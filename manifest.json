@@ -1,0 +1,76 @@
+{
+  "manifest_version": 3,
+  "name": "Faro — copiloto para Jira y Confluence",
+  "short_name": "Faro",
+  "version": "1.0.0",
+  "description": "Chatea con tu opencode local dentro de Jira y Confluence, y deja que te lleve hasta donde está la respuesta.",
+  "minimum_chrome_version": "116",
+  "icons": {
+    "16": "src/assets/icon-16.png",
+    "32": "src/assets/icon-32.png",
+    "48": "src/assets/icon-48.png",
+    "128": "src/assets/icon-128.png"
+  },
+  "action": {
+    "default_title": "Abrir Faro",
+    "default_icon": {
+      "16": "src/assets/icon-16.png",
+      "32": "src/assets/icon-32.png"
+    }
+  },
+  "side_panel": {
+    "default_path": "src/panel/panel.html"
+  },
+  "background": {
+    "service_worker": "src/background/service-worker.js",
+    "type": "module"
+  },
+  "permissions": [
+    "sidePanel",
+    "storage",
+    "tabs",
+    "scripting"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1/*",
+    "http://localhost/*",
+    "https://*.atlassian.net/*"
+  ],
+  "optional_host_permissions": [
+    "https://*/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.atlassian.net/*"
+      ],
+      "js": [
+        "src/content/bootstrap.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "src/content/*.js",
+        "src/content/overlay/*.js",
+        "src/shared/*.js"
+      ],
+      "matches": [
+        "https://*/*"
+      ]
+    }
+  ],
+  "commands": {
+    "_execute_action": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+F",
+        "mac": "Command+Shift+F"
+      },
+      "description": "Abrir Faro"
+    }
+  },
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAs2Pj1k/f2Xioe1BhE0voWFDU3+W4inE6z071GShOCu6a2ywtNtUQjBTBqXNsE5MrnfmHqaHyf9sFPpF+aVB7QBdm2N9j8YuZ2Nh5EGJERr/ujDgn6kQ6YFbMXcgMoZaSKkr3trPhO//rXI3M6LexxBco+ozhGR79TNEjv8BGhR4CBEZ7f6ELXDjB+cETmyNbbJ2pDe5kphOD4t3LghQxeAStJFLFHt/aGNhNccPUK8rj6ms0DconRsr2esKwnnK0kEhkpsNRDOy0FXvKGz6csWzkrXJ6uH1QhNgXPd6uyKTDp876dXs1IKjftbW9Z+Wg836YUOz3cgzrsWxVbkJQNQIDAQAB"
+}

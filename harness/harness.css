@@ -1,0 +1,202 @@
+/* Estilo del banco de pruebas: imita lo justo de Confluence para que las
+   comprobaciones visuales signifiquen algo (cabecera pegajosa, árbol lateral,
+   columna de contenido con la misma medida de línea). */
+
+:root {
+  --bg: #FFFFFF;
+  --panel: #F7F8F9;
+  --ink: #172B4D;
+  --ink-2: #44546F;
+  --muted: #626F86;
+  --line: #DFE1E6;
+  --blue: #0C66E4;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 0 16px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+}
+.logo { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+.sq { width: 18px; height: 18px; border-radius: 4px; background: var(--blue); display: inline-block; }
+.fake { color: var(--muted); font-weight: 400; font-size: 12px; }
+.crumbs { color: var(--muted); font-size: 13px; }
+.spacer { flex: 1; }
+.tb-btn {
+  font: inherit; font-size: 13px;
+  background: transparent; border: 1px solid var(--line);
+  border-radius: 6px; padding: 4px 10px; cursor: pointer; color: var(--ink-2);
+}
+.tb-btn.danger { color: #AE2A19; border-color: #FFD5D2; }
+.avatar {
+  width: 28px; height: 28px; border-radius: 50%;
+  background: #DDD6FE; color: #4C1D95;
+  display: grid; place-items: center; font-size: 12px; font-weight: 700;
+}
+
+.shell { display: grid; grid-template-columns: 264px minmax(0, 1fr); min-height: 200vh; }
+
+.sidebar {
+  border-right: 1px solid var(--line);
+  background: var(--panel);
+  padding: 16px 10px;
+  position: sticky;
+  top: 56px;
+  align-self: start;
+  height: calc(100vh - 56px);
+  overflow-y: auto;
+}
+.space-head { display: flex; align-items: center; gap: 9px; margin-bottom: 14px; padding: 0 6px; }
+.space-avatar {
+  width: 24px; height: 24px; border-radius: 5px;
+  background: #E9F2FF; color: var(--blue);
+  display: grid; place-items: center; font-size: 10px; font-weight: 700;
+}
+.space-head a { font-weight: 600; }
+
+.tree-item { display: grid; grid-template-columns: 20px 1fr; align-items: start; }
+.tree-item .children { grid-column: 1 / -1; padding-left: 20px; }
+.children.collapsed { display: none; }
+
+/* La barra lateral «Cloud»: la forma que tiene el Confluence real. No hay
+   role=treeitem ni <li>: son divs sueltos, el contenedor se reconoce por
+   data-testid y el chevron por aria-expanded. Es exactamente lo que hacía que
+   la navegación guiada no encontrara el árbol. */
+/* Un bloque de código como los de Confluence: fondo oscuro y sintaxis en color.
+   Es el sitio donde peor se veía el marcado, así que el banco tiene uno. */
+.doc pre.code {
+  background: #1D2125;
+  color: #C7D1DB;
+  border: 1px solid #2C333A;
+  border-radius: 6px;
+  padding: 12px 14px;
+  overflow-x: auto;
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 12.5px;
+  line-height: 1.7;
+  tab-size: 2;
+}
+.doc pre.code .k { color: #9DD8F5; }
+.doc pre.code .s { color: #B3DF72; }
+.doc pre.code .n { color: #F5CD47; }
+
+.cloud-row { display: grid; grid-template-columns: 20px 1fr; align-items: start; }
+.cloud-row .cloud-kids { grid-column: 1 / -1; padding-left: 20px; }
+.cloud-kids.collapsed { display: none; }
+
+.twisty {
+  width: 18px; height: 22px;
+  background: transparent; border: 0; cursor: pointer;
+  color: var(--muted); font-size: 11px; line-height: 22px; padding: 0;
+  border-radius: 4px;
+}
+.twisty:hover { background: #E4E6EA; }
+.twisty-space { width: 18px; }
+
+.sidebar a {
+  color: var(--ink-2);
+  text-decoration: none;
+  display: block;
+  padding: 3px 8px;
+  border-radius: 5px;
+  font-size: 13.5px;
+}
+.sidebar a:hover { background: #E4E6EA; color: var(--ink); }
+.sidebar a.current { background: #E9F2FF; color: var(--blue); font-weight: 600; }
+
+main { padding: 34px 40px 200px; }
+.doc { max-width: 720px; }
+.doc h1 { font-size: 28px; line-height: 1.25; margin: 0 0 6px; letter-spacing: -.01em; }
+.doc .meta { color: var(--muted); font-size: 12.5px; margin-bottom: 26px; }
+.doc h2 { font-size: 19px; margin: 32px 0 8px; }
+.doc h3 { font-size: 15px; margin: 22px 0 6px; }
+.doc p { margin: 0 0 14px; color: var(--ink-2); }
+.doc ul { color: var(--ink-2); }
+.doc code {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 4px;
+  padding: 1px 4px; font-size: 12.5px;
+  font-family: ui-monospace, Consolas, monospace;
+}
+.doc .panel {
+  background: #E9F2FF; border-left: 3px solid var(--blue);
+  padding: 12px 14px; border-radius: 0 6px 6px 0; margin: 0 0 16px;
+  color: var(--ink-2);
+}
+
+/* --------------------------------------------------------------- el control */
+
+.rig {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  width: 268px;
+  background: #1B1A22;
+  color: #EDECF2;
+  border: 1px solid #35323F;
+  border-radius: 12px;
+  box-shadow: 0 16px 40px -18px rgba(0,0,0,.7);
+  z-index: 2147483000;
+  font-size: 12.5px;
+  overflow: hidden;
+}
+.rig-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 9px 11px; border-bottom: 1px solid #2C2A36;
+}
+.rig-beacon {
+  width: 11px; height: 11px; border-radius: 50%;
+  border: 2px solid #E9AC4A; position: relative;
+}
+.rig-beacon::after { content: ""; position: absolute; inset: 2px; border-radius: 50%; background: #E9AC4A; }
+.rig-head strong { flex: 1; font-size: 12px; }
+.rig-min {
+  background: transparent; border: 0; color: #918EA1; cursor: pointer;
+  font-size: 15px; line-height: 1; padding: 0 4px;
+}
+.rig-body { padding: 10px 11px 11px; display: flex; flex-direction: column; gap: 6px; }
+.rig-body.hidden { display: none; }
+.rig-note { margin: 0 0 4px; color: #918EA1; font-size: 11.5px; line-height: 1.45; }
+
+.rig-btn {
+  font: inherit; font-size: 12px; text-align: left;
+  background: #22212B; color: #EDECF2;
+  border: 1px solid #35323F; border-radius: 7px;
+  padding: 6px 9px; cursor: pointer;
+  transition: border-color .15s ease, background .15s ease;
+}
+.rig-btn:hover { border-color: #57536A; background: #282733; }
+.rig-btn.primary { background: #E9AC4A; color: #1B1405; border-color: #C98A22; font-weight: 600; }
+.rig-btn.ghost { background: transparent; color: #918EA1; }
+
+.rig-log {
+  margin: 6px 0 0;
+  max-height: 130px;
+  overflow-y: auto;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: #918EA1;
+  white-space: pre-wrap;
+  border-top: 1px solid #2C2A36;
+  padding-top: 7px;
+}
+.rig-log b { color: #45BFAB; font-weight: 400; }
+.rig-log i { color: #E9847B; font-style: normal; }

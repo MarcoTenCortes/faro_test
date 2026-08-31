@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Banco de pruebas · Faro</title>
+<link rel="stylesheet" href="/harness/harness.css">
+</head>
+<body>
+
+<!-- Cabecera pegajosa: existe a propósito, para comprobar que el desplazamiento
+     descuenta su altura y el objetivo no queda escondido debajo. -->
+<header class="topbar">
+  <div class="logo"><span class="sq"></span> Confluence <span class="fake">(simulado)</span></div>
+  <div class="crumbs" id="crumbs">Ingeniería</div>
+  <div class="spacer"></div>
+  <button class="tb-btn" type="button">Editar</button>
+  <button class="tb-btn danger" type="button">Eliminar</button>
+  <div class="avatar">M</div>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" data-testid="side-navigation">
+    <div class="space-head">
+      <span class="space-avatar">EN</span>
+      <a href="/wiki/spaces/ENG" data-nav="space:ENG">Ingeniería</a>
+    </div>
+    <nav role="tree" aria-label="Árbol de páginas">
+      <div role="treeitem" class="tree-item">
+        <button class="twisty" aria-expanded="true" aria-label="Contraer Arquitectura">▾</button>
+        <a href="/wiki/spaces/ENG/pages/100/Arquitectura" data-nav="page:100">Arquitectura</a>
+        <div class="children">
+          <div role="treeitem" class="tree-item">
+            <span class="twisty-space"></span>
+            <a href="/wiki/spaces/ENG/pages/200/ADR-014" data-nav="page:200">ADR-014 Rotación de tokens</a>
+          </div>
+          <div role="treeitem" class="tree-item">
+            <span class="twisty-space"></span>
+            <a href="/wiki/spaces/ENG/pages/201/ADR-015" data-nav="page:201">ADR-015 Colas de eventos</a>
+          </div>
+        </div>
+      </div>
+      <div role="treeitem" class="tree-item">
+        <button class="twisty" aria-expanded="false" aria-label="Expandir Operación">▸</button>
+        <a href="/wiki/spaces/ENG/pages/300/Operacion" data-nav="page:300">Operación</a>
+        <div class="children collapsed">
+          <div role="treeitem" class="tree-item">
+            <span class="twisty-space"></span>
+            <a href="/wiki/spaces/ENG/pages/301/Runbook" data-nav="page:301">Runbook de guardia</a>
+          </div>
+        </div>
+      </div>
+      <div role="treeitem" class="tree-item">
+        <span class="twisty-space"></span>
+        <a href="/wiki/spaces/ENG/pages/400/Onboarding" data-nav="page:400">Onboarding</a>
+      </div>
+      <div role="treeitem" class="tree-item">
+        <button class="twisty" aria-expanded="false" aria-label="Expandir Architecture">▸</button>
+        <a href="/wiki/spaces/ENG/pages/1080/Architecture" data-nav="page:1080">1080 - Architecture</a>
+        <div class="children collapsed">
+          <div role="treeitem" class="tree-item">
+            <button class="twisty" aria-expanded="false" aria-label="Expandir D13x">▸</button>
+            <a href="/wiki/spaces/ENG/pages/1081/D13x" data-nav="page:1081">1081 - D1.3.x - Simpl-Open specification</a>
+            <div class="children collapsed">
+              <div role="treeitem" class="tree-item">
+                <button class="twisty" aria-expanded="false" aria-label="Expandir Application Architecture">▸</button>
+                <a href="/wiki/spaces/ENG/pages/1082/AppArch" data-nav="page:1082">Simpl-Open Application Architecture</a>
+                <div class="children collapsed">
+                  <div role="treeitem" class="tree-item">
+                    <button class="twisty" aria-expanded="false" aria-label="Expandir Application Components Views">▸</button>
+                    <a href="/wiki/spaces/ENG/pages/1083/Components" data-nav="page:1083">Application Components Views</a>
+                    <div class="children collapsed">
+                      <div role="treeitem" class="tree-item">
+                        <button class="twisty" aria-expanded="false" aria-label="Expandir ACV Domain 1">▸</button>
+                        <a href="/wiki/spaces/ENG/pages/1084/ACVDomain1" data-nav="page:1084">ACV - Domain 1 - Access Control &amp; Trust</a>
+                        <div class="children collapsed">
+                          <div role="treeitem" class="tree-item">
+                            <button class="twisty" aria-expanded="false" aria-label="Expandir Static Views">▸</button>
+                            <a href="/wiki/spaces/ENG/pages/1085/StaticViews" data-nav="page:1085">ACV - Domain 1 - Access Control &amp; Trust - Static Views</a>
+                            <div class="children collapsed">
+                              <div role="treeitem" class="tree-item">
+                                <span class="twisty-space"></span>
+                                <a href="/wiki/spaces/ENG/pages/1086/ACV+Static+-+Identity+Provider+Service" data-nav="page:1086">ACV Static - Identity Provider Service</a>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </nav>
+  </aside>
+
+  <main data-testid="page-content" id="page-content"></main>
+</div>
+
+<!-- Panel de control del banco de pruebas: no forma parte de la extensión. -->
+<div class="rig" id="rig">
+  <div class="rig-head">
+    <span class="rig-beacon"></span>
+    <strong>Banco de pruebas</strong>
+    <button class="rig-min" id="rig-min" type="button" aria-label="Plegar">–</button>
+  </div>
+  <div class="rig-body" id="rig-body">
+    <p class="rig-note">Ejecuta las piezas reales de Faro sobre esta página falsa.</p>
+    <button class="rig-btn" data-act="quote">Resaltar una cita</button>
+    <button class="rig-btn" data-act="quote-edited">Cita que cambió (aproximada)</button>
+    <button class="rig-btn" data-act="heading">Ir a un encabezado</button>
+    <button class="rig-btn" data-act="missing">Cita que ya no existe</button>
+    <button class="rig-btn primary" data-act="assisted">Navegación asistida (3 pasos)</button>
+    <button class="rig-btn" data-act="assisted-collapsed">Asistida con rama plegada</button>
+    <button class="rig-btn" data-act="sidebar">Cambiar de barra lateral (clásica ⇄ Cloud)</button>
+    <button class="rig-btn" data-act="acv-tcv">De la ACV a su TCV (árbol Cloud)</button>
+    <button class="rig-btn" data-act="marker">Probar el resaltado subrayado</button>
+    <button class="rig-btn" data-act="picker">Señalar en la página (texto o imagen)</button>
+    <button class="rig-btn" data-act="notes">Análisis: marcar tres observaciones</button>
+    <button class="rig-btn" data-act="code">Marcar dentro de un bloque de código</button>
+    <button class="rig-btn" data-act="unsafe">Intentar pulsar «Eliminar»</button>
+    <button class="rig-btn primary" data-act="selfcheck">Autocomprobación completa</button>
+    <button class="rig-btn ghost" data-act="clear">Limpiar</button>
+    <pre class="rig-log" id="rig-log"></pre>
+  </div>
+</div>
+
+<script type="module" src="/harness/harness.js"></script>
+</body>
+</html>

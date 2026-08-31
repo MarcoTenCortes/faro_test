@@ -1,0 +1,304 @@
+/**
+ * El orquestador del service worker, con un `chrome` de mentira.
+ *
+ * Es la máquina de estados más delicada del proyecto: lleva la cuenta del
+ * recorrido mientras la pestaña navega por debajo. Aquí se comprueba sin
+ * Chrome, simulando lo que contestaría el content script en cada paso.
+ */
+import { test, eq, assert } from '../harness.js'
+import { MSG } from '../../src/shared/messages.js'
+
+// El worker registra sus manejadores UNA vez, al importarse. Por eso la lista
+// se comparte entre todos los entornos simulados: lo que cambia en cada prueba
+// es el `chrome` global que esos manejadores consultan al ejecutarse.
+const LISTENERS = []
+
+/** Construye un entorno `chrome` simulado y devuelve los mandos. */
+function makeChrome() {
+  const listeners = LISTENERS
+  const state = {
+    tabs: { 1: { id: 1, url: 'https://acme.atlassian.net/wiki/spaces/ENG/pages/400/Onboarding', windowId: 9 } },
+    session: {},
+    local: {},
+    sentToTab: [],
+    contentReply: () => ({ status: 'clicked' }),
+    panelMessages: [],
+  }
+
+  globalThis.chrome = {
+    runtime: {
+      onInstalled: { addListener() {} },
+      onMessage: { addListener: (fn) => listeners.push(fn) },
+      sendMessage: async (m) => {
+        state.panelMessages.push(m)
+      },
+      getURL: (p) => 'chrome-extension://test/' + p,
+    },
+    action: { onClicked: { addListener() {} } },
+    sidePanel: { setPanelBehavior: async () => {}, open: async () => {} },
+    tabs: {
+      onRemoved: { addListener() {} },
+      onUpdated: { addListener() {} },
+      onActivated: { addListener() {} },
+      get: async (id) => state.tabs[id],
+      query: async () => Object.values(state.tabs),
+      update: async (id, { url }) => {
+        state.tabs[id].url = url
+        return state.tabs[id]
+      },
+      sendMessage: async (id, msg) => {
+        state.sentToTab.push(msg)
+        return state.contentReply(msg)
+      },
+    },
+    storage: {
+      session: {
+        get: async (k) => (k in state.session ? { [k]: state.session[k] } : {}),
+        set: async (o) => Object.assign(state.session, o),
+        remove: async (k) => delete state.session[k],
+      },
+      local: {
+        get: async (k) => (k in state.local ? { [k]: state.local[k] } : {}),
+        set: async (o) => Object.assign(state.local, o),
+        remove: async (k) => delete state.local[k],
+      },
+    },
+    permissions: { contains: async () => true, request: async () => true },
+    scripting: { getRegisteredContentScripts: async () => [], registerContentScripts: async () => {} },
+  }
+
+  return {
+    state,
+    /** Invoca el manejador de mensajes como haría Chrome. */
+    send(message, sender = {}) {
+      return new Promise((resolve) => {
+        for (const fn of listeners) {
+          const handled = fn(message, sender, resolve)
+          if (handled) return
+        }
+        resolve(null)
+      })
+    },
+  }
+}
+
+const PLAN = {
+  navigate: true,
+  mode: 'assisted',
+  destination: {
+    kind: 'confluence-page',
+    id: '200',
+    title: 'ADR-014',
+    url: 'https://acme.atlassian.net/wiki/spaces/ENG/pages/200/ADR-014',
+  },
+  anchor: { kind: 'text-quote', exact: 'el token expira a los 90 días' },
+  explanation: 'Está en el apartado de Decisión.',
+  steps: [
+    { kind: 'confluence-space', id: 'ENG', title: 'Ingeniería', url: 'https://acme.atlassian.net/wiki/spaces/ENG' },
+    {
+      kind: 'confluence-page',
+      id: '100',
+      title: 'Arquitectura',
+      url: 'https://acme.atlassian.net/wiki/spaces/ENG/pages/100/Arquitectura',
+    },
+    {
+      kind: 'confluence-page',
+      id: '200',
+      title: 'ADR-014',
+      url: 'https://acme.atlassian.net/wiki/spaces/ENG/pages/200/ADR-014',
+    },
+  ],
+}
+
+/** Importa el worker una sola vez por proceso, con el chrome ya montado. */
+let loaded = null
+async function loadWorker(rig) {
+  if (!loaded) loaded = await import('../../src/background/service-worker.js?probe=1')
+  // El worker guarda el recorrido en memoria entre pruebas: se limpia antes de
+  // empezar, igual que haría cerrar la pestaña.
+  await rig.send({ type: MSG.CANCEL_PLAN, tabId: 1 })
+  rig.state.sentToTab.length = 0
+  rig.state.panelMessages.length = 0
+  return rig
+}
+
+test('sw: la asistida recorre los tres pasos y termina anclando', async () => {
+  const rig = makeChrome()
+  await loadWorker(rig)
+
+  const res = await rig.send({ type: MSG.START_PLAN, tabId: 1, plan: PLAN })
+  assert(res?.ok, 'debería arrancar: ' + JSON.stringify(res))
+
+  const steps = rig.state.sentToTab.filter((m) => m.type === MSG.STEP)
+  eq(steps.length, 3, 'deberían enviarse tres pasos')
+  eq(steps.map((s) => s.step.id), ['ENG', '100', '200'])
+  eq(steps[2].isLast, true)
+
+  const anchors = rig.state.sentToTab.filter((m) => m.type === MSG.ANCHOR)
+  eq(anchors.length, 1, 'debe anclar al final')
+  eq(anchors[0].anchor.exact, 'el token expira a los 90 días')
+  eq(anchors[0].explanation, 'Está en el apartado de Decisión.')
+})
+
+test('sw: si el DESTINO no se puede pulsar, se degrada a salto por URL', async () => {
+  const rig = makeChrome()
+  await loadWorker(rig)
+
+  let n = 0
+  rig.state.contentReply = (msg) => {
+    if (msg.type !== MSG.STEP) return { status: 'done' }
+    n++
+    return n === 3 ? { status: 'navigate', reason: 'no localizado' } : { status: 'clicked' }
+  }
+
+  await rig.send({ type: MSG.START_PLAN, tabId: 1, plan: PLAN })
+  eq(
+    rig.state.tabs[1].url,
+    'https://acme.atlassian.net/wiki/spaces/ENG/pages/200/ADR-014',
+    'el destino sí puede llegar por URL'
+  )
+})
+
+test('EL CAMBIO: un paso INTERMEDIO nunca navega, se salta', async () => {
+  // Pasó de verdad: un paso intermedio que no se localizaba acababa en una
+  // carga de página completa. Eso pliega el árbol lateral entero, y los pasos
+  // que quedaban se quedaban sin nada que desplegar — la navegación guiada
+  // terminaba siendo el salto seco que precisamente quería evitar.
+  const rig = makeChrome()
+  await loadWorker(rig)
+  const partida = rig.state.tabs[1].url
+
+  let n = 0
+  rig.state.contentReply = (msg) => {
+    if (msg.type !== MSG.STEP) return { status: 'done' }
+    n++
+    return n === 2 ? { status: 'navigate', reason: 'no localizado' } : { status: 'clicked' }
+  }
+
+  await rig.send({ type: MSG.START_PLAN, tabId: 1, plan: PLAN })
+
+  eq(rig.state.tabs[1].url, partida, 'la pestaña no debe haberse recargado')
+  const steps = rig.state.sentToTab.filter((m) => m.type === MSG.STEP)
+  eq(steps.map((s) => s.step.id), ['ENG', '100', '200'], 'el recorrido sigue hasta el final')
+  eq(rig.state.sentToTab.filter((m) => m.type === MSG.ANCHOR).length, 1, 'y ancla igual')
+})
+
+test('sw: cancelar detiene el recorrido en seco', async () => {
+  const rig = makeChrome()
+  await loadWorker(rig)
+
+  rig.state.contentReply = (msg) =>
+    msg.type === MSG.STEP ? { status: 'cancelled', reason: 'user' } : { status: 'done' }
+
+  await rig.send({ type: MSG.START_PLAN, tabId: 1, plan: PLAN })
+  const steps = rig.state.sentToTab.filter((m) => m.type === MSG.STEP)
+  eq(steps.length, 1, 'no debe seguir tras la cancelación')
+  eq(rig.state.sentToTab.filter((m) => m.type === MSG.ANCHOR).length, 0, 'no debe anclar')
+})
+
+test('sw: un paso saltado no rompe el recorrido', async () => {
+  const rig = makeChrome()
+  await loadWorker(rig)
+
+  let n = 0
+  rig.state.contentReply = (msg) => {
+    if (msg.type !== MSG.STEP) return { status: 'done' }
+    n++
+    return n === 1 ? { status: 'skipped' } : { status: 'clicked' }
+  }
+
+  await rig.send({ type: MSG.START_PLAN, tabId: 1, plan: PLAN })
+  eq(rig.state.sentToTab.filter((m) => m.type === MSG.STEP).length, 3)
+  eq(rig.state.sentToTab.filter((m) => m.type === MSG.ANCHOR).length, 1)
+})
+
+test('sw: la navegación directa salta y ancla al avisar la pestaña', async () => {
+  const rig = makeChrome()
+  await loadWorker(rig)
+
+  const directo = { ...PLAN, mode: 'direct', steps: [] }
+  const res = await rig.send({ type: MSG.NAVIGATE_DIRECT, tabId: 1, plan: directo })
+  eq(res.navigating, true, 'debe navegar, no anclar todavía')
+  eq(rig.state.tabs[1].url, directo.destination.url)
+  eq(rig.state.sentToTab.filter((m) => m.type === MSG.ANCHOR).length, 0, 'aún no')
+
+  // La página nueva avisa de que está lista: ahora sí toca anclar.
+  await rig.send({ type: MSG.CONTENT_READY, url: directo.destination.url }, { tab: { id: 1 } })
+  eq(rig.state.sentToTab.filter((m) => m.type === MSG.ANCHOR).length, 1, 'debe anclar al estar lista')
+})
+
+test('sw: si ya estamos en el destino, ancla sin recargar', async () => {
+  const rig = makeChrome()
+  await loadWorker(rig)
+  rig.state.tabs[1].url = PLAN.destination.url
+
+  const res = await rig.send({ type: MSG.NAVIGATE_DIRECT, tabId: 1, plan: { ...PLAN, steps: [] } })
+  eq(res.navigating, false)
+  eq(rig.state.sentToTab.filter((m) => m.type === MSG.ANCHOR).length, 1)
+})
+
+test('sw: el estado del recorrido se guarda para sobrevivir a una recarga', async () => {
+  const rig = makeChrome()
+  await loadWorker(rig)
+
+  rig.state.contentReply = () => null // la pestaña no contesta: está recargando
+  await rig.send({ type: MSG.START_PLAN, tabId: 1, plan: PLAN })
+
+  const saved = rig.state.session['faro:plans']
+  assert(saved, 'debe quedar guardado en storage.session')
+  eq(saved['1'].index, 0, 'debe recordar por qué paso iba')
+})
+
+test('sw: el panel recibe el progreso', async () => {
+  const rig = makeChrome()
+  await loadWorker(rig)
+  await rig.send({ type: MSG.START_PLAN, tabId: 1, plan: PLAN })
+
+  const progress = rig.state.panelMessages.filter((m) => m.type === MSG.PLAN_PROGRESS)
+  eq(progress.length, 3)
+  eq(progress[0].total, 3)
+  const finished = rig.state.panelMessages.filter((m) => m.type === MSG.PLAN_FINISHED)
+  eq(finished.length, 1)
+})
+
+// --- el content script que no existe --------------------------------------
+// El fallo real: en un Confluence propio el content script no esta inyectado
+// (el manifest solo declara *.atlassian.net), la pestana no contestaba, y el
+// service worker devolvia {ok:true, waiting:true}. Resultado: pulsabas «Paso a
+// paso» y no pasaba absolutamente nada, sin un solo mensaje.
+
+test('sw: sin permiso de host, la asistida se queja en vez de callarse', async () => {
+  const rig = makeChrome()
+  await loadWorker(rig)
+
+  rig.state.contentReply = () => null // no hay content script
+  globalThis.chrome.permissions.contains = async () => false
+
+  const res = await rig.send({ type: MSG.START_PLAN, tabId: 1, plan: PLAN })
+
+  eq(res.ok, false)
+  eq(res.needsPermission, true)
+  assert(/permiso/i.test(res.error), 'el motivo debe hablar del permiso: ' + res.error)
+
+  const avisos = rig.state.panelMessages.filter((m) => m.type === MSG.PLAN_FINISHED)
+  eq(avisos.length, 1, 'el panel tiene que enterarse')
+  eq(avisos[0].result.needsPermission, true)
+
+  // Y no debe quedarse un recorrido a medias esperando para siempre.
+  eq(rig.state.session['faro:plans']?.['1'], undefined)
+
+  globalThis.chrome.permissions.contains = async () => true
+})
+
+test('sw: con permiso pero recargando, espera en vez de abortar', async () => {
+  const rig = makeChrome()
+  await loadWorker(rig)
+
+  rig.state.contentReply = () => null
+  globalThis.chrome.permissions.contains = async () => true
+
+  const res = await rig.send({ type: MSG.START_PLAN, tabId: 1, plan: PLAN })
+  eq(res.ok, true)
+  eq(res.waiting, true)
+  assert(rig.state.session['faro:plans']?.['1'], 'el recorrido se conserva para retomarlo')
+})

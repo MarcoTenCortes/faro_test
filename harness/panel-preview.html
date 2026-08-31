@@ -1,0 +1,377 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vista previa del panel · Faro</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    margin: 0; min-height: 100vh;
+    display: flex; align-items: flex-start; justify-content: center; gap: 28px;
+    padding: 28px;
+    background: #0E0D12;
+    color: #EDECF2;
+    font-family: ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-size: 13.5px;
+  }
+  .side { width: 250px; position: sticky; top: 28px; }
+  h1 { font-size: 16px; margin: 0 0 4px; letter-spacing: -.01em; }
+  p { color: #918EA1; font-size: 12.5px; line-height: 1.5; margin: 0 0 16px; }
+  .grp { margin-bottom: 16px; }
+  .grp-title {
+    font-size: 9.5px; letter-spacing: .12em; text-transform: uppercase;
+    color: #6F6C7E; margin-bottom: 6px;
+  }
+  button {
+    display: block; width: 100%; text-align: left;
+    font: inherit; font-size: 12px;
+    background: #1B1A22; color: #EDECF2;
+    border: 1px solid #2C2A36; border-radius: 7px;
+    padding: 6px 10px; margin-bottom: 5px; cursor: pointer;
+    transition: border-color .15s ease;
+  }
+  button:hover { border-color: #57536A; }
+  button.on { border-color: #E9AC4A; color: #E9AC4A; }
+  .frame {
+    width: 400px; height: 780px; flex: none;
+    border: 1px solid #2C2A36; border-radius: 14px; overflow: hidden;
+    box-shadow: 0 24px 60px -24px rgba(0,0,0,.9);
+    background: #131218;
+  }
+  iframe { width: 100%; height: 100%; border: 0; display: block; }
+  .note { font-size: 11.5px; color: #6F6C7E; line-height: 1.5; }
+</style>
+</head>
+<body>
+
+<div class="side">
+  <h1>Vista previa del panel</h1>
+  <p>El panel real, con su CSS real, relleno con una conversación de ejemplo. No hay <code>chrome.*</code> aquí, así que sólo se ve: no funciona.</p>
+
+  <div class="grp">
+    <div class="grp-title">Pantallas</div>
+    <button data-screen="" class="on">Conversación</button>
+    <button data-screen="screen-connect">opencode no responde</button>
+    <button data-screen="screen-setup">Configurar claves</button>
+    <button data-manual="1">Claves · paso manual</button>
+    <button data-screen="screen-context">Primera vez · contexto</button>
+    <button data-screen="screen-settings">Ajustes</button>
+    <button data-screen="screen-memory">Memoria</button>
+    <button data-screen="screen-log">Registro</button>
+    <button data-busy="1">Indexando…</button>
+  </div>
+
+  <div class="grp">
+    <div class="grp-title">Barra inferior</div>
+    <button data-pick="off" class="on">Sin selección</button>
+    <button data-pick="chip">Con algo señalado</button>
+    <button data-pick="on">Señalando en la página</button>
+  </div>
+
+  <div class="grp">
+    <div class="grp-title">Tema</div>
+    <button data-theme="dark" class="on">Oscuro</button>
+    <button data-theme="light">Claro</button>
+  </div>
+
+  <p class="note">El tema real lo decide el sistema; aquí se fuerza para poder mirar los dos.</p>
+</div>
+
+<div class="frame"><iframe id="panel" src="/src/panel/panel.html"></iframe></div>
+
+<script type="module">
+const frame = document.getElementById('panel')
+
+frame.addEventListener('load', async () => {
+  const doc = frame.contentDocument
+  const win = frame.contentWindow
+  const { renderMarkdown } = await import('/src/panel/markdown.js')
+
+  const $ = (id) => doc.getElementById(id)
+  const mk = (tag, cls, text) => {
+    const e = doc.createElement(tag)
+    if (cls) e.className = cls
+    if (text != null) e.textContent = text
+    return e
+  }
+
+  // ---- cabecera
+  $('location-text').textContent = 'Confluence · ENG · página 200'
+  $('status-dot').className = 'dot ok'
+  $('status-text').textContent = 'conectado'
+  $('btn-memory-toggle').classList.add('on')
+  $('memory-label').textContent = 'Memoria activa'
+
+  const sel = $('model')
+  const og = doc.createElement('optgroup')
+  og.label = 'github-copilot'
+  for (const n of ['claude-sonnet-5', 'claude-opus-5', 'gpt-5.4']) {
+    const o = doc.createElement('option')
+    o.textContent = n
+    og.appendChild(o)
+  }
+  sel.appendChild(og)
+
+  // El selector de Skill sale de la lista REAL: si se añade una, aparece aquí.
+  const { SKILLS } = await import('/src/panel/skills.js')
+  const skillSel = $('skill')
+  for (const s of SKILLS) {
+    const o = doc.createElement('option')
+    o.value = s.id
+    o.textContent = s.label
+    o.title = s.hint
+    skillSel.appendChild(o)
+  }
+  skillSel.value = 'analisis'
+
+  // Y el chip de lo señalado en la página, con la etiqueta real.
+  const { pickLabel, buildTextPick } = await import('/src/content/pick-payload.js')
+  $('pick-chip-text').textContent = pickLabel(
+    buildTextPick({ text: 'Por política de seguridad el token expira a los 90 días naturales' })
+  )
+
+  // ---- conversación
+  const chat = $('chat')
+  chat.textContent = ''
+  chat.appendChild(mk('div', 'msg user', '¿Dónde está documentada la rotación de tokens de servicio?'))
+
+  const bubble = mk('div', 'msg assistant')
+  const tools = mk('div', 'tools')
+  const row = mk('div', 'tool done')
+  row.append(mk('span', 'tdot'), mk('span', null, '3 consultas a Atlassian'))
+  tools.appendChild(row)
+
+  const body = doc.createElement('div')
+  body.appendChild(
+    renderMarkdown(
+      [
+        'Está en **ADR-014 Rotación de tokens de servicio**, dentro del espacio de Ingeniería.',
+        '',
+        'La política, en corto:',
+        '',
+        '- El token expira a los `90` días naturales.',
+        '- La rotación se solapa 48 horas, así que un despliegue a medias no deja fuera a nadie.',
+        '- El exportador de métricas heredado queda como excepción documentada en el runbook.',
+        '',
+        '> El cumplimiento se revisa cada trimestre.',
+      ].join('\n')
+    )
+  )
+  bubble.append(tools, body)
+
+  const card = mk('div', 'nav-card')
+  card.appendChild(mk('div', 'nav-kicker', 'Puedo llevarte'))
+  card.appendChild(mk('div', 'nav-title', 'ADR-014 Rotación de tokens de servicio'))
+  card.appendChild(mk('div', 'nav-text', 'Te dejo en el apartado de Decisión, con la frase de la caducidad marcada.'))
+  const steps = mk('div', 'nav-steps')
+  ;['Espacio Ingeniería', 'Arquitectura', 'ADR-014'].forEach((s, i) => {
+    if (i) steps.appendChild(mk('b', null, '›'))
+    steps.appendChild(mk('span', null, s))
+  })
+  card.appendChild(steps)
+  // Los botones salen de la logica REAL, con un plan en modo "direct":
+  // es el caso que solo ofrecia «Llevame».
+  const { navOptions } = await import('/src/nav/options.js')
+  const acts = mk('div', 'nav-actions')
+  const planDemo = { mode: 'direct', steps: [{ id: 'ENG' }, { id: '100' }, { id: '200' }] }
+  for (const o of navOptions(planDemo, { assistedByDefault: false })) {
+    acts.appendChild(mk('button', o.kind, o.label))
+  }
+  card.appendChild(acts)
+  bubble.appendChild(card)
+  chat.appendChild(bubble)
+
+  // ---- un análisis con sus observaciones numeradas
+  chat.appendChild(mk('div', 'msg user', 'Ahora analízala a fondo.'))
+
+  const bAnalisis = mk('div', 'msg assistant')
+  const cuerpo = doc.createElement('div')
+  cuerpo.appendChild(
+    renderMarkdown(
+      [
+        'Tres cosas, de más a menos importante:',
+        '',
+        '[1] La caducidad de 90 días se presenta como política, pero no se dice de dónde sale ni contra qué se calibró.',
+        '[2] La ventana de solape de 48 horas no está medida contra la duración real de un despliegue.',
+        '[3] La excepción del exportador de métricas no tiene fecha firme: «el próximo trimestre» no es una fecha.',
+      ].join('\n'),
+      { onNote: (n) => console.log('ir a la observación', n) }
+    )
+  )
+  bAnalisis.appendChild(cuerpo)
+
+  const notas = [
+    [1, 'La caducidad no se justifica', 'el token expira a los 90 días naturales', true],
+    [2, 'Ventana de solape sin medir', 'durante las últimas 48 horas conviven el token viejo y el nuevo', true],
+    [3, 'Excepción sin fecha firme', 'previsto para el próximo trimestre', false],
+  ]
+
+  const notesCard = mk('div', 'nav-card notes-card')
+  notesCard.appendChild(mk('div', 'nav-kicker', 'Marcado en la página'))
+  notesCard.appendChild(mk('div', 'nav-title', '2 observaciones subrayadas'))
+  notesCard.appendChild(
+    mk('div', 'nav-text', 'Una no la he sabido situar en la página; la dejo sin marcar antes que marcarla mal.')
+  )
+
+  const lista = mk('div', 'note-list')
+  for (const [n, titulo, cita, puesta] of notas) {
+    const row = doc.createElement('button')
+    row.className = 'note-row' + (puesta ? '' : ' missing')
+    row.type = 'button'
+    row.disabled = !puesta
+    if (n === 1) row.classList.add('active')
+    const num = mk('span', 'note-num', String(n))
+    const body = mk('span', 'note-body')
+    body.append(mk('span', 'note-title', titulo))
+    body.append(mk('span', 'note-quote', puesta ? '«' + cita + '»' : 'no la he encontrado en la página'))
+    row.append(num, body)
+    lista.appendChild(row)
+  }
+  notesCard.appendChild(lista)
+
+  const accionesNotas = mk('div', 'nav-actions')
+  accionesNotas.appendChild(mk('button', 'ghost', 'Quitar las marcas'))
+  notesCard.appendChild(accionesNotas)
+  bAnalisis.appendChild(notesCard)
+  chat.appendChild(bAnalisis)
+
+  // ---- relleno de las pantallas
+  $('connect-cmd').textContent = 'opencode serve --port 4096 --cors chrome-extension://ickohiffpicdfeameogbihbcanbjibmk'
+  $('server-url').value = 'http://127.0.0.1:4096'
+  $('setup-host').textContent = 'acme.atlassian.net'
+  $('context-scope').textContent = 'el espacio ENG'
+  $('settings-site-info').textContent = 'acme.atlassian.net · 212 entradas indexadas · con contexto'
+  $('delay-value').textContent = '900'
+  $('set-delay').value = 900
+  $('set-hl-spotlight').checked = true
+  $('set-url').value = 'http://127.0.0.1:4096'
+  $('setup-config-path').textContent = 'C:\\Users\\marco\\.config\\opencode\\opencode.json'
+  $('setup-snippet').textContent = JSON.stringify({
+    $schema: 'https://opencode.ai/config.json',
+    mcp: {
+      'atlassian-confluence-simplprogramme-eu': {
+        type: 'local',
+        command: ['uvx', 'mcp-atlassian'],
+        environment: {
+          CONFLUENCE_URL: 'https://confluence.simplprogramme.eu',
+          CONFLUENCE_PERSONAL_TOKEN: 'tu-token-personal',
+          READ_ONLY_MODE: 'true',
+        },
+        enabled: true,
+        timeout: 30000,
+      },
+    },
+  }, null, 2)
+  $('busy-title').textContent = 'Levantando el mapa'
+  $('busy-text').textContent = 'Recorriendo el espacio ENG…'
+
+  const mem = $('memory-body')
+  for (const [when, text] of [
+    ['2026-08-24', 'Buscabas cómo se rotan los tokens de servicio. Lo encontramos en ADR-014; quedó pendiente mirar la excepción del exportador de métricas.'],
+    ['2026-08-21', 'Repaso de las convenciones de tickets del proyecto ENG: prefijo por área y etiqueta adr para las decisiones.'],
+  ]) {
+    const r = doc.createElement('div')
+    r.style.marginBottom = '12px'
+    r.append(mk('div', 'fine', when), mk('div', null, text))
+    mem.appendChild(r)
+  }
+  $('mem-enabled').checked = true
+
+  // registro de ejemplo
+  const logBox = $('log-body')
+  for (const [t, lvl, m, d] of [
+    ['19:42:11', 'ok', 'Stream de eventos abierto', ''],
+    ['19:42:11', 'debug', 'GET /config/providers', '200 · 186 ms'],
+    ['19:42:12', 'ok', 'MCP verificado', 'DestinE-PoC-EPIC-006'],
+    ['19:42:40', 'info', 'Turno enviado', 'github-copilot/claude-sonnet-4.6 · 52 caracteres'],
+    ['19:42:58', 'ok', 'Respuesta recibida', '1.412 caracteres · 2 herramientas'],
+    ['19:42:58', 'ok', 'Índice ampliado', '+3 · total 215'],
+    ['19:43:04', 'error', 'Turno fallido', 'APIError: Upstream request failed'],
+  ]) {
+    const row = doc.createElement('div')
+    row.className = 'logrow ' + lvl
+    const tt = mk('span', 't', t)
+    const mm = mk('span', 'm', m)
+    if (d) mm.appendChild(mk('span', 'd', ' — ' + d))
+    row.append(tt, mm)
+    logBox.appendChild(row)
+  }
+  const stateBox = $('log-state')
+  for (const [k, v, kind] of [
+    ['servidor', 'http://127.0.0.1:4096', 'ok'],
+    ['sitio', 'confluence.simplprogramme.eu · confluence · data center', ''],
+    ['página', '83206087', ''],
+    ['modelo', 'github-copilot/claude-sonnet-4.6', ''],
+    ['índice', '215 entradas', ''],
+    ['MCP', 'atlassian-confluence-simplprogramme-eu · connected', 'ok'],
+  ]) {
+    const row = doc.createElement('div')
+    row.className = 'state-row'
+    row.append(mk('span', 'k', k), mk('span', 'v' + (kind ? ' ' + kind : ''), v))
+    stateBox.appendChild(row)
+  }
+
+  // ---- mandos
+  const show = (id) => {
+    doc.querySelectorAll('.screen').forEach((s) => s.classList.add('hidden'))
+    $('busy').classList.add('hidden')
+    $('setup-manual').classList.add('hidden')
+    $('setup-main').classList.remove('hidden')
+    if (id) $(id)?.classList.remove('hidden')
+  }
+
+  document.querySelectorAll('[data-screen]').forEach((b) => {
+    b.addEventListener('click', () => {
+      document.querySelectorAll('[data-screen],[data-busy]').forEach((x) => x.classList.remove('on'))
+      b.classList.add('on')
+      show(b.dataset.screen)
+    })
+  })
+  document.querySelector('[data-manual]').addEventListener('click', (ev) => {
+    document.querySelectorAll('[data-screen],[data-busy],[data-manual]').forEach((x) => x.classList.remove('on'))
+    ev.target.classList.add('on')
+    show('screen-setup')
+    $('setup-main').classList.add('hidden')
+    $('setup-manual').classList.remove('hidden')
+  })
+
+  document.querySelector('[data-busy]').addEventListener('click', (ev) => {
+    document.querySelectorAll('[data-screen],[data-busy]').forEach((x) => x.classList.remove('on'))
+    ev.target.classList.add('on')
+    show('')
+    $('busy').classList.remove('hidden')
+  })
+  document.querySelectorAll('[data-pick]').forEach((b) => {
+    b.addEventListener('click', () => {
+      document.querySelectorAll('[data-pick]').forEach((x) => x.classList.remove('on'))
+      b.classList.add('on')
+      const modo = b.dataset.pick
+      $('pick-chip').classList.toggle('hidden', modo !== 'chip')
+      $('btn-pick').classList.toggle('picking', modo === 'on')
+    })
+  })
+
+  document.querySelectorAll('[data-theme]').forEach((b) => {
+    b.addEventListener('click', () => {
+      document.querySelectorAll('[data-theme]').forEach((x) => x.classList.remove('on'))
+      b.classList.add('on')
+      // El panel usa prefers-color-scheme; para poder mirar los dos temas se
+      // fuerza aquí con una hoja añadida, sólo en la vista previa.
+      let s = doc.getElementById('preview-theme')
+      if (!s) {
+        s = doc.createElement('style')
+        s.id = 'preview-theme'
+        doc.head.appendChild(s)
+      }
+      s.textContent =
+        b.dataset.theme === 'light'
+          ? `:root{--ground:#F5F5F8;--surface:#FFF;--surface-2:#EFEFF4;--ink:#17161D;--ink-2:#45424F;--muted:#6B6879;--line:#E2E1EA;--line-2:#CFCDDA;--gold:#8A5A0A;--gold-bg:#F8EFDC;--gold-line:#E2C795;--teal:#0C6F62;--clay:#A63A32;--clay-bg:#F9E8E6}`
+          : ''
+      document.body.style.background = b.dataset.theme === 'light' ? '#E7E7EC' : '#0E0D12'
+    })
+  })
+})
+</script>
+</body>
+</html>

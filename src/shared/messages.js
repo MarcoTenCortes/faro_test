@@ -1,0 +1,56 @@
+/** Tipos de mensaje entre panel, service worker y content script. */
+
+export const MSG = {
+  // panel -> service worker
+  START_PLAN: 'faro:start-plan',
+  CANCEL_PLAN: 'faro:cancel-plan',
+  NAVIGATE_DIRECT: 'faro:navigate-direct',
+  GET_TAB_INFO: 'faro:get-tab-info',
+  REQUEST_HOST_PERMISSION: 'faro:request-host-permission',
+  CONTENT_STATUS: 'faro:content-status',
+
+  // service worker -> content script
+  PING: 'faro:ping',
+  STEP: 'faro:step',
+  ANCHOR: 'faro:anchor',
+  CANCEL: 'faro:cancel',
+  CLEAR: 'faro:clear',
+  SETTINGS: 'faro:settings',
+  TREE_SNAPSHOT: 'faro:tree-snapshot',
+  TREE_DEBUG: 'faro:tree-debug',
+
+  // panel -> content script
+  PICK_START: 'faro:pick-start',
+  PICK_CANCEL: 'faro:pick-cancel',
+  PAGE_TEXT: 'faro:page-text',
+  ANNOTATE: 'faro:annotate',
+  FOCUS_NOTE: 'faro:focus-note',
+  CLEAR_NOTES: 'faro:clear-notes',
+
+  // content script -> service worker / panel
+  CONTENT_READY: 'faro:content-ready',
+  URL_CHANGED: 'faro:url-changed',
+  PICK_RESULT: 'faro:pick-result',
+  NOTE_CLICKED: 'faro:note-clicked',
+
+  // service worker -> panel
+  PLAN_PROGRESS: 'faro:plan-progress',
+  PLAN_FINISHED: 'faro:plan-finished',
+}
+
+/** Envío tolerante: un content script que no está no debe romper nada. */
+export async function sendToTab(tabId, message) {
+  try {
+    return await chrome.tabs.sendMessage(tabId, message)
+  } catch {
+    return null
+  }
+}
+
+export async function sendToRuntime(message) {
+  try {
+    return await chrome.runtime.sendMessage(message)
+  } catch {
+    return null
+  }
+}
