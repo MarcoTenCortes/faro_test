@@ -15,15 +15,27 @@
  * Funciones puras: se pueden leer y comprobar sin arrancar nada.
  */
 
+import { anchorsBlockRules } from './notes.js'
+
 export const DEFAULT_SKILL = 'general'
 
-/** Lo que se le dice al modelo cuando hay algo seleccionado en la página. */
-const SOBRE_QUE = [
-  'Sobre qué trabajas:',
-  '- Si el usuario te ha pasado un fragmento seleccionado de la página, trabaja SOBRE ESE FRAGMENTO. Es lo que ha señalado con el ratón, y es lo que le importa.',
-  '- Si no hay selección, trabaja sobre la página o la incidencia que tiene abierta ahora mismo, cuyo identificador se te ha dado arriba. Léela con la herramienta correspondiente antes de responder.',
-  '- No le pidas que te diga cuál es: ya lo sabes.',
-].join('\n')
+/**
+ * Lo que se le dice al modelo sobre qué trabaja.
+ *
+ * Con `digest`, la página ya va en el prompt en bloques numerados: no hace
+ * falta pedirle que la lea con la herramienta, y leerla dos veces —la de la
+ * pantalla y la del MCP, que no coinciden letra a letra— sólo confunde.
+ */
+function sobreQue({ digest = false } = {}) {
+  return [
+    'Sobre qué trabajas:',
+    '- Si el usuario te ha pasado un fragmento seleccionado de la página, trabaja SOBRE ESE FRAGMENTO. Es lo que ha señalado con el ratón, y es lo que le importa.',
+    digest
+      ? '- Si no hay selección, trabaja sobre la página o la incidencia que tiene abierta ahora mismo: su texto va más abajo, en bloques numerados ¶, tal como se ve en pantalla. No hace falta leerla con la herramienta; úsala sólo para lo que no esté ahí (comentarios, adjuntos, otras páginas).'
+      : '- Si no hay selección, trabaja sobre la página o la incidencia que tiene abierta ahora mismo, cuyo identificador se te ha dado arriba. Léela con la herramienta correspondiente antes de responder.',
+    '- No le pidas que te diga cuál es: ya lo sabes.',
+  ].join('\n')
+}
 
 export const SKILLS = [
   {
@@ -48,9 +60,10 @@ export const SKILLS = [
         'MODO BÚSQUEDA.',
         'Tu trabajo es localizar DÓNDE está la información, no explicarla entera.',
         '- Busca de verdad con las herramientas del MCP antes de contestar. Prueba más de una formulación si la primera no da nada.',
-        '- Contesta en pocas líneas: qué has encontrado y dónde está, nombrando el título exacto de cada página y la clave de cada incidencia.',
+        '- Contesta en pocas líneas: qué has encontrado y dónde está, nombrando el título exacto de cada página con su id numérico entre paréntesis, y la clave de cada incidencia.',
         '- Si hay varias candidatas, ordénalas de más probable a menos y di por qué.',
         '- Si no existe, dilo claramente. Inventarse una ubicación es peor que no encontrarla.',
+        '- Termina SIEMPRE con una línea aparte, exactamente así: «Destino: título exacto (id 123456)» con la candidata más probable, o «Destino: ninguno» si no hay ninguna. La extensión lee esa línea para llevar al usuario; sin ella tiene que volver a preguntarte.',
       ].join('\n')
     },
   },
@@ -61,10 +74,10 @@ export const SKILLS = [
     hint: 'Resume la selección o la página abierta.',
     offersNavigation: false,
     alwaysPlan: false,
-    system() {
+    system(ctx) {
       return [
         'MODO RESUMEN.',
-        SOBRE_QUE,
+        sobreQue(ctx),
         '',
         'Cómo resumir:',
         '- Empieza por una frase que diga de qué va. Después, lo esencial en viñetas cortas.',
@@ -81,10 +94,10 @@ export const SKILLS = [
     hint: 'Analiza a fondo la selección o la página.',
     offersNavigation: false,
     alwaysPlan: false,
-    system() {
-      return [
+    system(ctx = {}) {
+      const out = [
         'MODO ANÁLISIS.',
-        SOBRE_QUE,
+        sobreQue(ctx),
         '',
         'Qué tienes que producir:',
         '- Qué afirma y en qué se apoya.',
@@ -100,7 +113,11 @@ export const SKILLS = [
         '- Una observación, un pasaje. Si tienes dos cosas que decir sobre el mismo párrafo, son dos observaciones.',
         '- Habla de trozos concretos del texto, no de la página en general: después se subrayará en la página el fragmento del que habla cada número, y una observación que no apunte a ninguna frase no se podrá marcar.',
         '- Como mucho ocho observaciones. Mejor cinco que importen que doce que no.',
-      ].join('\n')
+      ]
+      // Sin la página en bloques no hay a qué apuntar: el bloque de anclas
+      // sobraría, y la extensión no tendría contra qué resolverlo.
+      if (ctx?.digest) out.push('', anchorsBlockRules())
+      return out.join('\n')
     },
   },
 ]
@@ -110,9 +127,13 @@ export function skillById(id) {
   return SKILLS.find((s) => s.id === id) || SKILLS[0]
 }
 
-/** El bloque de sistema de una Skill. Cadena vacía si no aporta nada. */
-export function skillSystem(id) {
-  return skillById(id).system() || ''
+/**
+ * El bloque de sistema de una Skill. Cadena vacía si no aporta nada.
+ * @param {string} id
+ * @param {{digest?: boolean}} [ctx] si la página va en el prompt en bloques ¶
+ */
+export function skillSystem(id, ctx = {}) {
+  return skillById(id).system(ctx) || ''
 }
 
 /** ¿Esta Skill ofrece la tarjeta «Puedo llevarte»? */

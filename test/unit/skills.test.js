@@ -48,10 +48,21 @@ test('cada Skill tiene etiqueta y una frase que la explica', () => {
 
 test('resumen y análisis trabajan sobre la selección, y si no sobre la página', () => {
   for (const id of ['resumen', 'analisis']) {
-    const s = skillSystem(id)
-    assert(/seleccionado|selección/i.test(s), id + ' debe mirar primero lo señalado')
-    assert(/página o la incidencia que tiene abierta/i.test(s), id + ' debe caer en la página actual')
-    assert(/no le pidas/i.test(s), id + ' no debe pedirle al usuario que diga cuál es')
+    for (const ctx of [{}, { digest: true }]) {
+      const s = skillSystem(id, ctx)
+      assert(/seleccionado|selección/i.test(s), id + ' debe mirar primero lo señalado')
+      assert(/página o la incidencia que tiene abierta/i.test(s), id + ' debe caer en la página actual')
+      assert(/no le pidas/i.test(s), id + ' no debe pedirle al usuario que diga cuál es')
+    }
+  }
+})
+
+test('con la página en bloques, no se manda leerla con la herramienta', () => {
+  for (const id of ['resumen', 'analisis']) {
+    assert(/Léela con la herramienta/.test(skillSystem(id)), id + ' sin bloques la lee con la herramienta')
+    const con = skillSystem(id, { digest: true })
+    assert(!/Léela con la herramienta/.test(con), id + ' con bloques ya la tiene')
+    assert(/bloques numerados/i.test(con), id + ' debe decir dónde está')
   }
 })
 
@@ -59,6 +70,15 @@ test('búsqueda busca de verdad y no se inventa dónde está algo', () => {
   const s = skillSystem('busqueda')
   assert(/herramientas/i.test(s), 'debe usar el MCP antes de contestar')
   assert(/no existe/i.test(s), 'y decirlo cuando no lo encuentra')
+})
+
+test('búsqueda pide el id de cada página y cierra con la línea «Destino:»', () => {
+  // Es el contrato con el planificador: con esa línea no hace falta gastar un
+  // turno de modelo en preguntar cuál era el destino.
+  const s = skillSystem('busqueda')
+  assert(/id num[ée]rico/i.test(s), 'debe pedir el id junto al título')
+  assert(/Destino: título exacto \(id 123456\)/.test(s), 'debe fijar la forma exacta de la línea')
+  assert(/Destino: ninguno/.test(s), 'y la forma cuando no hay destino')
 })
 
 // --- lo que NO puede cambiar ---------------------------------------------

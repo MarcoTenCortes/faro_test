@@ -14,7 +14,7 @@
  * lectura incremental del cuerpo.
  */
 
-import { TurnTracker } from './turn.js'
+import { TurnTracker, structuredOutputOf } from './turn.js'
 import { SAFE_PERMISSIONS } from '../shared/config.js'
 
 export class OpencodeError extends Error {
@@ -297,6 +297,8 @@ export class OpencodeClient {
         tools: tracker.tools,
         model: tracker.model,
         rawError: tracker.rawError,
+        // Si el turno pidió `format`, el objeto ya validado por el servidor.
+        structured: tracker.structured ?? structuredOutputOf(tracker.allParts),
       }
     } finally {
       clearInterval(watchdog)
@@ -308,6 +310,11 @@ export class OpencodeClient {
    * Pide una respuesta que cumpla un JSON Schema y devuelve el objeto ya
    * validado por el servidor. opencode fuerza una herramienta StructuredOutput
    * y marca `metadata.valid`; si no viene válida, esto lanza.
+   *
+   * Comprobado en el binario de opencode 1.2.25: `retryCount` se acepta pero
+   * no se lee nunca. Un turno que termina en prosa sin llamar a la herramienta
+   * muere con StructuredOutputError a la primera; el reintento, si hace
+   * falta, tiene que hacerlo quien llama.
    */
   async promptStructured(id, { text, model, schema, system, agent, retryCount = 2 }, control) {
     const opts = typeof control === 'object' && control && 'aborted' in control ? { signal: control } : control || {}

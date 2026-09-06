@@ -8,14 +8,13 @@
  *   2. Volcar el índice como datos -> la fuente de verdad de la navegación.
  */
 
-import { normalizeIndex, mergeIndex, indexSize } from '../atlassian/index-store.js'
+import { normalizeIndex, mergeIndex, mergeIndexKeepingTree, indexSize } from '../atlassian/index-store.js'
 import { canonicalPagePath, canonicalSpacePath, isRealSpaceKey } from '../atlassian/site.js'
 import {
   indexExploreSystem,
   indexExplorePrompt,
   indexEmitPrompt,
   indexTreePrompt,
-  ancestryPrompt,
   INDEX_SCHEMA,
   TREE_SCHEMA,
 } from './prompts.js'
@@ -123,7 +122,9 @@ export function harvestIndex(parts, { site, index }) {
   if (!indexSize(fresh)) return { index, added: 0 }
 
   const before = indexSize(index)
-  const merged = mergeIndex(index, fresh)
+  // Lo que devuelve una herramienta no sabe de quién cuelga cada página: no
+  // puede borrar el padre que ya se había leído del árbol o de la API.
+  const merged = mergeIndexKeepingTree(index, fresh)
   return { index: merged, added: indexSize(merged) - before }
 }
 
@@ -267,30 +268,6 @@ export function countWithParent(index) {
   return Object.values(index?.pages || {}).filter((p) => p.parentId).length
 }
 
-/**
- * Antepasados de UNA página, a la carta.
- *
- * El respaldo para los índices que ya existen: sin esto habría que reindexar
- * el sitio entero sólo para poder enseñar el camino hasta una página. Se llama
- * una vez por página y el resultado se queda en el índice.
- */
-export async function fetchAncestry(client, { sessionID, model, site, index, pageId, title, signal }) {
-  try {
-    const raw = await client.promptStructured(
-      sessionID,
-      { text: ancestryPrompt(pageId, title), model, schema: TREE_SCHEMA },
-      { signal, stallMs: 90000, maxMs: 240000 }
-    )
-    if (!raw?.pages?.length) return { index, added: 0 }
-
-    const arbol = normalizeIndex({ pages: raw.pages, updated: Date.now() }, site.host, index?.scope, {
-      cloud: site.cloud,
-      wikiPrefix: site.wikiPrefix,
-    })
-    const antes = countWithParent(index)
-    const merged = mergeTree(mergeIndex(index, arbol), arbol)
-    return { index: merged, added: countWithParent(merged) - antes }
-  } catch {
-    return { index, added: 0 }
-  }
-}
+// Los antepasados de UNA página ya no se le piden al modelo: los lee el panel
+// de la API REST del propio Confluence (`src/shared/confluence-rest.js`), en
+// milisegundos y sin depender de que el modelo sepa usar el MCP.

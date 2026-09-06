@@ -129,16 +129,55 @@
             return
           }
 
-          case MSG.PAGE_TEXT: {
-            // El texto de la pagina, para que el modelo cite de lo mismo que
-            // luego se va a buscar aqui. Leer no toca nada.
-            const { readablePageText } = await import(url('src/content/anchor.js'))
+          case MSG.PAGE_DIGEST: {
+            // La pagina en bloques numerados, tal como se ve en pantalla: es lo
+            // que lee el modelo en el modo Analisis y lo mismo contra lo que
+            // despues se resuelven sus observaciones. Leer no toca nada.
+            const [{ pageDigest, serializeDigest }, { formatDigest }, { isEditing, waitFor, contentRoot }] =
+              await Promise.all([
+                import(url('src/content/digest.js')),
+                import(url('src/shared/digest.js')),
+                import(url('src/content/dom-utils.js')),
+              ])
+            if (isEditing()) {
+              sendResponse({ ok: false, reason: 'editando' })
+              return
+            }
+            await waitFor(() => contentRoot()?.textContent?.trim()?.length > 40, { timeout: 2000 })
+            const digest = pageDigest()
+            if (!digest.blocks.length) {
+              sendResponse({ ok: false, reason: 'sin-texto' })
+              return
+            }
             sendResponse({
               ok: true,
-              ...readablePageText(msg.max || 30000),
+              text: formatDigest(digest.blocks),
+              ...serializeDigest(digest),
               title: document.title,
               url: location.href,
             })
+            return
+          }
+
+          case MSG.PAGE_ANCESTORS: {
+            // De quién cuelga una página, leído de la API REST del propio sitio:
+            // un GET al mismo origen, con la sesión del navegador, y sólo con un
+            // id numérico validado. Lo que vuelve son datos, y se validan. El
+            // prefijo que llega por mensaje se acepta sólo si tiene forma de
+            // ruta; si no, se deduce de dónde estamos.
+            const { fetchAncestors, resolveWikiPrefix } = await import(url('src/shared/confluence-rest.js'))
+            const wikiPrefix = resolveWikiPrefix({
+              requested: msg.wikiPrefix,
+              cloud: !!msg.cloud,
+              pathname: location.pathname,
+            })
+            sendResponse(
+              await fetchAncestors(
+                (u, o) => fetch(u, o),
+                { origin: location.origin, wikiPrefix, cloud: !!msg.cloud },
+                msg.pageId
+              )
+            )
             return
           }
 

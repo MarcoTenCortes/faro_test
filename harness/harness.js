@@ -15,6 +15,8 @@ import { treeContainer, rowFor, toggleFor, treeScroller } from '../src/content/t
 import { scrollWithinScrollers } from '../src/content/dom-utils.js'
 import { imagesWithin } from '../src/content/anchor.js'
 import { Picker } from '../src/content/picker.js'
+import { pageDigest } from '../src/content/digest.js'
+import { formatDigest, blockHint } from '../src/shared/digest.js'
 
 // --------------------------------------------------------------- contenido
 
@@ -471,6 +473,43 @@ const ANCHOR_MISSING = {
   exact: 'la rotación se hace cada catorce lunas mediante un ritual documentado aparte',
 }
 
+/**
+ * Cinco observaciones como las que deja hoy el modo Análisis: apuntan a un
+ * bloque numerado de la página y, si acaso, a una cita dentro de él. Se
+ * construyen sobre la página en bloques leída del DOM, como hace el panel: la
+ * pista de cada bloque sale del texto que se le enseñó al modelo, nunca del
+ * modelo. Cubren la escalera entera:
+ *   1. bloque + cita literal;
+ *   2. bloque sin cita: se marca entero;
+ *   3. número equivocado pero texto correcto: el texto manda;
+ *   4. bloque que no existe: la cita se busca en toda la página;
+ *   5. ni bloque ni cita: sin marcar.
+ */
+function observacionesPorBloques(digest) {
+  const bloque = (inicio) => digest.blocks.find((b) => b.text.startsWith(inicio))
+  const decision = bloque('Adoptamos la rotación')
+  const solape = bloque('La rotación se solapa')
+  const excepcion = bloque('El exportador de métricas')
+  const ancla = (b, exact, desvio = 0) => ({ kind: 'block-quote', block: b.id + desvio, hint: blockHint(b.text), exact })
+  return [
+    { n: 1, title: 'La caducidad no se justifica', kind: 'supuesto', anchor: ancla(decision, 'el token expira a los 90 días naturales') },
+    { n: 2, title: 'Ventana de solape sin medir', kind: 'hueco', anchor: ancla(solape, '') },
+    { n: 3, title: 'Excepción sin fecha firme', kind: 'riesgo', anchor: ancla(excepcion, 'El exportador de métricas heredado sigue con token fijo', 1) },
+    {
+      n: 4,
+      title: 'Recarga en caliente',
+      kind: 'dato',
+      anchor: { kind: 'block-quote', block: 999, hint: 'un bloque que no existe', exact: 'Cada servicio necesita releer su credencial sin reiniciar' },
+    },
+    {
+      n: 5,
+      title: 'Comité de los martes',
+      kind: 'dato',
+      anchor: { kind: 'block-quote', block: 999, hint: 'tampoco existe', exact: 'la rotación la aprueba el comité de los martes' },
+    },
+  ]
+}
+
 /** Imita el bucle del service worker: un paso por vuelta. */
 async function driveSteps(steps, anchor) {
   for (let i = 0; i < steps.length; i++) {
@@ -598,6 +637,28 @@ const actions = {
     const r = await runner.applyNotes({ notes: OBSERVACIONES })
     say(`marcadas ${r.placed.join(', ') || 'ninguna'}${r.missed.length ? ' · sin anclar ' + r.missed.join(', ') : ''}`, 'ok')
     say('pulsa un número, o usa faroHarness.runner.focusNote({ n: 2 })')
+  },
+
+  async digest() {
+    renderPage('page:200')
+    await wait(320)
+    const d = pageDigest()
+    const lineas = formatDigest(d.blocks).split('\n')
+    say(`${d.blocks.length} bloques · ${d.chars} caracteres${d.truncated ? ' · recortada' : ''}`, 'ok')
+    for (const l of lineas.slice(0, 6)) say(l.length > 110 ? l.slice(0, 107) + '…' : l)
+    if (lineas.length > 6) say(`… y ${lineas.length - 6} bloques más (faroHarness.pageDigest() para verlos todos)`)
+  },
+
+  async 'notes-blocks'() {
+    renderPage('page:200')
+    await wait(320)
+    runner.clear()
+    const r = await runner.applyNotes({ notes: observacionesPorBloques(pageDigest()) })
+    say(
+      `marcadas ${r.placed.join(', ') || 'ninguna'}${r.missed.length ? ' · sin anclar ' + r.missed.join(', ') : ''}`,
+      'ok'
+    )
+    for (const d of r.detail || []) say(`  ${d.n} → ${d.strategy}${d.approximate ? ' (aproximada)' : ''}`)
   },
 
   unsafe() {
@@ -1155,10 +1216,14 @@ const actions = {
     const izquierdas = cajas.map((d) => parseFloat(d.style.left))
     const derechas = cajas.map((d) => parseFloat(d.style.left) + parseFloat(d.style.width))
 
+    // La cita ocupa cuatro líneas del bloque, así que son cuatro barras. Antes
+    // salían cinco: el índice de texto se saltaba los nodos que sólo tienen
+    // espacios, la cita —que cruza uno— sólo se encontraba por aproximación, y
+    // la marca aproximada se comía media línea de más.
     ok(
       'codigo: una barra por linea, no una por cada color de sintaxis',
-      rCodigo.anchored && cajas.length === 4 + 1,
-      `${cajas.length} cajas para 5 lineas · ${rCodigo.strategy}`
+      rCodigo.anchored && cajas.length === 4,
+      `${cajas.length} cajas para 4 lineas · ${rCodigo.strategy}`
     )
 
     ok(
@@ -1220,6 +1285,190 @@ const actions = {
     )
     preCode.style.maxWidth = ''
 
+    // 28. El camino se lee de la API REST del propio sitio, no del modelo: una
+    //     petición, milisegundos, y la portada del espacio fuera del recorrido.
+    const { fetchAncestors } = await import('/src/shared/confluence-rest.js')
+    const sitioRest = { origin: location.origin, wikiPrefix: '/wiki', cloud: true }
+    const pideRest = (u, o) => fetch(u, o)
+    const t0Rest = Date.now()
+    const rest = await fetchAncestors(pideRest, sitioRest, '3003')
+    const cadenaRest = rest.ok ? rest.pages.map((p) => p.id).join('>') : ''
+    ok(
+      'el camino se lee de la API REST del sitio, en milisegundos y sin la portada',
+      rest.ok &&
+        cadenaRest === '1080>1081>3001>3002>3003' &&
+        rest.pages[0].parentId === null &&
+        rest.pages[4].parentId === '3002' &&
+        rest.pages[4].url === '/wiki/spaces/ENG/pages/3003/TCV+Static+-+Identity+Provider+Service' &&
+        Date.now() - t0Rest < 2000,
+      rest.ok ? `${cadenaRest} · ${rest.via} · ${rest.ms} ms` : rest.reason
+    )
+    const restNo = await fetchAncestors(pideRest, sitioRest, '424242')
+    ok('una página que no existe no tiene camino, y no se inventa', !restNo.ok && restNo.status === 404, restNo.reason || '')
+
+    // 29. Y con ese camino, sin que el modelo haya dicho nada, el recorrido
+    //     entero sobre la barra lateral estilo Cloud: cuatro ramas y un salto.
+    if (rest.ok) {
+      setSidebar('clasica')
+      setSidebar('cloud')
+      renderPage('page:2003')
+      await wait(320)
+      const pasosRest = rest.pages.map((p, i) => ({
+        kind: 'confluence-page',
+        id: p.id,
+        title: p.title,
+        label: p.title,
+        path: p.url,
+        url: ORIGIN + p.url,
+        action: i === rest.pages.length - 1 ? 'open' : 'expand',
+      }))
+      const estadosRest = []
+      for (let i = 0; i < pasosRest.length; i++) {
+        const r = await runner.executeStep({
+          step: pasosRest[i],
+          index: i,
+          total: pasosRest.length,
+          isLast: i === pasosRest.length - 1,
+        })
+        estadosRest.push(r.status)
+        await wait(300)
+        if (r.status === STEP_RESULT.CANCELLED) break
+      }
+      ok(
+        'con el camino de la API, de la ACV a su TCV: despliega cuatro ramas y navega una vez',
+        estadosRest.slice(0, -1).every((e) => e === STEP_RESULT.EXPANDED) &&
+          estadosRest[estadosRest.length - 1] === STEP_RESULT.CLICKED &&
+          location.pathname.includes('/pages/3003'),
+        `${estadosRest.join(',')} · ${location.pathname}`
+      )
+      setSidebar('clasica')
+    }
+
+    // 30. La página en bloques numerados, tal como se le enseña al modelo:
+    //     determinista, con la forma esperada y sin lo que no se ve.
+    runner.clear()
+    renderPage('page:200')
+    await wait(320)
+    const d1 = pageDigest()
+    const d2 = pageDigest()
+    const lineasDigest = formatDigest(d1.blocks).split('\n')
+    ok(
+      'digest: la pagina en bloques numerados, determinista y con la forma esperada',
+      formatDigest(d1.blocks) === formatDigest(d2.blocks) &&
+        d1.blocks.length > 10 &&
+        !d1.truncated &&
+        /^¶1 \[h1\] ADR-014/.test(lineasDigest[0]) &&
+        d1.blocks.some((b) => b.tag === 'h2' && b.text === 'Contexto') &&
+        d1.blocks.some((b) => b.tag === 'código' && b.text.includes('app.example.com')),
+      `${d1.blocks.length} bloques · ${d1.chars} caracteres · ${lineasDigest[0]}`
+    )
+
+    const articulo = document.querySelector('#page-content article')
+    const oculto = document.createElement('p')
+    oculto.textContent = 'Párrafo oculto que no debe verse'
+    oculto.style.display = 'none'
+    const escondido = document.createElement('p')
+    escondido.textContent = 'Párrafo aria-hidden que tampoco'
+    escondido.setAttribute('aria-hidden', 'true')
+    articulo.append(oculto, escondido)
+    const conOcultos = pageDigest()
+    oculto.remove()
+    escondido.remove()
+    ok(
+      'digest: lo que no se ve no se le ensena al modelo',
+      conOcultos.blocks.length === d1.blocks.length && !conOcultos.blocks.some((b) => /oculto|tampoco/.test(b.text)),
+      `${conOcultos.blocks.length} bloques con dos parrafos ocultos`
+    )
+
+    // 31. La escalera entera del análisis por bloques, sobre observaciones
+    //     construidas con la misma página en bloques que vería el modelo.
+    const notasBloque = observacionesPorBloques(d1)
+    runner.clear()
+    const resBloques = await runner.applyNotes({ notes: notasBloque })
+    await wait(500)
+    const estrategia = (n) => resBloques.detail?.find((x) => x.n === n)?.strategy || 'sin detalle'
+
+    ok(
+      'analisis por bloques: bloque + cita literal',
+      estrategia(1) === 'block+quote' && highlighted().includes('el token expira a los 90 días naturales'),
+      estrategia(1)
+    )
+    ok(
+      'analisis por bloques: sin cita se marca el bloque entero',
+      estrategia(2) === 'block+whole' && highlighted().some((t) => t.startsWith('La rotación se solapa')),
+      estrategia(2)
+    )
+    ok(
+      'analisis por bloques: el numero se equivoco pero el texto manda',
+      estrategia(3) === 'block-moved+quote' && highlighted().includes('El exportador de métricas heredado sigue con token fijo'),
+      estrategia(3)
+    )
+    ok(
+      'analisis por bloques: sin bloque, la cita se busca en toda la pagina',
+      estrategia(4) === 'global+quote' && highlighted().includes('Cada servicio necesita releer su credencial sin reiniciar'),
+      estrategia(4)
+    )
+    ok(
+      'analisis por bloques: sin bloque ni cita, sin marcar; y una marca por observacion',
+      resBloques.placed.join(',') === '1,2,3,4' && resBloques.missed.join(',') === '5' && highlighted().length === 4,
+      `puestas ${resBloques.placed.join(',')} · sin anclar ${resBloques.missed.join(',')} · ${highlighted().length} resaltados`
+    )
+
+    // El bloque entero es una barra por línea, sin apilar; y las insignias, una
+    // por observación, detrás de su última línea.
+    const cajasBloques = [...runner.overlay.el.quoteLayer.children]
+    let solapesBloques = 0
+    for (let i = 0; i < cajasBloques.length; i++) {
+      for (let j = i + 1; j < cajasBloques.length; j++) {
+        const a = cajasBloques[i].getBoundingClientRect()
+        const b = cajasBloques[j].getBoundingClientRect()
+        if (a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom) solapesBloques++
+      }
+    }
+    ok(
+      'analisis por bloques: el bloque entero es una barra por linea, sin apilar',
+      cajasBloques.length >= 5 && solapesBloques === 0 && runner.overlay.el.noteLayer.children.length === 4,
+      `${cajasBloques.length} cajas · ${solapesBloques} solapes · ${runner.overlay.el.noteLayer.children.length} insignias`
+    )
+
+    // 32. La página se desplazó un bloque entre que se leyó y se marcó: alguien
+    //     añadió un párrafo por encima. El número ya no vale; el texto sí.
+    const insertado = document.createElement('p')
+    insertado.textContent = 'Nota añadida hoy por encima de todo lo demás.'
+    articulo.insertBefore(insertado, articulo.children[1])
+    runner.clearNotes()
+    const resMovido = await runner.applyNotes({ notes: notasBloque })
+    await wait(300)
+    insertado.remove()
+    ok(
+      'analisis por bloques: la pagina se desplazo un bloque y la marca sigue donde estaba el texto',
+      resMovido.detail?.find((x) => x.n === 1)?.strategy === 'block-moved+quote' &&
+        highlighted().includes('el token expira a los 90 días naturales'),
+      resMovido.detail?.find((x) => x.n === 1)?.strategy || 'sin detalle'
+    )
+
+    // 33. Confluence repinta: el párrafo marcado se sustituye por un clon. Ir a
+    //     la observación la vuelve a resolver contra la página de ahora.
+    runner.clearNotes()
+    renderPage('page:200')
+    await wait(320)
+    await runner.applyNotes({ notes: notasBloque })
+    const parrafoMarcado = [...document.querySelectorAll('#page-content p')].find((p) =>
+      p.textContent.includes('el token expira')
+    )
+    parrafoMarcado.replaceWith(parrafoMarcado.cloneNode(true))
+    const focoVivo = await runner.focusNote({ n: 1 })
+    await wait(300)
+    ok(
+      'analisis por bloques: una marca sobrevive a un repintado del parrafo',
+      focoVivo.ok &&
+        runner.overlay.notes.find((x) => x.n === 1)?.ranges[0]?.startContainer?.isConnected === true &&
+        highlighted().includes('el token expira a los 90 días naturales') &&
+        runner.overlay.activeNote === 1,
+      focoVivo.ok ? 'resuelta de nuevo' : focoVivo.reason
+    )
+    runner.clearNotes()
+
     runner.clear()
     const passed = results.filter((x) => x.pass).length
     say(`—— ${passed}/${results.length} comprobaciones ——`, passed === results.length ? 'ok' : 'bad')
@@ -1243,5 +1492,15 @@ document.getElementById('rig-min').addEventListener('click', () => {
 })
 
 // Expuesto para poder dirigir el banco desde fuera en las comprobaciones.
-window.faroHarness = { actions, runner, picker, renderPage, PAGES, OBSERVACIONES }
+window.faroHarness = {
+  actions,
+  runner,
+  picker,
+  renderPage,
+  PAGES,
+  OBSERVACIONES,
+  pageDigest,
+  formatDigest,
+  observacionesPorBloques,
+}
 say('banco listo')

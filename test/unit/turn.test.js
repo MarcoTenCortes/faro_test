@@ -1,5 +1,5 @@
 import { test, eq, assert } from '../harness.js'
-import { TurnTracker, describeError, isProviderAuthError } from '../../src/opencode/turn.js'
+import { TurnTracker, describeError, isProviderAuthError, structuredOutputOf } from '../../src/opencode/turn.js'
 import { parseEventBlock, readEventStream } from '../../src/opencode/client.js'
 
 const SID = 'ses_abc'
@@ -52,6 +52,29 @@ test('turn: las herramientas se registran aparte del texto', () => {
   eq(t.tools.length, 1)
   eq(t.tools[0].tool, 'confluence_search')
   eq(t.text, '')
+})
+
+test('turn: la salida estructurada se recoge del mensaje del asistente, no del usuario', () => {
+  const t = new TurnTracker(SID)
+  eq(t.structured, undefined)
+  t.handle(ev('message.updated', { info: { id: 'msg_u', sessionID: SID, role: 'user', structured: { colada: true } } }))
+  eq(t.structured, undefined, 'lo del usuario no cuenta')
+  t.handle(ev('message.updated', { info: { id: 'msg_a', sessionID: SID, role: 'assistant' } }))
+  eq(t.structured, undefined, 'sin structured no cambia nada')
+  t.handle(ev('message.updated', { info: { id: 'msg_a', sessionID: SID, role: 'assistant', structured: { observations: [] } } }))
+  eq(t.structured, { observations: [] })
+})
+
+test('structuredOutputOf: sólo la llamada completada y válida a StructuredOutput', () => {
+  const ok = { type: 'tool', tool: 'StructuredOutput', state: { status: 'completed', metadata: { valid: true }, input: { a: 1 } } }
+  eq(structuredOutputOf([ok]), { a: 1 })
+  eq(structuredOutputOf([{ type: 'text', text: 'hola' }, ok]), { a: 1 })
+  eq(structuredOutputOf([{ ...ok, state: { ...ok.state, status: 'running' } }]), undefined, 'pendiente no vale')
+  eq(structuredOutputOf([{ ...ok, state: { ...ok.state, metadata: { valid: false } } }]), undefined, 'inválida no vale')
+  eq(structuredOutputOf([{ ...ok, tool: 'invalid' }]), undefined, 'otra herramienta no vale')
+  eq(structuredOutputOf([{ ...ok, state: { ...ok.state, input: 'texto' } }]), undefined, 'tiene que ser un objeto')
+  eq(structuredOutputOf(null), undefined)
+  eq(structuredOutputOf([]), undefined)
 })
 
 test('turn: session.idle cierra el turno una sola vez', () => {

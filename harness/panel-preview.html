@@ -170,12 +170,12 @@ frame.addEventListener('load', async () => {
     steps.appendChild(mk('span', null, s))
   })
   card.appendChild(steps)
-  // Los botones salen de la logica REAL, con un plan en modo "direct":
-  // es el caso que solo ofrecia «Llevame».
+  // Los botones salen de la logica REAL, con un plan en modo "direct": el
+  // ajuste (guiada) manda sobre la recomendacion del modelo.
   const { navOptions } = await import('/src/nav/options.js')
   const acts = mk('div', 'nav-actions')
   const planDemo = { mode: 'direct', steps: [{ id: 'ENG' }, { id: '100' }, { id: '200' }] }
-  for (const o of navOptions(planDemo, { assistedByDefault: false })) {
+  for (const o of navOptions(planDemo, { navMode: 'guided' })) {
     acts.appendChild(mk('button', o.kind, o.label))
   }
   card.appendChild(acts)
@@ -201,15 +201,19 @@ frame.addEventListener('load', async () => {
   )
   bAnalisis.appendChild(cuerpo)
 
+  // Las filas, con las tres formas en que se marca hoy una observación: la cita
+  // literal dentro de su bloque, el bloque entero cuando la cita no estaba tal
+  // cual, y la que habla de la página en general, que no se marca.
   const notas = [
-    [1, 'La caducidad no se justifica', 'el token expira a los 90 días naturales', true],
-    [2, 'Ventana de solape sin medir', 'durante las últimas 48 horas conviven el token viejo y el nuevo', true],
-    [3, 'Excepción sin fecha firme', 'previsto para el próximo trimestre', false],
+    [1, 'La caducidad no se justifica', '«el token expira a los 90 días naturales»', true],
+    [2, 'Ventana de solape sin medir', 'bloque entero: «La rotación se solapa: durante las últimas 48 horas conviven el token viejo y el nuevo, de modo que»', true],
+    [3, 'Excepción sin fecha firme', '«previsto para el próximo trimestre» · aproximada', true],
+    [4, 'Falta un diagrama de despliegue', 'habla de la página en general; no hay pasaje que marcar', false],
   ]
 
   const notesCard = mk('div', 'nav-card notes-card')
   notesCard.appendChild(mk('div', 'nav-kicker', 'Marcado en la página'))
-  notesCard.appendChild(mk('div', 'nav-title', '2 observaciones subrayadas'))
+  notesCard.appendChild(mk('div', 'nav-title', '3 observaciones subrayadas'))
   notesCard.appendChild(
     mk('div', 'nav-text', 'Una no la he sabido situar en la página; la dejo sin marcar antes que marcarla mal.')
   )
@@ -224,7 +228,7 @@ frame.addEventListener('load', async () => {
     const num = mk('span', 'note-num', String(n))
     const body = mk('span', 'note-body')
     body.append(mk('span', 'note-title', titulo))
-    body.append(mk('span', 'note-quote', puesta ? '«' + cita + '»' : 'no la he encontrado en la página'))
+    body.append(mk('span', 'note-quote', cita))
     row.append(num, body)
     lista.appendChild(row)
   }
@@ -244,6 +248,7 @@ frame.addEventListener('load', async () => {
   $('settings-site-info').textContent = 'acme.atlassian.net · 212 entradas indexadas · con contexto'
   $('delay-value').textContent = '900'
   $('set-delay').value = 900
+  $('set-nav-guided').checked = true
   $('set-hl-spotlight').checked = true
   $('set-url').value = 'http://127.0.0.1:4096'
   $('setup-config-path').textContent = 'C:\\Users\\marco\\.config\\opencode\\opencode.json'

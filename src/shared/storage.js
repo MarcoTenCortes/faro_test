@@ -1,11 +1,13 @@
 /** Acceso a chrome.storage con valores por defecto y sin sorpresas. */
 
-import { DEFAULT_SETTINGS, STORAGE_KEYS } from './config.js'
+import { DEFAULT_SETTINGS, STORAGE_KEYS, migrateSettings } from './config.js'
 import { INDEX_VERSION } from '../atlassian/index-store.js'
 
 export async function getSettings() {
   const got = await chrome.storage.local.get(STORAGE_KEYS.settings)
-  return { ...DEFAULT_SETTINGS, ...(got[STORAGE_KEYS.settings] || {}) }
+  // Los ajustes de una versión anterior se traducen al leerlos y quedan
+  // guardados en la forma nueva la próxima vez que se toque cualquier cosa.
+  return { ...DEFAULT_SETTINGS, ...migrateSettings(got[STORAGE_KEYS.settings]) }
 }
 
 export async function saveSettings(patch) {

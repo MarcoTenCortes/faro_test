@@ -22,7 +22,8 @@ export const MSG = {
   // panel -> content script
   PICK_START: 'faro:pick-start',
   PICK_CANCEL: 'faro:pick-cancel',
-  PAGE_TEXT: 'faro:page-text',
+  PAGE_DIGEST: 'faro:page-digest',
+  PAGE_ANCESTORS: 'faro:page-ancestors',
   ANNOTATE: 'faro:annotate',
   FOCUS_NOTE: 'faro:focus-note',
   CLEAR_NOTES: 'faro:clear-notes',

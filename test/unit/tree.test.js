@@ -11,7 +11,7 @@ import { mergeTree, countWithParent } from '../../src/panel/indexer.js'
 import { normalizeIndex, ancestryOf } from '../../src/atlassian/index-store.js'
 import { validatePlan } from '../../src/nav/validate.js'
 import { navOptions } from '../../src/nav/options.js'
-import { indexTreePrompt, ancestryPrompt, TREE_SCHEMA, baseSystem } from '../../src/panel/prompts.js'
+import { indexTreePrompt, TREE_SCHEMA, baseSystem } from '../../src/panel/prompts.js'
 
 const HOST = 'confluence.simplprogramme.eu'
 const ORIGIN = 'https://confluence.simplprogramme.eu'
@@ -91,14 +91,9 @@ test('el esquema del arbol exige id y titulo, y admite el padre', () => {
   eq(TREE_SCHEMA.properties.pages.items.required, ['id', 'title'])
 })
 
-test('ancestryPrompt exige la cadena entera, no solo la pagina', () => {
-  const p = ancestryPrompt('83206087', 'ACV Static')
-  assert(p.includes('83206087'))
-  assert(/ancestors/i.test(p), 'debe nombrar el campo real de la herramienta')
-  assert(/CADENA COMPLETA/i.test(p), 'y pedir la cadena entera')
-  assert(/una sola pagina|una sola página/i.test(p), 'y avisar de que una sola pagina no sirve')
-  assert(/no inventes/i.test(p))
-})
+// Los antepasados de una pagina suelta ya no se le piden al modelo: se leen de
+// la API REST del propio Confluence. Eso vive en test/unit/confluence-rest.test.js
+// y en test/unit/planner.test.js.
 
 test('el modelo tiene prohibido improvisar recorridos', () => {
   // Vino de una conversacion real: el modelo se puso a escribir «1. abre la

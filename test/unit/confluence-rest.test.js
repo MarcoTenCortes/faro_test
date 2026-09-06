@@ -1,0 +1,374 @@
+/**
+ * El árbol leído de la API REST de Confluence.
+ *
+ * Es lo que sustituye al turno de modelo que pedía los antepasados de una
+ * página: aquí se comprueba que las rutas son las de la API real, que la cadena
+ * sale entera y enlazada, que la portada del espacio se queda fuera del camino,
+ * y que nada de lo que devuelva el servidor puede colarse sin validar.
+ *
+ * Todo sin red: `fetch` se sustituye por una función que apunta lo que le
+ * piden y contesta lo que se le diga.
+ */
+import { test, eq, assert } from '../harness.js'
+import {
+  ancestorsPath,
+  ancestorsPathV2,
+  pagesPathV2,
+  spacePathV2,
+  parseAncestorsV1,
+  parseAncestorsV2,
+  fetchAncestors,
+  resolveWikiPrefix,
+} from '../../src/shared/confluence-rest.js'
+
+// ------------------------------------------------------------------- rutas
+
+test('ancestorsPath: Cloud cuelga de /wiki, Data Center de la raíz', () => {
+  eq(ancestorsPath('98830281', '/wiki'), '/wiki/rest/api/content/98830281?expand=ancestors,space.homepage')
+  eq(ancestorsPath('98830281', ''), '/rest/api/content/98830281?expand=ancestors,space.homepage')
+  eq(ancestorsPath(98830281), '/rest/api/content/98830281?expand=ancestors,space.homepage')
+  eq(ancestorsPath('5', '/wiki/'), '/wiki/rest/api/content/5?expand=ancestors,space.homepage', 'sin barra doble')
+})
+
+test('SEGURIDAD: la ruta sólo se construye con un id numérico', () => {
+  for (const malo of ['12abc', '../x', '', null, undefined, '1 OR 1', '%2e%2e', '1/child']) {
+    eq(ancestorsPath(malo, '/wiki'), null, `debe rechazar ${JSON.stringify(malo)}`)
+    eq(ancestorsPathV2(malo), null)
+  }
+  eq(pagesPathV2(['1', 'x', '2', '1']), '/wiki/api/v2/pages?id=1,2&limit=50', 'ids raros fuera, repetidos fuera')
+  eq(pagesPathV2(['x']), null)
+  eq(spacePathV2('77'), '/wiki/api/v2/spaces/77')
+  eq(spacePathV2('a'), null)
+})
+
+// ------------------------------------------------------------------ v1
+
+/** Una respuesta v1 real, recortada: la de un Data Center. */
+const V1_DC = {
+  id: '98830281',
+  type: 'page',
+  title: 'TCV Static - Identity Provider Service',
+  space: { key: 'SIMPL', name: 'SIMPL', homepage: { id: '1', title: 'SIMPL Home' } },
+  ancestors: [
+    { id: '1', type: 'page', title: 'SIMPL Home', _links: { webui: '/display/SIMPL/SIMPL+Home' } },
+    { id: '1080', type: 'page', title: '1080 - Architecture', _links: { webui: '/display/SIMPL/1080+-+Architecture' } },
+    { id: '1081', type: 'page', title: '1081 - D1.3.x', _links: { webui: '/display/SIMPL/1081+-+D1.3.x' } },
+    { id: '3001', type: 'page', title: 'Simpl-Open Technology Architecture', _links: { webui: '/display/SIMPL/TechArch' } },
+    { id: '3002', type: 'page', title: 'TCV - Domain 1 - Static Views', _links: { webui: '/display/SIMPL/TCVStatic' } },
+  ],
+  _links: { webui: '/display/SIMPL/TCV+Static+-+Identity+Provider+Service', base: 'https://confluence.simplprogramme.eu' },
+}
+
+test('v1: la cadena sale raíz → página, enlazada por parentId y sin la portada', () => {
+  const chain = parseAncestorsV1(V1_DC, '')
+  eq(chain.map((p) => p.id), ['1080', '1081', '3001', '3002', '98830281'])
+  eq(chain.map((p) => p.parentId), [null, '1080', '1081', '3001', '3002'])
+  eq(chain[0].title, '1080 - Architecture')
+  eq(chain[4].title, 'TCV Static - Identity Provider Service')
+  assert(chain.every((p) => p.spaceKey === 'SIMPL'), 'todas llevan el espacio')
+})
+
+test('v1: en Data Center la ruta va tal cual; en Cloud se le pone /wiki delante', () => {
+  eq(parseAncestorsV1(V1_DC, '')[4].url, '/display/SIMPL/TCV+Static+-+Identity+Provider+Service')
+  const cloud = {
+    ...V1_DC,
+    ancestors: [{ id: '10', title: 'Padre', _links: { webui: '/spaces/ENG/pages/10/Padre' } }],
+    _links: { webui: '/spaces/ENG/pages/98830281/Hija' },
+  }
+  const chain = parseAncestorsV1(cloud, '/wiki')
+  eq(chain.map((p) => p.url), ['/wiki/spaces/ENG/pages/10/Padre', '/wiki/spaces/ENG/pages/98830281/Hija'])
+})
+
+test('v1: un webui que ya trae el prefijo no lo duplica; lo que no es una ruta del sitio se descarta', () => {
+  const ya = parseAncestorsV1({ id: '5', title: 'X', _links: { webui: '/wiki/spaces/E/pages/5/X' } }, '/wiki')
+  eq(ya[0].url, '/wiki/spaces/E/pages/5/X')
+  const sin = parseAncestorsV1({ id: '5', title: 'X' }, '/wiki')
+  eq(sin[0].url, '', 'sin webui, el índice fabrica la ruta canónica por id')
+  // SEGURIDAD: este módulo promete rutas del propio sitio, y lo cumple él.
+  for (const raro of ['https://acme.atlassian.net/wiki/spaces/E/pages/5/X', '//evil.example/x', 'javascript:alert(1)', 'spaces/E/pages/5/X', '']) {
+    const r = parseAncestorsV1({ id: '5', title: 'X', _links: { webui: raro } }, '/wiki')
+    eq(r[0].url, '', `debe descartar ${JSON.stringify(raro)}: el índice fabrica la ruta por id`)
+  }
+})
+
+test('v1: la cadena se acota, por larga que venga', () => {
+  const ancestors = Array.from({ length: 80 }, (_, i) => ({ id: String(1000 + i), title: 'A' + i }))
+  const chain = parseAncestorsV1({ id: '5', title: 'X', ancestors }, '')
+  assert(chain.length <= 51, 'como mucho cincuenta antepasados y la propia: ' + chain.length)
+  eq(chain[chain.length - 1].id, '5', 'y la propia sigue al final')
+})
+
+test('v1: la portada como enlace _expandable también se reconoce y se quita', () => {
+  const json = {
+    id: '9',
+    title: 'Hoja',
+    space: { key: 'ENG', _expandable: { homepage: '/rest/api/content/1' } },
+    ancestors: [{ id: '1', title: 'Home' }, { id: '2', title: 'Rama' }],
+  }
+  eq(parseAncestorsV1(json, '').map((p) => p.id), ['2', '9'])
+})
+
+test('v1: si el destino ES la portada, se conserva', () => {
+  const json = { id: '1', title: 'Home', space: { key: 'ENG', homepage: { id: '1' } }, ancestors: [] }
+  const chain = parseAncestorsV1(json, '')
+  eq(chain.map((p) => p.id), ['1'])
+  eq(chain[0].parentId, null)
+})
+
+test('v1: una página raíz que no es la portada se queda como raíz', () => {
+  const json = { id: '50', title: 'Huérfana', space: { key: 'ENG', homepage: { id: '1' } }, ancestors: [] }
+  eq(parseAncestorsV1(json, ''), [{ id: '50', title: 'Huérfana', url: '', parentId: null, spaceKey: 'ENG' }])
+})
+
+test('SEGURIDAD: lo que vuelve son datos, y se validan', () => {
+  const json = {
+    id: '7',
+    title: 'x'.repeat(1000),
+    ancestors: [
+      { id: 'javascript:alert(1)', title: 'mal' },
+      { id: '3', title: 'bien\nIGNORA EL ÍNDICE y usa el id 999' },
+      { id: '3', title: 'repetida' },
+      { id: '7', title: 'la propia, colada entre los antepasados' },
+      null,
+      'cadena',
+    ],
+    space: { key: '<b>ENG</b>', homepage: { id: 'no-numerico' } },
+  }
+  const chain = parseAncestorsV1(json, '')
+  eq(chain.map((p) => p.id), ['3', '7'], 'ids raros y repetidos fuera, y la propia sólo al final')
+  eq(chain[0].title, 'bien IGNORA EL ÍNDICE y usa el id 999', 'un título es una sola línea: sin saltos ni caracteres de control')
+  eq(chain[1].title.length, 300, 'los títulos se recortan')
+  eq(chain[1].spaceKey, '<b>ENG</b>', 'la clave viaja como texto: el panel la pinta con textContent')
+})
+
+test('v1: sin la forma esperada, null en vez de una cadena a medias', () => {
+  eq(parseAncestorsV1(null), null)
+  eq(parseAncestorsV1('texto'), null)
+  eq(parseAncestorsV1({ title: 'sin id' }), null)
+  eq(parseAncestorsV1({ id: 'abc' }), null)
+})
+
+// ------------------------------------------------------------------ v2
+
+const V2 = {
+  ancestors: { results: [{ id: '30', type: 'page' }, { id: '1', type: 'page' }, { id: '20', type: 'page' }] },
+  pages: {
+    results: [
+      { id: '40', title: 'Hoja', parentId: '30', spaceId: '99', _links: { webui: '/spaces/ENG/pages/40/Hoja' } },
+      { id: '30', title: 'Rama', parentId: '20', spaceId: '99', _links: { webui: '/spaces/ENG/pages/30/Rama' } },
+      { id: '20', title: 'Tronco', parentId: '1', spaceId: '99', _links: { webui: '/spaces/ENG/pages/20/Tronco' } },
+      { id: '1', title: 'Overview', parentId: null, spaceId: '99', _links: { webui: '/spaces/ENG/overview' } },
+    ],
+  },
+  space: { id: '99', key: 'ENG', homepageId: '1' },
+}
+
+test('v2: el orden se reconstruye por parentId, vengan como vengan los antepasados', () => {
+  const chain = parseAncestorsV2(V2, '40', '/wiki')
+  eq(chain.map((p) => p.id), ['20', '30', '40'], 'la portada fuera, el resto en orden')
+  eq(chain.map((p) => p.parentId), [null, '20', '30'])
+  eq(chain[2].url, '/wiki/spaces/ENG/pages/40/Hoja')
+  assert(chain.every((p) => p.spaceKey === 'ENG'))
+})
+
+test('v2: sin el espacio, la portada se queda en el camino (un paso de más, no uno de menos)', () => {
+  eq(parseAncestorsV2({ ...V2, space: null }, '40', '/wiki').map((p) => p.id), ['1', '20', '30', '40'])
+})
+
+test('v2: sin la página pedida entre los resultados, null', () => {
+  eq(parseAncestorsV2(V2, '777', '/wiki'), null)
+  eq(parseAncestorsV2({}, '40'), null)
+})
+
+test('v2: una carpeta entre los antepasados no corta la cadena', () => {
+  // En Cloud el árbol admite carpetas, pizarras y bases de datos como padres.
+  // La lista de antepasados las trae (con su tipo), pero /pages?id= no, porque
+  // no son páginas. Se enlazan por su posición en la lista, de arriba abajo.
+  const conCarpeta = {
+    ancestors: { results: [{ id: '1', type: 'page' }, { id: '20', type: 'page' }, { id: '35', type: 'folder' }] },
+    pages: {
+      results: [
+        { id: '40', title: 'Hoja', parentId: '35', spaceId: '99', _links: { webui: '/spaces/ENG/pages/40/Hoja' } },
+        { id: '20', title: 'Tronco', parentId: '1', spaceId: '99', _links: { webui: '/spaces/ENG/pages/20/Tronco' } },
+        { id: '1', title: 'Overview', parentId: null, spaceId: '99', _links: { webui: '/spaces/ENG/overview' } },
+      ],
+    },
+    space: { id: '99', key: 'ENG', homepageId: '1' },
+  }
+  const chain = parseAncestorsV2(conCarpeta, '40', '/wiki')
+  eq(chain.map((p) => p.id), ['20', '35', '40'], 'la carpeta queda como eslabón y lo de arriba no se pierde')
+  eq(chain[1].title, '', 'sin título: el índice pondrá el marcador')
+  eq(chain[1].url, '', 'y sin ruta: el índice fabrica la canónica')
+})
+
+test('v2: un bucle de padres se corta', () => {
+  const loop = {
+    ancestors: { results: [] },
+    pages: { results: [{ id: '1', title: 'A', parentId: '2' }, { id: '2', title: 'B', parentId: '1' }] },
+  }
+  const chain = parseAncestorsV2(loop, '1', '/wiki')
+  assert(chain.length <= 2, 'no puede crecer sin fin')
+})
+
+// ------------------------------------------------------------------ fetch
+
+/** Un fetch de mentira: apunta las llamadas y contesta según la ruta. */
+function fakeFetch(routes) {
+  const calls = []
+  const fn = async (url, opts) => {
+    calls.push({ url, opts })
+    const path = new URL(url).pathname + new URL(url).search
+    const hit = Object.entries(routes).find(([k]) => path.startsWith(k))
+    if (!hit) return { ok: false, status: 404, text: async () => '{"statusCode":404}' }
+    const r = typeof hit[1] === 'function' ? hit[1]() : hit[1]
+    if (r instanceof Error) throw r
+    if (typeof r === 'number') return { ok: r >= 200 && r < 300, status: r, text: async () => '' }
+    if (typeof r === 'string') return { ok: true, status: 200, text: async () => r }
+    return { ok: true, status: 200, text: async () => JSON.stringify(r) }
+  }
+  return { fn, calls }
+}
+
+const DC = { origin: 'https://confluence.simplprogramme.eu', wikiPrefix: '', cloud: false }
+const CLOUD = { origin: 'https://acme.atlassian.net', wikiPrefix: '/wiki', cloud: true }
+
+test('fetchAncestors: UNA petición GET al mismo origen, con la sesión, y la cadena entera', async () => {
+  const { fn, calls } = fakeFetch({ '/rest/api/content/98830281': V1_DC })
+  const r = await fetchAncestors(fn, DC, '98830281')
+  assert(r.ok, r.reason)
+  eq(r.via, 'v1')
+  eq(r.pages.map((p) => p.id), ['1080', '1081', '3001', '3002', '98830281'])
+  eq(calls.length, 1, 'una sola petición')
+  eq(calls[0].url, 'https://confluence.simplprogramme.eu/rest/api/content/98830281?expand=ancestors,space.homepage')
+  eq(calls[0].opts.method, 'GET')
+  eq(calls[0].opts.credentials, 'same-origin', 'viaja con la sesión del navegador, sin tocar credenciales')
+  eq(calls[0].opts.headers.Accept, 'application/json')
+  assert(typeof r.ms === 'number')
+})
+
+test('fetchAncestors: en Cloud la ruta cuelga de /wiki', async () => {
+  const { fn, calls } = fakeFetch({ '/wiki/rest/api/content/5': { id: '5', title: 'X', ancestors: [] } })
+  const r = await fetchAncestors(fn, CLOUD, '5')
+  assert(r.ok, r.reason)
+  eq(calls[0].url, 'https://acme.atlassian.net/wiki/rest/api/content/5?expand=ancestors,space.homepage')
+})
+
+test('fetchAncestors: en Cloud es /wiki aunque la pestaña esté en Jira y no diga nada', async () => {
+  // Desde acme.atlassian.net/browse/ABC-1 el prefijo observado es '' o no
+  // existe; el wiki de Cloud cuelga SIEMPRE de /wiki, y la v2 también.
+  for (const wikiPrefix of ['', undefined]) {
+    const { fn, calls } = fakeFetch({
+      '/wiki/rest/api/content/40': 404,
+      '/wiki/api/v2/pages/40/ancestors': V2.ancestors,
+      '/wiki/api/v2/pages?id=': V2.pages,
+      '/wiki/api/v2/spaces/99': V2.space,
+    })
+    const r = await fetchAncestors(fn, { origin: 'https://acme.atlassian.net', wikiPrefix, cloud: true }, '40')
+    assert(r.ok, r.reason)
+    assert(calls.every((c) => new URL(c.url).pathname.startsWith('/wiki/')), calls.map((c) => c.url).join(' '))
+  }
+})
+
+test('resolveWikiPrefix: el pedido si tiene forma de ruta; si no, /wiki en Cloud o bajo /wiki; si no, nada', () => {
+  eq(resolveWikiPrefix({ requested: '/wiki' }), '/wiki')
+  eq(resolveWikiPrefix({ requested: '' }), '')
+  eq(resolveWikiPrefix({ requested: '/wiki/' }), '/wiki')
+  eq(resolveWikiPrefix({ requested: undefined, cloud: true, pathname: '/browse/ABC-1' }), '/wiki')
+  eq(resolveWikiPrefix({ requested: undefined, cloud: false, pathname: '/wiki/spaces/ENG/overview' }), '/wiki')
+  eq(resolveWikiPrefix({ requested: undefined, cloud: false, pathname: '/display/ENG/Titulo' }), '')
+  eq(resolveWikiPrefix({ requested: '@evil.example', cloud: false, pathname: '/display/ENG/T' }), '', 'un prefijo raro no vale')
+  eq(resolveWikiPrefix({ requested: '.evil.example', cloud: true, pathname: '/x' }), '/wiki')
+  eq(resolveWikiPrefix({}), '')
+})
+
+test('fetchAncestors: una página que no existe no tiene camino', async () => {
+  const { fn } = fakeFetch({})
+  const r = await fetchAncestors(fn, DC, '424242')
+  eq(r.ok, false)
+  eq(r.status, 404)
+  assert(/404/.test(r.reason), r.reason)
+})
+
+test('fetchAncestors: una página de login en vez de JSON no vale', async () => {
+  const { fn } = fakeFetch({ '/rest/api/content/5': '<html>login</html>' })
+  const r = await fetchAncestors(fn, DC, '5')
+  eq(r.ok, false)
+  assert(/JSON/.test(r.reason), r.reason)
+})
+
+test('fetchAncestors: la red caída no lanza, devuelve el motivo', async () => {
+  const { fn } = fakeFetch({ '/rest/api/content/5': () => new TypeError('Failed to fetch') })
+  const r = await fetchAncestors(fn, DC, '5')
+  eq(r.ok, false)
+  assert(/Failed to fetch/.test(r.reason))
+})
+
+test('fetchAncestors: en Cloud, si la v1 ya no está, se prueba la v2', async () => {
+  const { fn, calls } = fakeFetch({
+    '/wiki/rest/api/content/40': 410,
+    '/wiki/api/v2/pages/40/ancestors': V2.ancestors,
+    '/wiki/api/v2/pages?id=': V2.pages,
+    '/wiki/api/v2/spaces/99': V2.space,
+  })
+  const r = await fetchAncestors(fn, CLOUD, '40')
+  assert(r.ok, r.reason)
+  eq(r.via, 'v2')
+  eq(r.pages.map((p) => p.id), ['20', '30', '40'])
+  eq(calls.length, 4, 'v1 fallida + tres de la v2')
+  assert(calls[2].url.includes('id=30,1,20,40'), calls[2].url)
+})
+
+test('fetchAncestors: en Data Center no se prueba la v2, que no existe allí', async () => {
+  const { fn, calls } = fakeFetch({})
+  const r = await fetchAncestors(fn, DC, '40')
+  eq(r.ok, false)
+  eq(calls.length, 1)
+})
+
+test('fetchAncestors: un 401 o un 403 no se reintentan por otra vía', async () => {
+  for (const status of [401, 403]) {
+    const { fn, calls } = fakeFetch({ '/wiki/rest/api/content/40': status })
+    const r = await fetchAncestors(fn, CLOUD, '40')
+    eq(r.ok, false)
+    eq(r.status, status)
+    eq(calls.length, 1, 'la sesión no vale: tampoco valdría en la v2')
+  }
+})
+
+test('fetchAncestors: si la v2 tampoco puede, queda el motivo de la v1', async () => {
+  const { fn } = fakeFetch({ '/wiki/rest/api/content/40': 404 })
+  const r = await fetchAncestors(fn, CLOUD, '40')
+  eq(r.ok, false)
+  eq(r.status, 404)
+})
+
+test('SEGURIDAD: un id o un origen raros no llegan a la red', async () => {
+  const { fn, calls } = fakeFetch({})
+  eq((await fetchAncestors(fn, DC, '../../admin')).ok, false)
+  eq((await fetchAncestors(fn, { origin: 'javascript:alert(1)' }, '5')).ok, false)
+  eq((await fetchAncestors(fn, { origin: 'https://acme.atlassian.net/wiki/otra' }, '5')).ok, false, 'el origen es sólo el origen')
+  eq((await fetchAncestors(fn, { origin: 'https://user@acme.atlassian.net' }, '5')).ok, false, 'ni lleva credenciales')
+  eq((await fetchAncestors(null, DC, '5')).ok, false)
+  eq(calls.length, 0)
+})
+
+test('SEGURIDAD: ninguna petición sale del sitio, venga el prefijo que venga', async () => {
+  // «https://acme.atlassian.net@evil.example/…» es una URL válida cuyo origen
+  // es evil.example. El prefijo se acepta sólo con forma de ruta, y además se
+  // comprueba el origen de cada URL antes de pedirla.
+  for (const wikiPrefix of ['@evil.example', '.evil.example', '/wiki/..', '//evil.example', 'https://evil.example', '/wiki?x=', '/wiki#']) {
+    const { fn, calls } = fakeFetch({ '/': { id: '5', title: 'X', ancestors: [] } })
+    await fetchAncestors(fn, { origin: 'https://acme.atlassian.net', wikiPrefix, cloud: false }, '5')
+    await fetchAncestors(fn, { origin: 'https://acme.atlassian.net', wikiPrefix, cloud: true }, '5')
+    for (const c of calls) {
+      eq(new URL(c.url).origin, 'https://acme.atlassian.net', `${JSON.stringify(wikiPrefix)} → ${c.url}`)
+    }
+  }
+})
+
+test('fetchAncestors: una respuesta con forma rara no se convierte en camino', async () => {
+  const { fn } = fakeFetch({ '/rest/api/content/5': { results: [] } })
+  const r = await fetchAncestors(fn, DC, '5')
+  eq(r.ok, false)
+  assert(/forma esperada/.test(r.reason), r.reason)
+})

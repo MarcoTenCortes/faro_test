@@ -33,14 +33,40 @@ export const FILES = {
  */
 export const HIGHLIGHT_STYLES = ['spotlight', 'marker']
 
+/**
+ * Cómo lleva Faro al usuario a un sitio.
+ *
+ * `guided`: intenta siempre enseñar el camino. Lee de quién cuelga el destino
+ * y ofrece «Paso a paso» destacado; si no conoce el camino, lleva de golpe.
+ * `quick`: lleva directamente, siempre. No se lee el árbol ni se espera nada.
+ */
+export const NAV_MODES = ['guided', 'quick']
+
 export const DEFAULT_SETTINGS = {
   serverUrl: DEFAULT_SERVER,
   password: '',
   crossSessionMemory: false,
-  assistedByDefault: true,
+  navMode: 'guided',
   stepDelayMs: 1600,
   reduceMotion: false,
   highlightStyle: 'spotlight',
+}
+
+/**
+ * Ajustes guardados por una versión anterior, en la forma actual. Pura.
+ *
+ * Hasta ahora había una casilla, `assistedByDefault`: marcada, la tarjeta
+ * destacaba «Paso a paso»; sin marcar, «Llévame», pero seguía ofreciendo las
+ * dos. Quien la desmarcó quería menos recorrido, así que pasa al modo rápido;
+ * el resto se queda en el guiado, que era y sigue siendo el de por defecto.
+ */
+export function migrateSettings(raw) {
+  const s = raw && typeof raw === 'object' ? { ...raw } : {}
+  if (!NAV_MODES.includes(s.navMode)) {
+    s.navMode = s.assistedByDefault === false ? 'quick' : DEFAULT_SETTINGS.navMode
+  }
+  delete s.assistedByDefault
+  return s
 }
 
 /** Topes del indexador: evitan que «indexar Confluence» se vuelva infinito. */
@@ -79,8 +105,9 @@ export const STORAGE_KEYS = {
  * escondido en una pagina de Confluence podria acabar ejecutando ordenes en la
  * maquina del usuario.
  *
- * Comprobado contra opencode 1.2.25: el `permission` de la sesion se respeta;
- * el campo `tools` del mensaje (marcado como obsoleto) se ignora.
+ * Comprobado contra opencode 1.2.25: el `permission` de la sesion se respeta.
+ * El campo `tools` del mensaje (marcado como obsoleto) tambien: lo convierte
+ * en reglas de permiso de la sesion. Faro simplemente no lo manda.
  */
 export const SAFE_PERMISSIONS = [
   'bash',

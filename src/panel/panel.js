@@ -13,8 +13,8 @@
 import { OpencodeClient, OpencodeError } from '../opencode/client.js'
 import { suggestsAnotherModel } from '../opencode/turn.js'
 import { pickDefaultModel, pickAlternativeModel, pickPlannerModel, modelKey, parseModelKey } from '../shared/models.js'
-import { parseAtlassianUrl, describeLocation, defaultScope, samePage } from '../atlassian/site.js'
-import { mergeIndex, indexSize, normalizeIndex } from '../atlassian/index-store.js'
+import { parseAtlassianUrl, describeLocation, defaultScope, samePage, wikiPrefix as wikiPrefixOf } from '../atlassian/site.js'
+import { mergeIndex, mergeIndexKeepingTree, indexSize, normalizeIndex, ancestryOf } from '../atlassian/index-store.js'
 import { CORS_ORIGIN, DEFAULT_SETTINGS, mcpNameForHost } from '../shared/config.js'
 import { MSG } from '../shared/messages.js'
 import { navOptions } from '../nav/options.js'
@@ -36,10 +36,17 @@ import {
   mcpBlockSnippet,
   fullConfigSnippet,
 } from './setup.js'
-import { buildContext, harvestIndex, mergeTree, countWithParent } from './indexer.js'
+import { buildContext, harvestIndex, countWithParent } from './indexer.js'
 import { planNavigation, shouldPlan } from './planner.js'
-import { collectNotes, numberedIn } from './notes.js'
-import { baseSystem, selectionBlock, stripSelectionBlock } from './prompts.js'
+import {
+  collectNotes,
+  numberedIn,
+  validateNotes,
+  splitAnchorsBlock,
+  titleFromProse,
+  surplusNumbers,
+} from './notes.js'
+import { baseSystem, selectionBlock, stripSelectionBlock, pageUrlFromSystem, PAGE_OPEN } from './prompts.js'
 import * as memory from './memory.js'
 
 // ------------------------------------------------------------------ estado
@@ -83,6 +90,12 @@ const state = {
   notes: [],
   noteRows: new Map(),
   notesCard: null,
+  // Lo que pintó la última tarjeta viva, para poder volver a pintarla si el
+  // chat se repinta con las marcas todavía en la página.
+  notesResult: null,
+  // Testigo del turno en curso: el `finally` de un turno cancelado no puede
+  // apagar el estado del siguiente.
+  turnToken: null,
   defaults: {},
   tracker: null,
   streaming: false,
@@ -97,6 +110,11 @@ const state = {
   logOnlyProblems: false,
   logUnsub: null,
   turnAbort: null,
+  // host:id -> { largo } del camino leído de la API en esta sesión, o { fallo }
+  // con la hora del último intento que no contestó. Sirve para no volver a
+  // pedirlo mientras el índice lo conserve entero, ni esperar en cada
+  // respuesta a una API caída.
+  ancestryFetched: new Map(),
 }
 
 // -------------------------------------------------------------------- init
@@ -147,6 +165,13 @@ function buildClient() {
 async function refreshTab() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
   if (!tab) return
+
+  // Las marcas de un análisis son de la página en la que se hicieron. Si la
+  // pestaña activa está en otra —por identidad de página, no por cadena:
+  // Confluence reescribe su propia URL sin que nadie se mueva—, se olvidan. Y
+  // ANTES de cambiar de pestaña, para que la orden de limpiar vaya a la que
+  // tenía las marcas y no a la recién activada.
+  if (state.notes.length && !samePage(tab.url || '', state.tabUrl)) forgetNotes()
   state.tabId = tab.id
 
   let site = parseAtlassianUrl(tab.url || '')
@@ -186,9 +211,6 @@ async function refreshTab() {
 
   const changedHost = site?.host !== state.site?.host
   if (changedHost && state.picking) setPicking(false)
-  // Las marcas de un análisis son de la página en la que se hicieron. Al
-  // cambiar de página dejan de significar nada, aunque la pestaña sea la misma.
-  if (state.notes.length && (tab.url || '') !== state.tabUrl) forgetNotes()
   state.site = site
   state.tabUrl = tab.url || ''
   state.tabTitle = tab.title || ''
@@ -450,21 +472,74 @@ async function restoreConversation() {
   if (state.sessionID) {
     try {
       const messages = await state.client.listMessages(state.sessionID)
+
+      // opencode parte un turno en varios mensajes del asistente —uno por
+      // cada vuelta de herramientas—. Se juntan por turno, como hace runTurn
+      // en vivo: si no, la prosa numerada y su bloque de anclas podían quedar
+      // en burbujas distintas y el bloque perderse.
+      let ultimoAnalisis = null
+      const burbujas = []
+      let turno = null
+      let urlDelTurno = ''
+      const cerrarTurno = () => {
+        if (!turno) return
+        // Un análisis cierra con su bloque JSON de anclas: no es para leerlo.
+        // Las marcas no se rehacen solas al restaurar —vivían en la página
+        // donde se hicieron—, pero las anclas se guardan para poder volver a
+        // ponerlas con un clic.
+        const { prose, anchors } = splitAnchorsBlock(turno.textos.join('\n\n'))
+        if (prose) {
+          const bubble = addAssistantMessage(prose)
+          state.turns.push({ role: 'assistant', text: prose })
+          burbujas.push({ prose, bubble })
+          if (anchors && numberedIn(prose).length) ultimoAnalisis = { prose, anchors, bubble, url: turno.url }
+        }
+        turno = null
+      }
+
       for (const m of messages || []) {
         const text = (m.parts || []).filter((p) => p.type === 'text' && p.text && !p.synthetic).map((p) => p.text).join('')
-        if (!text.trim()) continue
 
         if (m.info.role === 'user') {
+          cerrarTurno()
+          urlDelTurno = pageUrlFromSystem(m.info.system)
+          if (!text.trim()) continue
           // En opencode quedó guardado con el fragmento señalado por delante;
           // aquí se enseña sólo la pregunta, y una nota de que iba acompañada.
+          // La página en bloques viajó en el sistema de ese mensaje: se dice
+          // igual, que estuvo ahí.
           const limpio = stripSelectionBlock(text)
-          addUserMessage(limpio, limpio === text ? '' : 'con una selección de la página')
+          const conPagina = String(m.info.system || '').includes(PAGE_OPEN)
+          addUserMessage(
+            limpio,
+            [limpio === text ? '' : 'con una selección de la página', conPagina ? 'con el texto de la página' : '']
+              .filter(Boolean)
+              .join(' · ')
+          )
           state.turns.push({ role: m.info.role, text: limpio })
           continue
         }
 
-        addAssistantMessage(text)
-        state.turns.push({ role: m.info.role, text })
+        if (!text.trim()) continue
+        if (!turno) turno = { textos: [], url: urlDelTurno }
+        turno.textos.push(text)
+      }
+      cerrarTurno()
+
+      // Si hay marcas en la página —el chat se repinta al cerrar Ajustes, al
+      // reindexar…—, la tarjeta viva se vuelve a pintar bajo la respuesta de
+      // la que salieron (o bajo la última, si aquélla ya no está). Si no hay
+      // marcas, la atenuada del último análisis con anclas, con su botón.
+      if (state.notes.length && state.notesResult) {
+        const { prose, filas, placed, missed, detail } = state.notesResult
+        const misma = (a, b) => String(a || '').replace(/\s+/g, ' ').trim() === String(b || '').replace(/\s+/g, ' ').trim()
+        const dueña = burbujas.find((b) => misma(b.prose, prose)) || burbujas[burbujas.length - 1]
+        if (dueña) {
+          state.noteRows = new Map()
+          state.notesCard = attachToBubble(dueña.bubble, notesCard(filas, placed, missed, detail))
+        }
+      } else if (ultimoAnalisis) {
+        attachToBubble(ultimoAnalisis.bubble, staleNotesCard(ultimoAnalisis))
       }
     } catch {
       state.sessionID = null
@@ -608,19 +683,58 @@ async function send() {
 
   el.input.value = ''
   autoGrow()
-  addUserMessage(text, pick ? 'con ' + pickLabel(pick).toLowerCase() : '')
-  state.lastQuestion = text
-  state.turns.push({ role: 'user', text })
-  scrollChat()
 
+  // El modo con el que SE MANDA el turno. Lo que viene después —marcar la
+  // página, ofrecer llevarte— se decide con éste, no con el que haya en el
+  // desplegable cuando termine; y mientras dura, el desplegable se bloquea.
+  const skill = state.skill
+
+  // Ocupado desde ya: leer la página en bloques tarda, y en ese hueco un
+  // segundo clic abría otro turno y otra sesión. Con testigo, para que el
+  // `finally` de un turno cancelado no apague el estado del siguiente.
+  const testigo = {}
+  state.turnToken = testigo
+  // El controlador de ESTE turno, guardado aparte: `state.turnAbort` puede ser
+  // ya el del siguiente cuando la cola de éste llegue a usarlo.
+  const abort = new AbortController()
+  state.turnAbort = abort
   setStreaming(true)
 
   try {
+    // En el modo Análisis la página viaja en el prompt, troceada en bloques
+    // numerados: es lo que el modelo señala y contra lo que después se
+    // subraya. Se lee ANTES de mandar nada, y se dice debajo de la pregunta:
+    // mandar contexto sin que se vea sería mandarlo a espaldas de quien
+    // pregunta.
+    const lectura = skill === 'analisis' ? await readPageDigest() : { digest: null, reason: '' }
+    const digest = lectura.digest
+
+    // Parar mientras se leía la página: no se manda nada, y la pregunta
+    // vuelve al cuadro.
+    if (abort.signal.aborted) {
+      el.input.value = text
+      return
+    }
+
+    addUserMessage(
+      text,
+      [
+        pick ? 'con ' + pickLabel(pick).toLowerCase() : '',
+        digest ? `con el texto de la página (${digest.count} bloques${digest.truncated ? ', recortado' : ''})` : '',
+      ]
+        .filter(Boolean)
+        .join(' · ')
+    )
+    state.lastQuestion = text
+    state.turns.push({ role: 'user', text })
+    scrollChat()
+
     if (!state.sessionID) {
       const s = await state.client.createSession({ title: `Faro · ${state.site.host}` })
       state.sessionID = s.id
       await setSessionId(state.site.host, s.id)
     }
+    if (abort.signal.aborted) return
 
     const bubble = document.createElement('div')
     bubble.className = 'msg assistant'
@@ -645,11 +759,15 @@ async function send() {
 
     log.info(
       'Turno enviado',
-      [`${modelKey(state.model)} · ${text.length} caracteres`, `skill ${state.skill}`, pick ? pickLabel(pick) : '']
+      [
+        `${modelKey(state.model)} · ${text.length} caracteres`,
+        `skill ${skill}`,
+        pick ? pickLabel(pick) : '',
+        digest ? `página en ${digest.count} bloques${digest.truncated ? ' (recortada)' : ''}` : '',
+      ]
         .filter(Boolean)
         .join(' · ')
     )
-    state.turnAbort = new AbortController()
 
     // Por runTurn y no a mano: trae el vigilante de turnos colgados y junta las
     // partes de TODOS los mensajes del turno, no solo del ultimo.
@@ -664,11 +782,12 @@ async function send() {
           contextMd: state.contextMd,
           memoryMd: state.settings.crossSessionMemory ? memory.memoryToPrompt(state.memory) : '',
           page: { url: state.tabUrl, title: state.tabTitle },
-          skill: state.skill,
+          skill,
+          digest,
         }),
       },
       {
-        signal: state.turnAbort.signal,
+        signal: abort.signal,
         stallMs: 90000,
         onUpdate: (t) => paintTurn(t, toolsBox, body),
       }
@@ -703,7 +822,10 @@ async function send() {
       return
     }
 
-    const answer = turn.text.trim()
+    // En el modo Análisis la respuesta cierra con un bloque JSON de anclas que
+    // no es para el usuario: se separa de la prosa y va a marcar la página.
+    const { prose, anchors } = splitAnchorsBlock(turn.text)
+    const answer = prose.trim()
     if (!answer) {
       body.textContent = ''
       body.appendChild(noticeNode('El modelo no devolvió texto.', true))
@@ -726,10 +848,19 @@ async function send() {
     await growTreeFromPage()
 
     // Y, si procede, ofrecer llevar al usuario allí.
-    await offerNavigation(answer, bubble)
+    await offerNavigation(answer, bubble, skill)
 
     // O, en el modo Análisis, subrayar en la página de qué habla cada punto.
-    await offerNotes(answer, bubble)
+    // La página de la que salió el texto, tal y como la vio la pestaña; no
+    // vale `state.tabUrl`, que el panel refresca solo y cambia por su cuenta.
+    await offerNotes(answer, bubble, {
+      skill,
+      anchors,
+      digest,
+      digestReason: lectura.reason,
+      urlAlPedir: digest?.url || state.tabUrl,
+      signal: abort.signal,
+    })
   } catch (err) {
     if (err?.name !== 'AbortError') {
       showNotice(err instanceof OpencodeError ? err.message : 'Fallo enviando: ' + err.message, true)
@@ -738,7 +869,10 @@ async function send() {
     // Sin esto, un fallo a mitad de turno dejaría un tracker huérfano
     // recibiendo eventos de la sesión para siempre.
     state.tracker = null
-    setStreaming(false)
+    if (state.turnToken === testigo) {
+      state.turnToken = null
+      setStreaming(false)
+    }
     scrollChat()
   }
 }
@@ -769,12 +903,45 @@ function paintTurn(tracker, toolsBox, body, final = false) {
     toolsBox.appendChild(row)
   }
 
-  const text = tracker.text
-  if (text) {
+  // El bloque JSON de anclas con el que cierra un análisis no se pinta: ni
+  // entero al final, ni mientras se escribe a trozos.
+  const { prose, pending } = splitAnchorsBlock(tracker.text, { final })
+  if (pending) {
+    const row = document.createElement('div')
+    row.className = 'tool'
+    const dot = document.createElement('span')
+    dot.className = 'tdot'
+    const label = document.createElement('span')
+    label.textContent = 'Situando las observaciones en la página…'
+    row.append(dot, label)
+    toolsBox.appendChild(row)
+  }
+  if (prose) {
     body.textContent = ''
-    body.appendChild(renderMarkdown(text, { onLink: openUrl, onNote: focusNote }))
+    body.appendChild(renderMarkdown(prose, { onLink: openUrl, onNote: focusNote }))
   }
   scrollChat()
+}
+
+/**
+ * La página abierta, en bloques numerados, para el modo Análisis.
+ *
+ * Sin permiso sobre el dominio, o en el editor, no hay bloques: el análisis se
+ * hace igual —el modelo lee la página con el MCP— y es `offerNotes` quien dice
+ * después por qué no se marca nada. Nunca lanza.
+ */
+async function readPageDigest() {
+  if (!state.site || state.tabId == null) return { digest: null, reason: 'sin pestaña' }
+  if (!(await ensureContentAccess({ announce: false }))) return { digest: null, reason: 'permiso' }
+
+  const r = await chrome.tabs.sendMessage(state.tabId, { type: MSG.PAGE_DIGEST }).catch(() => null)
+  if (!r?.ok || !r.text) {
+    const reason = r?.reason || 'no se pudo leer'
+    log.info('Página sin bloques', reason === 'editando' ? 'estás en el editor' : reason)
+    return { digest: null, reason }
+  }
+  log.ok('Página leída en bloques', `${r.count} bloques · ${r.chars} caracteres${r.truncated ? ' · recortada' : ''}`)
+  return { digest: r, reason: '' }
 }
 
 /**
@@ -875,7 +1042,9 @@ async function growTreeFromPage() {
     wikiPrefix: state.site.wikiPrefix,
   })
   const antes = countWithParent(state.index || { pages: {} })
-  const merged = mergeTree(mergeIndex(state.index, arbol), arbol)
+  // La barra lateral no sabe el espacio de cada fila ni ve las ramas plegadas:
+  // lo que ya se sabía de padres y espacios se conserva.
+  const merged = mergeIndexKeepingTree(state.index, arbol)
   const ganados = countWithParent(merged) - antes
   if (ganados <= 0 && indexSize(merged) === indexSize(state.index)) return
 
@@ -886,8 +1055,8 @@ async function growTreeFromPage() {
 
 // ------------------------------------------------------------- navegación
 
-async function offerNavigation(answer, bubble) {
-  const skill = skillById(state.skill)
+async function offerNavigation(answer, bubble, skillId = state.skill) {
+  const skill = skillById(skillId)
 
   // Resumir o analizar lo que ya tienes delante no es ir a ningún sitio, y una
   // tarjeta que ofrece un viaje ahí sólo estorba.
@@ -902,70 +1071,161 @@ async function offerNavigation(answer, bubble) {
     return
   }
 
-  // Sesión aparte y desechable: así el chat no se llena del JSON del
-  // planificador ni de sus instrucciones.
-  let session = null
-  try {
-    session = await state.client.createSession({ title: 'Faro · planificador' })
-  } catch {
+  const { plan, reason, source } = await planNavigation(state.client, {
+    model: state.model,
+    plannerModel: pickPlannerModel(state.models, state.model),
+    question: state.lastQuestion,
+    answer,
+    index: state.index,
+    origin: state.site.origin,
+    host: state.site.host,
+    site: state.site,
+    // Dónde está el usuario ahora mismo: sirve para no meter en el recorrido
+    // un salto al espacio en el que ya estamos.
+    here: state.tabUrl,
+    force: skill.alwaysPlan,
+    // En modo rápido no se lee el árbol: no se va a ofrecer «Paso a paso».
+    navMode: state.settings.navMode,
+    learnAncestry,
+    onIndex: async (enriquecido) => {
+      state.index = enriquecido
+      await saveIndex(state.site.host, enriquecido)
+    },
+  })
+
+  if (!plan) {
+    if (reason) log.info('Sin navegación', reason)
     return
   }
 
-  try {
-    const { plan, reason } = await planNavigation(state.client, {
-      sessionID: session.id,
-      model: state.model,
-      plannerModel: pickPlannerModel(state.models, state.model),
-      question: state.lastQuestion,
-      answer,
-      index: state.index,
-      origin: state.site.origin,
-      host: state.site.host,
-      site: state.site,
-      // Dónde está el usuario ahora mismo: sirve para no meter en el recorrido
-      // un salto al espacio en el que ya estamos.
-      here: state.tabUrl,
-      force: skill.alwaysPlan,
-      onIndex: async (enriquecido) => {
-        state.index = enriquecido
-        await saveIndex(state.site.host, enriquecido)
-        log.ok('Jerarquía aprendida', 'ya puedo enseñarte el camino hasta ahí')
-      },
-    })
-
-    if (!plan) {
-      if (reason) log.info('Sin navegación', reason)
-      return
-    }
-
-    attachToBubble(bubble, navCard(plan))
-  } finally {
-    state.client.deleteSession(session.id).catch(() => {})
+  if (source === 'respuesta') {
+    log.ok('Destino leído de la respuesta', `${plan.destination.title} · sin preguntar al modelo`)
   }
+  attachToBubble(bubble, navCard(plan))
+}
+
+/**
+ * Los antepasados de una página, leídos de la API REST del propio Confluence.
+ *
+ * Es lo que permite ofrecer «Paso a paso» sin esperar: una petición GET al
+ * mismo origen en el que está el usuario, con su sesión, que devuelve la cadena
+ * entera en milisegundos. La hace el content script, porque vive en ese origen;
+ * el panel sólo pide y funde. Antes esto era un turno de modelo con llamadas al
+ * MCP: entre treinta segundos y varios minutos, y con los modelos pequeños ni
+ * eso.
+ *
+ * Se lee una vez por página y sesión del panel, y el resultado se queda en el
+ * índice. Si el índice deja de conocer el camino entero —lo que descubre una
+ * consulta se funde encima—, se vuelve a leer: la caché no manda sobre el
+ * índice. Si no se puede —sin content script, sin sesión, API caída— se
+ * devuelve null y el planificador lleva de golpe, sin inventar nada.
+ */
+async function learnAncestry(destination) {
+  if (!state.site || !state.tabId) return null
+  const id = String(destination?.id || '')
+  if (!/^\d+$/.test(id)) return null
+
+  const clave = `${state.site.host}:${id}`
+  const conocido = ancestryOf(state.index, id, 50).length
+  const previo = state.ancestryFetched.get(clave)
+  if (previo?.largo === conocido) return null
+  // Una API que no contesta no se vuelve a esperar en cada respuesta: un
+  // minuto de tregua, y luego se reintenta.
+  if (previo?.fallo && Date.now() - previo.fallo < 60000) return null
+
+  // Sin content script no hay quien lea el árbol, y tampoco quien lo recorra:
+  // el camino no hace falta, porque no se va a poder ofrecer.
+  if (!(await ensureContentAccess({ announce: false }))) {
+    log.warn('Sin camino', 'no puedo leer el árbol sin acceso a la pestaña; te llevaré de golpe')
+    return null
+  }
+
+  const t0 = Date.now()
+  const r = await chrome.tabs
+    .sendMessage(state.tabId, {
+      type: MSG.PAGE_ANCESTORS,
+      pageId: id,
+      // El prefijo que toca, no el observado a secas: en Cloud es /wiki
+      // aunque la pestaña esté en Jira y su ruta no lo diga.
+      wikiPrefix: wikiPrefixOf(state.site),
+      cloud: state.site.cloud,
+    })
+    .catch(() => null)
+
+  if (!r?.ok || !Array.isArray(r.pages) || !r.pages.length) {
+    state.ancestryFetched.set(clave, { fallo: Date.now() })
+    log.warn('Sin camino', `${r?.reason || 'la pestaña no contestó'} · te llevaré de golpe`)
+    return null
+  }
+
+  state.ancestryFetched.set(clave, { largo: r.pages.length })
+  log.ok('Camino leído de Confluence', `${r.pages.length - 1} rama(s) · API ${r.via} · ${r.ms ?? Date.now() - t0} ms`)
+  return r.pages
 }
 
 /**
  * Subraya en la página los puntos del análisis y los numera.
  *
- * El modelo ya ha numerado sus observaciones en la respuesta; aquí se le pide,
- * en una segunda pasada y con el texto real de la página delante, dónde cae
- * cada número. Es lo que hace que «el punto 3» del chat signifique algo.
+ * El modelo ya ha numerado sus observaciones en la respuesta y la ha cerrado
+ * con un bloque JSON que dice, de cada número, en qué bloque ¶ de la página
+ * cae y qué trozo literal. Aquí ese JSON se valida contra los bloques que se le
+ * enseñaron y se manda a la página, donde un script —no el modelo— decide qué
+ * subrayar. Es lo que hace que «el punto 3» del chat signifique algo.
  *
- * Cuesta un turno de modelo, así que sólo se hace en el modo Análisis y sólo
- * cuando la respuesta trae números que anclar.
+ * Si la respuesta numera pero no trae el bloque —un modelo que se salta esa
+ * parte del formato—, una segunda pasada lo pide aparte. Cuesta un turno, así
+ * que es la excepción, no la regla.
+ *
+ * @param {string} answer la prosa, ya sin el bloque de anclas
+ * @param {{skill?:string, anchors?:object|null, digest?:object|null, urlAlPedir?:string, signal?:AbortSignal}} extra
+ *        `skill` es el modo con el que se mandó el turno; `anchors` el bloque
+ *        JSON tal cual vino; `digest` la página en bloques que se le enseñó al
+ *        modelo; `urlAlPedir` la página de la que salió ese texto, tal y como
+ *        la vio la pestaña; `signal` lo que para la segunda pasada si el
+ *        usuario pulsa parar.
  */
-async function offerNotes(answer, bubble) {
-  if (state.skill !== 'analisis') return
+async function offerNotes(
+  answer,
+  bubble,
+  { skill = state.skill, anchors = null, digest = null, digestReason = '', urlAlPedir = '', signal = null } = {}
+) {
+  if (skill !== 'analisis') return
   if (!state.site || !state.tabId || !state.client) return
+  if (signal?.aborted) return
+
+  // Un análisis nuevo numera desde el 1. Lo demás es una respuesta de
+  // seguimiento —«amplía el punto 3»—, traiga o no anclas: las marcas que hay
+  // se conservan, sus pastillas siguen llevando a ellas, y no se gasta una
+  // segunda pasada en buscarle sitio a un punto que ya lo tiene.
+  const numeros = numberedIn(answer)
+  const analisisNuevo = numeros[0] === 1
+  if (!analisisNuevo && state.notes.length) {
+    log.info(
+      'Marcas conservadas',
+      numeros.length ? 'la respuesta cita observaciones sueltas; las marcas que hay se quedan' : 'la respuesta no numera nada; las marcas que hay se quedan'
+    )
+    return
+  }
 
   // Sin números no hay nada que anclar. Pasa con los modelos pequeños, que se
   // saltan el formato que se les pide; se dice, porque desde fuera es
   // indistinguible de que Faro no funcione.
-  if (!numberedIn(answer).length) {
+  if (!numeros.length) {
     log.info('Sin marcas', 'la respuesta no trae observaciones numeradas')
     attachToBubble(
       bubble,
       noticeNode('Este modelo no ha numerado sus observaciones, así que no hay nada que subrayar en la página.')
+    )
+    return
+  }
+
+  // Números sueltos sin un análisis del que vengan: no hay nada que marcar, y
+  // se dice, porque desde fuera parecería que Faro se ha olvidado.
+  if (!analisisNuevo) {
+    log.info('Sin marcas', 'la respuesta cita observaciones sueltas y no hay un análisis del que vengan')
+    attachToBubble(
+      bubble,
+      noticeNode('La respuesta cita observaciones sueltas, sin un análisis numerado desde el 1 del que vengan: no hay nada que subrayar.')
     )
     return
   }
@@ -980,84 +1240,99 @@ async function offerNotes(answer, bubble) {
     return
   }
 
-  const pagina = await chrome.tabs.sendMessage(state.tabId, { type: MSG.PAGE_TEXT }).catch(() => null)
-
-  if (!pagina?.ok || !pagina.text) {
-    log.warn('Sin marcas', 'no he podido leer el texto de la página')
+  // Sin la página en bloques, el modelo no tenía a qué apuntar: se leyó la
+  // página con el MCP y no hay contra qué resolver sus anclas. En el editor
+  // es a propósito, y se dice tal cual.
+  if (!digest?.blocks?.length) {
+    const editando = digestReason === 'editando'
+    log.warn('Sin marcas', editando ? 'estás en el editor' : 'no he podido leer la página en bloques')
     attachToBubble(
       bubble,
       noticeNode(
-        'No he podido leer el texto de esta página, así que el análisis se queda sin marcar. Recarga la pestaña y vuelve a pedirlo.',
-        true
+        editando
+          ? 'Estás en el editor: no marco nada para no interferir.'
+          : 'No he podido leer el texto de esta página, así que el análisis se queda sin marcar. Recarga la pestaña y vuelve a pedirlo.',
+        !editando
       )
     )
     return
   }
 
-  // La página de la que salió el texto, tal y como la ve la pestaña. No vale
-  // `state.tabUrl`: el panel se refresca solo y esa cadena cambia por su cuenta.
-  const urlAlPedir = pagina.url || state.tabUrl
-
-  // Sesión aparte y desechable, igual que el planificador: el chat no tiene por
-  // qué llenarse del JSON de las citas.
-  let session = null
-  try {
-    session = await state.client.createSession({ title: 'Faro · observaciones' })
-  } catch {
-    return
+  // Lo normal: las anclas venían en la respuesta. Sólo pasan los números que
+  // de verdad aparecen en ella, y cada bloque se comprueba contra la lista que
+  // se le enseñó al modelo.
+  let notes = anchors ? validateNotes(anchors, { allowed: numeros, blocks: digest.blocks }) : []
+  if (anchors) {
+    const sobran = surplusNumbers(anchors, numeros)
+    if (sobran.length) log.warn('Marcas sobrantes', `el bloque JSON trae ${sobran.join(', ')} y la respuesta no`)
   }
-
-  try {
-    const { notes, reason } = await collectNotes(state.client, {
-      sessionID: session.id,
-      model: state.model,
-      question: state.lastQuestion,
-      answer,
-      pageText: pagina.text,
-      truncated: pagina.truncated,
-    })
-
-    if (!notes.length) {
-      if (reason) log.info('Sin marcas', reason)
+  if (notes.some((x) => x.anchor)) {
+    log.ok('Anclas en la respuesta', `${notes.filter((x) => x.anchor).length} de ${numeros.length} observaciones`)
+  } else {
+    log.info('Sin bloque de anclas', anchors ? 'venía, pero sin ningún bloque utilizable' : 'la respuesta no lo traía; se pide aparte')
+    notes = await secondPassNotes(answer, digest, signal)
+    if (signal?.aborted) return
+    if (!notes.some((x) => x.anchor)) {
+      log.info('Sin marcas', 'ninguna observación apunta a un bloque de la página')
       attachToBubble(
         bubble,
         noticeNode(
-          'No he sabido situar en la página ninguna de las observaciones: se marcan sólo las que puedo citar literalmente del texto.'
+          'No he sabido situar en la página ninguna de las observaciones: se marcan sólo las que apuntan a un bloque del texto.'
         )
       )
       return
     }
-
-    // Mientras se preparaban, el usuario ha podido irse a otra página: marcarla
-    // sería marcar cualquier cosa. Se compara por IDENTIDAD de página y no por
-    // cadena, porque Confluence reescribe su propia URL sin que nadie se mueva.
-    const ahora = await chrome.tabs.get(state.tabId).catch(() => null)
-    if (ahora?.url && !samePage(ahora.url, urlAlPedir)) {
-      log.warn('Sin marcas', 'la pestaña cambió de página mientras se preparaban')
-      attachToBubble(bubble, noticeNode('Has cambiado de página, así que no he marcado nada.'))
-      return
-    }
-
-    const res = await chrome.tabs
-      .sendMessage(state.tabId, { type: MSG.ANNOTATE, notes })
-      .catch(() => null)
-
-    const placed = res?.placed || []
-    const missed = res?.missed || notes.map((x) => x.n)
-
-    forgetNotes({ keepPage: true })
-    state.notes = notes
-    state.notesCard = attachToBubble(bubble, notesCard(notes, placed, missed))
-
-    log.ok('Análisis marcado', `${placed.length} de ${notes.length} en la página`)
-    if (missed.length) log.warn('Sin anclar', 'observaciones ' + missed.join(', '))
-  } finally {
-    state.client.deleteSession(session.id).catch(() => {})
   }
+
+  // Mientras se preparaban, el usuario ha podido irse a otra página: marcarla
+  // sería marcar cualquier cosa. Se compara por IDENTIDAD de página y no por
+  // cadena, porque Confluence reescribe su propia URL sin que nadie se mueva.
+  const ahora = await chrome.tabs.get(state.tabId).catch(() => null)
+  if (ahora?.url && !samePage(ahora.url, urlAlPedir)) {
+    log.warn('Sin marcas', 'la pestaña cambió de página mientras se preparaban')
+    attachToBubble(bubble, noticeNode('Has cambiado de página, así que no he marcado nada.'))
+    return
+  }
+
+  // A la página sólo van las que tienen ancla. La tarjeta, en cambio, lista
+  // TODOS los números de la respuesta: las que el JSON no trajo, en gris y con
+  // la frase que las abre, para que la lista sea la del chat y no la del JSON.
+  const anclables = notes.filter((x) => x.anchor)
+  const filas = numeros.map(
+    (n) => notes.find((x) => x.n === n) || { n, title: titleFromProse(answer, n), kind: '', anchor: null }
+  )
+
+  const res = await chrome.tabs
+    .sendMessage(state.tabId, { type: MSG.ANNOTATE, notes: anclables })
+    .catch(() => null)
+
+  if (res?.reason === 'editando') {
+    log.warn('Sin marcas', 'estás en el editor')
+    attachToBubble(bubble, noticeNode('Estás en el editor: no marco nada para no interferir.'))
+    return
+  }
+
+  const placed = res?.placed || []
+  const missed = res?.missed || anclables.map((x) => x.n)
+  const detail = res?.detail || []
+
+  forgetNotes({ keepPage: true })
+  state.notes = anclables
+  // Con la prosa de la que salieron: al repintar el chat, la tarjeta viva
+  // vuelve bajo esa respuesta y no bajo otra.
+  state.notesResult = { prose: answer, filas, placed, missed, detail }
+  state.notesCard = attachToBubble(bubble, notesCard(filas, placed, missed, detail))
+
+  log.ok(
+    'Análisis marcado',
+    `${placed.length} de ${numeros.length} en la página` +
+      (detail.length ? ' · ' + detail.map((d) => `${d.n}:${d.strategy}`).join(' ') : '')
+  )
+  if (missed.length) log.warn('Sin anclar', 'observaciones ' + missed.join(', '))
 }
 
 /** La lista numerada, para poder saltar de una observación a su subrayado. */
-function notesCard(notes, placed, missed) {
+function notesCard(notes, placed, missed, detail = []) {
   const card = document.createElement('div')
   card.className = 'nav-card notes-card'
 
@@ -1072,13 +1347,26 @@ function notesCard(notes, placed, missed) {
     placed.length === 1 ? 'Una observación subrayada' : `${placed.length} observaciones subrayadas`
   card.appendChild(title)
 
+  const sinAncla = notes.filter((x) => !x.anchor).length
+  const avisos = []
   if (missed.length) {
-    const text = document.createElement('div')
-    text.className = 'nav-text'
-    text.textContent =
+    avisos.push(
       missed.length === 1
         ? 'Una no la he sabido situar en la página; la dejo sin marcar antes que marcarla mal.'
         : `${missed.length} no las he sabido situar en la página; las dejo sin marcar antes que marcarlas mal.`
+    )
+  }
+  if (sinAncla) {
+    avisos.push(
+      sinAncla === 1
+        ? 'Una habla de la página en general y no tiene pasaje que marcar.'
+        : `${sinAncla} hablan de la página en general y no tienen pasaje que marcar.`
+    )
+  }
+  if (avisos.length) {
+    const text = document.createElement('div')
+    text.className = 'nav-text'
+    text.textContent = avisos.join(' ')
     card.appendChild(text)
   }
 
@@ -1089,7 +1377,7 @@ function notesCard(notes, placed, missed) {
     const puesta = placed.includes(nota.n)
 
     const row = document.createElement('button')
-    row.className = 'note-row' + (puesta ? '' : ' missing')
+    row.className = 'note-row' + (puesta ? '' : ' missing') + (nota.anchor ? '' : ' unanchored')
     row.type = 'button'
     row.disabled = !puesta
 
@@ -1107,8 +1395,10 @@ function notesCard(notes, placed, missed) {
     const cita = document.createElement('span')
     cita.className = 'note-quote'
     cita.textContent = puesta
-      ? `«${nota.anchor.exact.slice(0, 110)}»`
-      : 'no la he encontrado en la página'
+      ? quoteLabel(nota, detail.find((d) => d.n === nota.n))
+      : nota.anchor
+        ? 'no la he encontrado en la página'
+        : 'habla de la página en general; no hay pasaje que marcar'
 
     cuerpo.append(titulo, cita)
     row.append(num, cuerpo)
@@ -1131,6 +1421,177 @@ function notesCard(notes, placed, missed) {
   card.appendChild(actions)
 
   return card
+}
+
+/**
+ * Qué se marcó de verdad, para la fila de la tarjeta: la cita, el bloque
+ * entero si la cita no estaba tal cual, y un aviso si fue por aproximación.
+ */
+function quoteLabel(nota, info) {
+  const a = nota.anchor || {}
+  if (info?.strategy?.endsWith('+whole')) return `bloque entero: «${String(a.hint || '').slice(0, 110)}»`
+  const texto = `«${String(a.exact || a.hint || '').slice(0, 110)}»`
+  return info?.approximate ? texto + ' · aproximada' : texto
+}
+
+/**
+ * La segunda pasada: pide las anclas aparte, en una sesión desechable —igual
+ * que el planificador: el chat no tiene por qué llenarse del JSON—. Sólo se
+ * llega aquí cuando la respuesta numeró observaciones y no trajo el bloque.
+ * Devuelve una lista vacía si algo falla, y lo apunta.
+ */
+async function secondPassNotes(answer, digest, signal = null) {
+  let session = null
+  try {
+    session = await state.client.createSession({ title: 'Faro · observaciones' })
+  } catch (err) {
+    log.warn('Segunda pasada', 'no se pudo abrir la sesión: ' + (err?.message || err))
+    return []
+  }
+  try {
+    const { notes, reason } = await collectNotes(state.client, {
+      sessionID: session.id,
+      model: state.model,
+      question: state.lastQuestion,
+      answer,
+      digest,
+      signal,
+    })
+    if (reason) log.info('Segunda pasada', reason)
+    else log.ok('Segunda pasada', `${notes.length} observaciones situadas`)
+    return notes
+  } finally {
+    state.client.deleteSession(session.id).catch(() => {})
+  }
+}
+
+/**
+ * La tarjeta de un análisis anterior, al restaurar la conversación.
+ *
+ * Las marcas vivían en la página donde se hicieron, así que no se rehacen
+ * solas: hacerlo al abrir el panel desplazaría una página por la que el
+ * usuario quizá sólo pasa. Pero las anclas siguen en la respuesta guardada, y
+ * con un botón se vuelven a poner —si se sigue en la misma página.
+ */
+function staleNotesCard({ prose, anchors, bubble, url = '' }) {
+  const numeros = numberedIn(prose)
+  const notes = validateNotes(anchors, { allowed: numeros })
+  const filas = numeros.map(
+    (n) => notes.find((x) => x.n === n) || { n, title: titleFromProse(prose, n), kind: '', anchor: null }
+  )
+
+  const card = document.createElement('div')
+  card.className = 'nav-card notes-card stale'
+
+  const kicker = document.createElement('div')
+  kicker.className = 'nav-kicker'
+  kicker.textContent = 'Análisis anterior'
+  card.appendChild(kicker)
+
+  const title = document.createElement('div')
+  title.className = 'nav-title'
+  title.textContent = 'Las marcas eran de la página donde se hizo'
+  card.appendChild(title)
+
+  const list = document.createElement('div')
+  list.className = 'note-list'
+  for (const nota of filas) {
+    const row = document.createElement('button')
+    row.className = 'note-row missing'
+    row.type = 'button'
+    row.disabled = true
+    const num = document.createElement('span')
+    num.className = 'note-num'
+    num.textContent = String(nota.n)
+    const cuerpo = document.createElement('span')
+    cuerpo.className = 'note-body'
+    const titulo = document.createElement('span')
+    titulo.className = 'note-title'
+    titulo.textContent = nota.title
+    cuerpo.appendChild(titulo)
+    row.append(num, cuerpo)
+    list.appendChild(row)
+  }
+  card.appendChild(list)
+
+  const actions = document.createElement('div')
+  actions.className = 'nav-actions'
+  const volver = document.createElement('button')
+  volver.className = 'primary'
+  volver.type = 'button'
+  volver.textContent = 'Volver a marcar en esta página'
+  volver.addEventListener('click', async () => {
+    volver.disabled = true
+    try {
+      await remarkFromAnchors({ prose, anchors, bubble, card, url })
+    } finally {
+      volver.disabled = false
+    }
+  })
+  actions.appendChild(volver)
+  card.appendChild(actions)
+
+  return card
+}
+
+/**
+ * Vuelve a marcar un análisis guardado sobre la página de ahora. Nunca solo:
+ * siempre detrás de un clic. Si la página no es la misma, lo dice y no toca
+ * nada: se compara con la página que llevaba el mensaje guardado y, además,
+ * los bloques de ahora no son los que vio el modelo, así que un bloque sólo
+ * vale si su cita está de verdad dentro (`strict`). Sin eso, cualquier página
+ * con bastantes párrafos acababa con «bloques enteros» de otra.
+ */
+async function remarkFromAnchors({ prose, anchors, bubble, card, url = '' }) {
+  if (!state.site || state.tabId == null) return
+  if (!(await ensureContentAccess({ announce: true }))) return
+
+  const { digest, reason } = await readPageDigest()
+  if (!digest) {
+    showNotice(
+      reason === 'editando'
+        ? 'Estás en el editor: no marco nada para no interferir.'
+        : 'No he podido leer esta página en bloques, así que no he marcado nada.',
+      true
+    )
+    return
+  }
+  if (url && digest.url && !samePage(digest.url, url)) {
+    showNotice('Esas marcas eran de otra página: no he marcado nada.', true)
+    return
+  }
+
+  const numeros = numberedIn(prose)
+  const notes = validateNotes(anchors, { allowed: numeros, blocks: digest.blocks, strict: true })
+  const anclables = notes.filter((x) => x.anchor)
+  if (!anclables.length) {
+    showNotice('Esas observaciones no apuntan a ningún bloque de esta página.', true)
+    return
+  }
+
+  const res = await chrome.tabs
+    .sendMessage(state.tabId, { type: MSG.ANNOTATE, notes: anclables })
+    .catch(() => null)
+  const placed = res?.placed || []
+  if (!placed.length) {
+    showNotice(
+      res?.reason === 'editando'
+        ? 'Estás en el editor: no marco nada para no interferir.'
+        : 'Esas marcas eran de otra página, o el texto ha cambiado: no he marcado nada.',
+      true
+    )
+    return
+  }
+
+  const filas = numeros.map(
+    (n) => notes.find((x) => x.n === n) || { n, title: titleFromProse(prose, n), kind: '', anchor: null }
+  )
+  forgetNotes({ keepPage: true })
+  state.notes = anclables
+  state.notesResult = { prose, filas, placed, missed: res?.missed || [], detail: res?.detail || [] }
+  card.remove()
+  state.notesCard = attachToBubble(bubble, notesCard(filas, placed, res?.missed || [], res?.detail || []))
+  log.ok('Análisis marcado de nuevo', `${placed.length} de ${anclables.length} en la página`)
 }
 
 /** Lleva a una observación concreta y la destaca, en la página y en el chat. */
@@ -1163,6 +1624,7 @@ async function clearNotes() {
 function forgetNotes({ keepPage = false } = {}) {
   state.notes = []
   state.noteRows = new Map()
+  state.notesResult = null
   if (state.notesCard) {
     // La tarjeta anterior se queda de recuerdo, pero ya no lleva a ningún sitio.
     state.notesCard.classList.add('stale')
@@ -1588,7 +2050,8 @@ async function treeDebug() {
 }
 
 async function showSettingsScreen() {
-  $('set-assisted').checked = state.settings.assistedByDefault
+  $('set-nav-guided').checked = state.settings.navMode !== 'quick'
+  $('set-nav-quick').checked = state.settings.navMode === 'quick'
   $('set-motion').checked = state.settings.reduceMotion
   $('set-hl-marker').checked = state.settings.highlightStyle === 'marker'
   $('set-hl-spotlight').checked = state.settings.highlightStyle !== 'marker'
@@ -1615,6 +2078,9 @@ function setStreaming(on) {
   el.send.classList.toggle('hidden', on)
   el.stop.classList.toggle('hidden', !on)
   el.input.disabled = false
+  // El modo se decide al mandar: cambiarlo a mitad de turno dejaría lo que
+  // viene después —marcar, ofrecer llevarte— hablando de otro modo.
+  el.skill.disabled = on
   setStatus(on ? 'busy' : state.client?.connected ? 'ok' : 'bad', on ? 'pensando…' : state.client?.connected ? 'conectado' : 'sin conexión')
 }
 
@@ -1761,7 +2227,7 @@ function wireEvents() {
   $('set-delay').addEventListener('input', () => ($('delay-value').textContent = $('set-delay').value))
   $('btn-settings-close').addEventListener('click', async () => {
     state.settings = await saveSettings({
-      assistedByDefault: $('set-assisted').checked,
+      navMode: $('set-nav-quick').checked ? 'quick' : 'guided',
       reduceMotion: $('set-motion').checked,
       highlightStyle: $('set-hl-marker').checked ? 'marker' : 'spotlight',
       stepDelayMs: Number($('set-delay').value),
@@ -1785,6 +2251,7 @@ function wireEvents() {
     await memory.saveContextMd(state.site.host, '')
     await clearSessionId(state.site.host)
     state.index = null
+    state.ancestryFetched = new Map()
     state.contextMd = ''
     state.sessionID = null
     hideScreens()
@@ -1990,6 +2457,9 @@ async function generateContext({ keepContext = false } = {}) {
       await memory.saveContextMd(state.site.host, contextMd)
     }
     state.index = mergeIndex(state.index, index)
+    // Lo que el indexador diga de los padres puede venir de un modelo: el
+    // camino de cada destino se vuelve a leer de la API la próxima vez.
+    state.ancestryFetched = new Map()
     await saveIndex(state.site.host, state.index)
     await saveSite(state.site.host, { onboarded: true, indexedAt: Date.now() })
 

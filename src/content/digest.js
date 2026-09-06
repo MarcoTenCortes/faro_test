@@ -1,0 +1,218 @@
+/**
+ * La página en bloques numerados, leída del DOM; y de un bloque a un Range.
+ *
+ * Es la otra mitad de `src/shared/digest.js`. Aquí se recorre el contenido de
+ * la página y se convierte en una lista de bloques —párrafo, encabezado,
+ * viñeta, celda, código— con su texto tal como se ve en pantalla. Esa lista es
+ * lo que se le enseña al modelo, y también lo que se vuelve a construir cuando
+ * llega su JSON: «¶12» se resuelve contra la página de AHORA, no contra una
+ * copia guardada. Confluence repinta su contenido cuando quiere; una lista en
+ * memoria sería una lista de nodos muertos.
+ *
+ * La escalera para marcar una observación, en orden:
+ *   1. El bloque, comprobado por su texto (`matchBlock`): el número es sólo
+ *      una preferencia.
+ *   2. La cita literal dentro de ese bloque; si la página cambió un poco, la
+ *      coincidencia aproximada, pero SIEMPRE dentro del bloque.
+ *   3. El bloque entero, si la cita no aparece: el modelo señaló ese párrafo,
+ *      y ese párrafo es lo que se marca.
+ *   4. La cita en toda la página, si el bloque ya no existe.
+ *   5. Nada. Una observación sin sitio se queda sin marcar.
+ *
+ * Nunca se inserta nada en el contenido: sólo se leen nodos y se devuelven
+ * Ranges, que el overlay pinta desde fuera.
+ */
+
+import { buildTextIndex, rangeFromOffsets, resolveAnchor } from './anchor.js'
+import { findQuote } from './anchor-match.js'
+import { contentRoot } from './dom-utils.js'
+import { DIGEST_LIMITS, squash, matchBlock } from '../shared/digest.js'
+
+/** Lo que en una página es «un bloque» a efectos de leerla y de marcarla. */
+const BLOCK_TAGS = new Set([
+  'P', 'LI', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'TD', 'TH', 'BLOCKQUOTE', 'PRE', 'FIGCAPTION', 'DT', 'DD',
+  'DIV', 'SECTION', 'ARTICLE', 'ASIDE', 'HEADER', 'FOOTER', 'MAIN', 'NAV', 'UL', 'OL', 'TABLE', 'THEAD',
+  'TBODY', 'TFOOT', 'TR', 'CAPTION', 'FIGURE', 'DETAILS', 'SUMMARY', 'FORM', 'FIELDSET', 'ADDRESS', 'HR',
+])
+const BLOCK_ROLES = new Set([
+  'heading', 'listitem', 'list', 'cell', 'gridcell', 'columnheader', 'rowheader', 'row', 'rowgroup',
+  'region', 'article', 'table', 'grid',
+])
+/** Lo que no tiene texto que leer, o cuyo texto no es contenido. */
+const SKIP_TAGS = new Set([
+  'SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'SVG', 'CANVAS', 'IFRAME', 'VIDEO', 'AUDIO', 'INPUT', 'SELECT',
+  'TEXTAREA',
+])
+
+/** ¿Este elemento es un bloque? Sirve de frontera al leer el texto propio. */
+export function isBlock(el) {
+  if (!el || el.nodeType !== 1) return false
+  return BLOCK_TAGS.has(el.tagName) || BLOCK_ROLES.has(el.getAttribute('role') || '')
+}
+
+/**
+ * ¿Está oculto? Lo que no se ve no se le enseña al modelo: no se podría
+ * subrayar y le haría hablar de cosas que el usuario no tiene delante.
+ */
+function hidden(el) {
+  if (el.getAttribute('aria-hidden') === 'true') return true
+  if (el.closest('#faro-overlay-host')) return true
+  if (el.getClientRects().length) return false
+  // `display: contents` no tiene cajas propias, pero sus hijos sí.
+  return getComputedStyle(el).display !== 'contents'
+}
+
+/** Los bloques que cuelgan directamente de éste, en orden de documento. */
+function nestedBlocks(el, out = []) {
+  for (const child of el.children) {
+    if (SKIP_TAGS.has(child.tagName)) continue
+    if (isBlock(child)) out.push(child)
+    else nestedBlocks(child, out)
+  }
+  return out
+}
+
+/** La etiqueta corta con la que el modelo ve de qué clase es un bloque. */
+export function tagLabel(el) {
+  const tag = el.tagName.toLowerCase()
+  const role = el.getAttribute('role') || ''
+  if (/^h[1-6]$/.test(tag)) return tag
+  if (role === 'heading') {
+    const nivel = Number(el.getAttribute('aria-level')) || 2
+    return 'h' + Math.min(6, Math.max(1, nivel))
+  }
+  if (tag === 'li' || role === 'listitem') return 'li'
+  if (tag === 'td' || tag === 'th' || /^(cell|gridcell|columnheader|rowheader)$/.test(role)) return 'celda'
+  if (tag === 'blockquote') return 'cita'
+  if (tag === 'pre') return 'código'
+  if (tag === 'figcaption' || tag === 'caption') return 'pie'
+  if (tag === 'dt' || tag === 'dd') return 'def'
+  if (tag === 'p') return 'p'
+  return 'txt'
+}
+
+/**
+ * Recorre el contenido y lo deja en bloques numerados.
+ *
+ * Cada bloque lleva su texto PROPIO —el que no pertenece a un bloque anidado—,
+ * de modo que una viñeta con una sublista es dos bloques, no uno repetido. El
+ * orden es el del documento. Con tope, y diciendo si se recortó: una página
+ * larga no cabe en el contexto de los modelos pequeños.
+ *
+ * @param {{root?: Element, limits?: object}} [opts]
+ * @returns {{blocks: Array<{id:number, tag:string, text:string, el:Element}>, chars:number, truncated:boolean}}
+ */
+export function pageDigest({ root = contentRoot(), limits = DIGEST_LIMITS } = {}) {
+  const blocks = []
+  let chars = 0
+  let truncated = false
+  let lleno = false
+
+  const visit = (el) => {
+    if (lleno) return
+    if (SKIP_TAGS.has(el.tagName) || hidden(el)) return
+
+    const propio = squash(buildTextIndex(el, { boundary: isBlock }).text)
+    if (propio.length >= limits.blockMin) {
+      const texto = propio.length > limits.blockMax ? propio.slice(0, limits.blockMax) + '…' : propio
+      // Lo que ocupa la línea entera para el modelo: «¶123 [código] » y el texto.
+      const linea = texto.length + 12
+      if (blocks.length >= limits.maxBlocks || chars + linea > limits.maxChars) {
+        lleno = true
+        truncated = true
+        return
+      }
+      blocks.push({ id: blocks.length + 1, tag: tagLabel(el), text: texto, el })
+      chars += linea
+      if (texto !== propio) truncated = true
+    }
+
+    for (const child of nestedBlocks(el)) {
+      if (lleno) break
+      visit(child)
+    }
+  }
+
+  if (root) visit(root)
+  return { blocks, chars, truncated }
+}
+
+/**
+ * Lo que viaja al panel: los bloques sin sus elementos. Un `Element` no cabe en
+ * un mensaje, y el panel no debe conocer el DOM de la página de todos modos.
+ */
+export function serializeDigest(digest) {
+  return {
+    blocks: digest.blocks.map(({ id, tag, text }) => ({ id, tag, text })),
+    count: digest.blocks.length,
+    chars: digest.chars,
+    truncated: digest.truncated,
+  }
+}
+
+/** Un Range con el texto propio del bloque, del primer carácter al último. */
+function wholeBlockRange(index) {
+  const start = index.text.search(/\S/)
+  if (start === -1) return null
+  const end = index.text.replace(/\s+$/, '').length
+  return rangeFromOffsets(index, start, end)
+}
+
+/**
+ * Resuelve una observación «bloque + cita» contra la página de ahora.
+ *
+ * Misma forma de respuesta que `resolveAnchor`, para que el ejecutor no tenga
+ * que distinguirlas. `approximate` avisa de que la marca no es la cita exacta:
+ * o es una coincidencia aproximada, o es el bloque entero porque la cita no
+ * estaba tal cual.
+ *
+ * @param {{block:number, hint:string, exact?:string}} anchor
+ * @param {{digest?: object}} [opts] los bloques ya leídos, para no recorrer la
+ *        página una vez por observación
+ * @returns {{ok:boolean, strategy:string, ranges?:Range[], element?:Element, approximate?:boolean, message?:string}}
+ */
+export function resolveBlockQuote(anchor, { digest = null } = {}) {
+  const D = digest || pageDigest()
+  const exact = String(anchor?.exact || '')
+
+  const hit = matchBlock(D.blocks, anchor)
+  if (hit) {
+    const el = D.blocks[hit.index].el
+    const index = buildTextIndex(el, { boundary: isBlock })
+
+    if (exact) {
+      const q = findQuote(index.text, { exact })
+      if (q) {
+        const range = rangeFromOffsets(index, q.start, q.end)
+        if (range) {
+          const aproximada = q.strategy === 'fuzzy'
+          return {
+            ok: true,
+            strategy: hit.strategy + (aproximada ? '+fuzzy' : '+quote'),
+            ranges: [range],
+            element: el,
+            approximate: aproximada,
+          }
+        }
+      }
+    }
+
+    const whole = wholeBlockRange(index)
+    if (whole) {
+      return { ok: true, strategy: hit.strategy + '+whole', ranges: [whole], element: el, approximate: !!exact }
+    }
+  }
+
+  // El bloque ya no está: la cita, si tiene sustancia, se busca en toda la página.
+  if (exact.length >= DIGEST_LIMITS.quoteMinGlobal) {
+    const r = resolveAnchor({ kind: 'text-quote', exact })
+    if (r.ok && r.ranges?.length) return { ...r, strategy: 'global+' + r.strategy }
+  }
+
+  return {
+    ok: false,
+    strategy: 'none',
+    element: contentRoot(),
+    message: 'No encuentro en la página el bloque del que habla esta observación.',
+  }
+}

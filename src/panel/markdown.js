@@ -122,8 +122,10 @@ export function parseInline(src) {
       out.push({ type: 'em', text: token.slice(1, -1) })
     } else if (/^\[\d{1,2}\]$/.test(token)) {
       // La marca de una observación del análisis. En el panel se pinta como una
-      // pastilla que lleva al subrayado correspondiente de la página.
-      out.push({ type: 'note', text: token, n: Number(token.slice(1, -1)) })
+      // pastilla que lleva al subrayado correspondiente de la página. Las
+      // observaciones empiezan en 1: un «[0]» es texto.
+      const n = Number(token.slice(1, -1))
+      out.push(n >= 1 ? { type: 'note', text: token, n } : { type: 'text', text: token })
     } else if (token.startsWith('[')) {
       const link = token.match(/^\[([^\]]+)\]\(([^)\s]+)\)$/)
       if (link && isSafeHref(link[2])) out.push({ type: 'link', text: link[1], href: link[2] })

@@ -10,6 +10,7 @@
 
 import { Overlay } from './overlay/overlay.js'
 import { resolveAnchor, rangeRect, imagesWithin } from './anchor.js'
+import { pageDigest, resolveBlockQuote } from './digest.js'
 import { locateStep, isSafeToClick, clickableAncestor, treeToggleFor, isExpanded } from './locators.js'
 import { treeContainer, expandersIn, rowFor } from './tree-dom.js'
 import {
@@ -576,19 +577,26 @@ export class NavRunner {
 
     await waitFor(() => contentRoot()?.textContent?.trim()?.length > 40, { timeout: 2000 })
 
+    // La página en bloques se lee UNA vez para todas las observaciones, y de la
+    // página de ahora: lo que vio el modelo pudo haberse repintado desde entonces.
+    const digest = pageDigest()
+
     const items = []
     const missed = []
+    const detail = []
     for (const nota of notes || []) {
-      const resolved = resolveAnchor(nota.anchor)
-      if (!resolved.ok || !resolved.ranges?.length) {
+      const resolved = resolveNote(nota, digest)
+      if (!resolved?.ok || !resolved.ranges?.length) {
         missed.push(nota.n)
+        detail.push({ n: nota.n, strategy: 'none' })
         continue
       }
-      items.push({ n: nota.n, title: nota.title, ranges: resolved.ranges })
+      items.push({ n: nota.n, title: nota.title, anchor: nota.anchor, ranges: resolved.ranges })
+      detail.push({ n: nota.n, strategy: resolved.strategy, approximate: !!resolved.approximate })
     }
 
     this.overlay.clearNotes()
-    if (!items.length) return { ok: true, placed: [], missed }
+    if (!items.length) return { ok: true, placed: [], missed, detail }
 
     this.overlay.annotate(items)
 
@@ -600,13 +608,25 @@ export class NavRunner {
       this.overlay.refreshMarks()
     }
 
-    return { ok: true, placed: items.map((x) => x.n), missed }
+    return { ok: true, placed: items.map((x) => x.n), missed, detail }
   }
 
   /** Lleva a una observación concreta y la destaca sobre las demás. */
   async focusNote({ n }) {
     const nota = this.overlay.notes.find((x) => x.n === n)
     if (!nota) return { ok: false, reason: 'esa marca ya no está en la página' }
+
+    // Confluence repinta su contenido cuando quiere, y un Range cuyos nodos ya
+    // no están en el documento no se ve. Si pasó, se vuelve a resolver la
+    // observación contra la página de ahora; si tampoco así, se dice.
+    if (nota.anchor && !rangeAlive(nota.ranges[0])) {
+      const resolved = resolveNote(nota, pageDigest())
+      if (!resolved?.ok || !resolved.ranges?.length) {
+        return { ok: false, reason: 'esa marca ya no está en la página' }
+      }
+      nota.ranges = resolved.ranges
+      this.overlay.annotate(this.overlay.notes)
+    }
 
     const rect = rangeRect(nota.ranges[0])
     if (rect) {
@@ -625,6 +645,24 @@ export class NavRunner {
   clear() {
     this.overlay.clearAll()
   }
+}
+
+/**
+ * Resuelve una observación según la clase de su ancla.
+ *
+ * Las del análisis apuntan a un bloque numerado de la página («¶12») y llevan
+ * la escalera de `digest.js`; el resto —una cita suelta, un encabezado— siguen
+ * el camino de siempre. Sin ancla no hay nada que resolver.
+ */
+function resolveNote(nota, digest) {
+  if (!nota?.anchor) return null
+  if (nota.anchor.kind === 'block-quote') return resolveBlockQuote(nota.anchor, { digest })
+  return resolveAnchor(nota.anchor)
+}
+
+/** ¿Este Range sigue apuntando a nodos del documento, y se ve? */
+function rangeAlive(range) {
+  return !!range && !!range.startContainer?.isConnected && !!rangeRect(range)
 }
 
 /**

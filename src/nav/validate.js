@@ -15,6 +15,8 @@ export const ANCHOR_LIMITS = {
   exactMax: 300,
   affixMax: 80,
   headingMax: 200,
+  /** Ningún resumen de página llega a tantos bloques: un número mayor es inventado. */
+  blockMax: 9999,
 }
 
 const CONTROL_CHARS = new RegExp('[\\u0000-\\u001F\\u007F]', 'g')
@@ -124,6 +126,24 @@ export function validateAnchor(raw) {
       exact,
       prefix: clean(raw.prefix, ANCHOR_LIMITS.affixMax),
       suffix: clean(raw.suffix, ANCHOR_LIMITS.affixMax),
+    }
+  }
+
+  // Un bloque numerado de la página («¶12») más, si la hay, una cita literal
+  // dentro de él. `hint` son las primeras letras del bloque tal como las leyó
+  // la EXTENSIÓN: es la comprobación de que ¶12 sigue siendo ¶12, así que sin
+  // ella no hay ancla. La cita puede faltar: entonces se marca el bloque entero.
+  if (kind === 'block-quote') {
+    const block = Number(raw.block)
+    if (!Number.isInteger(block) || block < 1 || block > ANCHOR_LIMITS.blockMax) return null
+    const hint = clean(raw.hint, ANCHOR_LIMITS.affixMax)
+    if (!hint) return null
+    const exact = clean(raw.exact, ANCHOR_LIMITS.exactMax)
+    return {
+      kind: 'block-quote',
+      block,
+      hint,
+      exact: exact.length < ANCHOR_LIMITS.exactMin ? '' : exact,
     }
   }
 

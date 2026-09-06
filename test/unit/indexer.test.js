@@ -74,6 +74,28 @@ test('harvest: sin nada que añadir, no toca el índice', () => {
   eq(added, 0)
 })
 
+test('EL FALLO: descubrir otra vez una página no le quita el padre que ya se sabía', () => {
+  // Pasó de verdad: el camino se leía de la API y, en la pregunta siguiente, la
+  // misma URL en la salida de una herramienta lo pisaba con una entrada sin
+  // padre. La tarjeta volvía a quedarse sin «Paso a paso».
+  const conArbol = normalizeIndex(
+    {
+      pages: [
+        { id: '3002', title: 'TCV - Domain 1 - Static Views', spaceKey: 'SIMPL', url: '/spaces/SIMPL/pages/3002/TCVStatic' },
+        { id: '98830281', title: 'TCV Static - Identity Provider Service', spaceKey: 'SIMPL', parentId: '3002', url: '/spaces/SIMPL/pages/98830281/TCVIdP' },
+      ],
+    },
+    DC.host,
+    null,
+    { wikiPrefix: '' }
+  )
+  const parts = [toolPart('Ver https://confluence.simplprogramme.eu/spaces/SIMPL/pages/98830281/TCVIdP y https://confluence.simplprogramme.eu/spaces/SIMPL/pages/555555/Otra')]
+  const { index, added } = harvestIndex(parts, { site: DC, index: conArbol })
+  assert(added > 0, 'la página nueva entra')
+  eq(index.pages['98830281'].parentId, '3002', 'y la conocida conserva su padre')
+  eq(index.pages['98830281'].spaceKey, 'SIMPL')
+})
+
 // ------------------------------------------------------------- planificador
 
 const INDEX = normalizeIndex(

@@ -17,15 +17,35 @@ import { contentRoot } from './dom-utils.js'
 
 /**
  * Aplana el texto del contenedor y guarda de qué nodo salió cada carácter.
+ *
+ * Con `boundary` se queda sólo con el texto PROPIO del contenedor: los nodos
+ * de texto que no cuelgan de ningún elemento para el que `boundary` diga que
+ * es un bloque. Es lo que permite leer un párrafo sin la lista que lleva
+ * dentro, y es la misma función con la que después se busca la cita en ese
+ * párrafo: el texto que vio el modelo y el texto en el que se busca salen del
+ * mismo sitio, o no coinciden.
+ *
+ * Los nodos que sólo tienen espacios también cuentan. Sin ellos, «<a>x</a>
+ * <a>y</a>» se leía «xy»: palabras pegadas para el modelo y una cita que no
+ * encontraba nada. En las posiciones no cambia nada —el mapa sigue siendo
+ * carácter a carácter— y `findQuote` ya colapsa los espacios al comparar.
+ *
+ * @param {Node} root
+ * @param {{boundary?: (el: Element) => boolean}} [opts]
  * @returns {{text: string, nodes: Array<{node: Text, start: number, end: number}>}}
  */
-export function buildTextIndex(root) {
+export function buildTextIndex(root, { boundary = null } = {}) {
   const nodes = []
   let text = ''
 
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+  const what = boundary ? NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT : NodeFilter.SHOW_TEXT
+  const walker = document.createTreeWalker(root, what, {
     acceptNode(node) {
-      if (!node.nodeValue || !node.nodeValue.trim()) return NodeFilter.FILTER_REJECT
+      if (node.nodeType === Node.ELEMENT_NODE) {
+        // Un bloque anidado se salta ENTERO; lo demás se atraviesa sin devolverlo.
+        return node !== root && boundary(node) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_SKIP
+      }
+      if (!node.nodeValue) return NodeFilter.FILTER_REJECT
       const parent = node.parentElement
       if (!parent) return NodeFilter.FILTER_REJECT
       const tag = parent.tagName
@@ -191,28 +211,6 @@ export function imagesWithin(element, limit = 12) {
   }
 
   return out.slice(0, limit)
-}
-
-/**
- * El texto del contenido, para enseñárselo al modelo.
- *
- * Se manda `innerText` y no el plano de `buildTextIndex`: `innerText` respeta
- * los saltos de párrafo, así que el modelo lee algo con forma y sus citas salen
- * limpias. Que luego se busque sobre el plano no importa, porque `findQuote`
- * normaliza los espacios y una cita vive dentro de un párrafo.
- *
- * Con tope, y diciendo si se recortó: sin él, una página larga se lleva por
- * delante la ventana de contexto de los modelos pequeños.
- */
-export function readablePageText(max = 30000) {
-  const root = contentRoot()
-  const bruto = root ? root.innerText || root.textContent || '' : ''
-  const limpio = bruto.replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim()
-  return {
-    text: limpio.slice(0, max),
-    truncated: limpio.length > max,
-    chars: limpio.length,
-  }
 }
 
 /** Rectángulo del viewport que engloba un Range, para el foco. */

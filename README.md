@@ -18,8 +18,12 @@ la respuesta**.
 - **Navegación asistida**: va **desplegando el árbol de páginas de la
   izquierda**, rama a rama, hasta dejar el destino a la vista. Sólo entonces
   navega — una vez, no ocho — y al llegar marca el párrafo exacto del que te
-  hablaba. El camino no se lo inventa el modelo: es la rama del árbol. Y al
-  llegar no oscurece nada: subraya.
+  hablaba. El camino no se lo inventa el modelo: es la rama del árbol, y se
+  lee **de la API REST del propio Confluence, con tu sesión, en
+  milisegundos**. Si no hay camino, te lleva de golpe. Y al llegar no oscurece
+  nada: subraya.
+- **Guiada o rápida**, a elegir en Ajustes: que intente siempre enseñarte el
+  camino, o que te lleve directamente sin esperar a nada.
 - **Dos formas de señalar**: el foco de siempre, que oscurece el resto de la
   página, o un **subrayado amarillo** que no tapa nada y rodea las imágenes con
   un filete muy fino. Se elige en Ajustes.
@@ -32,7 +36,10 @@ la respuesta**.
 - **Análisis con marcas numeradas**: el modo Análisis numera sus observaciones y
   **subraya en la página el pasaje del que habla cada una**, con su número
   detrás, como una nota al pie. En el chat, pulsar un `[2]` te lleva a su
-  subrayado; pulsar el número en la página te lleva a su fila en el chat.
+  subrayado; pulsar el número en la página te lleva a su fila en el chat. La
+  página se le enseña al modelo **troceada en bloques numerados** («¶7»), y él
+  cierra su respuesta con un JSON que dice de qué bloque habla cada número: el
+  subrayado lo decide un script a partir de ese JSON, no el modelo.
 
 ---
 
@@ -119,7 +126,7 @@ flowchart LR
   LLM["🤖 LLM<br/>en la nube o en local"]
   MCP["🔌 MCP de Atlassian<br/>sólo lectura"]
 
-  PAGINA <-- "marca y navega" --> EXT
+  PAGINA <-- "marca, navega y lee el árbol" --> EXT
   EXT -- "pregunta" --> OC
   OC <-- "razona" --> LLM
   OC -- "consulta" --> MCP
@@ -136,8 +143,9 @@ Cinco piezas y ningún misterio:
 - **La extensión** es la única que toca la página. Lee lo que estás viendo, va
   desplegando el árbol de la izquierda y marca en amarillo el fragmento del que
   te habla, sin modificar el documento.
-- **opencode** corre en tu máquina. La extensión no habla con nadie más: sólo
-  con `127.0.0.1`.
+- **opencode** corre en tu máquina. La extensión no habla con ninguna nube:
+  sólo con `127.0.0.1` y, en modo lectura, con el Confluence que ya tienes
+  abierto, para leer el árbol de páginas con tu propia sesión.
 - **El LLM** lo eliges tú de la lista que tenga tu opencode: uno de pago en la
   nube, uno gratuito, o uno corriendo en tu propio equipo. Faro no llama a
   ninguna nube; le habla a tu opencode, y es él quien decide a dónde va la
@@ -149,7 +157,7 @@ De ahí que haya dos caminos hasta el mismo sitio: la extensión ve **la página
 que tienes delante**, y opencode consulta **la API**. Ninguno de los dos
 escribe nada.
 
-Once decisiones que sostienen el diseño:
+Doce decisiones que sostienen el diseño:
 
 1. **El panel es el único que habla con opencode.** El content script vive
    dentro de una página que no controlamos: no conoce la contraseña del
@@ -169,8 +177,14 @@ Once decisiones que sostienen el diseño:
    hermanas que cuelgan de sitios distintos, así que no había nada que
    desplegar y la navegación guiada acababa en un salto seco. Ahora los pasos
    son la cadena de padres del destino, que la sabe el índice; el `path` que
-   escriba el modelo no cuenta. Y si no se conoce esa cadena, se pide una vez y
-   se guarda, en vez de improvisar un camino falso.
+   escriba el modelo no cuenta. Y esa cadena **se lee, no se pregunta**: una
+   petición `GET …/rest/api/content/<id>?expand=ancestors` al mismo Confluence
+   en el que estás, con tu sesión, la devuelve entera en milisegundos
+   (`src/shared/confluence-rest.js`, puro y con pruebas; si Cloud retira la
+   API v1, son tres peticiones a la v2). Antes se le pedía al
+   modelo, que tenía que llamar al MCP y devolver un JSON válido: entre treinta
+   segundos y varios minutos, y con los modelos pequeños ni eso. Si la API no
+   contesta, no se improvisa un camino falso: se lleva de golpe.
 
 5. **Un paso intermedio nunca navega.** Una carga de página a mitad del
    recorrido pliega el árbol entero y deja sin base a los pasos que quedan. Si
@@ -185,8 +199,9 @@ Once decisiones que sostienen el diseño:
    teclado (flecha derecha, como manda ARIA para un árbol).
 
 7. **La estructura del árbol se guarda como datos, no como HTML.** Se lee de
-   dos sitios: del MCP al construir el contexto, y **del propio DOM de la barra
-   lateral** mientras usas Faro — gratis, exacto y limitado a lo desplegado.
+   tres sitios: del MCP al construir el contexto, **del propio DOM de la barra
+   lateral** mientras usas Faro — gratis, exacto y limitado a lo desplegado — y
+   **de la API REST del sitio** cuando hace falta el camino hasta una página.
    Guardar marcado sería pesado y caducaría al primer rediseño; guardar «la
    1084 cuelga de la 1083» no caduca.
 
@@ -209,11 +224,29 @@ Once decisiones que sostienen el diseño:
    ya está. Es la misma pieza con y sin escudo, no dos.
 
    De ahí sale lo demás: las observaciones de un análisis son ese mismo
-   subrayado, varias veces y numeradas. Y como el modelo numera sus puntos en la
-   respuesta y una segunda pasada localiza cada número en el texto real de la
-   página, el chat y la página comparten numeración sin reconciliar nada. Una
-   observación cuya cita no aparece se queda **sin marcar**: marcarla en el
-   párrafo de al lado sería peor que no marcarla.
+   subrayado, varias veces y numeradas. Y quien decide dónde cae cada una es un
+   **script, no el modelo**. La página se lee del DOM y se le enseña troceada
+   en bloques numerados —párrafo, encabezado, viñeta, celda, código: «¶7 [p]
+   …»—; el modelo numera sus puntos en la prosa y cierra la respuesta con un
+   bloque JSON que no ve el usuario: de cada número, el bloque ¶ del que habla y,
+   si quiere afinar, una cita literal dentro de él. El panel lo valida contra
+   los bloques que le enseñó (la pista con la que se reconoce un bloque son sus
+   primeras letras, tal como las leyó la extensión, nunca lo que diga el
+   modelo) y el content script vuelve a trocear la página de AHORA y resuelve
+   cada ancla por una escalera fija: el bloque comprobado por su texto, la cita
+   dentro de él, el bloque entero si la cita no está tal cual, la cita en toda
+   la página si el bloque ya no existe, y si no, nada. Antes hacían falta dos
+   turnos y el modelo tenía que copiar frases de memoria; copiaba mal, y lo
+   que copiaba mal no se marcaba. Esa segunda pasada sigue existiendo sólo como
+   red, para el modelo que numera y se olvida del bloque JSON. Una observación
+   que no apunta a ningún bloque se queda **sin marcar**: marcarla en el
+   párrafo de al lado sería peor que no marcarla. El texto de la página viaja
+   en el `system` de ese turno —opencode lo guarda por mensaje y sólo manda el
+   del último, así que no se acumula en la sesión—, delimitado y etiquetado
+   como información, nunca instrucciones, igual que lo señalado con el ratón.
+   Y como las anclas se quedan en la respuesta guardada, al reabrir el panel
+   la tarjeta del último análisis ofrece **volver a marcar**; nunca lo hace
+   sola, que desplazaría una página por la que quizá sólo pasas.
 
 10. **Una marca por línea, y recortada a su caja.** `getClientRects()` no
    devuelve una caja por línea: devuelve una por cada trozo con estilo propio.
@@ -230,12 +263,38 @@ Once decisiones que sostienen el diseño:
    `<html>`. Confluence monta su vista sobre React: insertar nodos dentro del
    contenido es pedir que el siguiente render se los lleve por delante.
 
+12. **En modo Búsqueda, el destino se lee de la respuesta.** Ahí se le pide al
+   modelo que nombre cada página con su id y que cierre con una línea fija,
+   `Destino: título (id N)` o `Destino: ninguno`. Esa línea —o, si no la
+   escribe, la única página del índice que nombre— es el destino, y no hace
+   falta gastar otro turno en preguntárselo. Se lee con cuidado: sólo vale
+   como **última línea** de la respuesta, nunca citada con `>` ni dentro de
+   un bloque de código, porque una página de Confluence que contenga
+   «Destino: …» y que el modelo cite literalmente es información, no la
+   decisión; un título de una sola palabra sólo cuenta entre comillas o en
+   negrita («la arquitectura del sistema» no nombra la página *Arquitectura*);
+   y un número corto sólo si va presentado como id. Y lo que sale de ahí pasa
+   por la misma validación que lo que dice el modelo: sólo páginas del índice,
+   del mismo sitio, y siempre con un botón que hay que pulsar. Con varias
+   candidatas y sin esa línea —o en modo
+   General, donde la pregunta es si merece la pena llevar a alguien a algún
+   sitio— sigue decidiendo el modelo. Y quien elige entre enseñar el camino o
+   ir de golpe es el usuario, en **Ajustes → Cómo te lleva Faro**: *guiada* lee
+   el árbol y destaca «Paso a paso»; *rápida* no lee nada y sólo ofrece
+   «Llévame».
+
+   Lo que descubre una conversación —la misma página, vista en la salida de una
+   herramienta— no puede borrar lo que ya se sabía de ella: al fundirlo se
+   conservan el padre, el espacio, el título de verdad y la ruta con nombre
+   (`mergeIndexKeepingTree`). Sin eso, el camino leído de la API se perdía en la
+   pregunta siguiente. Pasó de verdad, en la revisión de este cambio.
+
 ---
 
 ## Comprobaciones
 
 ```bash
-npm run check              # sintaxis + orden + manifest + 296 pruebas unitarias
+npm run check              # sintaxis + orden + manifest + 423 pruebas unitarias
 npm run test:integration   # contra un opencode real que arranca la propia prueba
 npm run harness            # banco de pruebas visual en http://127.0.0.1:5175
 ```
@@ -294,13 +353,27 @@ Con el banco levantado hay dos páginas:
   insignia justo detrás del último carácter de su cita; una cuarta cuya cita no
   existe, que tiene que quedarse sin marcar; ir a una observación concreta sin
   apagar las demás; y que **al llegar a un destino no se oscurece la página**.
+  Más las del análisis por bloques: que la página en bloques numerados sale
+  igual dos veces seguidas y sin lo que está oculto; la escalera entera sobre
+  cinco observaciones —bloque más cita, bloque entero, número equivocado con
+  el texto correcto, cita sin bloque, y nada—, con una marca por observación y
+  el bloque entero en una barra por línea; que si alguien añade un párrafo por
+  encima la marca sigue donde estaba el texto; y que si Confluence repinta el
+  párrafo marcado, ir a la observación la vuelve a resolver.
+
+  Y las del camino leído por la API: la Confluence de mentira contesta a
+  `…/rest/api/content/<id>?expand=ancestors` como la de verdad —con la portada
+  del espacio por encima de todo— y se comprueba que la cadena sale entera, sin
+  esa portada, en milisegundos; que una página inexistente no tiene camino; y
+  que con esa cadena, **sin que el modelo haya dicho nada**, el recorrido de la
+  ACV a su TCV despliega cuatro ramas y navega una sola vez.
 
 ---
 
 ## Seguridad
 
 El contenido de Jira y Confluence lo escribe cualquiera de tu organización.
-Faro lo trata como información, nunca como instrucciones. Tres barreras, y
+Faro lo trata como información, nunca como instrucciones. Cuatro barreras, y
 ninguna depende de que el modelo se porte bien:
 
 - **El modelo no emite URLs.** Emite identificadores, y sólo se abren los que
@@ -310,6 +383,11 @@ ninguna depende de que el modelo se porte bien:
 - **Lista blanca de clics.** Sólo enlaces de navegación del propio sitio y
   botones de desplegar. Nunca «Guardar», «Publicar», «Comentar»,
   «Transicionar» ni «Eliminar». La navegación asistida navega; no actúa.
+- **La API se lee, nunca se escribe.** La única petición que la extensión hace
+  al sitio es un `GET` al mismo origen en el que ya estás, con tu sesión y con
+  un id numérico validado, para leer de quién cuelga una página. La respuesta
+  se trata como datos —ids numéricos, títulos recortados, rutas del propio
+  sitio— y todo lo demás se ignora.
 
 **Y el modelo no puede tocar tu máquina.** El agente por defecto de opencode
 trae herramientas de shell y de ficheros, y las usa: comprobado, ejecutaba
@@ -376,11 +454,14 @@ modelo que funciona se recuerda para ese sitio.
   filas y controles ha encontrado, y lo deja copiado. Se ajusta con datos, no a
   ojo.
 
-- **Un análisis no marca todo lo que dice.** Sólo se subraya lo que el modelo
-  sabe citar literalmente del texto de la página. Una observación general —«a
-  esta página le falta un diagrama»— no apunta a ninguna frase, así que sale en
-  la lista del chat en gris y sin marca. Es a propósito: la alternativa sería
-  subrayar un párrafo cualquiera.
+- **Un análisis no marca todo lo que dice.** Sólo se subraya lo que apunta a
+  un bloque del texto de la página: la cita literal si está tal cual, y si no,
+  el bloque entero que señaló el modelo. Una observación general —«a esta
+  página le falta un diagrama»— no apunta a ningún bloque, así que sale en la
+  lista del chat en gris y sin marca. Es a propósito: la alternativa sería
+  subrayar un párrafo cualquiera. Y lo que no está en los bloques —el texto
+  dentro de un iframe, de un macro o de una rama plegada— no se puede marcar,
+  porque no se ve.
 
 - **Una imagen seleccionada no siempre viaja.** Si está servida desde otro
   origen, el `canvas` queda contaminado y el navegador no deja exportarla. En
@@ -397,13 +478,14 @@ src/
   panel/
     panel.js                chat, ajustes, memoria, indexador, planificador
     skills.js               General · Búsqueda · Resumen · Análisis (puro)
-    notes.js                observaciones numeradas: esquema, prompt, validación
-    prompts.js              plantillas, incluido el bloque de lo señalado
+    notes.js                observaciones numeradas: el bloque JSON de anclas, su validación, la segunda pasada (puro)
+    prompts.js              plantillas, incluido el bloque de lo señalado y la página en bloques
   background/               orquestador del recorrido paso a paso
   content/
     overlay/                foco, subrayado, insignias, cartel — Shadow DOM cerrado
     anchor.js               escalera de anclaje + Custom Highlight API
     anchor-match.js         localización de citas (puro)
+    digest.js               la página en bloques numerados, y de «¶7 + cita» a un Range
     overlay/rects.js        funde por línea y recorta a su caja (puro)
     tree-dom.js             qué es el árbol, una fila y su control · diagnóstico
     locators.js             cascada href → rol → texto + lista blanca de clics
@@ -413,6 +495,10 @@ src/
   opencode/                 cliente HTTP + SSE, reconstrucción de turnos
   atlassian/                detección de sitio, índice de contenido
   nav/                      esquema NavigationPlan y su validación
+  shared/
+    confluence-rest.js      el árbol por la API REST del sitio, con tu sesión (puro)
+    digest.js               cómo se enseñan los bloques y cómo se reconoce uno después (puro)
+    config.js               ajustes por defecto y su migración
 harness/                    Confluence de mentira para pruebas visuales
 test/                       arnés propio, sin dependencias
 tools/                      generación de iconos, clave del manifest, servidor

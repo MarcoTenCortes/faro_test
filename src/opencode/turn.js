@@ -27,6 +27,9 @@ export class TurnTracker {
     this.roles = new Map() // messageID -> role
     this.assistantMessageID = null
     this.model = null
+    // La salida estructurada del turno, si se pidió con `format`: opencode la
+    // deja en `info.structured` del mensaje del asistente al terminar.
+    this.structured = undefined
     this.done = false
     this.error = null
     this.rawError = null
@@ -108,6 +111,7 @@ export class TurnTracker {
         // El modelo del turno hace falta para poder nombrar al proveedor si
         // falla su autenticación: el evento de error no lo trae.
         if (info.model) this.model = info.model
+        if (info.role === 'assistant' && info.structured !== undefined) this.structured = info.structured
         return true
       }
 
@@ -168,6 +172,26 @@ export class TurnTracker {
         return false
     }
   }
+}
+
+/**
+ * La salida estructurada que hay entre las partes de un turno, si la hay.
+ *
+ * opencode la entrega como una llamada a la herramienta `StructuredOutput` ya
+ * validada contra el esquema (`metadata.valid`). Sirve tanto para un turno en
+ * vivo como para los mensajes guardados de una sesión, que traen las mismas
+ * partes. Una llamada pendiente, fallida o a otra herramienta no cuenta. Pura.
+ *
+ * @param {Array<{type?:string, tool?:string, state?:object}>} parts
+ * @returns {object|undefined}
+ */
+export function structuredOutputOf(parts) {
+  for (const p of Array.isArray(parts) ? parts : []) {
+    if (!p || p.type !== 'tool' || p.tool !== 'StructuredOutput') continue
+    if (p.state?.status !== 'completed' || p.state?.metadata?.valid !== true) continue
+    if (p.state.input && typeof p.state.input === 'object') return p.state.input
+  }
+  return undefined
 }
 
 /**

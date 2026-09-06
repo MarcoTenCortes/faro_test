@@ -112,6 +112,66 @@ test('no se decide si cambiaste de página comparando URLs como cadenas', () => 
   assert(!/state\.tabUrl !== urlAlPedir/.test(cuerpo), 'y no por igualdad de cadenas')
 })
 
+test('EL CAMBIO: la página va en bloques en el propio turno del análisis, y las anclas vuelven con la respuesta', () => {
+  // Antes hacían falta dos turnos: el análisis, y otro con el texto entero de
+  // la página para que el modelo volviera a localizar cada número copiando
+  // frases de memoria. Ahora la página se lee ANTES de mandar la pregunta, va
+  // troceada y numerada en el prompt, y el bloque JSON de anclas viene en la
+  // misma respuesta. La segunda pasada queda sólo como red.
+  const envio = JS.slice(JS.indexOf('async function send('), JS.indexOf('function paintTurn('))
+  assert(/readPageDigest\(\)/.test(envio), 'la página se lee antes de mandar el turno')
+  assert(/splitAnchorsBlock\(turn\.text\)/.test(envio), 'y el bloque de anclas se separa de la prosa')
+  assert(/digest,\s*\n/.test(envio) || /digest\b/.test(envio), 'y viaja en el sistema del turno')
+
+  const cuerpo = JS.slice(JS.indexOf('async function offerNotes'), JS.indexOf('function notesCard'))
+  assert(/validateNotes\(anchors/.test(cuerpo), 'las anclas de la respuesta se validan contra los bloques enseñados')
+  assert(/if \(skill !== 'analisis'\) return/.test(cuerpo), 'el modo es el del turno, no el del desplegable al terminar')
+  assert(!/state\.skill !== 'analisis'/.test(cuerpo), 'nunca el del desplegable')
+  // Una respuesta de seguimiento no borra las marcas, traiga o no anclas: lo
+  // que distingue un análisis nuevo es que numera desde el 1.
+  assert(/const analisisNuevo = numeros\[0\] === 1/.test(cuerpo), 'un análisis nuevo numera desde el 1')
+  assert(/if \(!analisisNuevo && state\.notes\.length\)/.test(cuerpo), 'y un seguimiento conserva las marcas')
+  assert(/if \(signal\?\.aborted\) return/.test(cuerpo), 'y un turno cancelado no marca nada')
+
+  // La señal de cancelar es la de ESTE turno, no la que haya en el estado
+  // cuando la cola del turno llegue a usarla.
+  assert(/const abort = new AbortController\(\)/.test(envio), 'el controlador se guarda aparte')
+  assert(/signal: abort\.signal/.test(envio), 'y es el que viaja al turno y a las marcas')
+  assert(!/state\.turnAbort\?\.signal/.test(envio), 'nunca el del estado')
+  assert(/if \(abort\.signal\.aborted\)/.test(envio), 'parar mientras se lee la página no manda nada')
+
+  // Las marcas se olvidan por identidad de página y ANTES de cambiar de
+  // pestaña, para que la orden de limpiar vaya a la que las tenía.
+  const refresco = JS.slice(JS.indexOf('async function refreshTab'), JS.indexOf('let site = parseAtlassianUrl'))
+  assert(/samePage\(tab\.url/.test(refresco), 'refreshTab compara por identidad de página')
+  assert(refresco.indexOf('forgetNotes()') < refresco.indexOf('state.tabId = tab.id'), 'y olvida antes de cambiar de pestaña')
+
+  // «Volver a marcar» comprueba la página y no se fía de los bloques de ahora.
+  const remarcar = JS.slice(JS.indexOf('async function remarkFromAnchors'), JS.indexOf('async function focusNote'))
+  assert(/samePage\(digest\.url, url\)/.test(remarcar), 'comprueba que es la misma página')
+  assert(/strict: true/.test(remarcar), 'y exige que la cita esté dentro del bloque')
+  assert(!/MSG\.PAGE_TEXT/.test(cuerpo), 'ya no se vuelve a leer la página después')
+  assert(!/createSession\(/.test(cuerpo), 'ni se abre una sesión aparte salvo como red')
+  assert(/secondPassNotes\(/.test(cuerpo), 'la red sigue existiendo')
+  assert(!/MSG\.PAGE_TEXT|readablePageText/.test(JS), 'el texto plano de la página ya no se usa')
+})
+
+test('lo que se pinta de un turno nunca incluye el bloque de anclas', () => {
+  const pintar = JS.slice(JS.indexOf('function paintTurn('), JS.indexOf('async function readPageDigest('))
+  assert(/splitAnchorsBlock\(tracker\.text,\s*\{\s*final\s*\}\)/.test(pintar), 'se separa también mientras llega a trozos')
+  const restaurar = JS.slice(JS.indexOf('async function restoreConversation'), JS.indexOf('function showWelcome'))
+  assert(/splitAnchorsBlock\(turno\.textos\.join/.test(restaurar), 'y al restaurar una conversación, por turnos enteros')
+  assert(/staleNotesCard\(/.test(restaurar), 'que ofrece volver a marcar el último análisis, sin hacerlo solo')
+  assert(!/MSG\.ANNOTATE/.test(restaurar), 'restaurar nunca marca la página por su cuenta')
+
+  // Los ayudantes de la tarjeta viven DESPUÉS de notesCard: el trozo que
+  // vigilan las pruebas de arriba va de offerNotes a notesCard.
+  const tarjeta = JS.indexOf('function notesCard')
+  for (const fn of ['async function secondPassNotes', 'function staleNotesCard', 'async function remarkFromAnchors']) {
+    assert(JS.indexOf(fn) > tarjeta, fn + ' debe ir después de notesCard')
+  }
+})
+
 test('el análisis no se cae en silencio cuando no puede marcar', () => {
   // Pasó de verdad: el modelo devolvía ocho observaciones numeradas, no se
   // subrayaba ninguna, y el único rastro era una línea en el registro. En un

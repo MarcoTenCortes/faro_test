@@ -62,7 +62,7 @@ export function snapshotTree(root = document) {
         !!fila.querySelector('[aria-current], .current')
       if (!marcada) continue
       const title = (fila.innerText || fila.textContent || '').trim().slice(0, 200)
-      porFila.set(fila, { id: idActual, title, url: location.pathname })
+      porFila.set(fila, { id: idActual, title, url: location.pathname + location.search })
       orden.push(fila)
       break
     }

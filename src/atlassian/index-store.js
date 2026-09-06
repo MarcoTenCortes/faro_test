@@ -151,6 +151,48 @@ export function mergeIndex(base, incoming) {
   return out
 }
 
+/**
+ * Como `mergeIndex`, pero sin que lo nuevo borre lo que no sabe.
+ *
+ * Lo que descubre una conversación o un vistazo a la barra lateral trae páginas
+ * sin padre, sin espacio y a veces con un título de relleno o una ruta
+ * fabricada por id. Fundirlo a lo bruto pisaba el árbol que ya se había leído
+ * de la API: pasó de verdad, y la tarjeta volvía a quedarse sin «Paso a paso»
+ * en la pregunta siguiente. Aquí el padre, el espacio, un título de verdad y
+ * una ruta con nombre sólo se sustituyen por otros del mismo tipo. Pura.
+ */
+export function mergeIndexKeepingTree(base, incoming) {
+  const out = mergeIndex(base, incoming)
+  if (!base || base.version !== INDEX_VERSION) return out
+
+  for (const [id, nueva] of Object.entries(incoming?.pages || {})) {
+    const previa = base.pages?.[id]
+    if (!previa) continue
+    out.pages[id] = {
+      ...nueva,
+      parentId: nueva.parentId ?? previa.parentId ?? null,
+      spaceKey: nueva.spaceKey ?? previa.spaceKey ?? null,
+      title: isPlaceholderTitle(nueva.title) && previa.title && !isPlaceholderTitle(previa.title) ? previa.title : nueva.title,
+      path: isCanonicalPath(nueva.path) && previa.path && !isCanonicalPath(previa.path) ? previa.path : nueva.path,
+    }
+  }
+  return out
+}
+
+/** «Página 123»: lo que se pone cuando sólo se conoce el id. */
+export function isPlaceholderTitle(title) {
+  return /^Página \d+$/.test(String(title || ''))
+}
+
+/**
+ * La ruta fabricada por id, que vale pero no lleva el nombre de la página. Sin
+ * el id —la fila actual de un Data Center abierto por viewpage.action— vale
+ * aún menos: nunca gana a una ruta con nombre.
+ */
+function isCanonicalPath(path) {
+  return /\/pages\/viewpage\.action(\?|$)/i.test(String(path || ''))
+}
+
 function structuredCloneish(v) {
   return JSON.parse(JSON.stringify(v))
 }
@@ -220,8 +262,12 @@ export function resolveTarget(index, origin, target) {
   }
 }
 
-/** Cadena de padres de una página, de la raíz hacia abajo. Con tope anti-bucle. */
-export function ancestryOf(index, pageId, limit = 8) {
+/**
+ * Cadena de padres de una página, de la raíz hacia abajo. Con tope anti-bucle,
+ * el mismo que admite la API: un árbol real puede tener más de ocho niveles, y
+ * cortar antes deja sin desplegar justo las ramas de arriba.
+ */
+export function ancestryOf(index, pageId, limit = 50) {
   const chain = []
   const seen = new Set()
   let cur = index?.pages?.[String(pageId)]

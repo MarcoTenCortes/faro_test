@@ -194,3 +194,74 @@ test('la correccion no toca rutas que no son de Confluence', () => {
   )
   eq(idx.issues['AB-1'].path, '/browse/AB-1')
 })
+
+// --- fundir sin borrar el árbol -------------------------------------------
+// Pasó de verdad: el camino se leía de la API, y en la pregunta siguiente lo
+// que devolvían las herramientas —la misma página, sin padre— lo pisaba.
+
+import { mergeIndexKeepingTree, isPlaceholderTitle } from '../../src/atlassian/index-store.js'
+
+const CON_ARBOL = normalizeIndex(
+  {
+    pages: [
+      { id: '3002', title: 'TCV - Domain 1 - Static Views', spaceKey: 'SIMPL', url: '/spaces/SIMPL/pages/3002/TCVStatic' },
+      { id: '98830281', title: 'TCV Static - Identity Provider Service', spaceKey: 'SIMPL', parentId: '3002', url: '/spaces/SIMPL/pages/98830281/TCVIdP' },
+    ],
+  },
+  'confluence.simplprogramme.eu',
+  null,
+  { wikiPrefix: '' }
+)
+
+test('mergeIndexKeepingTree: lo nuevo no borra el padre ni el espacio que no sabe', () => {
+  const suelta = normalizeIndex(
+    { pages: [{ id: '98830281', title: 'TCV Static - Identity Provider Service', url: '/pages/viewpage.action?pageId=98830281' }] },
+    'confluence.simplprogramme.eu',
+    null,
+    { wikiPrefix: '' }
+  )
+  const m = mergeIndexKeepingTree(CON_ARBOL, suelta)
+  eq(m.pages['98830281'].parentId, '3002', 'el padre se conserva')
+  eq(m.pages['98830281'].spaceKey, 'SIMPL', 'y el espacio')
+  eq(m.pages['98830281'].path, '/spaces/SIMPL/pages/98830281/TCVIdP', 'y la ruta con nombre gana a la fabricada por id')
+  eq(ancestryOf(m, '98830281').map((p) => p.id), ['3002', '98830281'])
+
+  // La fila actual de un Data Center abierto por viewpage.action llega sin
+  // nombre y, si se pierde la query, sin id: tampoco gana.
+  const sinId = normalizeIndex({ pages: [{ id: '98830281', title: 'TCV', url: '/pages/viewpage.action' }] }, 'confluence.simplprogramme.eu', null, { wikiPrefix: '' })
+  eq(mergeIndexKeepingTree(CON_ARBOL, sinId).pages['98830281'].path, '/spaces/SIMPL/pages/98830281/TCVIdP')
+})
+
+test('ancestryOf: admite árboles de más de ocho niveles', () => {
+  const pages = Array.from({ length: 12 }, (_, i) => ({ id: String(7000 + i), title: 'N' + i, url: '/p/' + i, parentId: i ? String(7000 + i - 1) : undefined }))
+  const idx = normalizeIndex({ pages }, HOST)
+  eq(ancestryOf(idx, '7011').length, 12, 'la cadena entera, no los ocho de abajo')
+})
+
+test('mergeIndexKeepingTree: un marcador «Página N» no pisa un título de verdad, pero un título nuevo sí', () => {
+  const marcador = normalizeIndex({ pages: [{ id: '3002', title: 'Página 3002' }] }, 'confluence.simplprogramme.eu', null, { wikiPrefix: '' })
+  eq(mergeIndexKeepingTree(CON_ARBOL, marcador).pages['3002'].title, 'TCV - Domain 1 - Static Views')
+  const mejor = normalizeIndex({ pages: [{ id: '3002', title: 'TCV - Domain 1 - Static Views (v2)' }] }, 'confluence.simplprogramme.eu', null, { wikiPrefix: '' })
+  eq(mergeIndexKeepingTree(CON_ARBOL, mejor).pages['3002'].title, 'TCV - Domain 1 - Static Views (v2)')
+  assert(isPlaceholderTitle('Página 12') && !isPlaceholderTitle('Página de inicio'))
+})
+
+test('mergeIndexKeepingTree: un padre nuevo sí sustituye al viejo, y una página nueva entra entera', () => {
+  const nuevo = normalizeIndex(
+    { pages: [{ id: '98830281', title: 'TCV', parentId: '3001' }, { id: '7', title: 'Nueva', parentId: '3002' }] },
+    'confluence.simplprogramme.eu',
+    null,
+    { wikiPrefix: '' }
+  )
+  const m = mergeIndexKeepingTree(CON_ARBOL, nuevo)
+  eq(m.pages['98830281'].parentId, '3001')
+  eq(m.pages['7'].parentId, '3002')
+  eq(m.pages['7'].title, 'Nueva')
+})
+
+test('mergeIndexKeepingTree: sin base, o con una de otra version, es como mergeIndex', () => {
+  const nuevo = normalizeIndex({ pages: [{ id: '1', title: 'X', url: '/p/1' }] }, HOST)
+  eq(Object.keys(mergeIndexKeepingTree(null, nuevo).pages), ['1'])
+  const viejo = { version: 1, host: HOST, pages: { 1: { id: '1', title: 'Vieja', parentId: '9', path: '/wiki/spaces/~/pages/1' } }, spaces: {}, projects: {}, issues: {} }
+  eq(mergeIndexKeepingTree(viejo, nuevo).pages['1'].parentId, null, 'de un indice descartado no se rescata nada')
+})

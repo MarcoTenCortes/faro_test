@@ -160,7 +160,14 @@ Junto al selector de modelo hay otras dos cosas:
   la destaca. Al revés también: pulsar el número en la página marca su fila en
   el chat. Y dentro del propio texto de la respuesta, cada `[2]` es pulsable.
 
-  Cuesta un turno de modelo extra, y sólo se hace en ese modo.
+  Cómo lo hace: antes de mandar la pregunta, Faro lee la página abierta y se
+  la enseña al modelo troceada en bloques numerados («¶7 [p] …»), tal como se
+  ve en pantalla; debajo de la pregunta queda dicho que iba. El modelo cierra
+  su respuesta con un bloque JSON —que el chat retira, no es para leerlo— con
+  el bloque del que habla cada número y, si puede, una cita literal. Con eso,
+  un script de la extensión decide qué subrayar: la cita si está tal cual, el
+  bloque entero si no. Todo en el mismo turno. Si un modelo numera pero se
+  olvida del bloque JSON, se le pide aparte en una segunda pasada.
 
   La elección se recuerda por sitio, igual que el modelo.
 
@@ -173,6 +180,23 @@ Junto al selector de modelo hay otras dos cosas:
   encabezado bajo el que está. De una imagen, su descripción **y la imagen
   misma**, incrustada en el mensaje. Necesita permiso sobre el dominio, igual
   que la navegación paso a paso.
+
+## 7. Guiada o rápida
+
+**Ajustes → Cómo te lleva Faro** decide qué hace la tarjeta «Puedo llevarte»:
+
+- **Guiada** (por defecto): intenta siempre enseñarte el camino. Lee de quién
+  cuelga la página en la API REST del propio Confluence —una petición `GET` con
+  tu sesión, milisegundos— y destaca «Paso a paso», con «Llévame» al lado. Si
+  no hay camino, sólo queda «Llévame».
+- **Rápida**: te lleva directamente, siempre. No se lee el árbol ni se espera
+  a nada: la tarjeta sólo tiene «Llévame».
+
+En el modo **Búsqueda**, además, el modelo termina cada respuesta con una línea
+`Destino: título (id N)` —o `Destino: ninguno`— y Faro la lee tal cual: el
+destino sale de ahí, sin gastar un turno en preguntárselo. Si un modelo se
+salta esa línea pero nombra una sola página del índice, vale igual. La tarjeta
+aparece nada más terminar la respuesta.
 
 ---
 
@@ -211,14 +235,26 @@ deja en el portapapeles. Los cuerpos de las peticiones no se guardan nunca:
 por ahí pasan tus claves.
 
 **Sólo me ofrece «Llévame», nunca «Paso a paso»**
+Lo primero: **Ajustes → Cómo te lleva Faro** tiene que estar en *Guiada*. En
+*Rápida* la tarjeta sólo ofrece «Llévame», a propósito.
+
 Para enseñar el camino hace falta saber quién es la página padre del destino: el
-recorrido ES su rama del árbol, no un camino que se invente el modelo. Si el
-índice no conoce ese padre, Faro lo pregunta una vez y lo guarda; y cada
-respuesta aprovecha para leer del DOM la parte del árbol que esté desplegada. Si indexaste antes de que Faro levantara el árbol,
-vuelve a generar el contexto desde **Ajustes → Reconstruir el contexto**. Faro
-también intenta averiguar los antepasados de una página suelta sobre la marcha,
-pero eso depende del modelo: con `claude-sonnet-4.6` funciona, con los más
-pequeños no siempre.
+recorrido ES su rama del árbol, no un camino que se invente el modelo. Faro la
+lee de la API REST del propio Confluence, con tu sesión, en cuanto sabe el
+destino; en el **registro** aparece como «Camino leído de Confluence» con la
+duración. Si en su lugar ves «Sin camino», el motivo va al lado:
+
+- *sin acceso a la pestaña*: falta el permiso del dominio o el content script
+  no está cargado. Es el mismo permiso que necesita el propio «Paso a paso».
+- *la API respondió 401 o 403*: tu sesión de Confluence no vale para su API.
+  Recarga la página y vuelve a entrar.
+- *la respuesta no es JSON*: el sitio ha devuelto una página de login o un
+  proxy se ha puesto en medio.
+- *la API respondió 404*: la página del índice ya no existe con ese id.
+
+En cualquiera de esos casos Faro no inventa nada: te lleva de golpe. Y cada
+respuesta aprovecha, además, para leer del DOM la parte del árbol que esté
+desplegada.
 
 **Pulso «Paso a paso» y no pasa nada**
 Faro necesita permiso sobre el dominio para poder actuar dentro de la página.
@@ -265,22 +301,42 @@ Faro te dirá por qué, debajo de la respuesta. Los motivos, por frecuencia:
    específicos» → añade tu dominio.
 2. **El modelo no ha numerado sus observaciones.** Sin `[1]`, `[2]`… no hay nada
    que anclar. Pasa con los modelos pequeños; cambia de modelo.
-3. **No se ha podido leer el texto de la página.** Casi siempre es que la
-   pestaña se cargó antes que la versión nueva de la extensión: recárgala.
-4. **La Skill no es Análisis.** En General no se marca nada.
+3. **No se ha podido leer la página en bloques.** Casi siempre es que la
+   pestaña se cargó antes que la versión nueva de la extensión: recárgala. Si
+   estás en el editor, Faro no lee ni marca nada a propósito. En el registro
+   sale «Página sin bloques» con la razón, y debajo de la pregunta no aparece
+   «con el texto de la página».
+4. **El modelo no ha señalado ningún bloque.** Numera, pero cierra sin el
+   bloque JSON —o con bloques que no existen—. Faro lo pide aparte en una
+   segunda pasada («Sin bloque de anclas» en el registro); si tampoco así,
+   cambia de modelo.
+5. **La Skill no es Análisis.** En General no se marca nada.
 
 En el **registro** queda lo mismo, con más detalle: «Sin marcas» con la razón, o
-«Sin anclar» con los números que no se pudieron situar.
+«Sin anclar» con los números que no se pudieron situar. «Análisis marcado» dice,
+de cada número, cómo se resolvió: `block+quote` es la cita dentro de su bloque,
+`block+whole` el bloque entero, `block-moved` que el número no coincidía pero
+el texto sí, y `global` que el bloque ya no estaba y la cita se buscó en toda
+la página.
 
 **Algunas observaciones salen en gris, sin marca**
-Son las que no se han podido situar en la página: o la cita no aparece tal cual,
-o la página es más larga que el trozo que se le mandó al modelo (30.000
-caracteres). Se dejan sin marcar a propósito: subrayar el párrafo de al lado
-sería peor que no subrayar nada.
+Son las que no apuntan a ningún bloque de la página: hablan de ella en general,
+o de algo que cae fuera de los bloques que se le enseñaron al modelo (la página
+se recorta a 30.000 caracteres o 400 bloques, y lo que hay dentro de un iframe
+o de una rama plegada no se ve). Se dejan sin marcar a propósito: subrayar el
+párrafo de al lado sería peor que no subrayar nada.
+
+**Una fila dice «bloque entero» o «aproximada»**
+La cita del modelo no estaba tal cual en el bloque que señaló —la parafraseó, o
+la página cambió—, así que se marca el bloque entero, que es lo que él señaló;
+o se encontró por aproximación. La fila lo dice para que no pase por exacta.
 
 **Pulso [2] y dice que esa marca ya no está**
 Las marcas viven en la página donde se hicieron. Si has navegado, recargado o
-empezado una sesión nueva, se van con ella. Vuelve a pedir el análisis.
+empezado una sesión nueva, se van con ella. Al volver a abrir el panel, la
+tarjeta del último análisis sale atenuada con **Volver a marcar en esta
+página**: si sigues en la misma página, la vuelve a subrayar; si no, te lo
+dice y no toca nada. Si no, vuelve a pedir el análisis.
 
 **No quiero que oscurezca la página entera**
 **Ajustes → Cómo te señala Faro → Subrayado**. En ese modo no se oscurece nada:
