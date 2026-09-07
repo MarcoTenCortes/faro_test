@@ -40,6 +40,14 @@ la respuesta**.
   página se le enseña al modelo **troceada en bloques numerados** («¶7»), y él
   cierra su respuesta con un JSON que dice de qué bloque habla cada número: el
   subrayado lo decide un script a partir de ese JSON, no el modelo.
+- **Páginas base del análisis**: junto al selector de Skill, en Análisis, un
+  botón para decir **en base a qué páginas** se analiza la abierta: una guía,
+  una decisión anterior, la página con la que hay que comparar. Se añaden
+  pegando su URL o buscándolas por título, con autocompletado desde el índice
+  del sitio y desde la API del propio Confluence. Y un **alcance** a elegir:
+  *sólo estas* —la página abierta y las base, nada más— o *estas como mínimo*,
+  y las que el modelo decida consultar. Se recuerdan por sitio y se ven siempre
+  en un chip sobre el cuadro de texto.
 
 ---
 
@@ -294,7 +302,7 @@ Doce decisiones que sostienen el diseño:
 ## Comprobaciones
 
 ```bash
-npm run check              # sintaxis + orden + manifest + 423 pruebas unitarias
+npm run check              # sintaxis + orden + manifest + 464 pruebas unitarias
 npm run test:integration   # contra un opencode real que arranca la propia prueba
 npm run harness            # banco de pruebas visual en http://127.0.0.1:5175
 ```
@@ -366,7 +374,11 @@ Con el banco levantado hay dos páginas:
   del espacio por encima de todo— y se comprueba que la cadena sale entera, sin
   esa portada, en milisegundos; que una página inexistente no tiene camino; y
   que con esa cadena, **sin que el modelo haya dicho nada**, el recorrido de la
-  ACV a su TCV despliega cuatro ramas y navega una sola vez.
+  ACV a su TCV despliega cuatro ramas y navega una sola vez. Y la búsqueda de
+  páginas por título contra la misma API falsa, que busca como la de verdad:
+  «ADR» devuelve las dos ADR y nada más, «Arqui» encuentra «Arquitectura»
+  porque el último término lleva comodín, con una letra no se pide nada, y las
+  comillas y barras del usuario no llegan al CQL.
 
 ---
 
@@ -383,11 +395,14 @@ ninguna depende de que el modelo se porte bien:
 - **Lista blanca de clics.** Sólo enlaces de navegación del propio sitio y
   botones de desplegar. Nunca «Guardar», «Publicar», «Comentar»,
   «Transicionar» ni «Eliminar». La navegación asistida navega; no actúa.
-- **La API se lee, nunca se escribe.** La única petición que la extensión hace
-  al sitio es un `GET` al mismo origen en el que ya estás, con tu sesión y con
-  un id numérico validado, para leer de quién cuelga una página. La respuesta
-  se trata como datos —ids numéricos, títulos recortados, rutas del propio
-  sitio— y todo lo demás se ignora.
+- **La API se lee, nunca se escribe.** La extensión hace al sitio dos tipos de
+  petición, ambas `GET` al mismo origen en el que ya estás y con tu sesión:
+  leer de quién cuelga una página (con un id numérico validado) y buscar
+  páginas por título para elegir las páginas base de un análisis (con texto
+  tuyo, limpiado, acotado a cien caracteres y seis palabras, y sin comillas,
+  barras ni comodines antes de convertirse en CQL). La respuesta se trata como
+  datos —ids numéricos, títulos recortados, rutas del propio sitio— y todo lo
+  demás se ignora.
 
 **Y el modelo no puede tocar tu máquina.** El agente por defecto de opencode
 trae herramientas de shell y de ficheros, y las usa: comprobado, ejecutaba
@@ -468,6 +483,17 @@ modelo que funciona se recuerda para ese sitio.
   ese caso se manda su `alt`, su pie de figura y el texto de alrededor, y se
   dice en el chat que la imagen no iba.
 
+- **El alcance «sólo estas» se le pide al modelo, no se le impone.** Las
+  páginas base las lee el modelo por el MCP, y limitar sus herramientas en un
+  turno no se puede: opencode convierte esa limitación en permisos permanentes
+  de la sesión, que es por sitio y compartida entre turnos. Así que el alcance
+  va en el prompt y, al terminar, Faro mira qué herramientas llamó el modelo:
+  si buscó, recorrió el árbol o leyó una página que no estaba en la lista, lo
+  dice bajo la respuesta («Fuera del alcance» en el registro). Sin MCP
+  conectado no hay páginas base que valgan, y también se dice. Y cada análisis
+  con páginas base cuesta una consulta por página, cuyo texto se queda en la
+  sesión: por eso el tope son seis.
+
 ---
 
 ## Estructura
@@ -478,6 +504,7 @@ src/
   panel/
     panel.js                chat, ajustes, memoria, indexador, planificador
     skills.js               General · Búsqueda · Resumen · Análisis (puro)
+    sources.js              páginas base del análisis: forma, alcance, autocompletado desde el índice, URL pegada, vigilancia del alcance (puro)
     notes.js                observaciones numeradas: el bloque JSON de anclas, su validación, la segunda pasada (puro)
     prompts.js              plantillas, incluido el bloque de lo señalado y la página en bloques
   background/               orquestador del recorrido paso a paso
@@ -496,7 +523,7 @@ src/
   atlassian/                detección de sitio, índice de contenido
   nav/                      esquema NavigationPlan y su validación
   shared/
-    confluence-rest.js      el árbol por la API REST del sitio, con tu sesión (puro)
+    confluence-rest.js      el árbol y la búsqueda de páginas por la API REST del sitio, con tu sesión (puro)
     digest.js               cómo se enseñan los bloques y cómo se reconoce uno después (puro)
     config.js               ajustes por defecto y su migración
 harness/                    Confluence de mentira para pruebas visuales

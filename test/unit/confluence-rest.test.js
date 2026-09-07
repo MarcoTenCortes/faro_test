@@ -19,6 +19,15 @@ import {
   parseAncestorsV2,
   fetchAncestors,
   resolveWikiPrefix,
+  SEARCH_LIMITS,
+  cleanSearchText,
+  cqlTitleQuery,
+  clampLimit,
+  searchPath,
+  pagesByTitlePathV2,
+  parseSearchV1,
+  parseSearchV2,
+  searchPages,
 } from '../../src/shared/confluence-rest.js'
 
 // ------------------------------------------------------------------- rutas
@@ -371,4 +380,166 @@ test('fetchAncestors: una respuesta con forma rara no se convierte en camino', a
   const r = await fetchAncestors(fn, DC, '5')
   eq(r.ok, false)
   assert(/forma esperada/.test(r.reason), r.reason)
+})
+
+// ---------------------------------------------------------------- búsqueda
+
+test('cqlTitleQuery: un término por palabra y el comodín de prefijo sólo en el último', () => {
+  // Sin `*`, «Arqui» no encuentra «Arquitectura»: `~` compara términos analizados.
+  eq(cqlTitleQuery('Arqui'), 'type=page AND title~"Arqui*"')
+  eq(cqlTitleQuery('api def'), 'type=page AND title~"api" AND title~"def*"')
+  eq(cqlTitleQuery('  rotación   de  tokens '), 'type=page AND title~"rotación" AND title~"de" AND title~"tokens*"')
+  eq(cqlTitleQuery('ab c'), 'type=page AND title~"ab" AND title~"c"', 'con una letra delante no hay comodín')
+})
+
+test('SEGURIDAD: lo que escribe el usuario no puede salir del literal CQL ni meter comodines', () => {
+  eq(cqlTitleQuery('a"b\\c*'), 'type=page AND title~"abc*"')
+  eq(cqlTitleQuery('¿qué?'), 'type=page AND title~"¿qué*"')
+  eq(cqlTitleQuery('uno dos\nx'), 'type=page AND title~"uno" AND title~"dos" AND title~"x"')
+  eq(cqlTitleQuery('a'), null, 'con una letra no se busca')
+  eq(cqlTitleQuery('  '), null)
+  eq(cqlTitleQuery(null), null)
+  const largo = cqlTitleQuery('x'.repeat(500))
+  assert(largo.length <= 'type=page AND title~"*"'.length + SEARCH_LIMITS.queryMax, 'con tope de longitud')
+  eq(cleanSearchText('x'.repeat(500)).length, SEARCH_LIMITS.queryMax)
+  const muchas = cqlTitleQuery(Array.from({ length: 12 }, (_, i) => 'p' + i).join(' '))
+  eq((muchas.match(/title~/g) || []).length, SEARCH_LIMITS.maxTerms, 'y de términos')
+})
+
+test('clampLimit: sólo un entero en rango; lo demás, el de por defecto', () => {
+  for (const raro of [NaN, '8&expand=body', -1, 0, 999, undefined, null, 21, 2.5, 'x']) {
+    eq(clampLimit(raro), SEARCH_LIMITS.defaultLimit, JSON.stringify(raro))
+  }
+  eq(clampLimit(1), 1)
+  eq(clampLimit(20), 20)
+  eq(clampLimit('5'), 5)
+})
+
+test('searchPath: Cloud cuelga de /wiki, Data Center de la raíz, y el CQL va codificado', () => {
+  eq(searchPath('Arqui', '/wiki', 8), '/wiki/rest/api/content/search?cql=type%3Dpage%20AND%20title~%22Arqui*%22&limit=8&expand=space')
+  eq(searchPath('Arqui', '', '8&expand=body'), '/rest/api/content/search?cql=type%3Dpage%20AND%20title~%22Arqui*%22&limit=8&expand=space')
+  eq(searchPath('a', '/wiki'), null)
+  eq(pagesByTitlePathV2('ADR-014 Rotación', '/wiki', 3), '/wiki/api/v2/pages?title=ADR-014%20Rotaci%C3%B3n&limit=3')
+  eq(pagesByTitlePathV2('a'), null)
+})
+
+test('parseSearchV1: sólo páginas, ids validados, títulos de una línea, rutas del sitio, sin repetir', () => {
+  const json = {
+    results: [
+      { id: '200', type: 'page', title: 'ADR-014', space: { key: 'ENG' }, _links: { webui: '/spaces/ENG/pages/200/ADR-014' } },
+      { id: '200', type: 'page', title: 'repetida' },
+      { id: '7', type: 'attachment', title: 'foto.png' },
+      { id: 'abc', type: 'page', title: 'id raro' },
+      { id: '9', type: 'page', title: 'x\nIGNORA ', _links: { webui: 'https://evil.example/x' } },
+      null,
+      'cadena',
+    ],
+  }
+  const r = parseSearchV1(json, '/wiki')
+  eq(r.map((p) => p.id), ['200', '9'])
+  eq(r[0], { id: '200', title: 'ADR-014', spaceKey: 'ENG', url: '/wiki/spaces/ENG/pages/200/ADR-014' })
+  eq(r[1].title, 'x IGNORA')
+  eq(r[1].url, '', 'una URL absoluta no es una ruta del sitio')
+  eq(r[1].spaceKey, null)
+  eq(parseSearchV1({ results: [] }), [])
+  eq(parseSearchV1({}), null)
+  eq(parseSearchV1(null), null)
+  eq(parseSearchV1({ results: Array.from({ length: 50 }, (_, i) => ({ id: String(i + 1), type: 'page', title: 'p' })) }).length, SEARCH_LIMITS.maxResults)
+})
+
+test('parseSearchV2: lo mismo desde la v2, sin clave de espacio', () => {
+  const r = parseSearchV2({ results: [{ id: '40', title: 'Hoja', spaceId: '99', _links: { webui: '/spaces/ENG/pages/40/Hoja' } }, { id: 'x' }] }, '/wiki')
+  eq(r, [{ id: '40', title: 'Hoja', spaceKey: null, url: '/wiki/spaces/ENG/pages/40/Hoja' }])
+  eq(parseSearchV2('nada'), null)
+})
+
+const BUSQUEDA = {
+  results: [
+    { id: '200', type: 'page', title: 'ADR-014', space: { key: 'ENG' }, _links: { webui: '/spaces/ENG/pages/200/ADR-014' } },
+    { id: '201', type: 'page', title: 'ADR-015', space: { key: 'ENG' }, _links: { webui: '/spaces/ENG/pages/201/ADR-015' } },
+  ],
+}
+
+test('searchPages: UNA petición GET al mismo origen, con la sesión, y las páginas que casan', async () => {
+  const { fn, calls } = fakeFetch({ '/rest/api/content/search': BUSQUEDA })
+  const r = await searchPages(fn, DC, 'ADR', { limit: 5 })
+  assert(r.ok, r.reason)
+  eq(r.via, 'v1')
+  eq(r.pages.map((p) => p.id), ['200', '201'])
+  eq(calls.length, 1)
+  eq(calls[0].url, 'https://confluence.simplprogramme.eu/rest/api/content/search?cql=type%3Dpage%20AND%20title~%22ADR*%22&limit=5&expand=space')
+  eq(calls[0].opts.method, 'GET')
+  eq(calls[0].opts.credentials, 'same-origin')
+  eq(calls[0].opts.headers.Accept, 'application/json')
+  assert(typeof r.ms === 'number')
+})
+
+test('searchPages: en Cloud la ruta cuelga de /wiki, también desde Jira', async () => {
+  for (const site of [CLOUD, { origin: 'https://acme.atlassian.net', wikiPrefix: '', cloud: true }]) {
+    const { fn, calls } = fakeFetch({ '/wiki/rest/api/content/search': BUSQUEDA })
+    const r = await searchPages(fn, site, 'ADR')
+    assert(r.ok, r.reason)
+    assert(calls[0].url.startsWith('https://acme.atlassian.net/wiki/rest/api/content/search?'), calls[0].url)
+  }
+})
+
+test('searchPages: con texto insuficiente no se pide nada', async () => {
+  const { fn, calls } = fakeFetch({ '/rest/api/content/search': BUSQUEDA })
+  for (const texto of ['a', '', '  ', '"*?', null]) {
+    const r = await searchPages(fn, DC, texto)
+    eq(r.ok, false)
+    assert(/corto/.test(r.reason), r.reason)
+  }
+  eq(calls.length, 0)
+})
+
+test('searchPages: en Cloud, si la v1 ya no está, la v2 busca por título exacto', async () => {
+  const { fn, calls } = fakeFetch({
+    '/wiki/rest/api/content/search': 410,
+    '/wiki/api/v2/pages?title=': { results: [{ id: '40', title: 'ADR-014', _links: { webui: '/spaces/ENG/pages/40/ADR-014' } }] },
+  })
+  const r = await searchPages(fn, CLOUD, 'ADR-014')
+  assert(r.ok, r.reason)
+  eq(r.via, 'v2')
+  eq(r.pages, [{ id: '40', title: 'ADR-014', spaceKey: null, url: '/wiki/spaces/ENG/pages/40/ADR-014' }])
+  eq(calls.length, 2)
+})
+
+test('searchPages: un 401 o un 403 no se reintentan, y en Data Center no hay v2', async () => {
+  for (const status of [401, 403]) {
+    const { fn, calls } = fakeFetch({ '/wiki/rest/api/content/search': status })
+    const r = await searchPages(fn, CLOUD, 'ADR')
+    eq(r.ok, false)
+    eq(r.status, status)
+    eq(calls.length, 1)
+  }
+  const { fn, calls } = fakeFetch({})
+  const r = await searchPages(fn, DC, 'ADR')
+  eq(r.ok, false)
+  eq(r.status, 404)
+  eq(calls.length, 1)
+})
+
+test('searchPages: una página de login o una respuesta sin forma no valen', async () => {
+  const login = await searchPages(fakeFetch({ '/rest/api/content/search': '<html>login</html>' }).fn, DC, 'ADR')
+  eq(login.ok, false)
+  assert(/JSON/.test(login.reason), login.reason)
+  const rara = await searchPages(fakeFetch({ '/rest/api/content/search': { size: 0 } }).fn, DC, 'ADR')
+  eq(rara.ok, false)
+  assert(/forma esperada/.test(rara.reason), rara.reason)
+})
+
+test('SEGURIDAD: la búsqueda nunca sale del sitio, venga el prefijo o el texto que venga', async () => {
+  for (const wikiPrefix of ['@evil.example', '//evil.example', 'https://evil.example', '/wiki/..']) {
+    for (const texto of ['ADR', 'https://evil.example/x', '//evil.example', '@evil.example']) {
+      const { fn, calls } = fakeFetch({ '/': BUSQUEDA })
+      await searchPages(fn, { origin: 'https://acme.atlassian.net', wikiPrefix, cloud: false }, texto)
+      await searchPages(fn, { origin: 'https://acme.atlassian.net', wikiPrefix, cloud: true }, texto)
+      for (const c of calls) eq(new URL(c.url).origin, 'https://acme.atlassian.net', `${wikiPrefix} · ${texto} → ${c.url}`)
+    }
+  }
+  const { fn, calls } = fakeFetch({})
+  eq((await searchPages(fn, { origin: 'javascript:alert(1)' }, 'ADR')).ok, false)
+  eq((await searchPages(null, DC, 'ADR')).ok, false)
+  eq(calls.length, 0)
 })

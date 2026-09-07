@@ -58,6 +58,7 @@
     <button data-screen="screen-context">Primera vez · contexto</button>
     <button data-screen="screen-settings">Ajustes</button>
     <button data-screen="screen-memory">Memoria</button>
+    <button data-screen="screen-sources">Páginas base del análisis</button>
     <button data-screen="screen-log">Registro</button>
     <button data-busy="1">Indexando…</button>
   </div>
@@ -67,6 +68,8 @@
     <button data-pick="off" class="on">Sin selección</button>
     <button data-pick="chip">Con algo señalado</button>
     <button data-pick="on">Señalando en la página</button>
+    <button data-sources="off" class="on">Sin páginas base</button>
+    <button data-sources="on">Con páginas base</button>
   </div>
 
   <div class="grp">
@@ -283,6 +286,43 @@ frame.addEventListener('load', async () => {
   }
   $('mem-enabled').checked = true
 
+  // ---- páginas base del análisis: la pantalla a medio usar, con dos páginas ya
+  // elegidas y una búsqueda en marcha, para ver todas las piezas de una vez.
+  const elegidas = $('sources-list')
+  for (const [titulo, meta] of [
+    ['ADR-014 Rotación de tokens de servicio', 'ENG · id 200'],
+    ['Guía de estilo de la documentación', 'ENG · id 300'],
+  ]) {
+    const fila = mk('div', 'source-row')
+    const quitar = mk('button', 'source-x', '×')
+    quitar.type = 'button'
+    quitar.title = 'Quitar esta página'
+    quitar.setAttribute('aria-label', 'Quitar ' + titulo)
+    fila.append(mk('span', 'source-title', titulo), mk('span', 'source-meta', meta), quitar)
+    elegidas.appendChild(fila)
+  }
+
+  const sugerencias = $('sources-suggest')
+  sugerencias.classList.remove('hidden')
+  for (const [titulo, meta, extra] of [
+    ['ADR-014 Rotación de tokens de servicio', 'ENG · id 200 · en el índice', 'active'],
+    ['Rotación de credenciales del clúster de métricas', 'desde Confluence', ''],
+    ['Añadir la página 98830281', 'por su id', 'add'],
+  ]) {
+    const fila = mk('button', 'suggest-row' + (extra ? ' ' + extra : ''))
+    fila.type = 'button'
+    fila.setAttribute('role', 'option')
+    if (extra === 'active') fila.setAttribute('aria-selected', 'true')
+    fila.append(mk('span', 'suggest-title', titulo), mk('span', 'suggest-meta', meta))
+    sugerencias.appendChild(fila)
+  }
+  $('sources-query').value = 'rotación'
+  $('sources-query').setAttribute('aria-expanded', 'true')
+  $('sources-mode-exclusive').checked = true
+  $('sources-status').textContent = 'Buscando en Confluence…'
+  $('sources-count').textContent = '2'
+  $('sources-chip-text').textContent = 'Análisis sobre esta página y 2 páginas base (sólo estas)'
+
   // registro de ejemplo
   const logBox = $('log-body')
   for (const [t, lvl, m, d] of [
@@ -354,6 +394,18 @@ frame.addEventListener('load', async () => {
       const modo = b.dataset.pick
       $('pick-chip').classList.toggle('hidden', modo !== 'chip')
       $('btn-pick').classList.toggle('picking', modo === 'on')
+    })
+  })
+  // Con páginas base: el botón encendido con su insignia y el chip sobre el cuadro.
+  document.querySelectorAll('[data-sources]').forEach((b) => {
+    b.addEventListener('click', () => {
+      document.querySelectorAll('[data-sources]').forEach((x) => x.classList.remove('on'))
+      b.classList.add('on')
+      const con = b.dataset.sources === 'on'
+      $('btn-sources').classList.toggle('hidden', !con)
+      $('btn-sources').classList.toggle('on', con)
+      $('sources-count').classList.toggle('hidden', !con)
+      $('sources-chip').classList.toggle('hidden', !con)
     })
   })
 

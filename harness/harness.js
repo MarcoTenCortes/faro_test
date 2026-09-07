@@ -1306,6 +1306,40 @@ const actions = {
     const restNo = await fetchAncestors(pideRest, sitioRest, '424242')
     ok('una página que no existe no tiene camino, y no se inventa', !restNo.ok && restNo.status === 404, restNo.reason || '')
 
+    // 28b. La búsqueda de páginas por título, por la misma API: un término por
+    //      palabra, comodín de prefijo sólo en el último, y nada de lo que el
+    //      usuario escriba puede romper el literal. La Confluence falsa busca
+    //      como la de verdad: sin comodín, «Arqui» no encontraría nada.
+    const { searchPages } = await import('/src/shared/confluence-rest.js')
+    const pedidas = []
+    const pideContando = (u, o) => {
+      pedidas.push(String(u))
+      return fetch(u, o)
+    }
+    const busca = await searchPages(pideContando, sitioRest, 'ADR')
+    const idsBusca = busca.ok ? busca.pages.map((p) => p.id).sort().join(',') : ''
+    ok(
+      'la búsqueda por título se hace en la API del sitio y devuelve sólo lo que casa',
+      busca.ok && busca.via === 'v1' && idsBusca === '200,201' && busca.pages.every((p) => p.spaceKey === 'ENG' && p.url.startsWith('/wiki/spaces/ENG/pages/')),
+      busca.ok ? `${idsBusca} · ${busca.via} · ${busca.ms} ms` : busca.reason
+    )
+    const prefijoBusca = await searchPages(pideContando, sitioRest, 'Arqui')
+    ok(
+      'escribir el principio de una palabra encuentra la página: el último término lleva comodín',
+      prefijoBusca.ok && prefijoBusca.pages.some((p) => p.id === '100'),
+      prefijoBusca.ok ? prefijoBusca.pages.map((p) => p.title).join(' | ') : prefijoBusca.reason
+    )
+    const pedidasAntes = pedidas.length
+    const corta = await searchPages(pideContando, sitioRest, 'x')
+    ok('con una letra no se pide nada al sitio', !corta.ok && pedidas.length === pedidasAntes, corta.reason || '')
+    const rara = await searchPages(pideContando, sitioRest, 'ADR"\\')
+    const ultimaUrl = decodeURIComponent(pedidas[pedidas.length - 1] || '')
+    ok(
+      'las comillas y las barras del usuario no llegan al CQL',
+      rara.ok && ultimaUrl.includes('title~"ADR*"') && !ultimaUrl.includes('\\') && rara.pages.some((p) => p.id === '200'),
+      ultimaUrl.slice(Math.max(0, ultimaUrl.indexOf('cql=')))
+    )
+
     // 29. Y con ese camino, sin que el modelo haya dicho nada, el recorrido
     //     entero sobre la barra lateral estilo Cloud: cuatro ramas y un salto.
     if (rest.ok) {

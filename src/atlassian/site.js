@@ -66,8 +66,11 @@ export function parseAtlassianUrl(url) {
     out.wikiPrefix = '/wiki'
     const pageOnly = path.match(/\/pages\/(?:viewpage\.action)?\D*(\d+)/i)
     if (pageOnly) out.pageId = pageOnly[1]
+    // Un id es un número: `?pageId=abc` no señala ninguna página, y aceptarlo
+    // hacía que una URL pegada pasara por válida y fallara más adelante sin
+    // motivo claro. La rama de Data Center ya lo exigía.
     const qsPage = u.searchParams.get('pageId')
-    if (qsPage) out.pageId = qsPage
+    if (qsPage && /^\d+$/.test(qsPage)) out.pageId = qsPage
     const qsSpace = u.searchParams.get('spaceKey')
     if (qsSpace) out.spaceKey = qsSpace
     return out

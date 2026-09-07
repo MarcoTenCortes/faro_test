@@ -28,12 +28,18 @@ export const CONTEXT_BUDGET = {
  * Cabecera común: quién es Faro y qué no debe hacer nunca.
  *
  * @param {{site:object, contextMd?:string, memoryMd?:string, page?:object,
- *          skill?:string, digest?:{text:string, count:number, truncated:boolean}}} input
+ *          skill?:string, digest?:{text:string, count:number, truncated:boolean},
+ *          sources?:{mode:string, pages:Array}|null}} input
  *        `digest` es la página abierta en bloques numerados, si se leyó; va
- *        sólo en el modo Análisis.
+ *        sólo en el modo Análisis. `sources` son las páginas base del análisis
+ *        y su alcance, elegidas por el usuario; también sólo en Análisis.
  */
-export function baseSystem({ site, contextMd, memoryMd, page, skill, digest = null }) {
+export function baseSystem({ site, contextMd, memoryMd, page, skill, digest = null, sources = null }) {
   const conPagina = !!digest?.text
+  // Con alcance exclusivo, la cabecera no puede invitar a leer «otras
+  // páginas» y el modo prohibirlo tres párrafos más abajo: las dos frases que
+  // lo hacían cambian. Sin alcance, el prompt es el de siempre, letra a letra.
+  const exclusivo = (skill || DEFAULT_SKILL) === 'analisis' && sources?.mode === 'exclusive'
   const where =
     site?.product === 'confluence'
       ? `Confluence${site.spaceKey ? `, espacio ${site.spaceKey}` : ''}`
@@ -45,9 +51,11 @@ export function baseSystem({ site, contextMd, memoryMd, page, skill, digest = nu
     'Eres Faro, un copiloto que vive en una extensión de Chrome, dentro de Jira y Confluence.',
     `Ahora mismo el usuario está en ${where} (${site?.host || 'host desconocido'}).`,
     '',
-    ...currentPageBlock(site, page, conPagina),
+    ...currentPageBlock(site, page, conPagina, exclusivo),
     'Cómo trabajas:',
-    '- Tienes herramientas MCP de Atlassian para consultar Jira y Confluence. Úsalas antes de responder cuando la pregunta trate de contenido concreto.',
+    exclusivo
+      ? '- Tienes herramientas MCP de Atlassian para consultar Jira y Confluence. En este turno el usuario ha limitado qué puedes leer con ellas: mira el ALCANCE, más abajo.'
+      : '- Tienes herramientas MCP de Atlassian para consultar Jira y Confluence. Úsalas antes de responder cuando la pregunta trate de contenido concreto.',
     '- Contesta en el idioma del usuario, y de forma breve. Prosa clara, sin relleno.',
     '- Cita los títulos de las páginas o las claves de las incidencias de las que hablas: la extensión los usa para poder llevar allí al usuario.',
     '- Si no encuentras algo, dilo. No completes huecos con suposiciones.',
@@ -61,7 +69,7 @@ export function baseSystem({ site, contextMd, memoryMd, page, skill, digest = nu
 
   // El modo de trabajo va al final de las reglas: puede ajustar el tono y el
   // formato, pero nunca lo de arriba.
-  const modo = skillSystem(skill || DEFAULT_SKILL, { digest: conPagina })
+  const modo = skillSystem(skill || DEFAULT_SKILL, { digest: conPagina, sources })
   if (modo) out.push('', modo)
 
   // La página abierta, en bloques numerados: después del modo, que dice qué
@@ -229,14 +237,17 @@ export function pageUrlFromSystem(system) {
  * visibilidad sobre qué página estás viendo» — y tenía razón: nunca se lo
  * decíamos. Se le da el identificador para que pueda ir a buscarla.
  */
-function currentPageBlock(site, page, conPagina = false) {
+function currentPageBlock(site, page, conPagina = false, exclusivo = false) {
   const lines = []
 
   // Con la página ya en el prompt, mandar leerla con la herramienta es pedir
   // que la lea dos veces —y la del MCP no coincide letra a letra con la de la
   // pantalla, que es contra la que se subraya.
   const yaLaTiene =
-    'Su texto, tal como se ve en pantalla, va más abajo en bloques numerados ¶: trabaja sobre eso. Usa la herramienta sólo para lo que ahí no esté (comentarios, adjuntos, otras páginas).'
+    'Su texto, tal como se ve en pantalla, va más abajo en bloques numerados ¶: trabaja sobre eso. ' +
+    (exclusivo
+      ? 'Usa la herramienta sólo para lo que permita el ALCANCE de más abajo.'
+      : 'Usa la herramienta sólo para lo que ahí no esté (comentarios, adjuntos, otras páginas).')
 
   if (site?.pageId) {
     lines.push(
@@ -254,7 +265,10 @@ function currentPageBlock(site, page, conPagina = false) {
     )
   }
 
-  if (page?.title) lines.push(`Título de la pestaña: «${page.title}».`)
+  // El título de la pestaña es texto de Confluence: una línea, sin saltos
+  // raros (un U+2028 abriría línea) y con tope, como el título del digest.
+  const titulo = String(page?.title || '').replace(/\s+/g, ' ').trim().slice(0, 200)
+  if (titulo) lines.push(`Título de la pestaña: «${titulo}».`)
   if (page?.url) lines.push(`URL abierta: ${page.url}`)
 
   if (site?.product === 'confluence') {

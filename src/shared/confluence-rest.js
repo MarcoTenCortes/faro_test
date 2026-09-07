@@ -21,15 +21,44 @@
  *
  * Sin dependencias del navegador: `fetch` se recibe por parámetro, así que corre
  * igual en el content script, en el banco de pruebas y en Node.
+ *
+ * Desde las páginas base del análisis, aquí vive también la BÚSQUEDA de páginas
+ * por título (`searchPages`): la primera petición al sitio cuyo parámetro no es
+ * un id numérico sino texto del usuario. Lo que la hace segura: sigue siendo un
+ * GET al mismo origen con la sesión del navegador; el texto se limpia, se acota
+ * en longitud y en número de términos, y se le quitan las comillas, las barras
+ * y los comodines antes de convertirse en CQL; y lo que vuelve son datos, con
+ * los mismos filtros que la cadena de antepasados. Comprobado que `~` compara
+ * términos analizados: sin el comodín de prefijo en el último término, «Arqui»
+ * no encuentra «Arquitectura», que es lo que se espera de un autocompletado.
  */
 
 const ID = /^\d+$/
 const MAX_TITLE = 300
 const MAX_CHAIN = 50
 
+/**
+ * Topes de la búsqueda de páginas por título (`searchPages`). Viven aquí, en
+ * el módulo que los aplica; el panel los referencia desde `SOURCE_LIMITS` y un
+ * test pina que coinciden.
+ */
+export const SEARCH_LIMITS = {
+  /** Con una letra, el sitio entero. */
+  queryMin: 2,
+  queryMax: 100,
+  /** Palabras del texto que se convierten en términos CQL; el resto se ignora. */
+  maxTerms: 6,
+  defaultLimit: 8,
+  maxLimit: 20,
+  /** Resultados que se aceptan de la respuesta, venga como venga. */
+  maxResults: 20,
+}
+
 /** Un prefijo del wiki tiene forma de ruta: nada, o segmentos normales. */
 const PREFIX = /^(\/[A-Za-z0-9._~-]+)*$/
 const CONTROL = new RegExp('[\\u0000-\\u001F\\u007F]', 'g')
+/** Lo que en un literal CQL rompe la cadena (`"`, `\`) o es un comodín (`*`, `?`). */
+const CQL_UNSAFE = new RegExp('["\\\\*?]', 'g')
 
 // ------------------------------------------------------------------- rutas
 
@@ -320,4 +349,149 @@ async function getJson(fetchFn, url, { timeoutMs, credentials, base }) {
   } finally {
     if (timer) clearTimeout(timer)
   }
+}
+
+// ---------------------------------------------------------------- búsqueda
+
+/**
+ * El texto de búsqueda tal y como puede entrar en un literal CQL: sin
+ * caracteres de control, sin comillas, barras ni comodines, espacios
+ * colapsados y con tope de longitud. Pura.
+ */
+export function cleanSearchText(text) {
+  // Los caracteres inseguros se quitan sin dejar hueco: no separan palabras.
+  return str(text).replace(CONTROL, ' ').replace(CQL_UNSAFE, '').replace(/\s+/g, ' ').trim().slice(0, SEARCH_LIMITS.queryMax)
+}
+
+/** Las palabras que se convierten en términos, con tope; nada si no llega al mínimo. */
+function searchTerms(text) {
+  const limpio = cleanSearchText(text)
+  if (limpio.length < SEARCH_LIMITS.queryMin) return []
+  return limpio.split(' ').filter(Boolean).slice(0, SEARCH_LIMITS.maxTerms)
+}
+
+/**
+ * De lo que escribió el usuario a una consulta CQL por título.
+ *
+ * Un término por palabra, y SÓLO el último con el comodín de prefijo: `~`
+ * compara términos analizados, así que sin `*` «Arqui» no encuentra
+ * «Arquitectura». El comodín va por término y no dentro de una frase entre
+ * comillas, que no todas las versiones aceptan; y con una sola letra delante
+ * no se pone, que sería pedir el sitio entero. Pura.
+ *
+ * @returns {string|null} null si no queda texto suficiente
+ */
+export function cqlTitleQuery(text) {
+  const terminos = searchTerms(text)
+  if (!terminos.length) return null
+  const partes = terminos.map((t, i) => {
+    const ultimo = i === terminos.length - 1
+    return `title~"${t}${ultimo && t.length >= 2 ? '*' : ''}"`
+  })
+  return 'type=page AND ' + partes.join(' AND ')
+}
+
+/**
+ * El tope de resultados que se pide, ya validado: llega por mensaje y un
+ * `Number('8&expand=body')` es NaN, que en la URL sería `limit=NaN`. Pura.
+ */
+export function clampLimit(limit) {
+  const n = Number(limit)
+  return Number.isInteger(n) && n >= 1 && n <= SEARCH_LIMITS.maxLimit ? n : SEARCH_LIMITS.defaultLimit
+}
+
+/** v1: vale en Cloud y en Server/Data Center. `expand=space` trae la clave del espacio. */
+export function searchPath(text, wikiPrefix = '', limit) {
+  const cql = cqlTitleQuery(text)
+  if (!cql) return null
+  return `${prefix(wikiPrefix)}/rest/api/content/search?cql=${encodeURIComponent(cql)}&limit=${clampLimit(limit)}&expand=space`
+}
+
+/** v2: sólo Cloud, y sólo por título EXACTO. Por si algún día retiran la v1. */
+export function pagesByTitlePathV2(text, wikiPrefix = '/wiki', limit) {
+  const limpio = str(text).replace(CONTROL, ' ').replace(/\s+/g, ' ').trim().slice(0, SEARCH_LIMITS.queryMax)
+  if (limpio.length < SEARCH_LIMITS.queryMin) return null
+  return `${prefix(wikiPrefix)}/api/v2/pages?title=${encodeURIComponent(limpio)}&limit=${clampLimit(limit)}`
+}
+
+/**
+ * De la respuesta v1 (`results[]` con `id, type, title, space.key, _links.webui`)
+ * a la lista de páginas. Sólo páginas, ids validados, títulos de una línea,
+ * rutas relativas al sitio, sin repetir y con tope. null si la respuesta no
+ * tiene la forma esperada. Pura.
+ * @returns {Array<{id:string, title:string, spaceKey:string|null, url:string}>|null}
+ */
+export function parseSearchV1(json, wikiPrefix = '') {
+  if (!json || typeof json !== 'object' || !Array.isArray(json.results)) return null
+  const out = []
+  const seen = new Set()
+  for (const r of json.results) {
+    if (out.length >= SEARCH_LIMITS.maxResults) break
+    if (!r || typeof r !== 'object') continue
+    if (r.type != null && str(r.type) !== 'page') continue
+    const id = cleanId(r.id)
+    if (!id || seen.has(id)) continue
+    seen.add(id)
+    out.push({ id, title: cleanTitle(r.title), spaceKey: cleanTitle(r.space?.key) || null, url: webuiOf(r, wikiPrefix) })
+  }
+  return out
+}
+
+/** Lo mismo desde la v2 de Cloud, que no trae la clave del espacio. Pura. */
+export function parseSearchV2(json, wikiPrefix = '/wiki') {
+  if (!json || typeof json !== 'object' || !Array.isArray(json.results)) return null
+  const out = []
+  const seen = new Set()
+  for (const r of json.results) {
+    if (out.length >= SEARCH_LIMITS.maxResults) break
+    if (!r || typeof r !== 'object') continue
+    const id = cleanId(r.id)
+    if (!id || seen.has(id)) continue
+    seen.add(id)
+    out.push({ id, title: cleanTitle(r.title), spaceKey: null, url: webuiOf(r, wikiPrefix) })
+  }
+  return out
+}
+
+/**
+ * Páginas del sitio cuyo título casa con lo escrito, contra el sitio en el que
+ * está el usuario. Misma forma y mismas garantías que `fetchAncestors`.
+ *
+ * @param {Function} fetchFn `fetch` del contexto que llama
+ * @param {{origin:string, wikiPrefix?:string, cloud?:boolean}} site
+ * @param {string} text lo que escribió el usuario
+ * @returns {Promise<{ok:true, pages:Array, via:'v1'|'v2', ms:number}|{ok:false, reason:string, status?:number}>}
+ */
+export async function searchPages(fetchFn, site, text, { limit, timeoutMs = 6000, credentials = 'same-origin' } = {}) {
+  const t0 = Date.now()
+  const base = String(site?.origin || '').replace(/\/+$/, '')
+  if (!/^https?:\/\/[^/@]+$/i.test(base)) return { ok: false, reason: 'origen desconocido' }
+  if (typeof fetchFn !== 'function') return { ok: false, reason: 'sin fetch' }
+
+  const wiki = site?.cloud ? '/wiki' : prefix(site?.wikiPrefix)
+  const ruta = searchPath(text, wiki, limit)
+  // Con menos de dos letras no se pregunta nada: sería pedir el sitio entero.
+  if (!ruta) return { ok: false, reason: 'texto demasiado corto' }
+  const opts = { timeoutMs, credentials, base }
+
+  const v1 = await getJson(fetchFn, base + ruta, opts)
+  if (v1.ok) {
+    const pages = parseSearchV1(v1.json, wiki)
+    if (pages) return { ok: true, pages, via: 'v1', ms: Date.now() - t0 }
+    return { ok: false, reason: 'la respuesta de la API no tiene la forma esperada', status: v1.status }
+  }
+
+  // En Cloud la v1 puede estar retirada; la v2 sólo sabe buscar por título
+  // exacto, que es menos, pero es algo. Un 401 o un 403 no se reintentan.
+  const esCloud = !!site?.cloud || wiki === '/wiki'
+  if (esCloud && v1.status && v1.status !== 401 && v1.status !== 403) {
+    const rutaV2 = pagesByTitlePathV2(text, '/wiki', limit)
+    const v2 = rutaV2 ? await getJson(fetchFn, base + rutaV2, opts) : { ok: false }
+    if (v2.ok) {
+      const pages = parseSearchV2(v2.json, '/wiki')
+      if (pages) return { ok: true, pages, via: 'v2', ms: Date.now() - t0 }
+    }
+  }
+
+  return { ok: false, reason: v1.reason, status: v1.status }
 }

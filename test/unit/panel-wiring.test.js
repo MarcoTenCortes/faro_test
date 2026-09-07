@@ -187,6 +187,81 @@ test('el análisis no se cae en silencio cuando no puede marcar', () => {
   assert(visibles >= mudos, `${mudos} motivos registrados y sólo ${visibles} visibles`)
 })
 
+test('EL CAMBIO: las páginas base del análisis viajan con el turno, se ven y se comprueban', () => {
+  // Las páginas base y la página abierta se capturan al MANDAR: `state.site`
+  // cambia con la pestaña, y la comprobación del alcance al terminar tiene
+  // que hablar de la página que se analizó, no de la que haya abierta entonces.
+  const envio = JS.slice(JS.indexOf('async function send('), JS.indexOf('function paintTurn('))
+  assert(/const sources = skill === 'analisis'/.test(envio), 'las páginas base se capturan con el modo del turno')
+  assert(/const pageIdAlPedir = /.test(envio), 'y la página abierta también')
+  assert(envio.indexOf('const pageIdAlPedir') < envio.indexOf('runTurn('), 'antes de mandar nada')
+  assert(/sources,\s*\n\s*\}\),/.test(envio), 'viajan en el sistema del turno')
+  assert(/sourcesNote\(sources\)/.test(envio), 'y se dicen bajo la pregunta')
+  assert(/warnAboutSources\(turn\.parts, bubble, \{\s*sources,\s*pageId: pageIdAlPedir/.test(envio), 'la comprobación usa lo capturado')
+
+  // La contraparte visible: sin MCP no se leyeron, y en exclusivo lo que se
+  // consultó de más. Nunca con `state.site` de después del turno.
+  const aviso = JS.slice(JS.indexOf('function warnAboutSources'), JS.indexOf('// ------------------------------------------------------------- navegación'))
+  assert(/consultedOutside\(parts/.test(aviso), 'mira las herramientas del turno')
+  assert(/allowedTitles: \[\.\.\.titlesFromTab\(title\)/.test(aviso), 'y admite lecturas por título, con las variantes del título de la pestaña')
+  assert(/pageUrl,/.test(aviso), 'y por la URL de la página abierta (Data Center sin id)')
+  assert((aviso.match(/noticeNode\(/g) || []).length >= 2, 'los dos avisos se ven')
+  assert(/'Fuera del alcance'/.test(aviso) && /'Páginas base sin leer'/.test(aviso), 'y quedan en el registro')
+  assert(!/state\.(site|mcpConnected|tabTitle|tabUrl)/.test(aviso), 'nunca el estado de después del turno')
+  assert(/mcpConnected: mcpAlPedir/.test(envio), 'si había MCP se captura al mandar')
+
+  // Se cargan con el sitio, antes de cualquier pantalla, y se vacían al
+  // cambiar de host —con el índice y el contexto, que también son del sitio—:
+  // el chip no puede enseñar las del sitio anterior, ni la pantalla sugerir
+  // páginas de otro.
+  const refresco = JS.slice(JS.indexOf('async function refreshTab'), JS.indexOf('async function bootForSite'))
+  const vacia = refresco.indexOf('state.sources = emptySources()')
+  assert(vacia >= 0, 'refreshTab vacía las páginas base al cambiar de host')
+  assert(vacia < refresco.indexOf('state.site = site'), 'al cambiar de host se vacían antes de cambiar de sitio')
+  const cambio = refresco.slice(refresco.indexOf('if (changedHost) {'), refresco.indexOf('state.site = site'))
+  assert(/state\.index = null/.test(cambio) && /state\.contextMd = ''/.test(cambio), 'y el índice y el contexto del sitio anterior se van con él')
+  assert(/closeSourcesScreen\(\)/.test(cambio), 'y la pantalla de páginas base, si estaba abierta, se cierra')
+  // Saltar las claves ya no deja el panel con el índice del sitio anterior.
+  const eventos = JS.slice(JS.indexOf('function wireEvents'), JS.indexOf('async function saveKeys'))
+  const saltar = eventos.slice(eventos.indexOf("$('btn-setup-skip')"), eventos.indexOf("$('link-token')"))
+  assert(/await bootForSite\(\)/.test(saltar), 'saltar las claves vuelve a arrancar el sitio')
+  const arranque = JS.slice(JS.indexOf('async function bootForSite'), JS.indexOf('async function ensureContentAccess'))
+  assert(/state\.sources = normalizeSources\(saved\?\.analysisSources/.test(arranque), 'se cargan de lo guardado por sitio')
+  assert(arranque.indexOf('normalizeSources(saved?.analysisSources') < arranque.indexOf('showSetupScreen()'), 'antes de la pantalla de claves')
+  assert(/state\.mcpConnected = /.test(arranque), 'y se sabe si hay quien pueda leerlas')
+
+  // La búsqueda: una URL o un id no se mandan al sitio como texto de búsqueda.
+  const entrada = JS.slice(JS.indexOf('function onSourcesInput'), JS.indexOf('function refReasonText'))
+  assert(/pageRefFromUrl\(/.test(entrada), 'primero se mira si es una referencia')
+  assert(!/MSG\.PAGE_SEARCH/.test(entrada), 'y la búsqueda remota va aparte, tras la pausa')
+  const remota = JS.slice(JS.indexOf('async function searchSourcesRemote'), JS.indexOf('function searchFailText'))
+  assert(/MSG\.PAGE_SEARCH/.test(remota))
+  assert(/token !== state\.sourcesSearch\.token/.test(remota), 'una respuesta tardía se tira')
+  assert(/mergeSuggestions\(local, r\.pages, \{[^}]*host: state\.site\.host/.test(remota), 'lo de la API se limpia contra el host')
+  // Elegir una sugerencia mata la búsqueda que quedara en marcha: si no, la
+  // lista volvía a aparecer bajo el campo vacío con la página recién añadida.
+  const alta = JS.slice(JS.indexOf('async function addSource('), JS.indexOf('async function removeSource'))
+  assert(/state\.sourcesSearch\.token\+\+/.test(alta) && /clearTimeout\(state\.sourcesSearch\.timer\)/.test(alta), 'añadir cancela la búsqueda pendiente')
+  // Desde un Jira Data Center no se pregunta a una API que no está en ese origen.
+  const porId = JS.slice(JS.indexOf('async function addSourceById'), JS.indexOf('async function fetchPageChain'))
+  assert(/product === 'jira' && !state\.site\.cloud/.test(porId), 'en Jira Data Center se añade por id sin comprobar')
+
+  // Restaurar la conversación reconstruye la nota desde el sistema guardado.
+  const restaurar = JS.slice(JS.indexOf('async function restoreConversation'), JS.indexOf('function showWelcome'))
+  assert(/sourcesFromSystem\(m\.info\.system\)/.test(restaurar))
+  assert(/sourcesNote\(baseDelTurno\)/.test(restaurar), 'con el mismo texto que al mandar')
+
+  // Lo que dibuja: botón junto a la Skill, chip y pantalla.
+  for (const id of ['btn-sources', 'sources-count', 'sources-chip', 'screen-sources', 'sources-query', 'sources-suggest', 'sources-list', 'sources-mode-exclusive', 'sources-mode-open', 'btn-sources-permission']) {
+    assert(htmlIds.has(id), 'falta #' + id)
+  }
+  assert(HTML.indexOf('id="skill"') < HTML.indexOf('id="btn-sources"'), 'el botón va junto al selector de Skill')
+  for (const c of ['suggest', 'suggest-row', 'source-list', 'source-row', 'badge', 'sources-chip']) {
+    assert(new RegExp('\\.' + c + '\\b').test(CSS), 'clase sin estilo: ' + c)
+  }
+  assert(/showScreen\('screen-sources'\)/.test(JS))
+})
+
 test('la navegación no se cae en silencio cuando falta el índice', () => {
   // Pasó de verdad: el modelo decía «usa la tarjeta de abajo» y no había
   // tarjeta, porque el índice se habia descartado por cambio de versión.

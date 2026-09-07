@@ -171,6 +171,30 @@ Junto al selector de modelo hay otras dos cosas:
 
   La elección se recuerda por sitio, igual que el modelo.
 
+- **Páginas base del análisis** — el icono de las dos hojas, que sólo aparece
+  con la Skill Análisis. Abre una pantalla para decir **en base a qué páginas**
+  de Confluence se analiza la abierta: una guía, una decisión anterior, la
+  página con la que hay que comparar. Se añaden de tres formas en el mismo
+  campo: pegando la URL de la página (tiene que ser de este mismo sitio y
+  llevar el id; las de tipo `/display/ESPACIO/Título` no lo llevan), pegando
+  su id numérico, o escribiendo parte del título: las sugerencias salen al
+  instante del índice del sitio y, un cuarto de segundo después, de la API del
+  propio Confluence con tu sesión (para eso hace falta el permiso del dominio,
+  como para señalar; la pantalla lo pide si falta). Flechas, Intro y Esc valen
+  para elegir. Como mucho seis páginas.
+
+  Debajo, el **alcance**: *Sólo estas* —la página abierta y las páginas base,
+  y nada más: el modelo no busca ni lee ninguna otra— o *Estas como mínimo*,
+  que las lee siempre y además consulta las que él decida, diciendo cuáles.
+  Se recuerdan por sitio, y mientras la Skill sea Análisis se ven en un chip
+  sobre el cuadro de texto y en la nota bajo cada pregunta («con 2 páginas
+  base (sólo estas)»).
+
+  Las páginas base las lee el modelo por el MCP, enteras, antes de responder:
+  cada una es una consulta, y sin el MCP conectado no puede leerlas (la
+  pantalla y la respuesta lo dicen). Sólo se subraya la página abierta: una
+  observación que hable de una página base sale en la lista sin marca.
+
 - **Señalar en la página** — el icono del rotulador. Al pulsarlo el cursor
   cambia y puedes subrayar un párrafo o pulsar una imagen; aparece una barra
   abajo con «Usar esto». Lo que elijas queda en un recuadro encima del cuadro de
@@ -360,6 +384,39 @@ figura y lo que hay escrito alrededor; lo que no viaja es la imagen.
 **Pedí un resumen y no aparece la tarjeta para llevarme**
 Es lo previsto: las Skills *Resumen* y *Análisis* trabajan sobre lo que ya
 tienes delante y no ofrecen viaje. Cambia a *General* o *Búsqueda*.
+
+**El buscador de páginas base no encuentra nada**
+Por orden de probabilidad:
+
+1. **Falta el permiso del dominio.** Sin él sólo se busca en el índice del
+   sitio, y la pantalla lo dice con un botón **Dar permiso**. En
+   `*.atlassian.net` viene de fábrica.
+2. **No hay índice.** Si además el sitio no tiene contexto construido, no hay
+   dónde buscar hasta que Confluence conteste: pega la URL de la página, que
+   siempre vale.
+3. **Tu sesión no vale para la API.** Si la pantalla dice que recargues la
+   pestaña, es que Confluence contestó con una página de login o un 401: entra
+   de nuevo y repite. En el **registro** sale como «Búsqueda de páginas» con el
+   motivo.
+4. **Es una palabra a medias en mitad del título.** La API busca por
+   palabras: «Arqui» encuentra «Arquitectura» (el último término lleva
+   comodín), pero «quitec» no. Escribe el principio de una palabra.
+
+Una URL de otro sitio, una incidencia de Jira o una dirección sin id no valen
+como página base, y la pantalla explica cuál de las tres es.
+
+**El análisis consultó páginas que no le pedí**
+Con el alcance *Sólo estas*, Faro se lo pide al modelo en el prompt, pero no
+puede impedírselo: opencode convierte cualquier límite de herramientas en un
+permiso permanente de la sesión. Por eso, al terminar, mira qué herramientas
+llamó el modelo y, si buscó, recorrió el árbol o leyó una página fuera de la
+lista, lo dice bajo la respuesta y en el registro («Fuera del alcance», con lo
+que consultó). Con otro modelo suele respetarse mejor.
+
+**Las páginas base no se han podido leer**
+Este sitio no tiene el MCP conectado, así que el modelo no llega a ellas y el
+análisis sale sólo de la página abierta. Configúralo en **Ajustes → Cambiar las
+claves**. La pantalla de páginas base lo avisa antes, y la respuesta después.
 
 **No se resalta nada**
 Comprueba que no estás en el editor de Confluence: ahí Faro se aparta a

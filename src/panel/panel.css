@@ -643,7 +643,8 @@ button.small { font-size: 11.5px; padding: 4px 9px; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.pick-chip-x {
+/* La misma × sirve para quitar una página base de su lista (.source-x). */
+.pick-chip-x, .source-x {
   flex: none;
   font: inherit;
   font-size: 15px;
@@ -744,3 +745,120 @@ button.small { font-size: 11.5px; padding: 4px 9px; }
    no están en la página, así que tampoco lleva a ningún sitio. */
 .notes-card.stale { opacity: .55; }
 .notes-card.stale .note-row { border-style: dashed; }
+
+/* ------------------------------------------- Páginas base del análisis */
+
+/* Cuántas páginas base hay, pegado a la esquina del botón. El botón sólo sale
+   con la Skill Análisis, y sin el número a la vista se manda un análisis «sólo
+   sobre estas» sin acordarse de cuáles eran. Va absoluto para no romper la
+   rejilla del botón, que centra un único hijo. */
+.icon-btn { position: relative; }
+.icon-btn .badge {
+  position: absolute;
+  top: -4px; right: -4px;
+  min-width: 14px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: var(--gold);
+  color: var(--surface);
+  font-size: 9px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 14px;
+  text-align: center;
+  pointer-events: none;
+}
+
+/* El chip de las páginas base hereda el aspecto del de la selección, pero es
+   un botón entero: pulsarlo abre la pantalla. Como botón, no hereda la fuente
+   ni se alinea a la izquierda por sí solo. */
+.sources-chip {
+  font: inherit;
+  font-size: 11.5px;
+  text-align: left;
+  width: 100%;
+  cursor: pointer;
+  transition: border-color .15s ease;
+}
+.sources-chip:hover { border-color: var(--gold); }
+.pick-chip-more {
+  flex: none;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--gold);
+}
+
+/* Las sugerencias van EN el flujo, bajo el campo, no flotando: el panel es
+   estrecho y se desplaza, y una lista absoluta se saldría por abajo o taparía
+   la lista de páginas elegidas. */
+.suggest {
+  margin-top: 4px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  border-radius: 8px;
+  max-height: 260px;
+  overflow: auto;
+}
+.suggest-row {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--ink-2);
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  padding: 6px 9px;
+  cursor: pointer;
+  transition: background .12s ease;
+}
+.suggest-row:last-child { border-bottom: 0; }
+/* .active es la fila elegida con el teclado: el foco se queda en el campo. */
+.suggest-row:hover, .suggest-row.active { background: var(--gold-bg); }
+.suggest-title {
+  display: block;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.suggest-meta { display: block; font-size: 11px; color: var(--muted); }
+/* «Añadir la página 123456»: no es un resultado, es una acción, y se ve distinta. */
+.suggest-row.add .suggest-title { color: var(--gold); }
+
+.source-list { display: flex; flex-direction: column; gap: 5px; margin-bottom: 13px; }
+.source-list:empty::after {
+  content: "Todavía ninguna. Pega una URL o busca por título.";
+  color: var(--muted);
+  font-size: 12px;
+}
+.source-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 9px;
+}
+.source-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+  font-weight: 600;
+  font-size: 12.5px;
+}
+.source-meta { flex: none; font-size: 11px; color: var(--muted); }
+/* La × comparte aspecto con .pick-chip-x (definida arriba); aquí sólo cambia el
+   hover, porque la fila es blanca y no dorada. */
+.source-x:hover { background: var(--surface-2); color: var(--ink); }
+
+/* Visto en el banco: «Dar permiso» junto a su explicación se partía en dos
+   líneas («Dar / permiso»), porque un botón en una fila flex cede hasta su
+   palabra más larga. La etiqueta de un botón nunca se parte: quien envuelve es
+   el texto de al lado. */
+.row > button { white-space: nowrap; }

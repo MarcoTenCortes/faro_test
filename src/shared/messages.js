@@ -24,6 +24,7 @@ export const MSG = {
   PICK_CANCEL: 'faro:pick-cancel',
   PAGE_DIGEST: 'faro:page-digest',
   PAGE_ANCESTORS: 'faro:page-ancestors',
+  PAGE_SEARCH: 'faro:page-search',
   ANNOTATE: 'faro:annotate',
   FOCUS_NOTE: 'faro:focus-note',
   CLEAR_NOTES: 'faro:clear-notes',

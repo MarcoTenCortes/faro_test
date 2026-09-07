@@ -30,6 +30,9 @@ test('site: Confluence con pageId en query', () => {
   const s = parseAtlassianUrl('https://acme.atlassian.net/wiki/pages/viewpage.action?pageId=98765')
   eq(s.product, 'confluence')
   eq(s.pageId, '98765')
+  // Un id es un número: `?pageId=abc` no señala ninguna página, ni en Cloud ni en Data Center.
+  eq(parseAtlassianUrl('https://acme.atlassian.net/wiki/pages/viewpage.action?pageId=abc').pageId, undefined)
+  eq(parseAtlassianUrl('https://confluence.acme.eu/pages/viewpage.action?pageId=abc').pageId, undefined)
 })
 
 test('site: incidencia de Jira por /browse', () => {

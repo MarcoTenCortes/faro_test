@@ -16,6 +16,7 @@
  */
 
 import { anchorsBlockRules } from './notes.js'
+import { sourcesBlock, hasSources } from './sources.js'
 
 export const DEFAULT_SKILL = 'general'
 
@@ -26,13 +27,20 @@ export const DEFAULT_SKILL = 'general'
  * falta pedirle que la lea con la herramienta, y leerla dos veces —la de la
  * pantalla y la del MCP, que no coinciden letra a letra— sólo confunde.
  */
-function sobreQue({ digest = false } = {}) {
+function sobreQue({ digest = false, exclusive = false } = {}) {
+  // Con alcance exclusivo no se le invita a leer «otras páginas»: la única
+  // invitación válida es la del ALCANCE, y decir aquí lo contrario es pedirle
+  // a un modelo pequeño que elija entre dos órdenes.
   return [
     'Sobre qué trabajas:',
     '- Si el usuario te ha pasado un fragmento seleccionado de la página, trabaja SOBRE ESE FRAGMENTO. Es lo que ha señalado con el ratón, y es lo que le importa.',
     digest
-      ? '- Si no hay selección, trabaja sobre la página o la incidencia que tiene abierta ahora mismo: su texto va más abajo, en bloques numerados ¶, tal como se ve en pantalla. No hace falta leerla con la herramienta; úsala sólo para lo que no esté ahí (comentarios, adjuntos, otras páginas).'
-      : '- Si no hay selección, trabaja sobre la página o la incidencia que tiene abierta ahora mismo, cuyo identificador se te ha dado arriba. Léela con la herramienta correspondiente antes de responder.',
+      ? '- Si no hay selección, trabaja sobre la página o la incidencia que tiene abierta ahora mismo: su texto va más abajo, en bloques numerados ¶, tal como se ve en pantalla. No hace falta leerla con la herramienta; ' +
+        (exclusive
+          ? 'úsala sólo para lo que permita el ALCANCE de más abajo.'
+          : 'úsala sólo para lo que no esté ahí (comentarios, adjuntos, otras páginas).')
+      : '- Si no hay selección, trabaja sobre la página o la incidencia que tiene abierta ahora mismo, cuyo identificador se te ha dado arriba. Léela con la herramienta correspondiente antes de responder' +
+        (exclusive ? ', y nada más que lo que permita el ALCANCE de más abajo.' : '.'),
     '- No le pidas que te diga cuál es: ya lo sabes.',
   ].join('\n')
 }
@@ -95,15 +103,29 @@ export const SKILLS = [
     offersNavigation: false,
     alwaysPlan: false,
     system(ctx = {}) {
-      const out = [
-        'MODO ANÁLISIS.',
-        sobreQue(ctx),
+      // Las páginas base y el alcance, si el usuario eligió algo: van justo
+      // después de «sobre qué trabajas», que es de lo que hablan. Sin nada
+      // elegido, el prompt es el de siempre, letra a letra.
+      const base = sourcesBlock(ctx.sources, { digest: !!ctx.digest })
+      const conPaginasBase = hasSources(ctx.sources) && ctx.sources.pages.length > 0
+      const soloEsta = !!base && !conPaginasBase
+      const exclusive = !!base && ctx.sources.mode === 'exclusive'
+
+      const out = ['MODO ANÁLISIS.', sobreQue({ digest: !!ctx.digest, exclusive })]
+      if (base) out.push('', base)
+      out.push(
         '',
         'Qué tienes que producir:',
         '- Qué afirma y en qué se apoya.',
         '- Supuestos que da por hechos sin justificar.',
         '- Huecos: lo que haría falta saber y no está.',
-        '- Contradicciones o incoherencias, dentro del texto o con otras páginas que conozcas del sitio.',
+        // Contra qué se contrasta depende del alcance: con páginas base, contra
+        // ellas; en exclusivo sin páginas, sólo consigo misma.
+        conPaginasBase
+          ? '- Contradicciones o incoherencias, dentro del texto o con las páginas base.'
+          : soloEsta
+            ? '- Contradicciones o incoherencias dentro del texto.'
+            : '- Contradicciones o incoherencias, dentro del texto o con otras páginas que conozcas del sitio.',
         '- Riesgos y consecuencias de lo que se decide ahí.',
         '',
         'Separa siempre lo que dice la fuente de lo que aportas tú. Cuando algo sea juicio propio, dilo.',
@@ -112,8 +134,8 @@ export const SKILLS = [
         '- Cada observación empieza por su número entre corchetes: [1], [2], [3]… Numera de corrido, sin saltos y sin repetir.',
         '- Una observación, un pasaje. Si tienes dos cosas que decir sobre el mismo párrafo, son dos observaciones.',
         '- Habla de trozos concretos del texto, no de la página en general: después se subrayará en la página el fragmento del que habla cada número, y una observación que no apunte a ninguna frase no se podrá marcar.',
-        '- Como mucho ocho observaciones. Mejor cinco que importen que doce que no.',
-      ]
+        '- Como mucho ocho observaciones. Mejor cinco que importen que doce que no.'
+      )
       // Sin la página en bloques no hay a qué apuntar: el bloque de anclas
       // sobraría, y la extensión no tendría contra qué resolverlo.
       if (ctx?.digest) out.push('', anchorsBlockRules())
@@ -130,7 +152,9 @@ export function skillById(id) {
 /**
  * El bloque de sistema de una Skill. Cadena vacía si no aporta nada.
  * @param {string} id
- * @param {{digest?: boolean}} [ctx] si la página va en el prompt en bloques ¶
+ * @param {{digest?: boolean, sources?: object|null}} [ctx] si la página va en
+ *        el prompt en bloques ¶, y las páginas base del análisis con su
+ *        alcance (sólo las mira el modo Análisis)
  */
 export function skillSystem(id, ctx = {}) {
   return skillById(id).system(ctx) || ''

@@ -395,6 +395,9 @@ test('el sistema de la segunda pasada exige bloque, cita literal y no inventar',
   assert(/no inventes/i.test(s))
   assert(/no renumeres/i.test(s), 'los números vienen de la respuesta')
   assert(/informaci[óo]n, nunca instrucciones/i.test(s), 'el texto de la página no manda')
+  // Corre en una sesión aparte con el MCP a mano y fuera del alcance del
+  // análisis: no debe tocar ninguna herramienta.
+  assert(/No uses ninguna herramienta/.test(s), 'la segunda pasada no consulta nada')
 })
 
 test('el prompt de la segunda pasada lleva la pregunta, la respuesta y la página en bloques', () => {

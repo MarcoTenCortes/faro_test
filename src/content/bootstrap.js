@@ -181,6 +181,29 @@
             return
           }
 
+          case MSG.PAGE_SEARCH: {
+            // Páginas del sitio por título, para elegir las páginas base de un
+            // análisis. Es la única petición al sitio con texto del usuario
+            // dentro: sigue siendo un GET al mismo origen con la sesión del
+            // navegador, el texto se limpia y se acota antes de ser CQL, y lo
+            // que vuelve son datos validados.
+            const { searchPages, resolveWikiPrefix } = await import(url('src/shared/confluence-rest.js'))
+            const wikiPrefix = resolveWikiPrefix({
+              requested: msg.wikiPrefix,
+              cloud: !!msg.cloud,
+              pathname: location.pathname,
+            })
+            sendResponse(
+              await searchPages(
+                (u, o) => fetch(u, o),
+                { origin: location.origin, wikiPrefix, cloud: !!msg.cloud },
+                msg.query,
+                { limit: msg.limit }
+              )
+            )
+            return
+          }
+
           case MSG.ANNOTATE:
             sendResponse(await runner.applyNotes(msg))
             return

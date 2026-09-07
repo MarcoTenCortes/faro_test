@@ -37,7 +37,24 @@ import {
   fullConfigSnippet,
 } from './setup.js'
 import { buildContext, harvestIndex, countWithParent } from './indexer.js'
-import { planNavigation, shouldPlan } from './planner.js'
+import { planNavigation, shouldPlan, currentPageId } from './planner.js'
+import {
+  SOURCE_LIMITS,
+  emptySources,
+  normalizeSources,
+  addSourcePage,
+  removeSourcePage,
+  setSourceMode,
+  hasSources,
+  sourcesLabel,
+  sourcesNote,
+  sourcesFromSystem,
+  suggestFromIndex,
+  mergeSuggestions,
+  pageRefFromUrl,
+  consultedOutside,
+  titlesFromTab,
+} from './sources.js'
 import {
   collectNotes,
   numberedIn,
@@ -63,6 +80,10 @@ const el = {
   pick: $('btn-pick'),
   pickChip: $('pick-chip'),
   pickChipText: $('pick-chip-text'),
+  sources: $('btn-sources'),
+  sourcesCount: $('sources-count'),
+  sourcesChip: $('sources-chip'),
+  sourcesChipText: $('sources-chip-text'),
   locationText: $('location-text'),
   statusDot: $('status-dot'),
   statusText: $('status-text'),
@@ -87,6 +108,14 @@ const state = {
   skill: DEFAULT_SKILL,
   pendingPick: null,
   picking: false,
+  // Las páginas base del análisis y su alcance, por sitio. Se cargan con el
+  // sitio y se vacían al cambiar de host: el chip no puede enseñar las del
+  // sitio anterior.
+  sources: emptySources(),
+  mcpConnected: false,
+  // La búsqueda de páginas base en curso: un testigo para descartar la
+  // respuesta tardía de una consulta que el usuario ya ha reescrito.
+  sourcesSearch: { token: 0, timer: 0, suggestions: [], active: -1 },
   notes: [],
   noteRows: new Map(),
   notesCard: null,
@@ -211,6 +240,20 @@ async function refreshTab() {
 
   const changedHost = site?.host !== state.site?.host
   if (changedHost && state.picking) setPicking(false)
+  // Lo que es del sitio no viaja al siguiente: las páginas base, el índice,
+  // los caminos leídos y el contexto se vacían hasta que `bootForSite` cargue
+  // los del host nuevo. Sin esto, si el sitio nuevo se quedaba en la pantalla
+  // de claves, la pantalla de páginas base sugería páginas del sitio anterior
+  // y su índice acababa guardado como si fuera de éste. Y la pantalla, si
+  // estaba abierta, se cierra: hablaba del otro sitio.
+  if (changedHost) {
+    if (!$('screen-sources').classList.contains('hidden')) closeSourcesScreen()
+    state.sources = emptySources()
+    state.index = null
+    state.ancestryFetched = new Map()
+    state.contextMd = ''
+    paintSourcesUi()
+  }
   state.site = site
   state.tabUrl = tab.url || ''
   state.tabTitle = tab.title || ''
@@ -260,6 +303,12 @@ async function bootForSite() {
   const mcp = await client.listMcp().catch(() => ({}))
   const status = mcpStatusFor(mcp, state.site.host)
   const saved = await getSite(state.site.host)
+
+  // Las páginas base de ESTE sitio, y si hay quien pueda leerlas: sin el MCP
+  // el modelo no llega a ellas, y la pantalla lo dice.
+  state.mcpConnected = !!status.connected
+  state.sources = normalizeSources(saved?.analysisSources, { host: state.site.host })
+  paintSourcesUi()
 
   if (!status.connected && !saved?.skippedKeys) {
     hideScreens()
@@ -355,36 +404,20 @@ function showPermissionNotice() {
   btn.textContent = 'Dar permiso'
   btn.addEventListener('click', async () => {
     btn.disabled = true
-    const pattern = state.site.origin.replace(/\/+$/, '') + '/*'
-    // Se pide AQUÍ: `permissions.request` exige un gesto del usuario, y el
-    // gesto no viaja hasta el service worker por sendMessage.
-    const granted = await chrome.permissions.request({ origins: [pattern] }).catch(() => false)
-    if (!granted) {
+    const r = await requestHostPermission()
+    if (r.denied) {
       btn.disabled = false
       // Hay versiones de Chrome donde `permissions.request` no funciona desde
       // el panel lateral. Si pasa, queda la via manual, que siempre vale.
-      card.appendChild(
-        noticeNode(
-          'No se concedió. Si no llegó a salir el diálogo, dalo a mano: chrome://extensions → Faro → ' +
-            'Detalles → Acceso al sitio → «En sitios específicos», y añade ' +
-            state.site.origin +
-            '. Sin permiso sólo puedo llevarte de golpe.',
-          true
-        )
-      )
-      log.warn('Permiso de host denegado', state.site.host)
+      card.appendChild(noticeNode(manualPermissionText() + ' Sin permiso sólo puedo llevarte de golpe.', true))
       return
     }
-    const r = await chrome.runtime
-      .sendMessage({ type: MSG.REQUEST_HOST_PERMISSION, origin: state.site.origin, tabId: state.tabId })
-      .catch(() => null)
-    if (r?.ok) {
-      log.ok('Permiso concedido', state.site.host)
+    if (r.ok) {
       card.remove()
       showNotice('Listo. Ya puedo resaltar y guiarte paso a paso en ' + state.site.host + '.')
     } else {
       btn.disabled = false
-      card.appendChild(noticeNode('Permiso dado, pero no he podido inyectarme: ' + (r?.error || 'motivo desconocido'), true))
+      card.appendChild(noticeNode('Permiso dado, pero no he podido inyectarme: ' + r.error, true))
     }
   })
   actions.appendChild(btn)
@@ -392,6 +425,42 @@ function showPermissionNotice() {
   card.append(kicker, title, text, actions)
   el.chat.appendChild(card)
   scrollChat()
+}
+
+/**
+ * Pide el permiso sobre el dominio del sitio e inyecta el content script.
+ *
+ * Se pide desde el panel y detrás de un clic: `permissions.request` exige un
+ * gesto del usuario, y el gesto no viaja hasta el service worker por
+ * sendMessage. Lo usan la tarjeta del chat y la pantalla de páginas base, que
+ * tapa al chat y necesita su propio botón.
+ *
+ * @returns {Promise<{ok:true}|{ok:false, denied:true}|{ok:false, error:string}>}
+ */
+async function requestHostPermission() {
+  const pattern = state.site.origin.replace(/\/+$/, '') + '/*'
+  const granted = await chrome.permissions.request({ origins: [pattern] }).catch(() => false)
+  if (!granted) {
+    log.warn('Permiso de host denegado', state.site.host)
+    return { ok: false, denied: true }
+  }
+  const r = await chrome.runtime
+    .sendMessage({ type: MSG.REQUEST_HOST_PERMISSION, origin: state.site.origin, tabId: state.tabId })
+    .catch(() => null)
+  if (r?.ok) {
+    log.ok('Permiso concedido', state.site.host)
+    return { ok: true }
+  }
+  return { ok: false, error: r?.error || 'motivo desconocido' }
+}
+
+function manualPermissionText() {
+  return (
+    'No se concedió. Si no llegó a salir el diálogo, dalo a mano: chrome://extensions → Faro → ' +
+    'Detalles → Acceso al sitio → «En sitios específicos», y añade ' +
+    state.site.origin +
+    '.'
+  )
 }
 
 function hostOf(url) {
@@ -433,6 +502,8 @@ function setSkill(id) {
   state.skill = skillById(id).id
   el.skill.value = state.skill
   el.skill.title = skillById(state.skill).hint
+  // El botón de páginas base sólo tiene sentido en Análisis.
+  paintSourcesUi()
 }
 
 function fillModels(models, selected) {
@@ -481,6 +552,7 @@ async function restoreConversation() {
       const burbujas = []
       let turno = null
       let urlDelTurno = ''
+      let baseDelTurno = null
       const cerrarTurno = () => {
         if (!turno) return
         // Un análisis cierra con su bloque JSON de anclas: no es para leerlo.
@@ -492,7 +564,9 @@ async function restoreConversation() {
           const bubble = addAssistantMessage(prose)
           state.turns.push({ role: 'assistant', text: prose })
           burbujas.push({ prose, bubble })
-          if (anchors && numberedIn(prose).length) ultimoAnalisis = { prose, anchors, bubble, url: turno.url }
+          if (anchors && numberedIn(prose).length) {
+            ultimoAnalisis = { prose, anchors, bubble, url: turno.url, conBase: turno.conBase }
+          }
         }
         turno = null
       }
@@ -503,6 +577,9 @@ async function restoreConversation() {
         if (m.info.role === 'user') {
           cerrarTurno()
           urlDelTurno = pageUrlFromSystem(m.info.system)
+          // Las páginas base viajaron en el sistema de ese mensaje: la nota
+          // de abajo se reconstruye de ahí, con el mismo texto que al mandar.
+          baseDelTurno = sourcesFromSystem(m.info.system)
           if (!text.trim()) continue
           // En opencode quedó guardado con el fragmento señalado por delante;
           // aquí se enseña sólo la pregunta, y una nota de que iba acompañada.
@@ -512,7 +589,11 @@ async function restoreConversation() {
           const conPagina = String(m.info.system || '').includes(PAGE_OPEN)
           addUserMessage(
             limpio,
-            [limpio === text ? '' : 'con una selección de la página', conPagina ? 'con el texto de la página' : '']
+            [
+              limpio === text ? '' : 'con una selección de la página',
+              conPagina ? 'con el texto de la página' : '',
+              baseDelTurno ? sourcesNote(baseDelTurno) : '',
+            ]
               .filter(Boolean)
               .join(' · ')
           )
@@ -521,7 +602,7 @@ async function restoreConversation() {
         }
 
         if (!text.trim()) continue
-        if (!turno) turno = { textos: [], url: urlDelTurno }
+        if (!turno) turno = { textos: [], url: urlDelTurno, conBase: (baseDelTurno?.count || 0) > 0 }
         turno.textos.push(text)
       }
       cerrarTurno()
@@ -531,12 +612,12 @@ async function restoreConversation() {
       // la que salieron (o bajo la última, si aquélla ya no está). Si no hay
       // marcas, la atenuada del último análisis con anclas, con su botón.
       if (state.notes.length && state.notesResult) {
-        const { prose, filas, placed, missed, detail } = state.notesResult
+        const { prose, filas, placed, missed, detail, conBase } = state.notesResult
         const misma = (a, b) => String(a || '').replace(/\s+/g, ' ').trim() === String(b || '').replace(/\s+/g, ' ').trim()
         const dueña = burbujas.find((b) => misma(b.prose, prose)) || burbujas[burbujas.length - 1]
         if (dueña) {
           state.noteRows = new Map()
-          state.notesCard = attachToBubble(dueña.bubble, notesCard(filas, placed, missed, detail))
+          state.notesCard = attachToBubble(dueña.bubble, notesCard(filas, placed, missed, detail, { conBase }))
         }
       } else if (ultimoAnalisis) {
         attachToBubble(ultimoAnalisis.bubble, staleNotesCard(ultimoAnalisis))
@@ -689,6 +770,17 @@ async function send() {
   // desplegable cuando termine; y mientras dura, el desplegable se bloquea.
   const skill = state.skill
 
+  // Igual con las páginas base y con la página abierta: se capturan AHORA.
+  // `state.site` cambia con la pestaña, y la comprobación del alcance al
+  // terminar tiene que hablar de la página que se analizó, no de la que haya
+  // abierta entonces. En un Data Center la URL no lleva id: se busca en el
+  // índice, y si no, queda el título de la pestaña.
+  const sources = skill === 'analisis' && hasSources(state.sources) ? normalizeSources(state.sources, { host: state.site.host }) : null
+  const pageIdAlPedir = state.site.pageId || currentPageId(state.index, state.tabUrl) || ''
+  const tituloAlPedir = state.tabTitle
+  const tabUrlAlPedir = state.tabUrl
+  const mcpAlPedir = state.mcpConnected
+
   // Ocupado desde ya: leer la página en bloques tarda, y en ese hueco un
   // segundo clic abría otro turno y otra sesión. Con testigo, para que el
   // `finally` de un turno cancelado no apague el estado del siguiente.
@@ -721,6 +813,7 @@ async function send() {
       [
         pick ? 'con ' + pickLabel(pick).toLowerCase() : '',
         digest ? `con el texto de la página (${digest.count} bloques${digest.truncated ? ', recortado' : ''})` : '',
+        sources ? sourcesNote(sources) : '',
       ]
         .filter(Boolean)
         .join(' · ')
@@ -764,6 +857,7 @@ async function send() {
         `skill ${skill}`,
         pick ? pickLabel(pick) : '',
         digest ? `página en ${digest.count} bloques${digest.truncated ? ' (recortada)' : ''}` : '',
+        sources ? `${sources.pages.length} páginas base · alcance ${sources.mode === 'exclusive' ? 'exclusivo' : 'abierto'}` : '',
       ]
         .filter(Boolean)
         .join(' · ')
@@ -784,6 +878,7 @@ async function send() {
           page: { url: state.tabUrl, title: state.tabTitle },
           skill,
           digest,
+          sources,
         }),
       },
       {
@@ -836,6 +931,17 @@ async function send() {
     paintTurn(turn, toolsBox, body, true)
     log.ok('Respuesta recibida', `${answer.length} caracteres · ${turn.tools.length} herramientas`)
 
+    // Con páginas base: si no había quien las leyera, o si en alcance
+    // exclusivo el modelo consultó fuera de la lista, se dice bajo la
+    // respuesta. Con lo capturado al mandar, no con el estado de ahora.
+    warnAboutSources(turn.parts, bubble, {
+      sources,
+      pageId: pageIdAlPedir,
+      title: tituloAlPedir,
+      pageUrl: digest?.url || tabUrlAlPedir,
+      mcpConnected: mcpAlPedir,
+    })
+
     // El modelo que acaba de funcionar se recuerda para este sitio: si el
     // proveedor por defecto está caducado, no hay que volver a tropezar.
     if (state.site && state.model) await saveSite(state.site.host, { model: state.model })
@@ -860,6 +966,7 @@ async function send() {
       digestReason: lectura.reason,
       urlAlPedir: digest?.url || state.tabUrl,
       signal: abort.signal,
+      conBase: (sources?.pages.length || 0) > 0,
     })
   } catch (err) {
     if (err?.name !== 'AbortError') {
@@ -1053,6 +1160,55 @@ async function growTreeFromPage() {
   if (ganados > 0) log.ok('Árbol leído de la página', `+${ganados} relaciones · ${snap.scanned} filas`)
 }
 
+/**
+ * La contraparte visible de las páginas base.
+ *
+ * Dos cosas que, si no se dicen, parecen que Faro se ha olvidado de ellas: que
+ * sin el MCP conectado el modelo no ha podido leer las páginas base (el chip
+ * prometía que iban), y que en alcance exclusivo —que sólo se pide por prompt,
+ * porque los permisos de sesión de opencode son persistentes— el modelo se
+ * salió de la lista. Todo con lo capturado al mandar el turno, no con el
+ * estado de ahora: la pestaña ha podido cambiar mientras el modelo pensaba.
+ *
+ * @param {Array} parts partes del turno
+ * @param {{sources: object|null, pageId?: string, title?: string, pageUrl?: string, mcpConnected?: boolean}} extra
+ *        las páginas base con las que se mandó; la página abierta entonces (id,
+ *        título de la pestaña y URL); y si había MCP entonces
+ */
+function warnAboutSources(parts, bubble, { sources, pageId = '', title = '', pageUrl = '', mcpConnected = true } = {}) {
+  if (!sources) return
+
+  if (sources.pages.length && !mcpConnected) {
+    log.warn('Páginas base sin leer', 'este sitio no tiene el MCP conectado')
+    attachToBubble(
+      bubble,
+      noticeNode(
+        'Las páginas base no se han podido leer: este sitio no tiene el MCP conectado, así que el análisis sale sólo de la página abierta. Configúralo en Ajustes → Cambiar las claves.',
+        true
+      )
+    )
+  }
+
+  if (sources.mode !== 'exclusive') return
+  // El título de la pestaña lleva el sufijo de Confluence («… - Espacio -
+  // Confluence») y el modelo lee por título exacto: valen sus variantes.
+  const fuera = consultedOutside(parts, {
+    allowed: [pageId, ...sources.pages.map((p) => p.id)],
+    allowedTitles: [...titlesFromTab(title), ...sources.pages.map((p) => p.title)],
+    pageUrl,
+  })
+  if (!fuera.length) return
+
+  log.warn('Fuera del alcance', fuera.join(' · '))
+  attachToBubble(
+    bubble,
+    noticeNode(
+      `El alcance era sólo la página abierta${sources.pages.length ? ' y las páginas base' : ''}, pero el modelo consultó además ${fuera.join(', ')}. ` +
+        'Tenlo en cuenta al leer la respuesta: el alcance se le pide, no se le impone, y otro modelo suele respetarlo mejor.'
+    )
+  )
+}
+
 // ------------------------------------------------------------- navegación
 
 async function offerNavigation(answer, bubble, skillId = state.skill) {
@@ -1187,7 +1343,7 @@ async function learnAncestry(destination) {
 async function offerNotes(
   answer,
   bubble,
-  { skill = state.skill, anchors = null, digest = null, digestReason = '', urlAlPedir = '', signal = null } = {}
+  { skill = state.skill, anchors = null, digest = null, digestReason = '', urlAlPedir = '', signal = null, conBase = false } = {}
 ) {
   if (skill !== 'analisis') return
   if (!state.site || !state.tabId || !state.client) return
@@ -1319,9 +1475,10 @@ async function offerNotes(
   forgetNotes({ keepPage: true })
   state.notes = anclables
   // Con la prosa de la que salieron: al repintar el chat, la tarjeta viva
-  // vuelve bajo esa respuesta y no bajo otra.
-  state.notesResult = { prose: answer, filas, placed, missed, detail }
-  state.notesCard = attachToBubble(bubble, notesCard(filas, placed, missed, detail))
+  // vuelve bajo esa respuesta y no bajo otra. Y con si llevaba páginas base:
+  // cambia lo que se dice de una observación sin pasaje.
+  state.notesResult = { prose: answer, filas, placed, missed, detail, conBase }
+  state.notesCard = attachToBubble(bubble, notesCard(filas, placed, missed, detail, { conBase }))
 
   log.ok(
     'Análisis marcado',
@@ -1331,8 +1488,16 @@ async function offerNotes(
   if (missed.length) log.warn('Sin anclar', 'observaciones ' + missed.join(', '))
 }
 
-/** La lista numerada, para poder saltar de una observación a su subrayado. */
-function notesCard(notes, placed, missed, detail = []) {
+/**
+ * La lista numerada, para poder saltar de una observación a su subrayado.
+ *
+ * Con páginas base, una observación sin pasaje no habla necesariamente «de la
+ * página en general»: lo normal es que hable de una página base, que no se
+ * subraya porque sólo se marca la abierta. La fila lo dice así.
+ *
+ * @param {{conBase?: boolean}} [opts] si el turno llevaba páginas base
+ */
+function notesCard(notes, placed, missed, detail = [], { conBase = false } = {}) {
   const card = document.createElement('div')
   card.className = 'nav-card notes-card'
 
@@ -1358,9 +1523,13 @@ function notesCard(notes, placed, missed, detail = []) {
   }
   if (sinAncla) {
     avisos.push(
-      sinAncla === 1
-        ? 'Una habla de la página en general y no tiene pasaje que marcar.'
-        : `${sinAncla} hablan de la página en general y no tienen pasaje que marcar.`
+      conBase
+        ? sinAncla === 1
+          ? 'Una no apunta a un pasaje de esta página: habla de ella en general o de una página base.'
+          : `${sinAncla} no apuntan a un pasaje de esta página: hablan de ella en general o de una página base.`
+        : sinAncla === 1
+          ? 'Una habla de la página en general y no tiene pasaje que marcar.'
+          : `${sinAncla} hablan de la página en general y no tienen pasaje que marcar.`
     )
   }
   if (avisos.length) {
@@ -1398,7 +1567,9 @@ function notesCard(notes, placed, missed, detail = []) {
       ? quoteLabel(nota, detail.find((d) => d.n === nota.n))
       : nota.anchor
         ? 'no la he encontrado en la página'
-        : 'habla de la página en general; no hay pasaje que marcar'
+        : conBase
+          ? 'no apunta a un pasaje de esta página (habla de ella en general o de una página base)'
+          : 'habla de la página en general; no hay pasaje que marcar'
 
     cuerpo.append(titulo, cita)
     row.append(num, cuerpo)
@@ -1473,7 +1644,7 @@ async function secondPassNotes(answer, digest, signal = null) {
  * usuario quizá sólo pasa. Pero las anclas siguen en la respuesta guardada, y
  * con un botón se vuelven a poner —si se sigue en la misma página.
  */
-function staleNotesCard({ prose, anchors, bubble, url = '' }) {
+function staleNotesCard({ prose, anchors, bubble, url = '', conBase = false }) {
   const numeros = numberedIn(prose)
   const notes = validateNotes(anchors, { allowed: numeros })
   const filas = numeros.map(
@@ -1523,7 +1694,7 @@ function staleNotesCard({ prose, anchors, bubble, url = '' }) {
   volver.addEventListener('click', async () => {
     volver.disabled = true
     try {
-      await remarkFromAnchors({ prose, anchors, bubble, card, url })
+      await remarkFromAnchors({ prose, anchors, bubble, card, url, conBase })
     } finally {
       volver.disabled = false
     }
@@ -1542,7 +1713,7 @@ function staleNotesCard({ prose, anchors, bubble, url = '' }) {
  * vale si su cita está de verdad dentro (`strict`). Sin eso, cualquier página
  * con bastantes párrafos acababa con «bloques enteros» de otra.
  */
-async function remarkFromAnchors({ prose, anchors, bubble, card, url = '' }) {
+async function remarkFromAnchors({ prose, anchors, bubble, card, url = '', conBase = false }) {
   if (!state.site || state.tabId == null) return
   if (!(await ensureContentAccess({ announce: true }))) return
 
@@ -1588,9 +1759,9 @@ async function remarkFromAnchors({ prose, anchors, bubble, card, url = '' }) {
   )
   forgetNotes({ keepPage: true })
   state.notes = anclables
-  state.notesResult = { prose, filas, placed, missed: res?.missed || [], detail: res?.detail || [] }
+  state.notesResult = { prose, filas, placed, missed: res?.missed || [], detail: res?.detail || [], conBase }
   card.remove()
-  state.notesCard = attachToBubble(bubble, notesCard(filas, placed, res?.missed || [], res?.detail || []))
+  state.notesCard = attachToBubble(bubble, notesCard(filas, placed, res?.missed || [], res?.detail || [], { conBase }))
   log.ok('Análisis marcado de nuevo', `${placed.length} de ${anclables.length} en la página`)
 }
 
@@ -1801,6 +1972,429 @@ function paintPickChip() {
   if (!pick) return
   el.pickChipText.textContent =
     pickLabel(pick) + (pick.kind === 'image' && !pick.image ? ' · sin adjuntar' : '')
+}
+
+// ------------------------------------------- páginas base del análisis
+
+/**
+ * El botón junto a la Skill y el chip sobre el cuadro de texto.
+ *
+ * El botón sólo existe en Análisis. Se enciende cuando hay algo elegido —hay
+ * páginas, o el alcance es exclusivo— y la insignia cuenta las páginas: en
+ * exclusivo sin páginas no hay «0» que enseñar, lo dice el título. El chip
+ * repite lo mismo en una frase: lo que va a acompañar a la siguiente pregunta
+ * se ve siempre, que mandarlo a escondidas sería mandarlo a espaldas de quien
+ * pregunta.
+ */
+function paintSourcesUi() {
+  const analisis = state.skill === 'analisis'
+  const s = state.sources
+  const n = s.pages.length
+  const activo = hasSources(s)
+
+  el.sources.classList.toggle('hidden', !analisis)
+  el.sources.classList.toggle('on', analisis && activo)
+  el.sources.title = activo ? sourcesLabel(s) : 'Páginas base del análisis'
+  el.sourcesCount.textContent = n ? String(n) : ''
+  el.sourcesCount.classList.toggle('hidden', !n)
+
+  const label = analisis ? sourcesLabel(s) : ''
+  el.sourcesChip.classList.toggle('hidden', !label)
+  el.sourcesChipText.textContent = label
+}
+
+async function showSourcesScreen() {
+  if (!state.site) return
+  const s = state.sources
+  $('sources-mode-exclusive').checked = s.mode === 'exclusive'
+  $('sources-mode-open').checked = s.mode !== 'exclusive'
+  $('sources-query').value = ''
+  $('sources-mcp').classList.toggle('hidden', state.mcpConnected)
+  $('sources-perm').classList.add('hidden')
+  setSourcesStatus('')
+  clearSourceSuggestions()
+  paintSourceList()
+  showScreen('screen-sources')
+  $('sources-query').focus()
+
+  // Las páginas base son de Confluence: desde Jira, según el despliegue, se
+  // pueden buscar (Cloud comparte host) o sólo pegar por id (Data Center).
+  if (state.site.product === 'jira') {
+    setSourcesStatus(
+      state.site.cloud
+        ? 'Las páginas base son páginas de Confluence de este mismo sitio.'
+        : 'Las páginas base son de Confluence; desde este Jira no puedo buscarlas ni comprobar una URL: pega el id numérico de la página.'
+    )
+  }
+
+  // Sin permiso sobre el dominio no hay content script, y sin él no se puede
+  // preguntar a Confluence: queda el índice, y se ofrece el permiso AQUÍ,
+  // porque la tarjeta del chat queda tapada por esta pantalla.
+  const puede = await ensureContentAccess({ announce: false })
+  if (!puede) {
+    $('sources-perm').classList.remove('hidden')
+    const n = Object.keys(state.index?.pages || {}).length
+    setSourcesStatus(
+      n
+        ? `Sin permiso sobre ${state.site.host} sólo busco en lo que ya tengo indexado (${n} páginas).`
+        : `Todavía no tengo nada indexado de este sitio y no puedo preguntarle a Confluence sin permiso: pega la URL de la página, o dame permiso.`
+    )
+  }
+}
+
+function setSourcesStatus(text) {
+  $('sources-status').textContent = text || ''
+}
+
+/** Las páginas elegidas, con su × para quitarlas. */
+function paintSourceList() {
+  const list = $('sources-list')
+  list.textContent = ''
+  for (const p of state.sources.pages) {
+    const row = document.createElement('div')
+    row.className = 'source-row'
+
+    const title = document.createElement('span')
+    title.className = 'source-title'
+    title.textContent = p.title
+    title.title = p.title
+
+    const meta = document.createElement('span')
+    meta.className = 'source-meta'
+    meta.textContent = [p.spaceKey, `id ${p.id}`].filter(Boolean).join(' · ')
+
+    const x = document.createElement('button')
+    x.className = 'source-x'
+    x.type = 'button'
+    x.title = 'Quitar esta página'
+    x.setAttribute('aria-label', `Quitar «${p.title}»`)
+    x.textContent = '×'
+    x.addEventListener('click', () => removeSource(p.id).catch(console.error))
+
+    row.append(title, meta, x)
+    list.appendChild(row)
+  }
+}
+
+/**
+ * Lo que escribe el usuario en el campo único. Una URL o un id no se buscan:
+ * se resuelven, o se explica por qué no valen. Lo demás es una búsqueda: al
+ * instante en el índice y, tras una pausa, en Confluence.
+ */
+function onSourcesInput() {
+  clearTimeout(state.sourcesSearch.timer)
+  state.sourcesSearch.token++
+  const text = $('sources-query').value
+  // La pestaña ha podido salir de Atlassian con la pantalla abierta.
+  if (!state.site) {
+    clearSourceSuggestions()
+    setSourcesStatus('Abre una página de Confluence y vuelve.')
+    return
+  }
+
+  const ref = pageRefFromUrl(text, state.site)
+  if (ref.ok) {
+    paintSuggestions([{ id: ref.id, title: `Añadir la página ${ref.id}`, path: ref.path, spaceKey: null, source: 'add' }])
+    setSourcesStatus(state.index?.pages?.[ref.id] ? `Es «${state.index.pages[ref.id].title}».` : 'Intro para añadirla; el título se lee de Confluence.')
+    return
+  }
+  if (ref.reason !== 'no-es-url') {
+    clearSourceSuggestions()
+    setSourcesStatus(refReasonText(ref.reason, text))
+    return
+  }
+
+  const q = text.trim()
+  if (q.length < SOURCE_LIMITS.queryMin) {
+    clearSourceSuggestions()
+    setSourcesStatus('')
+    return
+  }
+
+  const exclude = state.sources.pages.map((p) => p.id)
+  const local = suggestFromIndex(state.index, q, { limit: SOURCE_LIMITS.suggestions, exclude })
+  paintSuggestions(local)
+  setSourcesStatus(local.length ? '' : 'Nada en el índice con ese título.')
+  state.sourcesSearch.timer = setTimeout(
+    () => searchSourcesRemote(q, local, exclude).catch(console.error),
+    SOURCE_LIMITS.searchDebounceMs
+  )
+}
+
+function refReasonText(reason, text) {
+  if (reason === 'otro-sitio') {
+    const host = hostOf(text.trim())
+    return `Esa página es de ${host || 'otro sitio'} y estás en ${state.site?.host || 'otro'}: sólo valen páginas de este sitio.`
+  }
+  if (reason === 'jira') return 'Eso es una incidencia de Jira, no una página de Confluence.'
+  return 'Esa dirección no lleva el id de la página (las de tipo /display/ESPACIO/Título no lo llevan). Ábrela y copia la URL con /pages/<número>, o pega el número.'
+}
+
+/**
+ * La búsqueda en Confluence, con la sesión del navegador y desde el content
+ * script. Con testigo: si el usuario ha seguido escribiendo, la respuesta
+ * llega tarde y se tira. Lo que vuelve se funde con lo del índice.
+ */
+async function searchSourcesRemote(q, local, exclude) {
+  const token = state.sourcesSearch.token
+  if (!state.site || state.tabId == null) return
+  if (!(await ensureContentAccess({ announce: false }))) return
+  if (token !== state.sourcesSearch.token) return
+
+  setSourcesStatus('Buscando en Confluence…')
+  const r = await chrome.tabs
+    .sendMessage(state.tabId, {
+      type: MSG.PAGE_SEARCH,
+      query: q,
+      wikiPrefix: wikiPrefixOf(state.site),
+      cloud: state.site.cloud,
+      limit: SOURCE_LIMITS.suggestions,
+    })
+    .catch(() => null)
+  if (token !== state.sourcesSearch.token) return
+
+  if (!r?.ok) {
+    log.warn('Búsqueda de páginas', r?.reason || 'la pestaña no contestó')
+    setSourcesStatus(searchFailText(r) + (local.length ? ' Mientras, sólo busco en lo indexado.' : ''))
+    return
+  }
+
+  const merged = mergeSuggestions(local, r.pages, { limit: SOURCE_LIMITS.suggestions, exclude, host: state.site.host })
+  paintSuggestions(merged)
+  setSourcesStatus(merged.length ? '' : 'Nada con ese título. Prueba con otra palabra o pega su URL.')
+  log.debug('Búsqueda de páginas', `«${q}» · ${r.pages.length} de Confluence · API ${r.via} · ${r.ms} ms`)
+}
+
+function searchFailText(r) {
+  const status = Number(r?.status) || 0
+  if (status === 401 || status === 403 || /JSON/.test(String(r?.reason || ''))) {
+    return 'Tu sesión de Confluence no vale para su API: recarga la pestaña y vuelve a entrar.'
+  }
+  return 'No he podido preguntarle a Confluence: ' + (r?.reason || 'la pestaña no contestó') + '.'
+}
+
+/** La lista de sugerencias bajo el campo, como un listbox con teclado. */
+function paintSuggestions(list) {
+  const box = $('sources-suggest')
+  const input = $('sources-query')
+  box.textContent = ''
+  state.sourcesSearch.suggestions = list
+  state.sourcesSearch.active = -1
+  input.removeAttribute('aria-activedescendant')
+
+  list.forEach((s, i) => {
+    const row = document.createElement('button')
+    row.className = 'suggest-row' + (s.source === 'add' ? ' add' : '')
+    row.type = 'button'
+    row.id = 'sources-opt-' + i
+    row.setAttribute('role', 'option')
+    row.setAttribute('aria-selected', 'false')
+
+    const title = document.createElement('span')
+    title.className = 'suggest-title'
+    title.textContent = s.title
+
+    const meta = document.createElement('span')
+    meta.className = 'suggest-meta'
+    meta.textContent =
+      s.source === 'add'
+        ? 'por su id'
+        : [s.spaceKey, `id ${s.id}`, s.source === 'confluence' ? 'desde Confluence' : 'en el índice'].filter(Boolean).join(' · ')
+
+    row.append(title, meta)
+    row.addEventListener('click', () => chooseSuggestion(s).catch(console.error))
+    box.appendChild(row)
+  })
+
+  box.classList.toggle('hidden', !list.length)
+  input.setAttribute('aria-expanded', list.length ? 'true' : 'false')
+}
+
+function clearSourceSuggestions() {
+  paintSuggestions([])
+}
+
+function moveSuggestion(delta) {
+  const { suggestions } = state.sourcesSearch
+  if (!suggestions.length) return
+  const n = suggestions.length
+  // Sin nada resaltado, ↓ va a la primera y ↑ a la última: partir de -1 hacia
+  // arriba caía en la penúltima.
+  const from = state.sourcesSearch.active < 0 && delta < 0 ? 0 : state.sourcesSearch.active
+  const next = ((from + delta) % n + n) % n
+  state.sourcesSearch.active = next
+  const rows = $('sources-suggest').querySelectorAll('.suggest-row')
+  rows.forEach((row, i) => {
+    row.classList.toggle('active', i === next)
+    row.setAttribute('aria-selected', i === next ? 'true' : 'false')
+  })
+  $('sources-query').setAttribute('aria-activedescendant', 'sources-opt-' + next)
+  rows[next]?.scrollIntoView({ block: 'nearest' })
+}
+
+/**
+ * Teclado del campo: ↑/↓ recorren, Intro elige la resaltada (o la primera),
+ * Esc quita las sugerencias y, si no había, cierra como «Listo».
+ */
+function onSourcesKeydown(ev) {
+  const { suggestions, active } = state.sourcesSearch
+  if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
+    if (!suggestions.length) return
+    ev.preventDefault()
+    moveSuggestion(ev.key === 'ArrowDown' ? 1 : -1)
+    return
+  }
+  if (ev.key === 'Enter') {
+    ev.preventDefault()
+    const elegida = suggestions[active >= 0 ? active : 0]
+    if (elegida) chooseSuggestion(elegida).catch(console.error)
+    return
+  }
+  if (ev.key === 'Escape') {
+    ev.preventDefault()
+    if (suggestions.length) {
+      clearSourceSuggestions()
+      return
+    }
+    closeSourcesScreen()
+  }
+}
+
+async function chooseSuggestion(s) {
+  if (s.source === 'add') return addSourceById(s.id, s.path)
+  return addSource({ id: s.id, title: s.title, path: s.path, spaceKey: s.spaceKey }, { from: s.source })
+}
+
+/**
+ * Una página por su id (URL pegada o número suelto): el título sale del
+ * índice si la conoce y, si no, de la API del sitio —la misma petición que
+ * lee el camino, que devuelve la propia página al final de la cadena—. Sin
+ * quien la lea, se añade por su id, que es lo que el modelo necesita, y se
+ * dice. Un 404 no se añade: no hay página.
+ */
+async function addSourceById(id, path = '') {
+  if (!state.site) return
+  const conocida = state.index?.pages?.[id]
+  if (conocida) {
+    return addSource({ id, title: conocida.title, path: conocida.path || path, spaceKey: conocida.spaceKey }, { from: 'index' })
+  }
+
+  // Desde un Jira Data Center la API de Confluence no está en este origen:
+  // preguntarle daría un 404 que no significa «no hay página». Se añade por
+  // su id, que es lo que la pantalla prometió.
+  if (state.site.product === 'jira' && !state.site.cloud) {
+    log.warn('Página base sin título', `${id} · desde Jira no se puede leer`)
+    await addSource({ id, title: '', path }, { from: 'id' })
+    setSourcesStatus(`Añadida por su id ${id}: desde este Jira no puedo leer su título.`)
+    return
+  }
+
+  // La comprobación tarda: si mientras tanto la pestaña se va a otro sitio,
+  // lo que vuelva no es de aquí.
+  const host = state.site.host
+  setSourcesStatus(`Comprobando la página ${id} en Confluence…`)
+  const r = await fetchPageChain(id)
+  if (state.site?.host !== host) return
+  if (r.ok && r.pages?.length) {
+    const propia = r.pages[r.pages.length - 1]
+    await mergePagesIntoIndex(r.pages)
+    return addSource({ id, title: propia.title, path: propia.url || path, spaceKey: propia.spaceKey }, { from: 'confluence' })
+  }
+  if (r.status === 404) {
+    log.warn('Página base', `id ${id} · la API respondió 404`)
+    setSourcesStatus(`Confluence no encuentra ninguna página con el id ${id}.`)
+    return
+  }
+  log.warn('Página base sin título', `${id} · ${r.reason}`)
+  await addSource({ id, title: '', path }, { from: 'id' })
+  setSourcesStatus(`Añadida por su id ${id}: no he podido leer su título (${r.reason}).`)
+}
+
+/** La cadena de una página por la API del sitio, vía content script. Nunca lanza. */
+async function fetchPageChain(id) {
+  if (!state.site || state.tabId == null) return { ok: false, reason: 'sin pestaña' }
+  if (!(await ensureContentAccess({ announce: false }))) return { ok: false, reason: 'sin acceso a la pestaña' }
+  const r = await chrome.tabs
+    .sendMessage(state.tabId, {
+      type: MSG.PAGE_ANCESTORS,
+      pageId: id,
+      wikiPrefix: wikiPrefixOf(state.site),
+      cloud: state.site.cloud,
+    })
+    .catch(() => null)
+  return r || { ok: false, reason: 'la pestaña no contestó' }
+}
+
+/** Lo que la API o el usuario descubren se queda en el índice, sin pisar el árbol que ya se sabía. */
+async function mergePagesIntoIndex(pages) {
+  if (!state.site || !pages?.length) return
+  const fresh = normalizeIndex({ pages, updated: Date.now() }, state.site.host, state.index?.scope, {
+    cloud: state.site.cloud,
+    wikiPrefix: state.site.wikiPrefix,
+  })
+  state.index = mergeIndexKeepingTree(state.index, fresh)
+  await saveIndex(state.site.host, state.index)
+}
+
+async function addSource(page, { from = 'index' } = {}) {
+  if (!state.site) return
+  const r = addSourcePage(state.sources, page, { host: state.site.host })
+  if (!r.added) {
+    setSourcesStatus(
+      r.reason === 'tope'
+        ? `Como mucho ${SOURCE_LIMITS.maxPages} páginas base: quita alguna para añadir otra.`
+        : r.reason === 'duplicada'
+          ? 'Esa página ya está en la lista.'
+          : 'Eso no es una página de Confluence de este sitio.'
+    )
+    return
+  }
+  state.sources = r.sources
+  await saveSite(state.site.host, { analysisSources: state.sources })
+  if (from === 'confluence') await mergePagesIntoIndex([page])
+
+  const añadida = state.sources.pages[state.sources.pages.length - 1]
+  log.ok(
+    'Página base añadida',
+    `${añadida.title} (id ${añadida.id}) · ${from === 'index' ? 'del índice' : from === 'confluence' ? 'de Confluence' : 'por su id'}`
+  )
+  // La búsqueda que estuviera en marcha era de lo que había en el campo, que
+  // se vacía ahora: si llegara después, volvería a pintar la lista —con la
+  // página recién añadida dentro— bajo un campo vacío.
+  clearTimeout(state.sourcesSearch.timer)
+  state.sourcesSearch.token++
+  $('sources-query').value = ''
+  clearSourceSuggestions()
+  setSourcesStatus(`Añadida «${añadida.title}».`)
+  paintSourceList()
+  paintSourcesUi()
+  $('sources-query').focus()
+}
+
+async function removeSource(id) {
+  if (!state.site) return
+  const antes = state.sources.pages.find((p) => p.id === String(id))
+  state.sources = removeSourcePage(state.sources, id)
+  paintSourceList()
+  paintSourcesUi()
+  await saveSite(state.site.host, { analysisSources: state.sources })
+  log.info('Página base quitada', antes ? `${antes.title} (id ${antes.id})` : String(id))
+}
+
+async function setSourcesMode(mode) {
+  if (!state.site) return
+  state.sources = setSourceMode(state.sources, mode)
+  await saveSite(state.site.host, { analysisSources: state.sources })
+  log.info('Alcance del análisis', state.sources.mode === 'exclusive' ? 'sólo la página abierta y las páginas base' : 'las páginas base y las que decida el modelo')
+  paintSourcesUi()
+}
+
+function closeSourcesScreen() {
+  clearTimeout(state.sourcesSearch.timer)
+  state.sourcesSearch.token++
+  hideScreens()
+  paintSourcesUi()
+  el.input.focus()
 }
 
 function onRuntimeMessage(msg) {
@@ -2139,6 +2733,36 @@ function wireEvents() {
   el.pick.addEventListener('click', () => togglePick().catch(console.error))
   $('btn-pick-clear').addEventListener('click', () => clearPick())
 
+  // --- páginas base del análisis
+  el.sources.addEventListener('click', () => showSourcesScreen().catch(console.error))
+  el.sourcesChip.addEventListener('click', () => showSourcesScreen().catch(console.error))
+  $('sources-query').addEventListener('input', onSourcesInput)
+  $('sources-query').addEventListener('keydown', onSourcesKeydown)
+  $('sources-mode-exclusive').addEventListener('change', () => setSourcesMode('exclusive').catch(console.error))
+  $('sources-mode-open').addEventListener('change', () => setSourcesMode('open').catch(console.error))
+  $('btn-sources-close').addEventListener('click', () => closeSourcesScreen())
+  $('btn-sources-clear').addEventListener('click', async () => {
+    state.sources = { ...state.sources, pages: [] }
+    await saveSite(state.site.host, { analysisSources: state.sources })
+    log.info('Páginas base quitadas', 'el alcance se queda como estaba')
+    paintSourceList()
+    paintSourcesUi()
+    setSourcesStatus('')
+  })
+  $('btn-sources-permission').addEventListener('click', async () => {
+    const btn = $('btn-sources-permission')
+    btn.disabled = true
+    const r = await requestHostPermission()
+    btn.disabled = false
+    if (r.ok) {
+      $('sources-perm').classList.add('hidden')
+      setSourcesStatus('Listo. Ya puedo buscar en Confluence.')
+      onSourcesInput()
+    } else {
+      setSourcesStatus(r.denied ? manualPermissionText() : 'Permiso dado, pero no he podido inyectarme: ' + r.error)
+    }
+  })
+
   el.memoryToggle.addEventListener('click', async () => {
     state.settings = await saveSettings({ crossSessionMemory: !state.settings.crossSessionMemory })
     applySettingsToUi()
@@ -2176,6 +2800,10 @@ function wireEvents() {
   $('btn-setup-skip').addEventListener('click', async () => {
     hideScreens()
     await saveSite(state.site.host, { onboarded: true, skippedKeys: true })
+    // Con las claves saltadas el arranque ya no se para en esta pantalla:
+    // carga el índice, el contexto y la sesión de ESTE sitio. Sin esto se
+    // seguía trabajando con los del sitio anterior.
+    await bootForSite()
     showNotice('Sin claves configuradas: puedo charlar, pero no consultar Jira ni Confluence.')
   })
   $('link-token').addEventListener('click', () => openUrl('https://id.atlassian.com/manage-profile/security/api-tokens'))
@@ -2200,6 +2828,7 @@ function wireEvents() {
     state.mcpWait?.abort()
     hideScreens()
     await saveSite(state.site.host, { onboarded: true, skippedKeys: true })
+    await bootForSite()
     showNotice('Sin MCP conectado: puedo charlar, pero no consultar Jira ni Confluence.')
   })
 
@@ -2254,6 +2883,8 @@ function wireEvents() {
     state.ancestryFetched = new Map()
     state.contextMd = ''
     state.sessionID = null
+    state.sources = emptySources()
+    paintSourcesUi()
     hideScreens()
     await bootForSite()
   })

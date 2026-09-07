@@ -86,9 +86,49 @@ function contentWithAncestors(id) {
   }
 }
 
+/**
+ * `GET /wiki/rest/api/content/search?cql=…`, como busca CQL de verdad, para
+ * que la autocomprobación detecte que sin comodín no hay prefijo: cada
+ * `title~"…"` es un término; sin `*` tiene que coincidir con una palabra ENTERA
+ * del título (sin mayúsculas ni acentos) y con `*` al final, con el principio
+ * de una palabra. Todos los términos tienen que cumplirse.
+ */
+const DIACRITICS = new RegExp('[\\u0300-\\u036f]', 'g')
+function fold(s) {
+  return String(s).normalize('NFD').replace(DIACRITICS, '').toLowerCase()
+}
+
+function searchByTitle(cql, limit) {
+  const terms = [...String(cql).matchAll(/title~"([^"]*)"/g)].map((m) => m[1]).filter(Boolean)
+  const n = Math.min(20, Math.max(1, Number(limit) || 8))
+  const hits = Object.keys(PAGE)
+    .map(Number)
+    .sort((a, b) => a - b)
+    .filter((id) => {
+      const words = fold(PAGE[id][0]).split(/[^\p{L}\p{N}]+/u).filter(Boolean)
+      return (
+        terms.length > 0 &&
+        terms.every((t) => {
+          const prefijo = t.endsWith('*')
+          const term = fold(prefijo ? t.slice(0, -1) : t)
+          return term.length > 0 && words.some((w) => (prefijo ? w.startsWith(term) : w === term))
+        })
+      )
+    })
+  const results = hits.slice(0, n).map((id) => ({ ...pageNode(id), space: { key: 'ENG', name: 'Ingeniería' } }))
+  return { results, start: 0, limit: n, size: results.length }
+}
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost')
   let path = decodeURIComponent(url.pathname)
+
+  if (path === '/wiki/rest/api/content/search') {
+    const body = searchByTitle(url.searchParams.get('cql') || '', url.searchParams.get('limit'))
+    res.writeHead(200, { 'Content-Type': TYPES['.json'], 'Cache-Control': 'no-store' })
+    res.end(JSON.stringify(body))
+    return
+  }
 
   const rest = /^\/wiki\/rest\/api\/content\/(\d+)$/.exec(path)
   if (rest) {
