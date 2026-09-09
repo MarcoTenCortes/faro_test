@@ -62,7 +62,9 @@ la respuesta**.
   Data Center son dos instalaciones con su token personal cada una. Un solo
   MCP sirve a los dos, y si viven en hosts distintos el otro queda enlazado:
   no vuelve a pedir claves, y desde Jira se lleva el contexto del Confluence
-  de su pareja para saber qué páginas mirar.
+  de su pareja para saber qué páginas mirar. Y si el MCP ya existe en tu
+  opencode con ese dominio dentro —lo pegaste a mano, o lo configuraste desde
+  el otro producto—, Faro lo reconoce y lo usa sin pedirte nada.
 - **Análisis con marcas numeradas**: el modo Análisis numera sus observaciones y
   **subraya en la página el pasaje del que habla cada una**, con su número
   detrás, como una nota al pie. En el chat, pulsar un `[2]` te lleva a su
@@ -359,7 +361,7 @@ Trece decisiones que sostienen el diseño:
 ## Comprobaciones
 
 ```bash
-npm run check              # sintaxis + orden + manifest + 497 pruebas unitarias
+npm run check              # sintaxis + orden + manifest + 503 pruebas unitarias
 npm run test:integration   # contra un opencode real que arranca la propia prueba
 npm run harness            # banco de pruebas visual en http://127.0.0.1:5175
 ```

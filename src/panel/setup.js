@@ -147,6 +147,72 @@ export function siteRecords({ host, product, mcpName, jiraHost = '', confluenceH
 }
 
 /**
+ * El MCP que ya existe en opencode para este dominio, si lo hay.
+ *
+ * Faro sólo sabía de un MCP por dos vías: el nombre que deriva del host de la
+ * pestaña, o el nombre que él mismo apuntó al terminar de configurarlo. Las
+ * dos fallan en cuanto el MCP se configuró desde el OTRO producto —desde Jira,
+ * con las dos direcciones dentro— y la anotación no llegó a escribirse (la
+ * comprobación no terminó en el panel, o el bloque se pegó a mano): al abrir
+ * Confluence, Faro pedía claves para un MCP que ya estaba conectado. Pasó de
+ * verdad.
+ *
+ * Ahora se mira lo que opencode tiene de verdad (`GET /config`): de cada MCP,
+ * los hosts de `JIRA_URL` y `CONFLUENCE_URL` de su `environment`. Vale el que
+ * lleve este dominio en cualquiera de las dos; con varios, el que tenga los dos
+ * productos; en igualdad, el primero en el orden de la configuración.
+ *
+ * Y antes que nada, el que esté CONECTADO. Un bloque viejo caído —o con
+ * `enabled: false`, que opencode conserva en la configuración y devuelve como
+ * «disabled»— con los dos productos ganaba al recién verificado con uno, y el
+ * panel volvía a la pantalla de claves en cada arranque: un bucle sin salida
+ * desde el panel. Lo encontró la revisión. Por eso la elección mira la lista
+ * de `GET /mcp` cuando se le da, y un MCP deshabilitado no cuenta.
+ *
+ * Del `environment` sólo salen los hosts. Las claves van ahí en claro y no
+ * pueden acabar ni en el estado ni en el registro: el resultado son cinco
+ * claves blancas. Pura, cubierta por pruebas.
+ *
+ * @param {object} config lo que devuelve `GET /config`
+ * @param {string} host el host de la pestaña
+ * @param {{status?: object|null}} [opts] lo que devuelve `GET /mcp`, si se tiene
+ * @returns {{name:string, jiraHost:string, confluenceHost:string, products:number, connected:boolean}|null}
+ */
+export function mcpForHost(config, host, { status = null } = {}) {
+  const buscado = String(host || '').trim().toLowerCase()
+  const mcp = config?.mcp
+  if (!buscado || !mcp || typeof mcp !== 'object') return null
+
+  let elegido = null
+  for (const [name, entry] of Object.entries(mcp)) {
+    if (entry?.enabled === false) continue
+    const env = entry?.environment
+    if (!env || typeof env !== 'object') continue
+    const jiraHost = hostOf(String(env.JIRA_URL || '')).toLowerCase()
+    const confluenceHost = hostOf(String(env.CONFLUENCE_URL || '')).toLowerCase()
+    if (jiraHost !== buscado && confluenceHost !== buscado) continue
+    const products = (jiraHost ? 1 : 0) + (confluenceHost ? 1 : 0)
+    const connected = status ? mcpStatusFor(status, host, name).connected : false
+    // Conectado antes que nada; después, más productos; en igualdad, el primero.
+    const mejor =
+      !elegido ||
+      (connected && !elegido.connected) ||
+      (connected === elegido.connected && products > elegido.products)
+    if (mejor) elegido = { name, jiraHost, confluenceHost, products, connected }
+  }
+  return elegido
+}
+
+/**
+ * Con qué nombre se busca el MCP de este host en `GET /mcp`: el que opencode
+ * tiene para este dominio, si lo hay; si no, el que Faro apuntó al
+ * configurarlo; y si no, el que deriva del host. Pura.
+ */
+export function chosenMcpName(config, saved, host, { status = null } = {}) {
+  return mcpForHost(config, host, { status })?.name || String(saved?.mcpName || '') || mcpNameForHost(host)
+}
+
+/**
  * ¿Está ya configurado y conectado el MCP de este host?
  *
  * `GET /mcp` devuelve `{ "<nombre>": { "status": "connected" } }`. Cualquier

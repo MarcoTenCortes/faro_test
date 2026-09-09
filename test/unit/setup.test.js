@@ -8,6 +8,8 @@ import {
   mcpBlockSnippet,
   fullConfigSnippet,
   readVerification,
+  mcpForHost,
+  chosenMcpName,
   PRODUCTS,
 } from '../../src/panel/setup.js'
 import { mcpNameForHost } from '../../src/shared/config.js'
@@ -235,4 +237,100 @@ test('verificación: otro fallo de herramienta se reporta tal cual', () => {
 test('verificación: entrada vacía no revienta', () => {
   eq(readVerification(null).ok, false)
   eq(readVerification([]).reason, 'sin-herramientas')
+})
+
+// --- el MCP que ya existe en opencode para este dominio ----------------------
+// Pasó de verdad: el MCP se configuró desde Jira con las dos direcciones, la
+// anotación de Faro no llegó a escribirse, y al abrir Confluence pedía claves
+// para un MCP que ya estaba conectado.
+
+const CONFIG = {
+  mcp: {
+    'atlassian-jira-simplprogramme-eu': {
+      type: 'local',
+      environment: { JIRA_URL: 'https://jira.simplprogramme.eu', JIRA_PERSONAL_TOKEN: 'secreto-jira', CONFLUENCE_URL: 'https://confluence.simplprogramme.eu', CONFLUENCE_PERSONAL_TOKEN: 'secreto-conf', READ_ONLY_MODE: 'true' },
+    },
+    otro: { type: 'local', command: ['x'] },
+  },
+}
+
+test('EL CAMBIO: el MCP se reconoce por el dominio que lleva en JIRA_URL o CONFLUENCE_URL, venga de donde venga', () => {
+  const desdeConfluence = mcpForHost(CONFIG, 'confluence.simplprogramme.eu')
+  eq(desdeConfluence, { name: 'atlassian-jira-simplprogramme-eu', jiraHost: 'jira.simplprogramme.eu', confluenceHost: 'confluence.simplprogramme.eu', products: 2, connected: false })
+  eq(mcpForHost(CONFIG, 'jira.simplprogramme.eu').name, 'atlassian-jira-simplprogramme-eu')
+  eq(mcpForHost(CONFIG, 'Confluence.SimplProgramme.EU').name, 'atlassian-jira-simplprogramme-eu', 'sin distinguir mayúsculas')
+  eq(mcpForHost(CONFIG, 'otro.host'), null)
+  eq(mcpForHost({ mcp: {} }, 'jira.simplprogramme.eu'), null)
+  eq(mcpForHost(null, 'jira.simplprogramme.eu'), null)
+  eq(mcpForHost(CONFIG, ''), null)
+  // Una ruta de contexto o el /wiki de Cloud no estorban: se compara el host.
+  const cloud = { mcp: { a: { environment: { JIRA_URL: 'https://acme.atlassian.net', CONFLUENCE_URL: 'https://acme.atlassian.net/wiki' } } } }
+  eq(mcpForHost(cloud, 'acme.atlassian.net'), { name: 'a', jiraHost: 'acme.atlassian.net', confluenceHost: 'acme.atlassian.net', products: 2, connected: false })
+  eq(mcpForHost({ mcp: { b: { environment: { CONFLUENCE_URL: 'https://x.eu/confluence' } } } }, 'x.eu'), { name: 'b', jiraHost: '', confluenceHost: 'x.eu', products: 1, connected: false })
+})
+
+test('mcpForHost: con varios, el que tiene los dos productos; en igualdad, el primero', () => {
+  const dos = {
+    mcp: {
+      'solo-confluence': { environment: { CONFLUENCE_URL: 'https://confluence.x.eu', CONFLUENCE_PERSONAL_TOKEN: 'a' } },
+      'los-dos': { environment: { JIRA_URL: 'https://jira.x.eu', CONFLUENCE_URL: 'https://confluence.x.eu', JIRA_PERSONAL_TOKEN: 'b', CONFLUENCE_PERSONAL_TOKEN: 'c' } },
+      'los-dos-tambien': { environment: { JIRA_URL: 'https://jira.x.eu', CONFLUENCE_URL: 'https://confluence.x.eu' } },
+      'solo-jira': { environment: { JIRA_URL: 'https://jira.x.eu' } },
+    },
+  }
+  eq(mcpForHost(dos, 'confluence.x.eu').name, 'los-dos', 'el de los dos productos gana al que iba antes')
+  eq(mcpForHost(dos, 'jira.x.eu').name, 'los-dos', 'y en igualdad, el primero')
+  const iguales = { mcp: { primero: { environment: { JIRA_URL: 'https://j.eu' } }, segundo: { environment: { JIRA_URL: 'https://j.eu' } } } }
+  eq(mcpForHost(iguales, 'j.eu').name, 'primero')
+})
+
+test('SEGURIDAD: de la configuración sólo salen los hosts; las claves no llegan a ningún sitio', () => {
+  const r = mcpForHost(CONFIG, 'jira.simplprogramme.eu')
+  eq(Object.keys(r).sort(), ['confluenceHost', 'connected', 'jiraHost', 'name', 'products'])
+  assert(!JSON.stringify(r).includes('secreto'), 'ningún token en el resultado')
+  // Una URL rara en el environment no revienta ni cuela nada.
+  eq(mcpForHost({ mcp: { x: { environment: { JIRA_URL: 'javascript:alert(1)', CONFLUENCE_URL: 42 } } } }, 'j.eu'), null)
+})
+
+test('chosenMcpName: lo que opencode tiene, luego lo apuntado, luego el nombre por host', () => {
+  eq(chosenMcpName(CONFIG, { mcpName: 'apuntado' }, 'confluence.simplprogramme.eu'), 'atlassian-jira-simplprogramme-eu', 'lo de opencode manda')
+  eq(chosenMcpName(null, { mcpName: 'apuntado' }, 'confluence.simplprogramme.eu'), 'apuntado', 'sin configuración, lo apuntado')
+  eq(chosenMcpName(CONFIG, { mcpName: 'apuntado' }, 'otro.eu'), 'apuntado', 'sin coincidencia, lo apuntado')
+  eq(chosenMcpName(null, null, 'confluence.simplprogramme.eu'), 'atlassian-confluence-simplprogramme-eu', 'y si no, el de siempre')
+})
+
+test('EL FALLO: el MCP conectado gana al caído aunque tenga menos productos, y uno deshabilitado no cuenta', () => {
+  // Lo encontró la revisión: el bloque viejo con los dos productos, caído,
+  // ganaba al recién verificado con uno, y el panel volvía a la pantalla de
+  // claves en cada arranque. Sin salida desde el panel.
+  const config = {
+    mcp: {
+      'atlassian-jira-x-eu': { environment: { JIRA_URL: 'https://jira.x.eu', CONFLUENCE_URL: 'https://confluence.x.eu' } },
+      'atlassian-confluence-x-eu': { environment: { CONFLUENCE_URL: 'https://confluence.x.eu' } },
+    },
+  }
+  const estados = { 'atlassian-jira-x-eu': { status: 'failed' }, 'atlassian-confluence-x-eu': { status: 'connected' } }
+  const r = mcpForHost(config, 'confluence.x.eu', { status: estados })
+  eq(r.name, 'atlassian-confluence-x-eu', 'el conectado, aunque tenga un producto')
+  eq(r.connected, true)
+  // Sin la lista de estados, la regla de siempre: los dos productos.
+  eq(mcpForHost(config, 'confluence.x.eu').name, 'atlassian-jira-x-eu')
+  // Con los dos conectados, otra vez los dos productos; en igualdad, el primero.
+  const ambos = { 'atlassian-jira-x-eu': { status: 'connected' }, 'atlassian-confluence-x-eu': { status: 'connected' } }
+  eq(mcpForHost(config, 'confluence.x.eu', { status: ambos }).name, 'atlassian-jira-x-eu')
+  // Ninguno conectado: se devuelve el mejor por productos, pero marcado como no conectado.
+  const ninguno = { 'atlassian-jira-x-eu': { status: 'failed' }, 'atlassian-confluence-x-eu': { status: 'failed' } }
+  eq(mcpForHost(config, 'confluence.x.eu', { status: ninguno }), { name: 'atlassian-jira-x-eu', jiraHost: 'jira.x.eu', confluenceHost: 'confluence.x.eu', products: 2, connected: false })
+
+  // `enabled: false`: opencode lo conserva en la configuración y lo devuelve como «disabled». No cuenta.
+  const deshabilitado = {
+    mcp: {
+      viejo: { enabled: false, environment: { JIRA_URL: 'https://jira.x.eu', CONFLUENCE_URL: 'https://confluence.x.eu' } },
+      nuevo: { environment: { CONFLUENCE_URL: 'https://confluence.x.eu' } },
+    },
+  }
+  eq(mcpForHost(deshabilitado, 'confluence.x.eu').name, 'nuevo')
+  eq(mcpForHost({ mcp: { viejo: deshabilitado.mcp.viejo } }, 'confluence.x.eu'), null)
+  // Y chosenMcpName pasa los estados.
+  eq(chosenMcpName(config, { mcpName: 'apuntado' }, 'confluence.x.eu', { status: estados }), 'atlassian-confluence-x-eu')
 })

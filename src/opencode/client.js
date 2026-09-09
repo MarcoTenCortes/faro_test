@@ -125,6 +125,17 @@ export class OpencodeClient {
     return this.request('GET', '/path')
   }
 
+  /**
+   * La configuración entera de opencode, tal como la tiene cargada.
+   *
+   * Ojo: trae el `environment` de cada servidor MCP, con las claves en claro.
+   * Se lee para saber qué MCP lleva qué dominio (`mcpForHost`) y nada más: ni
+   * se guarda, ni se registra, ni sale del panel.
+   */
+  config() {
+    return this.request('GET', '/config')
+  }
+
   providers() {
     return this.request('GET', '/config/providers')
   }

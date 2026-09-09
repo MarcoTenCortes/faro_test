@@ -289,8 +289,10 @@ test('EL CAMBIO: claves por producto, host enlazado y contexto de Confluence des
   // Al arrancar, el MCP se busca por el nombre guardado (el de la pareja) y
   // desde Jira se carga el contexto del Confluence enlazado.
   const arranque = JS.slice(JS.indexOf('async function bootForSite'), JS.indexOf('async function ensureContentAccess'))
-  assert(/mcpStatusFor\(mcp, state\.site\.host, saved\?\.mcpName\)/.test(arranque), 'el nombre guardado manda')
-  assert(arranque.indexOf('const saved = await getSite') < arranque.indexOf('mcpStatusFor(mcp'), 'y se lee antes')
+  // El nombre guardado cuenta por detrás de lo que opencode tiene de verdad
+  // (`chosenMcpName`: opencode → lo apuntado → el nombre por host).
+  assert(/mcpStatusFor\(mcp, state\.site\.host, chosenMcpName\(config, saved, state\.site\.host, \{ status: mcp \}\)\)/.test(arranque), 'el nombre guardado cuenta')
+  assert(arranque.indexOf('let saved = await getSite') < arranque.indexOf('mcpStatusFor(mcp'), 'y se lee antes')
   assert(/state\.linkedContext = await loadLinkedContext\(saved\)/.test(arranque))
   const enlazado = JS.slice(JS.indexOf('async function loadLinkedContext'), JS.indexOf('async function ensureContentAccess'))
   assert(/product !== 'jira'/.test(enlazado) && /saved\?\.confluenceHost/.test(enlazado), 'sólo desde Jira y sólo si hay pareja')
@@ -303,9 +305,31 @@ test('EL CAMBIO: claves por producto, host enlazado y contexto de Confluence des
   const cambio = refresco.slice(refresco.indexOf('if (changedHost) {'), refresco.indexOf('state.site = site'))
   assert(/state\.linkedContext = null/.test(cambio))
 
-  // El estado del registro enseña el MCP por el nombre guardado.
+  // El estado del registro enseña el MISMO MCP que el arranque: el que
+  // opencode tiene para este dominio, luego el guardado, luego el del host.
   const estado = JS.slice(JS.indexOf('async function paintState'), JS.indexOf('async function treeDebug'))
-  assert(/mcpStatusFor\(list, state\.site\.host, \(await getSite\(state\.site\.host\)\)\?\.mcpName\)/.test(estado))
+  assert(/mcpStatusFor\(list, state\.site\.host, chosenMcpName\(config, await getSite\(state\.site\.host\), state\.site\.host, \{ status: list \}\)\)/.test(estado))
+})
+
+test('EL CAMBIO: un MCP que ya existe en opencode para este dominio se adopta, se apunta y enlaza el otro host', () => {
+  // Pasó de verdad: configurado desde Jira con las dos direcciones, al abrir
+  // Confluence se pedían claves para un MCP que ya estaba conectado.
+  const arranque = JS.slice(JS.indexOf('async function bootForSite'), JS.indexOf('async function ensureContentAccess'))
+  assert(/client\.config\(\)\.catch\(\(\) => null\)/.test(arranque), 'se pregunta a opencode qué configuración tiene')
+  assert(/const found = mcpForHost\(config, state\.site\.host, \{ status: mcp \}\)/.test(arranque), 'y se busca el MCP que lleva este dominio, mirando su estado')
+  assert(/if \(found && found\.connected && \(/.test(arranque), 'sólo se adopta lo que está conectado: apuntar uno caído pisaba lo que funcionaba')
+  assert(/saved\?\.jiraHost !== found\.jiraHost/.test(arranque) && /saved\?\.confluenceHost !== found\.confluenceHost/.test(arranque), 'y también cuando el MCP ya apuntado trae un host nuevo')
+  assert(/siteRecords\(\{[^}]*mcpName: found\.name/.test(arranque), 'el que se encuentra se apunta, con el otro host enlazado')
+  assert(/chosenMcpName\(config, saved, state\.site\.host, \{ status: mcp \}\)/.test(arranque), 'y se comprueba con ese nombre')
+  assert(arranque.indexOf('const found = mcpForHost') < arranque.indexOf('showSetupScreen()'), 'antes de pedir claves')
+  assert(/'MCP reconocido'/.test(arranque) && /'MCP sin conectar'/.test(arranque))
+  assert(/«\$\{status\.name\}» está registrado pero en/.test(arranque), 'la pantalla de claves dice QUÉ bloque está caído')
+  // SEGURIDAD: la configuración trae las claves en claro. Ni al estado ni al registro.
+  assert(!/state\.\w+ = config\b/.test(arranque) && !/log\.\w+\([^)]*\bconfig\b/.test(arranque) && !/environment/.test(arranque), 'la configuración no se guarda ni se registra')
+  const estado = JS.slice(JS.indexOf('async function paintState'), JS.indexOf('async function treeDebug'))
+  assert(/chosenMcpName\(config, await getSite\(state\.site\.host\), state\.site\.host, \{ status: list \}\)/.test(estado), 'el registro mira el mismo MCP')
+  const cliente = readFileSync(join(ROOT, 'src/opencode/client.js'), 'utf8')
+  assert(/config\(\) \{\s*return this\.request\('GET', '\/config'\)/.test(cliente), 'el cliente lee /config')
 })
 
 test('EL CAMBIO: el análisis en Jira lee la incidencia, permite leerla en el alcance y elige páginas base del Confluence enlazado', () => {

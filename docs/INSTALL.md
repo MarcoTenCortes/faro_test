@@ -81,7 +81,10 @@ el MCP conectado comprueba **los dos tokens**, uno detrás de otro, y lo dice.
 Si Jira y Confluence viven en **hosts distintos**, el otro host queda
 **enlazado** a éste: comparte el MCP —no se levanta un segundo proceso con el
 mismo token— y al abrirlo no se vuelven a pedir claves. En el registro sale
-como «Sitio enlazado». Y desde ese Jira, el contexto del Confluence enlazado
+como «Sitio enlazado». Y aunque Faro no lo hubiera apuntado —porque pegaste el
+bloque a mano, o porque la comprobación no terminó en el panel—, al abrir
+cualquiera de los dos dominios reconoce el MCP que lo lleva dentro y lo adopta
+(«MCP reconocido»). Y desde ese Jira, el contexto del Confluence enlazado
 (su `CONTEXT.md`, si lo construiste) va en cada pregunta: sirve para saber
 qué páginas mirar, y en el registro sale como «Contexto de Confluence
 enlazado», con el host y su tamaño.
@@ -315,12 +318,20 @@ revisa ese, no el otro. En Data Center, comprueba además que la dirección de
 ese producto es la suya (`https://jira.…`, no la de Confluence).
 
 **Abro el Jira de mi Confluence (u otro host) y me vuelve a pedir claves**
-Sólo pasa si configuraste un solo producto. Para enlazar los dos hosts hay que
-darlos juntos en la misma pantalla de claves: entonces el segundo host queda
-apuntando al mismo MCP («Sitio enlazado» en el registro) y no pide nada. Si ya
-lo hiciste por separado, tienes dos MCP con el mismo token: funciona, pero es
-un proceso de más. Desde **Ajustes → Cambiar las claves** puedes rehacerlo con
-los dos productos.
+No debería: al arrancar, Faro le pregunta a opencode qué servidores MCP tiene
+y se queda con el que lleve este dominio en su `JIRA_URL` o `CONFLUENCE_URL`,
+lo haya configurado Faro desde el otro producto, lo hayas pegado tú a mano, o
+venga de antes. Con varios, elige el que está **conectado**; entre los
+conectados, el que tiene los dos productos; en igualdad, el primero del
+fichero. Un bloque con `"enabled": false` no cuenta. En el registro sale como
+«MCP reconocido», y el otro host queda enlazado en ese momento.
+
+Si la pantalla de claves dice «El MCP «nombre» está registrado pero en
+«failed»», ese bloque es el que hay que arreglar o quitar del `opencode.json`:
+mientras exista y ninguno de los que llevan este dominio conecte, Faro no tiene
+otro que usar (en el registro, «MCP sin conectar»). Si tienes dos MCP con el
+mismo token de cuando se configuraban por separado, funciona, pero es un
+proceso de más: quita el que sobre.
 
 **En Jira la tarjeta no ofrece abrir la búsqueda**
 Sólo sale cuando el modelo llamó de verdad a `jira_search` y esa búsqueda

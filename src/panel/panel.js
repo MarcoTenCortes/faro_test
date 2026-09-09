@@ -36,6 +36,8 @@ import {
   mcpBlockSnippet,
   fullConfigSnippet,
   siteRecords,
+  mcpForHost,
+  chosenMcpName,
   PRODUCTS,
 } from './setup.js'
 import { buildContext, harvestIndex, countWithParent } from './indexer.js'
@@ -304,12 +306,39 @@ async function bootForSite() {
     showNotice('No he podido leer la lista de modelos: ' + err.message, true)
   }
 
-  // 3. ¿Tiene claves este sitio, y están de verdad conectadas? Un host
-  // enlazado —el Jira de este Confluence, o al revés— usa el MCP de su pareja,
-  // con el nombre que se guardó al configurarlo, no uno con su propio nombre.
-  const mcp = await client.listMcp().catch(() => ({}))
-  const saved = await getSite(state.site.host)
-  const status = mcpStatusFor(mcp, state.site.host, saved?.mcpName)
+  // 3. ¿Tiene claves este sitio, y están de verdad conectadas? Se mira lo que
+  // opencode tiene de verdad: el MCP que lleve este dominio en JIRA_URL o
+  // CONFLUENCE_URL (lo configuró el otro producto, o el usuario a mano) se
+  // adopta y se apunta, con el otro host enlazado. Sólo después cuenta el
+  // nombre que Faro guardó, y en último lugar el que deriva del host. De la
+  // configuración sólo se miran los hosts: las claves van ahí en claro y no
+  // pueden acabar en el estado ni en el registro.
+  const [mcp, config] = await Promise.all([client.listMcp().catch(() => ({})), client.config().catch(() => null)])
+  let saved = await getSite(state.site.host)
+  const found = mcpForHost(config, state.site.host, { status: mcp })
+  // Se adopta sólo lo que está conectado: apuntar un MCP caído pisaba lo que
+  // sí funcionaba. Y también cuando el MCP ya apuntado trae un host nuevo —el
+  // usuario añadió el otro producto al bloque a mano—: sin esto, el enlace
+  // sólo se aprendía si cambiaba el nombre.
+  const enlaceNuevo =
+    !!found &&
+    ((found.jiraHost && found.jiraHost !== state.site.host && saved?.jiraHost !== found.jiraHost) ||
+      (found.confluenceHost && found.confluenceHost !== state.site.host && saved?.confluenceHost !== found.confluenceHost))
+  if (found && found.connected && (saved?.mcpName !== found.name || !saved?.configured || enlaceNuevo)) {
+    const registros = siteRecords({
+      host: state.site.host,
+      product: state.site.product,
+      mcpName: found.name,
+      jiraHost: found.jiraHost,
+      confluenceHost: found.confluenceHost,
+    })
+    for (const { host, patch } of registros) await saveSite(host, patch)
+    saved = await getSite(state.site.host)
+    log.ok('MCP reconocido', `${found.name} · ${found.products === 2 ? 'Jira y Confluence' : found.jiraHost ? 'sólo Jira' : 'sólo Confluence'}`)
+  } else if (found && !found.connected) {
+    log.warn('MCP sin conectar', `${found.name} lleva este dominio pero no está conectado`)
+  }
+  const status = mcpStatusFor(mcp, state.site.host, chosenMcpName(config, saved, state.site.host, { status: mcp }))
 
   // Las páginas base de ESTE sitio, y si hay quien pueda leerlas: sin el MCP
   // el modelo no llega a ellas, y la pantalla lo dice.
@@ -321,7 +350,7 @@ async function bootForSite() {
     hideScreens()
     showSetupScreen()
     if (status.present) {
-      $('setup-status').textContent = `El MCP está registrado pero en «${status.status}». Revisa el bloque y reinicia opencode.`
+      $('setup-status').textContent = `El MCP «${status.name}» está registrado pero en «${status.status}». Revisa ese bloque y reinicia opencode, o quítalo si sobra.`
     }
     return
   }
@@ -2746,8 +2775,8 @@ async function paintState() {
 
   if (state.client && state.site) {
     try {
-      const list = await state.client.listMcp()
-      const s = mcpStatusFor(list, state.site.host, (await getSite(state.site.host))?.mcpName)
+      const [list, config] = await Promise.all([state.client.listMcp(), state.client.config().catch(() => null)])
+      const s = mcpStatusFor(list, state.site.host, chosenMcpName(config, await getSite(state.site.host), state.site.host, { status: list }))
       add('MCP', s.present ? `${s.name} · ${s.status}` : '(no registrado)', s.connected ? 'ok' : 'bad')
     } catch (err) {
       add('MCP', 'no se pudo consultar: ' + err.message, 'bad')
