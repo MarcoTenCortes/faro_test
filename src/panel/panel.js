@@ -35,9 +35,11 @@ import {
   configFilePath,
   mcpBlockSnippet,
   fullConfigSnippet,
+  siteRecords,
+  PRODUCTS,
 } from './setup.js'
 import { buildContext, harvestIndex, countWithParent } from './indexer.js'
-import { planNavigation, shouldPlan, currentPageId } from './planner.js'
+import { planNavigation, shouldPlan, currentPageId, jqlDestination, jqlPlan } from './planner.js'
 import {
   SOURCE_LIMITS,
   emptySources,
@@ -113,6 +115,8 @@ const state = {
   // sitio anterior.
   sources: emptySources(),
   mcpConnected: false,
+  // Desde Jira, el contexto del Confluence enlazado: {host, contextMd} o null.
+  linkedContext: null,
   // La búsqueda de páginas base en curso: un testigo para descartar la
   // respuesta tardía de una consulta que el usuario ya ha reescrito.
   sourcesSearch: { token: 0, timer: 0, suggestions: [], active: -1 },
@@ -252,6 +256,7 @@ async function refreshTab() {
     state.index = null
     state.ancestryFetched = new Map()
     state.contextMd = ''
+    state.linkedContext = null
     paintSourcesUi()
   }
   state.site = site
@@ -299,10 +304,12 @@ async function bootForSite() {
     showNotice('No he podido leer la lista de modelos: ' + err.message, true)
   }
 
-  // 3. ¿Tiene claves este sitio, y están de verdad conectadas?
+  // 3. ¿Tiene claves este sitio, y están de verdad conectadas? Un host
+  // enlazado —el Jira de este Confluence, o al revés— usa el MCP de su pareja,
+  // con el nombre que se guardó al configurarlo, no uno con su propio nombre.
   const mcp = await client.listMcp().catch(() => ({}))
-  const status = mcpStatusFor(mcp, state.site.host)
   const saved = await getSite(state.site.host)
+  const status = mcpStatusFor(mcp, state.site.host, saved?.mcpName)
 
   // Las páginas base de ESTE sitio, y si hay quien pueda leerlas: sin el MCP
   // el modelo no llega a ellas, y la pantalla lo dice.
@@ -319,8 +326,10 @@ async function bootForSite() {
     return
   }
 
-  // 4. Contexto y memoria.
+  // 4. Contexto y memoria. Desde Jira, también el contexto del Confluence
+  // enlazado: sirve para saber qué páginas mirar.
   state.contextMd = await memory.getContextMd(state.site.host)
+  state.linkedContext = await loadLinkedContext(saved)
   state.memory = await memory.getMemory(state.site.host)
   const guardado = await getIndex(state.site.host)
   state.index = guardado.index
@@ -342,6 +351,47 @@ async function bootForSite() {
   // Sin ruido: si falta el permiso, se avisa cuando de verdad hace falta
   // (al ofrecer navegación), no nada más abrir el panel.
   await ensureContentAccess({ announce: false })
+}
+
+/**
+ * El contexto del Confluence enlazado a este Jira, si lo hay.
+ *
+ * Se enlazan al configurar las claves con los dos productos en hosts distintos
+ * (`siteRecords`). Sólo desde Jira: en Confluence el contexto propio ya es el
+ * de Confluence, y en Cloud los dos productos comparten host y contexto.
+ */
+async function loadLinkedContext(saved) {
+  if (state.site?.product !== 'jira' || !saved?.confluenceHost) return null
+  const host = saved.confluenceHost
+  const contextMd = await memory.getContextMd(host)
+  // Y su índice: es donde se buscan las páginas base de un análisis desde
+  // Jira, que son páginas de ESE Confluence. Nunca se guarda desde aquí.
+  const { index } = await getIndex(host)
+  // El enlace es un hecho del sitio guardado, no de que ya haya contexto: sin
+  // esto, una URL de ese Confluence pegada en las páginas base se rechazaba
+  // como «otro sitio» justo antes de indexarlo, que es cuando más falta hace.
+  if (contextMd?.trim() || index) {
+    log.info(
+      'Contexto de Confluence enlazado',
+      `${host} · ${contextMd?.length || 0} caracteres · ${index ? indexSize(index) + ' entradas' : 'sin índice'}`
+    )
+  }
+  return { host, contextMd: contextMd || '', index: index || null }
+}
+
+/**
+ * Dónde se buscan las páginas base: en Jira, en el índice del Confluence
+ * enlazado (son páginas suyas); en Confluence —o en un Jira Cloud, que
+ * comparte host y contexto—, en el del sitio.
+ */
+function sourcesIndex() {
+  if (state.site?.product === 'jira' && state.linkedContext?.index) return state.linkedContext.index
+  return state.index
+}
+
+/** El host del Confluence enlazado, si estamos en un Jira que lo tiene. */
+function linkedHost() {
+  return state.site?.product === 'jira' ? state.linkedContext?.host || '' : ''
 }
 
 /**
@@ -587,12 +637,14 @@ async function restoreConversation() {
           // igual, que estuvo ahí.
           const limpio = stripSelectionBlock(text)
           const conPagina = String(m.info.system || '').includes(PAGE_OPEN)
+          // Lo que se analizó era una incidencia si la URL del turno lo dice.
+          const productoDelTurno = parseAtlassianUrl(urlDelTurno)?.product || state.site?.product || ''
           addUserMessage(
             limpio,
             [
               limpio === text ? '' : 'con una selección de la página',
-              conPagina ? 'con el texto de la página' : '',
-              baseDelTurno ? sourcesNote(baseDelTurno) : '',
+              conPagina ? `con el texto de la ${productoDelTurno === 'jira' ? 'incidencia' : 'página'}` : '',
+              baseDelTurno ? sourcesNote(baseDelTurno, { product: productoDelTurno }) : '',
             ]
               .filter(Boolean)
               .join(' · ')
@@ -612,12 +664,12 @@ async function restoreConversation() {
       // la que salieron (o bajo la última, si aquélla ya no está). Si no hay
       // marcas, la atenuada del último análisis con anclas, con su botón.
       if (state.notes.length && state.notesResult) {
-        const { prose, filas, placed, missed, detail, conBase } = state.notesResult
+        const { prose, filas, placed, missed, detail, conBase, product } = state.notesResult
         const misma = (a, b) => String(a || '').replace(/\s+/g, ' ').trim() === String(b || '').replace(/\s+/g, ' ').trim()
         const dueña = burbujas.find((b) => misma(b.prose, prose)) || burbujas[burbujas.length - 1]
         if (dueña) {
           state.noteRows = new Map()
-          state.notesCard = attachToBubble(dueña.bubble, notesCard(filas, placed, missed, detail, { conBase }))
+          state.notesCard = attachToBubble(dueña.bubble, notesCard(filas, placed, missed, detail, { conBase, product }))
         }
       } else if (ultimoAnalisis) {
         attachToBubble(ultimoAnalisis.bubble, staleNotesCard(ultimoAnalisis))
@@ -679,7 +731,7 @@ function suggestionsFor(site) {
   }
   return [
     '¿En qué está trabajando el equipo este sprint?',
-    '¿Qué convenciones sigue este proyecto para los tickets?',
+    '¿Qué tipos de tickets hay y cómo se nombran?',
     'Enséñame las incidencias abiertas más antiguas',
   ]
 }
@@ -777,6 +829,9 @@ async function send() {
   // índice, y si no, queda el título de la pestaña.
   const sources = skill === 'analisis' && hasSources(state.sources) ? normalizeSources(state.sources, { host: state.site.host }) : null
   const pageIdAlPedir = state.site.pageId || currentPageId(state.index, state.tabUrl) || ''
+  // En Jira lo abierto es una incidencia: es lo que el alcance permite leer.
+  const issueKeyAlPedir = state.site.issueKey || ''
+  const productoAlPedir = state.site.product
   const tituloAlPedir = state.tabTitle
   const tabUrlAlPedir = state.tabUrl
   const mcpAlPedir = state.mcpConnected
@@ -812,8 +867,10 @@ async function send() {
       text,
       [
         pick ? 'con ' + pickLabel(pick).toLowerCase() : '',
-        digest ? `con el texto de la página (${digest.count} bloques${digest.truncated ? ', recortado' : ''})` : '',
-        sources ? sourcesNote(sources) : '',
+        digest
+          ? `con el texto de la ${productoAlPedir === 'jira' ? 'incidencia' : 'página'} (${digest.count} bloques${digest.truncated ? ', recortado' : ''})`
+          : '',
+        sources ? sourcesNote(sources, { product: productoAlPedir }) : '',
       ]
         .filter(Boolean)
         .join(' · ')
@@ -878,6 +935,8 @@ async function send() {
           page: { url: state.tabUrl, title: state.tabTitle },
           skill,
           digest,
+          // Desde Jira, el contexto del Confluence enlazado; null si no lo hay.
+          linkedContext: state.linkedContext,
           sources,
         }),
       },
@@ -937,6 +996,8 @@ async function send() {
     warnAboutSources(turn.parts, bubble, {
       sources,
       pageId: pageIdAlPedir,
+      issueKey: issueKeyAlPedir,
+      product: productoAlPedir,
       title: tituloAlPedir,
       pageUrl: digest?.url || tabUrlAlPedir,
       mcpConnected: mcpAlPedir,
@@ -954,7 +1015,7 @@ async function send() {
     await growTreeFromPage()
 
     // Y, si procede, ofrecer llevar al usuario allí.
-    await offerNavigation(answer, bubble, skill)
+    await offerNavigation(answer, bubble, skill, turn.parts)
 
     // O, en el modo Análisis, subrayar en la página de qué habla cada punto.
     // La página de la que salió el texto, tal y como la vio la pestaña; no
@@ -967,6 +1028,7 @@ async function send() {
       urlAlPedir: digest?.url || state.tabUrl,
       signal: abort.signal,
       conBase: (sources?.pages.length || 0) > 0,
+      product: productoAlPedir,
     })
   } catch (err) {
     if (err?.name !== 'AbortError') {
@@ -1171,19 +1233,21 @@ async function growTreeFromPage() {
  * estado de ahora: la pestaña ha podido cambiar mientras el modelo pensaba.
  *
  * @param {Array} parts partes del turno
- * @param {{sources: object|null, pageId?: string, title?: string, pageUrl?: string, mcpConnected?: boolean}} extra
+ * @param {{sources: object|null, pageId?: string, issueKey?: string, product?: string, title?: string, pageUrl?: string, mcpConnected?: boolean}} extra
  *        las páginas base con las que se mandó; la página abierta entonces (id,
- *        título de la pestaña y URL); y si había MCP entonces
+ *        o en Jira la clave de la incidencia, título de la pestaña y URL); el
+ *        producto; y si había MCP entonces
  */
-function warnAboutSources(parts, bubble, { sources, pageId = '', title = '', pageUrl = '', mcpConnected = true } = {}) {
+function warnAboutSources(parts, bubble, { sources, pageId = '', issueKey = '', product = '', title = '', pageUrl = '', mcpConnected = true } = {}) {
   if (!sources) return
+  const abierta = product === 'jira' ? 'la incidencia abierta' : 'la página abierta'
 
   if (sources.pages.length && !mcpConnected) {
     log.warn('Páginas base sin leer', 'este sitio no tiene el MCP conectado')
     attachToBubble(
       bubble,
       noticeNode(
-        'Las páginas base no se han podido leer: este sitio no tiene el MCP conectado, así que el análisis sale sólo de la página abierta. Configúralo en Ajustes → Cambiar las claves.',
+        `Las páginas base no se han podido leer: este sitio no tiene el MCP conectado, así que el análisis sale sólo de ${abierta}. Configúralo en Ajustes → Cambiar las claves.`,
         true
       )
     )
@@ -1191,10 +1255,13 @@ function warnAboutSources(parts, bubble, { sources, pageId = '', title = '', pag
 
   if (sources.mode !== 'exclusive') return
   // El título de la pestaña lleva el sufijo de Confluence («… - Espacio -
-  // Confluence») y el modelo lee por título exacto: valen sus variantes.
+  // Confluence») y el modelo lee por título exacto: valen sus variantes. En
+  // Jira, leer la incidencia abierta —sus comentarios, su historial— es leer
+  // lo que el usuario tiene delante.
   const fuera = consultedOutside(parts, {
     allowed: [pageId, ...sources.pages.map((p) => p.id)],
     allowedTitles: [...titlesFromTab(title), ...sources.pages.map((p) => p.title)],
+    allowedIssues: issueKey ? [issueKey] : [],
     pageUrl,
   })
   if (!fuera.length) return
@@ -1203,7 +1270,7 @@ function warnAboutSources(parts, bubble, { sources, pageId = '', title = '', pag
   attachToBubble(
     bubble,
     noticeNode(
-      `El alcance era sólo la página abierta${sources.pages.length ? ' y las páginas base' : ''}, pero el modelo consultó además ${fuera.join(', ')}. ` +
+      `El alcance era sólo ${abierta}${sources.pages.length ? ' y las páginas base' : ''}, pero el modelo consultó además ${fuera.join(', ')}. ` +
         'Tenlo en cuenta al leer la respuesta: el alcance se le pide, no se le impone, y otro modelo suele respetarlo mejor.'
     )
   )
@@ -1211,12 +1278,28 @@ function warnAboutSources(parts, bubble, { sources, pageId = '', title = '', pag
 
 // ------------------------------------------------------------- navegación
 
-async function offerNavigation(answer, bubble, skillId = state.skill) {
+/**
+ * @param {Array} [parts] las partes del turno: en Jira, si el modelo buscó con
+ *        `jira_search`, el destino es esa búsqueda (la lista de tickets vive
+ *        en el buscador), y no hace falta índice.
+ */
+async function offerNavigation(answer, bubble, skillId = state.skill, parts = []) {
   const skill = skillById(skillId)
 
   // Resumir o analizar lo que ya tienes delante no es ir a ningún sitio, y una
   // tarjeta que ofrece un viaje ahí sólo estorba.
   if (!skill.offersNavigation) return
+
+  // La búsqueda de Jira como destino no necesita mapa: la consulta viene de la
+  // llamada real a la herramienta y la URL se construye contra este origen.
+  if (state.site?.product === 'jira') {
+    const busqueda = jqlDestination(parts, { origin: state.site.origin })
+    if (busqueda) {
+      log.ok('Búsqueda de Jira como destino', `${busqueda.count} resultado(s) · ${busqueda.jql}`)
+      attachToBubble(bubble, navCard(jqlPlan(busqueda)))
+      return
+    }
+  }
 
   if (!state.index || !indexSize(state.index)) {
     // Antes esto se salía en silencio: el modelo decía «usa la tarjeta de
@@ -1343,8 +1426,11 @@ async function learnAncestry(destination) {
 async function offerNotes(
   answer,
   bubble,
-  { skill = state.skill, anchors = null, digest = null, digestReason = '', urlAlPedir = '', signal = null, conBase = false } = {}
+  { skill = state.skill, anchors = null, digest = null, digestReason = '', urlAlPedir = '', signal = null, conBase = false, product = '' } = {}
 ) {
+  // De qué se habla en los avisos y en la tarjeta: en Jira lo abierto es una
+  // incidencia, y «esta página» ahí significa una página de Confluence.
+  const abierta = product === 'jira' ? 'esta incidencia' : 'esta página'
   if (skill !== 'analisis') return
   if (!state.site || !state.tabId || !state.client) return
   if (signal?.aborted) return
@@ -1407,7 +1493,7 @@ async function offerNotes(
       noticeNode(
         editando
           ? 'Estás en el editor: no marco nada para no interferir.'
-          : 'No he podido leer el texto de esta página, así que el análisis se queda sin marcar. Recarga la pestaña y vuelve a pedirlo.',
+          : `No he podido leer el texto de ${abierta}, así que el análisis se queda sin marcar. Recarga la pestaña y vuelve a pedirlo.`,
         !editando
       )
     )
@@ -1429,11 +1515,11 @@ async function offerNotes(
     notes = await secondPassNotes(answer, digest, signal)
     if (signal?.aborted) return
     if (!notes.some((x) => x.anchor)) {
-      log.info('Sin marcas', 'ninguna observación apunta a un bloque de la página')
+      log.info('Sin marcas', 'ninguna observación apunta a un bloque del texto')
       attachToBubble(
         bubble,
         noticeNode(
-          'No he sabido situar en la página ninguna de las observaciones: se marcan sólo las que apuntan a un bloque del texto.'
+          `No he sabido situar en ${abierta} ninguna de las observaciones: se marcan sólo las que apuntan a un bloque del texto.`
         )
       )
       return
@@ -1446,7 +1532,7 @@ async function offerNotes(
   const ahora = await chrome.tabs.get(state.tabId).catch(() => null)
   if (ahora?.url && !samePage(ahora.url, urlAlPedir)) {
     log.warn('Sin marcas', 'la pestaña cambió de página mientras se preparaban')
-    attachToBubble(bubble, noticeNode('Has cambiado de página, así que no he marcado nada.'))
+    attachToBubble(bubble, noticeNode(`Has cambiado de ${product === 'jira' ? 'incidencia' : 'página'}, así que no he marcado nada.`))
     return
   }
 
@@ -1477,12 +1563,12 @@ async function offerNotes(
   // Con la prosa de la que salieron: al repintar el chat, la tarjeta viva
   // vuelve bajo esa respuesta y no bajo otra. Y con si llevaba páginas base:
   // cambia lo que se dice de una observación sin pasaje.
-  state.notesResult = { prose: answer, filas, placed, missed, detail, conBase }
-  state.notesCard = attachToBubble(bubble, notesCard(filas, placed, missed, detail, { conBase }))
+  state.notesResult = { prose: answer, filas, placed, missed, detail, conBase, product }
+  state.notesCard = attachToBubble(bubble, notesCard(filas, placed, missed, detail, { conBase, product }))
 
   log.ok(
     'Análisis marcado',
-    `${placed.length} de ${numeros.length} en la página` +
+    `${placed.length} de ${numeros.length} marcadas` +
       (detail.length ? ' · ' + detail.map((d) => `${d.n}:${d.strategy}`).join(' ') : '')
   )
   if (missed.length) log.warn('Sin anclar', 'observaciones ' + missed.join(', '))
@@ -1495,15 +1581,19 @@ async function offerNotes(
  * página en general»: lo normal es que hable de una página base, que no se
  * subraya porque sólo se marca la abierta. La fila lo dice así.
  *
- * @param {{conBase?: boolean}} [opts] si el turno llevaba páginas base
+ * @param {{conBase?: boolean, product?: string}} [opts] si el turno llevaba
+ *        páginas base, y el producto: en Jira lo marcado es una incidencia, y
+ *        «esta página» ahí significa una página de Confluence
  */
-function notesCard(notes, placed, missed, detail = [], { conBase = false } = {}) {
+function notesCard(notes, placed, missed, detail = [], { conBase = false, product = '' } = {}) {
+  const enJira = product === 'jira'
+  const abierta = enJira ? 'esta incidencia' : 'esta página'
   const card = document.createElement('div')
   card.className = 'nav-card notes-card'
 
   const kicker = document.createElement('div')
   kicker.className = 'nav-kicker'
-  kicker.textContent = 'Marcado en la página'
+  kicker.textContent = enJira ? 'Marcado en la incidencia' : 'Marcado en la página'
   card.appendChild(kicker)
 
   const title = document.createElement('div')
@@ -1517,19 +1607,19 @@ function notesCard(notes, placed, missed, detail = [], { conBase = false } = {})
   if (missed.length) {
     avisos.push(
       missed.length === 1
-        ? 'Una no la he sabido situar en la página; la dejo sin marcar antes que marcarla mal.'
-        : `${missed.length} no las he sabido situar en la página; las dejo sin marcar antes que marcarlas mal.`
+        ? `Una no la he sabido situar en ${abierta}; la dejo sin marcar antes que marcarla mal.`
+        : `${missed.length} no las he sabido situar en ${abierta}; las dejo sin marcar antes que marcarlas mal.`
     )
   }
   if (sinAncla) {
     avisos.push(
       conBase
         ? sinAncla === 1
-          ? 'Una no apunta a un pasaje de esta página: habla de ella en general o de una página base.'
-          : `${sinAncla} no apuntan a un pasaje de esta página: hablan de ella en general o de una página base.`
+          ? `Una no apunta a un pasaje de ${abierta}: habla de ella en general o de una página base.`
+          : `${sinAncla} no apuntan a un pasaje de ${abierta}: hablan de ella en general o de una página base.`
         : sinAncla === 1
-          ? 'Una habla de la página en general y no tiene pasaje que marcar.'
-          : `${sinAncla} hablan de la página en general y no tienen pasaje que marcar.`
+          ? `Una habla de ${abierta} en general y no tiene pasaje que marcar.`
+          : `${sinAncla} hablan de ${abierta} en general y no tienen pasaje que marcar.`
     )
   }
   if (avisos.length) {
@@ -1759,10 +1849,11 @@ async function remarkFromAnchors({ prose, anchors, bubble, card, url = '', conBa
   )
   forgetNotes({ keepPage: true })
   state.notes = anclables
-  state.notesResult = { prose, filas, placed, missed: res?.missed || [], detail: res?.detail || [], conBase }
+  const product = state.site?.product || ''
+  state.notesResult = { prose, filas, placed, missed: res?.missed || [], detail: res?.detail || [], conBase, product }
   card.remove()
-  state.notesCard = attachToBubble(bubble, notesCard(filas, placed, res?.missed || [], res?.detail || [], { conBase }))
-  log.ok('Análisis marcado de nuevo', `${placed.length} de ${anclables.length} en la página`)
+  state.notesCard = attachToBubble(bubble, notesCard(filas, placed, res?.missed || [], res?.detail || [], { conBase, product }))
+  log.ok('Análisis marcado de nuevo', `${placed.length} de ${anclables.length} marcadas`)
 }
 
 /** Lleva a una observación concreta y la destaca, en la página y en el chat. */
@@ -1991,14 +2082,15 @@ function paintSourcesUi() {
   const s = state.sources
   const n = s.pages.length
   const activo = hasSources(s)
+  const product = state.site?.product || ''
 
   el.sources.classList.toggle('hidden', !analisis)
   el.sources.classList.toggle('on', analisis && activo)
-  el.sources.title = activo ? sourcesLabel(s) : 'Páginas base del análisis'
+  el.sources.title = activo ? sourcesLabel(s, { product }) : 'Páginas base del análisis'
   el.sourcesCount.textContent = n ? String(n) : ''
   el.sourcesCount.classList.toggle('hidden', !n)
 
-  const label = analisis ? sourcesLabel(s) : ''
+  const label = analisis ? sourcesLabel(s, { product }) : ''
   el.sourcesChip.classList.toggle('hidden', !label)
   el.sourcesChipText.textContent = label
 }
@@ -2018,14 +2110,20 @@ async function showSourcesScreen() {
   $('sources-query').focus()
 
   // Las páginas base son de Confluence: desde Jira, según el despliegue, se
-  // pueden buscar (Cloud comparte host) o sólo pegar por id (Data Center).
-  if (state.site.product === 'jira') {
+  // pueden buscar (Cloud comparte host) o sólo elegir del índice del
+  // Confluence enlazado y pegar por URL o id (Data Center: la API de
+  // Confluence no está en este origen).
+  if (state.site.product === 'jira' && !state.site.cloud) {
+    const enlazado = linkedHost()
+    const n = Object.keys(sourcesIndex()?.pages || {}).length
     setSourcesStatus(
-      state.site.cloud
-        ? 'Las páginas base son páginas de Confluence de este mismo sitio.'
+      enlazado
+        ? `Las páginas base son del Confluence enlazado (${enlazado}): busco en su índice (${n} páginas) y acepto sus URL o su id. Desde este Jira no puedo preguntarle a Confluence.`
         : 'Las páginas base son de Confluence; desde este Jira no puedo buscarlas ni comprobar una URL: pega el id numérico de la página.'
     )
+    return
   }
+  if (state.site.product === 'jira') setSourcesStatus('Las páginas base son páginas de Confluence de este mismo sitio.')
 
   // Sin permiso sobre el dominio no hay content script, y sin él no se puede
   // preguntar a Confluence: queda el índice, y se ofrece el permiso AQUÍ,
@@ -2092,10 +2190,12 @@ function onSourcesInput() {
     return
   }
 
-  const ref = pageRefFromUrl(text, state.site)
+  // Desde Jira, una URL del Confluence enlazado vale igual que una de aquí.
+  const ref = pageRefFromUrl(text, state.site, { linkedHost: linkedHost() })
+  const indice = sourcesIndex()
   if (ref.ok) {
     paintSuggestions([{ id: ref.id, title: `Añadir la página ${ref.id}`, path: ref.path, spaceKey: null, source: 'add' }])
-    setSourcesStatus(state.index?.pages?.[ref.id] ? `Es «${state.index.pages[ref.id].title}».` : 'Intro para añadirla; el título se lee de Confluence.')
+    setSourcesStatus(indice?.pages?.[ref.id] ? `Es «${indice.pages[ref.id].title}».` : 'Intro para añadirla; el título se lee de Confluence.')
     return
   }
   if (ref.reason !== 'no-es-url') {
@@ -2112,9 +2212,12 @@ function onSourcesInput() {
   }
 
   const exclude = state.sources.pages.map((p) => p.id)
-  const local = suggestFromIndex(state.index, q, { limit: SOURCE_LIMITS.suggestions, exclude })
+  const local = suggestFromIndex(indice, q, { limit: SOURCE_LIMITS.suggestions, exclude })
   paintSuggestions(local)
   setSourcesStatus(local.length ? '' : 'Nada en el índice con ese título.')
+  // Desde un Jira Data Center la API de Confluence no está en este origen:
+  // no hay a quién preguntar, y queda lo del índice del Confluence enlazado.
+  if (state.site.product === 'jira' && !state.site.cloud) return
   state.sourcesSearch.timer = setTimeout(
     () => searchSourcesRemote(q, local, exclude).catch(console.error),
     SOURCE_LIMITS.searchDebounceMs
@@ -2124,7 +2227,10 @@ function onSourcesInput() {
 function refReasonText(reason, text) {
   if (reason === 'otro-sitio') {
     const host = hostOf(text.trim())
-    return `Esa página es de ${host || 'otro sitio'} y estás en ${state.site?.host || 'otro'}: sólo valen páginas de este sitio.`
+    const enlazado = linkedHost()
+    return enlazado
+      ? `Esa página es de ${host || 'otro sitio'}: desde este Jira sólo valen páginas del Confluence enlazado (${enlazado}).`
+      : `Esa página es de ${host || 'otro sitio'} y estás en ${state.site?.host || 'otro'}: sólo valen páginas de este sitio.`
   }
   if (reason === 'jira') return 'Eso es una incidencia de Jira, no una página de Confluence.'
   return 'Esa dirección no lleva el id de la página (las de tipo /display/ESPACIO/Título no lo llevan). Ábrela y copia la URL con /pages/<número>, o pega el número.'
@@ -2274,7 +2380,8 @@ async function chooseSuggestion(s) {
  */
 async function addSourceById(id, path = '') {
   if (!state.site) return
-  const conocida = state.index?.pages?.[id]
+  // En Jira, el índice que sabe de páginas es el del Confluence enlazado.
+  const conocida = sourcesIndex()?.pages?.[id]
   if (conocida) {
     return addSource({ id, title: conocida.title, path: conocida.path || path, spaceKey: conocida.spaceKey }, { from: 'index' })
   }
@@ -2475,15 +2582,43 @@ function portOf(url) {
   }
 }
 
+/**
+ * La pantalla de claves: un bloque por producto, cada uno con su dirección y
+ * su token. En Cloud los dos comparten host, así que las dos direcciones van
+ * rellenas con éste; en Server/Data Center sólo la del producto en el que
+ * estás, y el otro queda sin marcar hasta que el usuario diga dónde vive.
+ */
 function showSetupScreen() {
   state.mcpWait?.abort()
-  $('setup-host').textContent = state.site.host
-  $('setup-dc-field').classList.toggle('hidden', !!state.site.cloud)
-  $('setup-dc').checked = !state.site.cloud
+  const site = state.site
+  $('setup-host').textContent = site.host
+  $('setup-dc-field').classList.toggle('hidden', !!site.cloud)
+  $('setup-dc').checked = !site.cloud
+
+  $('setup-jira').checked = !!site.cloud || site.product !== 'confluence'
+  $('setup-confluence').checked = !!site.cloud || site.product !== 'jira'
+  $('setup-jira-url').value = site.cloud || site.product === 'jira' ? site.origin : ''
+  $('setup-confluence-url').value = site.cloud || site.product === 'confluence' ? site.origin : ''
+  // Los tokens nunca se quedan en el formulario de una vez para otra.
+  $('setup-jira-token').value = ''
+  $('setup-confluence-token').value = ''
+  paintSetupProducts()
+
   $('setup-status').textContent = ''
   $('setup-manual').classList.add('hidden')
   $('setup-main').classList.remove('hidden')
   showScreen('screen-setup')
+}
+
+/** Qué campos se ven: los de cada producto marcado, y el correo sólo en Cloud. */
+function paintSetupProducts() {
+  const dc = $('setup-dc').checked
+  for (const product of PRODUCTS) {
+    const on = $(`setup-${product}`).checked
+    $(`setup-${product}-block`).classList.toggle('off', !on)
+    $(`setup-${product}-fields`).classList.toggle('hidden', !on)
+    $(`setup-${product}-email-field`).classList.toggle('hidden', dc)
+  }
 }
 
 async function copyToClipboard(text, buttonId) {
@@ -2502,6 +2637,12 @@ function showContextScreen() {
   const scope = defaultScope(state.site)
   $('context-scope').textContent = scope?.label || state.site.host
   $('context-status').textContent = ''
+  // Lo que se recorre no es lo mismo en un proyecto de Jira que en un espacio
+  // de Confluence: en Jira no hay árbol, hay tipos, estados y nombres.
+  $('context-generate-text').textContent =
+    state.site?.product === 'jira'
+      ? 'Recorre los tipos de incidencia, los estados del flujo y una muestra de tickets para sacar las convenciones de nombre; y busca en Confluence si están documentadas. Con tope, progreso visible y botón de cancelar.'
+      : 'Recorre el árbol, los títulos y las etiquetas. Con tope, progreso visible y botón de cancelar.'
   showScreen('screen-context')
 }
 
@@ -2600,12 +2741,13 @@ async function paintState() {
   add('sesión', state.sessionID || '(sin sesión)')
   add('índice', state.index ? `${indexSize(state.index)} entradas` : '(sin índice)')
   add('contexto', state.contextMd ? `${state.contextMd.length} caracteres` : '(sin contexto)')
+  if (state.linkedContext) add('Confluence enlazado', `${state.linkedContext.host} · ${state.linkedContext.contextMd.length} caracteres`)
   add('memoria', state.settings.crossSessionMemory ? `activa · ${state.memory?.entries?.length || 0} entradas` : 'desactivada')
 
   if (state.client && state.site) {
     try {
       const list = await state.client.listMcp()
-      const s = mcpStatusFor(list, state.site.host)
+      const s = mcpStatusFor(list, state.site.host, (await getSite(state.site.host))?.mcpName)
       add('MCP', s.present ? `${s.name} · ${s.status}` : '(no registrado)', s.connected ? 'ok' : 'bad')
     } catch (err) {
       add('MCP', 'no se pudo consultar: ' + err.message, 'bad')
@@ -2797,6 +2939,9 @@ function wireEvents() {
 
   // --- pantalla de claves
   $('btn-setup-save').addEventListener('click', saveKeys)
+  for (const id of ['setup-jira', 'setup-confluence', 'setup-dc']) {
+    $(id).addEventListener('change', paintSetupProducts)
+  }
   $('btn-setup-skip').addEventListener('click', async () => {
     hideScreens()
     await saveSite(state.site.host, { onboarded: true, skippedKeys: true })
@@ -2919,31 +3064,40 @@ async function saveKeys() {
     return
   }
 
-  const email = $('setup-email').value.trim()
-  const token = $('setup-token').value
-  const jira = $('setup-jira').checked
-  const confluence = $('setup-confluence').checked
+  // Cada producto con lo suyo: dirección, correo (sólo en Cloud) y token. Lo
+  // que falte lo dice `buildMcpConfig` con el nombre del producto.
   const dataCenter = $('setup-dc').checked
+  const keysOf = (product) =>
+    $(`setup-${product}`).checked
+      ? {
+          url: $(`setup-${product}-url`).value.trim(),
+          email: $(`setup-${product}-email`).value.trim(),
+          token: $(`setup-${product}-token`).value,
+        }
+      : null
+  const jira = keysOf('jira')
+  const confluence = keysOf('confluence')
 
   status.textContent = 'Preparando la configuración…'
 
   let result
   try {
-    result = await configureMcp(state.client, {
-      host: state.site.host,
-      origin: state.site.origin,
-      email,
-      token,
-      jira,
-      confluence,
-      dataCenter,
-    })
+    result = await configureMcp(state.client, { host: state.site.host, jira, confluence, dataCenter })
   } catch (err) {
     status.textContent = 'No he podido configurarlo: ' + (err?.message || err)
     return
   }
 
-  state.pendingMcp = { ...result, jira, confluence }
+  // Los hosts de cada producto salen de la configuración que se acaba de
+  // construir —ya normalizada—, no de lo que se escribió en el campo.
+  const env = result.config.environment
+  state.pendingMcp = {
+    ...result,
+    products: {
+      jira: jira ? hostOf(env.JIRA_URL) : '',
+      confluence: confluence ? hostOf(env.CONFLUENCE_URL) : '',
+    },
+  }
 
   if (result.ready) {
     await finishSetup()
@@ -3004,9 +3158,14 @@ async function showManualStep(result) {
   await finishSetup()
 }
 
-/** Con el MCP ya disponible, se comprueba que el token sirve de verdad. */
+/**
+ * Con el MCP ya disponible, se comprueba que cada token sirve de verdad: son
+ * dos productos y dos tokens, así que se comprueban los dos. Y se recuerda
+ * qué host usa este MCP: si el otro producto vive en otro host, queda
+ * enlazado a éste y no volverá a pedir claves.
+ */
 async function finishSetup() {
-  const { jira, confluence, name } = state.pendingMcp || {}
+  const { name, products } = state.pendingMcp || {}
   const status = $('setup-status')
   const waitingText = $('setup-waiting-text')
   const say = (t) => {
@@ -3019,31 +3178,42 @@ async function finishSetup() {
   let session = null
   try {
     session = await state.client.createSession({ title: 'Faro · comprobación' })
-    const check = await verifyCredentials(state.client, {
-      sessionID: session.id,
-      model: state.model,
-      host: state.site.host,
-      jira,
-      confluence,
-    })
+    const detalles = []
+    for (const product of PRODUCTS.filter((p) => products?.[p])) {
+      const etiqueta = product === 'jira' ? 'Jira' : 'Confluence'
+      say(`Comprobando las claves de ${etiqueta}…`)
+      const check = await verifyCredentials(state.client, {
+        sessionID: session.id,
+        model: state.model,
+        host: state.site.host,
+        product,
+      })
 
-    if (!check.ok) {
-      say(
-        check.reason === 'sin-herramientas'
-          ? 'El MCP aparece conectado pero el modelo no ve sus herramientas. Prueba a reiniciar opencode.'
-          : check.detail
-      )
-      return
+      if (!check.ok) {
+        say(
+          check.reason === 'sin-herramientas'
+            ? 'El MCP aparece conectado pero el modelo no ve sus herramientas. Prueba a reiniciar opencode.'
+            : `${etiqueta}: ${check.detail}`
+        )
+        return
+      }
+      detalles.push(`${etiqueta}: ${check.detail}`)
     }
 
-    say('Conectado. ' + check.detail)
-    log.ok('MCP verificado', check.detail)
-    await saveSite(state.site.host, {
-      configured: true,
-      mcpName: name || mcpNameForHost(state.site.host),
+    say('Conectado. ' + detalles.join(' · '))
+    log.ok('MCP verificado', detalles.join(' · '))
+
+    const registros = siteRecords({
+      host: state.site.host,
       product: state.site.product,
-      cloud: state.site.cloud,
+      mcpName: name || mcpNameForHost(state.site.host),
+      jiraHost: products?.jira || '',
+      confluenceHost: products?.confluence || '',
     })
+    for (const { host, patch } of registros) await saveSite(host, patch)
+    for (const { host } of registros.slice(1)) {
+      log.ok('Sitio enlazado', `${host} comparte el MCP de ${state.site.host}; no pedirá claves`)
+    }
     setTimeout(() => bootForSite(), 800)
   } catch (err) {
     say('No he podido comprobarlo: ' + (err?.message || err))
@@ -3079,6 +3249,9 @@ async function generateContext({ keepContext = false } = {}) {
       scope,
       site: state.site,
       model: state.model,
+      // Desde Jira, el indexador sabe qué Confluence hay enlazado y qué
+      // cuenta su contexto: es donde buscar si los tickets están documentados.
+      linkedContext: state.linkedContext,
       signal: controller.signal,
       onProgress: (t) => (el.busyText.textContent = t),
     })

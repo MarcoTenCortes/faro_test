@@ -26,6 +26,7 @@
 import { buildTextIndex, rangeFromOffsets, resolveAnchor } from './anchor.js'
 import { findQuote } from './anchor-match.js'
 import { contentRoot } from './dom-utils.js'
+import { jiraIssueScope } from './jira-issue.js'
 import { DIGEST_LIMITS, squash, matchBlock } from '../shared/digest.js'
 
 /** Lo que en una página es «un bloque» a efectos de leerla y de marcarla. */
@@ -57,17 +58,42 @@ export function isBlock(el) {
 function hidden(el) {
   if (el.getAttribute('aria-hidden') === 'true') return true
   if (el.closest('#faro-overlay-host')) return true
-  if (el.getClientRects().length) return false
+  // Una caja de verdad, no una de 1×1 ni una desplazada fuera de la pantalla:
+  // así es como AUI esconde el texto para lectores («left: -9999px», el
+  // `clip` de 1×1), y ese texto no lo tiene el usuario delante. Si el modelo
+  // lo cita, la marca cae en x=-9999 y no se ve nada.
+  if (visibleRects(el).length) return false
   // `display: contents` no tiene cajas propias, pero sus hijos sí.
   return getComputedStyle(el).display !== 'contents'
 }
 
-/** Los bloques que cuelgan directamente de éste, en orden de documento. */
-function nestedBlocks(el, out = []) {
+/**
+ * Las cajas de un elemento que ocupan sitio de verdad en el DOCUMENTO.
+ *
+ * Nunca respecto a la ventana: un bloque que está más abajo del scroll se ve
+ * perfectamente, y filtrarlo haría que la misma página diera bloques distintos
+ * según dónde estuviera mirando el usuario. Lo que se descarta es lo que no
+ * tiene tamaño (el `clip` de 1×1 de AUI) y lo que está fuera del documento por
+ * la izquierda o por arriba (`left: -9999px`), que es como se esconde el texto
+ * para lectores de pantalla.
+ */
+function visibleRects(el) {
+  const x = window.scrollX || 0
+  const y = window.scrollY || 0
+  return Array.from(el.getClientRects()).filter(
+    (r) => r.width > 1 && r.height > 1 && r.right + x > 0 && r.bottom + y > 0
+  )
+}
+
+/**
+ * Los bloques que cuelgan directamente de éste, en orden de documento. Lo que
+ * sea interfaz según `esInterfaz` se salta con todo lo que lleve dentro.
+ */
+function nestedBlocks(el, esInterfaz = () => false, out = []) {
   for (const child of el.children) {
-    if (SKIP_TAGS.has(child.tagName)) continue
+    if (SKIP_TAGS.has(child.tagName) || esInterfaz(child)) continue
     if (isBlock(child)) out.push(child)
-    else nestedBlocks(child, out)
+    else nestedBlocks(child, esInterfaz, out)
   }
   return out
 }
@@ -92,6 +118,18 @@ export function tagLabel(el) {
 }
 
 /**
+ * Por dónde se lee la página: en una incidencia de Jira, sus puntos de lectura
+ * (título, campos, descripción, comentarios) y qué es interfaz; en cualquier
+ * otra, el contenedor del contenido de siempre. Es lo único que cambia entre
+ * los dos productos: el troceado, la pista y la escalera son los mismos.
+ *
+ * @returns {{roots: Array<{el: Element, tag?: string}>, chrome: string}}
+ */
+export function digestScope() {
+  return jiraIssueScope() || { roots: [{ el: contentRoot() }], chrome: '' }
+}
+
+/**
  * Recorre el contenido y lo deja en bloques numerados.
  *
  * Cada bloque lleva su texto PROPIO —el que no pertenece a un bloque anidado—,
@@ -99,20 +137,29 @@ export function tagLabel(el) {
  * orden es el del documento. Con tope, y diciendo si se recortó: una página
  * larga no cabe en el contexto de los modelos pequeños.
  *
- * @param {{root?: Element, limits?: object}} [opts]
+ * Lo que el ámbito declara como interfaz (`chrome`) no es un bloque ni entra
+ * en el texto de ninguno: se trata como frontera, igual que un bloque anidado.
+ * Sin ámbito ni raíz, se lee la página con `digestScope()`.
+ *
+ * @param {{root?: Element, scope?: {roots: Array<{el: Element, tag?: string}>, chrome: string}, limits?: object}} [opts]
  * @returns {{blocks: Array<{id:number, tag:string, text:string, el:Element}>, chars:number, truncated:boolean}}
  */
-export function pageDigest({ root = contentRoot(), limits = DIGEST_LIMITS } = {}) {
+export function pageDigest({ root = null, scope = null, limits = DIGEST_LIMITS } = {}) {
+  const S = scope || (root ? { roots: [{ el: root }], chrome: '' } : digestScope())
+  const chrome = String(S.chrome || '')
+  const esInterfaz = (el) => !!chrome && el.matches(chrome)
+  const frontera = chrome ? (el) => isBlock(el) || esInterfaz(el) : isBlock
+
   const blocks = []
   let chars = 0
   let truncated = false
   let lleno = false
 
-  const visit = (el) => {
+  const visit = (el, forcedTag = '') => {
     if (lleno) return
-    if (SKIP_TAGS.has(el.tagName) || hidden(el)) return
+    if (SKIP_TAGS.has(el.tagName) || esInterfaz(el) || hidden(el)) return
 
-    const propio = squash(buildTextIndex(el, { boundary: isBlock }).text)
+    const propio = squash(buildTextIndex(el, { boundary: frontera }).text)
     if (propio.length >= limits.blockMin) {
       const texto = propio.length > limits.blockMax ? propio.slice(0, limits.blockMax) + '…' : propio
       // Lo que ocupa la línea entera para el modelo: «¶123 [código] » y el texto.
@@ -122,18 +169,21 @@ export function pageDigest({ root = contentRoot(), limits = DIGEST_LIMITS } = {}
         truncated = true
         return
       }
-      blocks.push({ id: blocks.length + 1, tag: tagLabel(el), text: texto, el })
+      blocks.push({ id: blocks.length + 1, tag: forcedTag || tagLabel(el), text: texto, el })
       chars += linea
       if (texto !== propio) truncated = true
     }
 
-    for (const child of nestedBlocks(el)) {
+    for (const child of nestedBlocks(el, esInterfaz)) {
       if (lleno) break
       visit(child)
     }
   }
 
-  if (root) visit(root)
+  for (const r of S.roots || []) {
+    if (lleno) break
+    if (r?.el) visit(r.el, r.tag || '')
+  }
   return { blocks, chars, truncated }
 }
 
@@ -148,6 +198,45 @@ export function serializeDigest(digest) {
     chars: digest.chars,
     truncated: digest.truncated,
   }
+}
+
+/** La frontera con la que se lee el texto propio de un bloque de ESTA página: bloques anidados y, en una incidencia, la interfaz. */
+function blockBoundary(scope = digestScope()) {
+  const chrome = String(scope.chrome || '')
+  return chrome ? (el) => isBlock(el) || el.matches(chrome) : isBlock
+}
+
+/**
+ * Una cita literal buscada en el ÁMBITO de lectura, raíz por raíz: lo mismo
+ * que se le enseñó al modelo, y nada más. Es el último peldaño de la escalera
+ * y el que resuelve un ancla `text-quote` de una observación.
+ *
+ * Sin esto se buscaba en `contentRoot()`, que en una incidencia de Jira es el
+ * `main` entero: la cita podía caer en la barra de acciones o en una pestaña
+ * de campos oculta, y contarse como marcada sin que se viera nada.
+ *
+ * @returns {{ok:true, strategy:string, ranges:Range[], element:Element, approximate:boolean}|null}
+ */
+export function resolveScopedQuote(anchor, { scope = digestScope() } = {}) {
+  const busca = typeof anchor === 'string' ? { exact: anchor } : anchor || {}
+  if (!busca.exact) return null
+  for (const r of scope.roots || []) {
+    if (!r?.el) continue
+    const index = buildTextIndex(r.el, { boundary: scope.chrome ? (el) => el.matches(scope.chrome) : null })
+    if (!index.text) continue
+    const hit = findQuote(index.text, busca)
+    if (!hit) continue
+    const range = rangeFromOffsets(index, hit.start, hit.end)
+    if (!range) continue
+    return {
+      ok: true,
+      strategy: hit.strategy,
+      ranges: [range],
+      element: r.el,
+      approximate: hit.strategy === 'fuzzy',
+    }
+  }
+  return null
 }
 
 /** Un Range con el texto propio del bloque, del primer carácter al último. */
@@ -178,7 +267,9 @@ export function resolveBlockQuote(anchor, { digest = null } = {}) {
   const hit = matchBlock(D.blocks, anchor)
   if (hit) {
     const el = D.blocks[hit.index].el
-    const index = buildTextIndex(el, { boundary: isBlock })
+    // El mismo texto que vio el modelo: con la misma frontera (bloques e
+    // interfaz) con la que se leyó, o la cita no se encuentra donde estaba.
+    const index = buildTextIndex(el, { boundary: blockBoundary() })
 
     if (exact) {
       const q = findQuote(index.text, { exact })
@@ -203,10 +294,13 @@ export function resolveBlockQuote(anchor, { digest = null } = {}) {
     }
   }
 
-  // El bloque ya no está: la cita, si tiene sustancia, se busca en toda la página.
+  // El bloque ya no está: la cita, si tiene sustancia, se busca en el resto
+  // del ÁMBITO, no en toda la página. En una incidencia de Jira «toda la
+  // página» incluye la barra de acciones y las pestañas de campos ocultas: una
+  // cita podía resolverse ahí y contarse como marcada sin que se viera nada.
   if (exact.length >= DIGEST_LIMITS.quoteMinGlobal) {
-    const r = resolveAnchor({ kind: 'text-quote', exact })
-    if (r.ok && r.ranges?.length) return { ...r, strategy: 'global+' + r.strategy }
+    const r = resolveScopedQuote(exact)
+    if (r?.ok) return { ...r, strategy: 'global+' + r.strategy }
   }
 
   return {

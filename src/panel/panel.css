@@ -414,6 +414,14 @@ textarea::placeholder { color: var(--muted); }
 .check input { accent-color: var(--gold); width: 14px; height: 14px; }
 .check.strong { font-size: 13.5px; color: var(--ink); font-weight: 600; margin-bottom: 12px; }
 
+/* Las claves de un producto (Jira o Confluence): un recuadro con su casilla de
+   título. Sin marcar, se queda en la casilla y el recuadro se atenúa. */
+.product-keys { border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px 0; margin-bottom: 12px; }
+.product-keys > legend { padding: 0 4px; margin: 0; }
+.product-keys > legend .check { margin-bottom: 0; font-size: 12.5px; font-weight: 600; color: var(--ink); }
+.product-keys.off { padding-bottom: 6px; border-style: dashed; }
+.product-keys.off > legend .check { color: var(--muted); font-weight: 500; }
+
 .row { display: flex; gap: 8px; align-items: center; margin-top: 16px; }
 .row.wrap { flex-wrap: wrap; }
 

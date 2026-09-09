@@ -12,7 +12,7 @@
  *    modo rápido ni siquiera eso.
  */
 import { test, eq, assert } from '../harness.js'
-import { pickDestination, declaredDestination, currentPageId, planNavigation } from '../../src/panel/planner.js'
+import { pickDestination, declaredDestination, currentPageId, planNavigation, jqlDestination, JQL_LIMITS } from '../../src/panel/planner.js'
 import { normalizeIndex } from '../../src/atlassian/index-store.js'
 
 const HOST = 'confluence.simplprogramme.eu'
@@ -119,6 +119,56 @@ test('una incidencia sola es destino; página e incidencia a la vez, no', () => 
   eq(pickDestination('Lo lleva SIMPL-12, que sigue abierta.', INDEX), { kind: 'jira-issue', id: 'SIMPL-12' })
   eq(pickDestination('Ver 98830281 y SIMPL-12.', INDEX), null)
   eq(pickDestination('Lo lleva SIMPL-999, que no está indexada.', INDEX), null)
+})
+
+test('EL CAMBIO: la incidencia en la que ya está el usuario no es un destino', () => {
+  // En Jira la «página actual» es la incidencia abierta: el modelo la nombra
+  // porque se le dice cuál es, igual que la página en Confluence.
+  eq(pickDestination('Ya estás en SIMPL-12.', INDEX, { excludeId: 'SIMPL-12' }), null)
+  eq(pickDestination('Ya estás en simpl-12.', INDEX, { excludeId: 'simpl-12' }), null, 'sin distinguir mayúsculas')
+  const r = declaredDestination('Es la tuya.\nDestino: SIMPL-12', INDEX, { excludeId: 'SIMPL-12' })
+  eq(r?.none, true)
+  assert(/ya estás/.test(r.reason), r.reason)
+  eq(declaredDestination('Destino: SIMPL-12', INDEX, { excludeId: '2003' })?.target?.id, 'SIMPL-12', 'un id de página no excluye una incidencia')
+})
+
+test('EL CAMBIO: en Jira, «Destino: CLAVE» lleva de golpe a la incidencia sin preguntar al modelo', async () => {
+  // Es la Skill de búsqueda en Jira: JQL, claves, y una tarjeta que sólo
+  // ofrece «Llévame», porque no hay árbol ni camino que leer.
+  const client = fakeClient(new Error('no debería preguntarse'))
+  let pedido = false
+  const jira = { host: 'jira.simplprogramme.eu', origin: 'https://jira.simplprogramme.eu', cloud: false, product: 'jira', projectKey: 'SIMPL', issueKey: 'SIMPL-7' }
+  const indice = normalizeIndex(
+    {
+      projects: [{ key: 'SIMPL', name: 'SIMPL', url: '/projects/SIMPL/summary' }],
+      issues: [
+        { key: 'SIMPL-7', title: 'La abierta', url: '/browse/SIMPL-7' },
+        { key: 'SIMPL-12', title: 'Revisar la TCV', url: '/browse/SIMPL-12' },
+      ],
+    },
+    jira.host
+  )
+  const { plan, source, reason } = await planNavigation(client, base({
+    site: jira,
+    index: indice,
+    origin: jira.origin,
+    host: jira.host,
+    here: jira.origin + '/browse/SIMPL-7',
+    answer: 'JQL: project = SIMPL AND text ~ "TCV". Lo trata SIMPL-12 (Revisar la TCV), en curso; la tuya, SIMPL-7, sólo la menciona.\n\nDestino: SIMPL-12',
+    learnAncestry: async () => ((pedido = true), CADENA_TCV),
+  }))
+  assert(plan, reason)
+  eq(source, 'respuesta')
+  eq(plan.destination, { kind: 'jira-issue', id: 'SIMPL-12', title: 'Revisar la TCV', path: '/browse/SIMPL-12', url: 'https://jira.simplprogramme.eu/browse/SIMPL-12' })
+  eq(plan.steps.map((s) => s.id), ['SIMPL-12'], 'un salto único: el proyecto no es un paso')
+  eq(plan.mode, 'direct')
+  eq(pedido, false, 'y no se lee ningún árbol')
+  eq(client.calls.sessions, 0)
+
+  // La incidencia abierta como destino declarado: nada que ofrecer.
+  const misma = await planNavigation(client, base({ site: jira, index: indice, origin: jira.origin, host: jira.host, here: jira.origin + '/browse/SIMPL-7', answer: 'Es esa.\nDestino: SIMPL-7' }))
+  eq(misma.plan, undefined)
+  assert(/ya estás/.test(misma.reason), misma.reason)
 })
 
 test('títulos cortos y números sueltos no engañan', () => {
@@ -435,4 +485,115 @@ test('SEGURIDAD: una cadena de la API con ids raros no cuela nada en el índice'
   assert(!JSON.stringify(guardado).includes('malicioso'), 'la ruta externa se descarta entera')
   assert(!guardado.pages['javascript:x'])
   assert(plan.steps.every((s) => s.url.startsWith(ORIGIN)), 'ningún paso sale del sitio')
+})
+
+test('EL CAMBIO: donde ya estás nunca es destino, tampoco cuando decide el modelo', () => {
+  // En Jira el modelo nombra la clave abierta en casi toda respuesta (se le
+  // dice cuál es y se le manda citarla), así que la heurística dispara y el
+  // planificador la elegía: tarjeta «Llévame a SIMPL-7» estando en SIMPL-7.
+  const jira = { host: 'jira.x', origin: 'https://jira.x', cloud: false, product: 'jira', issueKey: 'SIMPL-7' }
+  const indice = normalizeIndex(
+    { issues: [{ key: 'SIMPL-7', title: 'La abierta', url: '/browse/SIMPL-7' }] },
+    'jira.x'
+  )
+  const client = fakeClient({
+    navigate: true,
+    mode: 'direct',
+    destination: { kind: 'jira-issue', id: 'SIMPL-7' },
+    explanation: 'Ahí lo tienes.',
+  })
+  return planNavigation(client, base({
+    site: jira,
+    index: indice,
+    origin: jira.origin,
+    host: jira.host,
+    here: jira.origin + '/browse/SIMPL-7',
+    force: false,
+    answer: 'Eso está en SIMPL-7, que es la incidencia que tienes delante, y lleva abierta desde marzo.',
+  })).then(({ plan, reason }) => {
+    eq(plan, undefined)
+    assert(/ya estás/.test(reason), reason)
+    // Y al planificador se le dice dónde está el usuario, para que no la elija.
+    assert(/YA está en SIMPL-7/.test(client.calls.prompts[0].req.text), client.calls.prompts[0].req.text.slice(-200))
+  })
+})
+
+// ---------------------------------------------------------- jqlDestination
+
+/** Una llamada a jira_search tal como la deja el turno, con su salida. */
+function busquedaJira(jql, output) {
+  return { type: 'tool', tool: 'atlassian-jira-x-eu_jira_search', state: { status: 'completed', input: { jql, limit: 20 }, output } }
+}
+
+test('EL CAMBIO: en Jira el destino es la búsqueda que produjo la lista, leída de la llamada real a jira_search', () => {
+  // Lo que responde a «¿dónde está lo de Kafka?» no es un ticket: es la lista,
+  // y vive en el buscador con su JQL. La consulta sale de la herramienta, no
+  // de la prosa: un modelo que escribe una JQL y llama con otra no manda al
+  // usuario a una lista que no ha visto.
+  const parts = [
+    { type: 'text', text: 'JQL: project = SIMPL AND text ~ "inventada"' },
+    busquedaJira('project = SIMPL AND text ~ "kafka"', JSON.stringify({ total: 3, issues: [{ key: 'SIMPL-1' }, { key: 'SIMPL-2' }, { key: 'SIMPL-3' }] })),
+  ]
+  const r = jqlDestination(parts, { origin: 'https://jira.x.eu' })
+  eq(r.jql, 'project = SIMPL AND text ~ "kafka"')
+  eq(r.count, 3)
+  eq(r.path, '/issues/?jql=' + encodeURIComponent('project = SIMPL AND text ~ "kafka"'))
+  eq(r.url, 'https://jira.x.eu' + r.path)
+})
+
+test('jqlDestination: se queda con la ÚLTIMA búsqueda con resultados; sin resultados no hay destino', () => {
+  const vacia = JSON.stringify({ total: 0, issues: [] })
+  const conAlgo = JSON.stringify({ total: 2, issues: [{ key: 'A-1' }, { key: 'A-2' }] })
+  // El modelo afina: la primera dio dos, la segunda nada. La lista que enseñó es la primera.
+  eq(jqlDestination([busquedaJira('project = A', conAlgo), busquedaJira('project = A AND status = Done', vacia)], { origin: 'https://j' }).jql, 'project = A')
+  // Y al revés: la segunda es la buena.
+  eq(jqlDestination([busquedaJira('project = A AND x', vacia), busquedaJira('project = A', conAlgo)], { origin: 'https://j' }).jql, 'project = A')
+  eq(jqlDestination([busquedaJira('project = A', vacia)], { origin: 'https://j' }), null, 'como «Destino: ninguno»')
+  eq(jqlDestination([], { origin: 'https://j' }), null)
+  eq(jqlDestination(null, { origin: 'https://j' }), null)
+})
+
+test('jqlDestination: cuenta resultados aunque la salida no sea el JSON esperado, y sólo mira jira_search', () => {
+  const texto = busquedaJira('project = ENG', 'Encontradas: ENG-1 Rotar tokens, ENG-2 Revisar permisos, ENG-1 otra vez')
+  eq(jqlDestination([texto], { origin: 'https://j' }).count, 2, 'claves distintas')
+  const otra = { type: 'tool', tool: 'x_jira_get_issue', state: { input: { issue_key: 'ENG-1', jql: 'project = ENG' }, output: '{"total": 5}' } }
+  eq(jqlDestination([otra], { origin: 'https://j' }), null, 'una herramienta que no es la búsqueda no cuenta')
+  eq(jqlDestination([busquedaJira('', '{"total":5}')], { origin: 'https://j' }), null, 'sin consulta no hay destino')
+})
+
+test('SEGURIDAD: la consulta entra en la URL codificada, en una línea y con tope; la URL es siempre la del origen', () => {
+  const sucia = 'project = A\nAND summary ~ "x" -- ' + '#'.repeat(3000)
+  const r = jqlDestination([busquedaJira(sucia, '{"total":1}')], { origin: 'https://jira.x.eu/' })
+  assert(!r.jql.includes('\n'), 'una línea')
+  eq(r.jql.length, JQL_LIMITS.maxChars, 'con tope')
+  assert(r.url.startsWith('https://jira.x.eu/issues/?jql='), 'contra el origen, sin barra doble')
+  assert(!r.url.includes('#') && !r.url.includes(' '), 'codificada')
+  // Ni una URL ni un salto de origen escondido en la consulta cambian el destino.
+  const tramposa = jqlDestination([busquedaJira('https://malicioso.example/?x', '{"total":1}')], { origin: 'https://jira.x.eu' })
+  assert(tramposa.url.startsWith('https://jira.x.eu/issues/?jql=https%3A%2F%2Fmalicioso'), tramposa.url)
+  eq(jqlDestination([busquedaJira('project = A', '{"total":1}')], {}), null, 'sin origen no hay URL')
+})
+
+test('EL CAMBIO: planNavigation en Jira devuelve la búsqueda sin índice, sin árbol y sin preguntar', async () => {
+  const client = fakeClient(new Error('no debería preguntarse'))
+  const jira = { host: 'jira.x.eu', origin: 'https://jira.x.eu', cloud: false, product: 'jira', issueKey: 'SIMPL-7' }
+  const parts = [busquedaJira('project = SIMPL AND text ~ "kafka"', '{"total":4,"issues":[{"key":"SIMPL-1"}]}')]
+  const { plan, source } = await planNavigation(client, base({ site: jira, index: null, origin: jira.origin, host: jira.host, parts, answer: 'Cuatro tickets hablan de Kafka.' }))
+  eq(source, 'jql')
+  eq(plan.destination.kind, 'jira-jql')
+  eq(plan.destination.url, 'https://jira.x.eu/issues/?jql=' + encodeURIComponent('project = SIMPL AND text ~ "kafka"'))
+  eq(plan.destination.title, 'Los 4 resultados de la búsqueda en Jira')
+  eq(plan.steps.map((s) => s.action), ['open'], 'un solo paso')
+  eq(plan.mode, 'direct')
+  eq(plan.explanation, 'project = SIMPL AND text ~ "kafka"', 'la consulta se enseña en la tarjeta')
+  eq(client.calls.sessions, 0)
+
+  // Sin búsqueda en el turno, todo sigue como antes: la clave de la respuesta.
+  const indice = normalizeIndex({ issues: [{ key: 'SIMPL-12', title: 'Revisar', url: '/browse/SIMPL-12' }] }, jira.host)
+  const sinBusqueda = await planNavigation(client, base({ site: jira, index: indice, origin: jira.origin, host: jira.host, parts: [], answer: 'Es SIMPL-12.\nDestino: SIMPL-12' }))
+  eq(sinBusqueda.source, 'respuesta')
+  eq(sinBusqueda.plan.destination.kind, 'jira-issue')
+  // Y en Confluence una búsqueda de Jira que hubiera hecho el modelo no manda a ningún sitio de este host.
+  const desdeConfluence = await planNavigation(fakeClient(null), base({ parts, learnAncestry: async () => CADENA_TCV }))
+  eq(desdeConfluence.source, 'respuesta')
 })

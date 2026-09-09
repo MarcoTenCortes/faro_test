@@ -196,7 +196,7 @@ test('EL CAMBIO: las páginas base del análisis viajan con el turno, se ven y s
   assert(/const pageIdAlPedir = /.test(envio), 'y la página abierta también')
   assert(envio.indexOf('const pageIdAlPedir') < envio.indexOf('runTurn('), 'antes de mandar nada')
   assert(/sources,\s*\n\s*\}\),/.test(envio), 'viajan en el sistema del turno')
-  assert(/sourcesNote\(sources\)/.test(envio), 'y se dicen bajo la pregunta')
+  assert(/sourcesNote\(sources, \{ product: productoAlPedir \}\)/.test(envio), 'y se dicen bajo la pregunta, con el producto del turno')
   assert(/warnAboutSources\(turn\.parts, bubble, \{\s*sources,\s*pageId: pageIdAlPedir/.test(envio), 'la comprobación usa lo capturado')
 
   // La contraparte visible: sin MCP no se leyeron, y en exclusivo lo que se
@@ -249,7 +249,7 @@ test('EL CAMBIO: las páginas base del análisis viajan con el turno, se ven y s
   // Restaurar la conversación reconstruye la nota desde el sistema guardado.
   const restaurar = JS.slice(JS.indexOf('async function restoreConversation'), JS.indexOf('function showWelcome'))
   assert(/sourcesFromSystem\(m\.info\.system\)/.test(restaurar))
-  assert(/sourcesNote\(baseDelTurno\)/.test(restaurar), 'con el mismo texto que al mandar')
+  assert(/sourcesNote\(baseDelTurno, \{ product: productoDelTurno \}\)/.test(restaurar), 'con el mismo texto que al mandar')
 
   // Lo que dibuja: botón junto a la Skill, chip y pantalla.
   for (const id of ['btn-sources', 'sources-count', 'sources-chip', 'screen-sources', 'sources-query', 'sources-suggest', 'sources-list', 'sources-mode-exclusive', 'sources-mode-open', 'btn-sources-permission']) {
@@ -260,6 +260,106 @@ test('EL CAMBIO: las páginas base del análisis viajan con el turno, se ven y s
     assert(new RegExp('\\.' + c + '\\b').test(CSS), 'clase sin estilo: ' + c)
   }
   assert(/showScreen\('screen-sources'\)/.test(JS))
+})
+
+test('EL CAMBIO: claves por producto, host enlazado y contexto de Confluence desde Jira', () => {
+  // Un bloque por producto en la pantalla de claves: dirección, correo y
+  // token de Jira, y los de Confluence. Los campos únicos de antes ya no están.
+  for (const p of ['jira', 'confluence']) {
+    for (const id of [`setup-${p}`, `setup-${p}-block`, `setup-${p}-fields`, `setup-${p}-url`, `setup-${p}-email`, `setup-${p}-email-field`, `setup-${p}-token`]) {
+      assert(htmlIds.has(id), 'falta #' + id)
+    }
+  }
+  assert(!htmlIds.has('setup-token') && !htmlIds.has('setup-email'), 'el token único ya no existe')
+  assert(/\.product-keys\b/.test(CSS), 'clase sin estilo: product-keys')
+
+  const claves = JS.slice(JS.indexOf('async function saveKeys'), JS.indexOf('async function showManualStep'))
+  assert(/setup-\$\{product\}-token/.test(claves), 'cada producto lee su token')
+  assert(!/'setup-token'|'setup-email'/.test(claves), 'y no hay un token para los dos')
+  assert(/configureMcp\(state\.client, \{ host: state\.site\.host, jira, confluence, dataCenter \}\)/.test(claves), 'las claves viajan por producto')
+  assert(/hostOf\(env\.JIRA_URL\)/.test(claves) && /hostOf\(env\.CONFLUENCE_URL\)/.test(claves), 'los hosts salen de la configuración construida, no del campo')
+
+  // Se comprueban los dos tokens, y el otro host queda enlazado.
+  const fin = JS.slice(JS.indexOf('async function finishSetup'), JS.indexOf('function paintSnippet'))
+  assert(/for \(const product of PRODUCTS\.filter/.test(fin), 'una comprobación por producto habilitado')
+  assert(/verifyCredentials\(state\.client, \{[^}]*product,/.test(fin))
+  assert(/siteRecords\(\{/.test(fin) && /for \(const \{ host, patch \} of registros\) await saveSite\(host, patch\)/.test(fin), 'los registros de cada host salen de siteRecords')
+  assert(/'Sitio enlazado'/.test(fin), 'y queda en el registro')
+
+  // Al arrancar, el MCP se busca por el nombre guardado (el de la pareja) y
+  // desde Jira se carga el contexto del Confluence enlazado.
+  const arranque = JS.slice(JS.indexOf('async function bootForSite'), JS.indexOf('async function ensureContentAccess'))
+  assert(/mcpStatusFor\(mcp, state\.site\.host, saved\?\.mcpName\)/.test(arranque), 'el nombre guardado manda')
+  assert(arranque.indexOf('const saved = await getSite') < arranque.indexOf('mcpStatusFor(mcp'), 'y se lee antes')
+  assert(/state\.linkedContext = await loadLinkedContext\(saved\)/.test(arranque))
+  const enlazado = JS.slice(JS.indexOf('async function loadLinkedContext'), JS.indexOf('async function ensureContentAccess'))
+  assert(/product !== 'jira'/.test(enlazado) && /saved\?\.confluenceHost/.test(enlazado), 'sólo desde Jira y sólo si hay pareja')
+  assert(/'Contexto de Confluence enlazado'/.test(enlazado))
+
+  // Viaja en el sistema del turno y se vacía al cambiar de host.
+  const envio = JS.slice(JS.indexOf('async function send('), JS.indexOf('function paintTurn('))
+  assert(/linkedContext: state\.linkedContext,/.test(envio))
+  const refresco = JS.slice(JS.indexOf('async function refreshTab'), JS.indexOf('async function bootForSite'))
+  const cambio = refresco.slice(refresco.indexOf('if (changedHost) {'), refresco.indexOf('state.site = site'))
+  assert(/state\.linkedContext = null/.test(cambio))
+
+  // El estado del registro enseña el MCP por el nombre guardado.
+  const estado = JS.slice(JS.indexOf('async function paintState'), JS.indexOf('async function treeDebug'))
+  assert(/mcpStatusFor\(list, state\.site\.host, \(await getSite\(state\.site\.host\)\)\?\.mcpName\)/.test(estado))
+})
+
+test('EL CAMBIO: el análisis en Jira lee la incidencia, permite leerla en el alcance y elige páginas base del Confluence enlazado', () => {
+  // Lo abierto en Jira es una incidencia: se captura su clave al mandar, y el
+  // alcance exclusivo la deja leer (sus comentarios, su historial). Nunca con
+  // el estado de después del turno.
+  const envio = JS.slice(JS.indexOf('async function send('), JS.indexOf('function paintTurn('))
+  assert(/const issueKeyAlPedir = state\.site\.issueKey \|\| ''/.test(envio), 'la clave se captura al mandar')
+  assert(/const productoAlPedir = state\.site\.product/.test(envio), 'y el producto')
+  assert(envio.indexOf('const issueKeyAlPedir') < envio.indexOf('runTurn('), 'antes de mandar nada')
+  assert(/issueKey: issueKeyAlPedir,\s*\n\s*product: productoAlPedir,/.test(envio), 'viajan a la comprobación del alcance')
+  assert(/con el texto de la \$\{productoAlPedir === 'jira' \? 'incidencia' : 'página'\}/.test(envio), 'y la nota bajo la pregunta dice qué era')
+
+  const aviso = JS.slice(JS.indexOf('function warnAboutSources'), JS.indexOf('// ------------------------------------------------------------- navegación'))
+  assert(/allowedIssues: issueKey \? \[issueKey\] : \[\]/.test(aviso), 'la incidencia abierta es lista blanca')
+  assert(!/state\.(site|mcpConnected|tabTitle|tabUrl|linkedContext)/.test(aviso), 'nunca el estado de después del turno')
+
+  // Las páginas base desde Jira: el índice y el host del Confluence enlazado.
+  const enlazado = JS.slice(JS.indexOf('async function loadLinkedContext'), JS.indexOf('async function ensureContentAccess'))
+  assert(/const \{ index \} = await getIndex\(host\)/.test(enlazado), 'el índice del Confluence enlazado se carga con su contexto')
+  assert(!/saveIndex\(/.test(enlazado), 'y nunca se guarda desde Jira')
+  assert(/function sourcesIndex\(\)/.test(JS) && /function linkedHost\(\)/.test(JS))
+  const entrada = JS.slice(JS.indexOf('function onSourcesInput'), JS.indexOf('function refReasonText'))
+  assert(/pageRefFromUrl\(text, state\.site, \{ linkedHost: linkedHost\(\) \}\)/.test(entrada), 'una URL del Confluence enlazado vale')
+  assert(/suggestFromIndex\(indice, q/.test(entrada) && /const indice = sourcesIndex\(\)/.test(entrada), 'las sugerencias salen del índice que toca')
+  assert(/product === 'jira' && !state\.site\.cloud\) return/.test(entrada), 'desde un Jira Data Center no se pregunta a la API del sitio')
+  const porId = JS.slice(JS.indexOf('async function addSourceById'), JS.indexOf('async function fetchPageChain'))
+  assert(/sourcesIndex\(\)\?\.pages\?\.\[id\]/.test(porId), 'y el título por id también')
+
+  // Restaurar la conversación dice «incidencia» cuando lo era.
+  const restaurar = JS.slice(JS.indexOf('async function restoreConversation'), JS.indexOf('function showWelcome'))
+  assert(/parseAtlassianUrl\(urlDelTurno\)\?\.product/.test(restaurar))
+  assert(/sourcesNote\(baseDelTurno, \{ product: productoDelTurno \}\)/.test(restaurar))
+})
+
+test('EL CAMBIO: en Jira la tarjeta abre la búsqueda que hizo el modelo, y el indexador sabe qué Confluence hay enlazado', () => {
+  // La lista de tickets vive en el buscador de Jira: la tarjeta lleva a la
+  // consulta JQL que produjo la lista, leída de la llamada real a jira_search
+  // (las partes del turno), y no necesita índice.
+  const envio = JS.slice(JS.indexOf('async function send('), JS.indexOf('function paintTurn('))
+  assert(/offerNavigation\(answer, bubble, skill, turn\.parts\)/.test(envio), 'las partes del turno llegan a la navegación')
+  const nav = JS.slice(JS.indexOf('async function offerNavigation'), JS.indexOf('async function learnAncestry'))
+  assert(/jqlDestination\(parts, \{ origin: state\.site\.origin \}\)/.test(nav), 'la URL se construye contra el origen de la pestaña')
+  assert(/navCard\(jqlPlan\(busqueda\)\)/.test(nav))
+  assert(nav.indexOf('jqlDestination(') < nav.indexOf('indexSize(state.index)'), 'antes de exigir índice: la búsqueda no lo necesita')
+  assert(/'Búsqueda de Jira como destino'/.test(nav), 'y queda en el registro')
+
+  // El contexto de un proyecto de Jira se construye sabiendo qué Confluence
+  // hay enlazado, para buscar ahí si los tickets están documentados.
+  const contexto = JS.slice(JS.indexOf('async function generateContext'), JS.indexOf('async function uploadContext'))
+  assert(/linkedContext: state\.linkedContext,/.test(contexto))
+  assert(htmlIds.has('context-generate-text'), 'la pantalla de contexto dice qué se recorre según el producto')
+  const pantalla = JS.slice(JS.indexOf('function showContextScreen'), JS.indexOf('async function showMemoryScreen'))
+  assert(/context-generate-text/.test(pantalla) && /tipos de incidencia/.test(pantalla))
 })
 
 test('la navegación no se cae en silencio cuando falta el índice', () => {

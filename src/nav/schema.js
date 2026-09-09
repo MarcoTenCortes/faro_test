@@ -7,6 +7,8 @@
  * equivocado.
  */
 
+// `jira-jql` no está aquí a propósito: el modelo no puede pedirlo. Ese destino
+// lo construye el panel a partir de la llamada real a `jira_search` (planner.js).
 export const TARGET_KINDS = ['confluence-page', 'confluence-space', 'jira-issue', 'jira-project']
 
 export const NAVIGATION_PLAN_SCHEMA = {

@@ -117,8 +117,9 @@ function mentionsTitle(plano, titulo) {
  * como tal («id 1080», «página 1080», «/pages/1080»): un año o un puerto que
  * coincidan con un id corto del índice no son destinos.
  *
- * La página en la que ya está el usuario se descarta: el modelo la nombra
- * porque se le dice cuál es, no porque haya que ir a ella.
+ * La página —o, en Jira, la incidencia— en la que ya está el usuario se
+ * descarta: el modelo la nombra porque se le dice cuál es, no porque haya que
+ * ir a ella. `excludeId` es un id de página o una clave de incidencia.
  *
  * Pura, cubierta por pruebas.
  *
@@ -151,10 +152,12 @@ export function pickDestination(answer, index, { excludeId = '' } = {}) {
     if (!trozo) paginas.add(c.id)
   }
 
+  // La incidencia en la que ya está el usuario se descarta igual que la
+  // página: el modelo la nombra porque se le dice cuál es.
   const incidencias = new Set()
   for (const m of texto.matchAll(ISSUE_KEYS)) {
     const key = m[0].toUpperCase()
-    if (index.issues?.[key]) incidencias.add(key)
+    if (index.issues?.[key] && key !== fuera.toUpperCase()) incidencias.add(key)
   }
 
   const candidatos = [
@@ -208,13 +211,101 @@ export function declaredDestination(answer, index, { excludeId = '' } = {}) {
   if (id === fuera && id) return { none: true, reason: 'el destino declarado es la página en la que ya estás' }
   if (id && index?.pages?.[id]) return { target: { kind: 'confluence-page', id } }
 
+  // En Jira la línea lleva una clave («Destino: ABC-123»). La incidencia
+  // abierta no es un destino, igual que la página abierta.
   const key = (ISSUE_KEY.exec(cuerpo) || [])[0]
+  if (key && key.toUpperCase() === fuera.toUpperCase()) {
+    return { none: true, reason: 'el destino declarado es la incidencia en la que ya estás' }
+  }
   if (key && index?.issues?.[key.toUpperCase()]) return { target: { kind: 'jira-issue', id: key.toUpperCase() } }
 
   // Sin id útil vale el título, pero sólo el de ESTA línea.
   const porTitulo = pickDestination(cuerpo, index, { excludeId })
   if (porTitulo) return { target: porTitulo }
   return { none: true, reason: 'el destino declarado no está en el índice' }
+}
+
+/** Lo que se acepta de una consulta JQL antes de meterla en una URL. */
+export const JQL_LIMITS = {
+  /** Una consulta escrita a mano rara vez pasa de doscientos caracteres; dos mil ya es un volcado. */
+  maxChars: 2000,
+}
+
+/**
+ * La búsqueda de Jira que produjo la lista, como destino.
+ *
+ * En Jira, lo que responde a «¿dónde está lo de Kafka?» no es un ticket: es la
+ * lista de tickets, y esa lista vive en el buscador de Jira con su consulta
+ * JQL. La consulta NO se lee de la prosa del modelo: se lee de la llamada real
+ * a `jira_search` que hizo, que es la que devolvió esos resultados. Un modelo
+ * que escribe una JQL en su respuesta y llama a la herramienta con otra no
+ * puede mandar al usuario a una lista que no ha visto.
+ *
+ * Se elige la ÚLTIMA llamada con resultados: el modelo afina la consulta, y la
+ * última que dio algo es la que listó. Sin ninguna con resultados no hay
+ * destino, igual que «Destino: ninguno». Pura, cubierta por pruebas.
+ *
+ * @param {Array} parts partes del turno
+ * @param {{origin: string}} ctx el origen de la pestaña: la URL se construye
+ *        SIEMPRE contra él, nunca contra nada que venga del modelo
+ * @returns {{jql: string, count: number, path: string, url: string}|null}
+ */
+export function jqlDestination(parts, { origin } = {}) {
+  const base = String(origin || '').replace(/\/+$/, '')
+  if (!base || !Array.isArray(parts)) return null
+
+  let elegida = null
+  for (const p of parts) {
+    if (!p || p.type !== 'tool') continue
+    if (!/(^|_)jira_search$/.test(String(p.tool || '').toLowerCase())) continue
+    const jql = cleanJql(p.state?.input?.jql)
+    if (!jql) continue
+    const count = countResults(p.state?.output)
+    if (count > 0) elegida = { jql, count }
+  }
+  if (!elegida) return null
+
+  const path = '/issues/?jql=' + encodeURIComponent(elegida.jql)
+  return { ...elegida, path, url: base + path }
+}
+
+/** Una consulta en una línea, sin caracteres de control y con tope. */
+function cleanJql(value) {
+  if (typeof value !== 'string') return ''
+  return value
+    .replace(new RegExp('[\\u0000-\\u001F\\u007F]', 'g'), ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, JQL_LIMITS.maxChars)
+}
+
+/**
+ * Cuántos resultados devolvió una búsqueda, leído de su salida.
+ *
+ * `mcp-atlassian` responde con un JSON `{total, issues:[…]}`; si viene otra
+ * cosa, se cuentan las claves de incidencia que haya. Sin salida, cero.
+ */
+function countResults(output) {
+  const texto = typeof output === 'string' ? output : output ? safeJson(output) : ''
+  if (!texto) return 0
+  try {
+    const json = JSON.parse(texto)
+    if (Number.isInteger(json?.total)) return json.total
+    if (Array.isArray(json?.issues)) return json.issues.length
+  } catch {
+    /* no era JSON: se cuentan claves */
+  }
+  const claves = new Set()
+  for (const m of texto.matchAll(ISSUE_KEYS)) claves.add(m[0])
+  return claves.size
+}
+
+function safeJson(v) {
+  try {
+    return JSON.stringify(v)
+  } catch {
+    return ''
+  }
 }
 
 /**
@@ -276,10 +367,21 @@ function normPath(p) {
  * @param {Function} [opts.learnAncestry] (destino) => cadena de antepasados,
  *        raíz → destino, o null. Lo pone el panel; aquí sólo se funde.
  * @param {Function} [opts.onIndex] avisa del índice enriquecido para guardarlo.
- * @returns {Promise<{plan?:object, source?:'respuesta'|'modelo', reason?:string}>}
+ * @param {Array} [opts.parts] las partes del turno: en Jira, si el modelo
+ *        buscó con `jira_search`, el destino es esa búsqueda, sin índice ni
+ *        modelo por medio.
+ * @returns {Promise<{plan?:object, source?:'respuesta'|'modelo'|'jql', reason?:string}>}
  */
 export async function planNavigation(client, opts) {
-  const { answer, index, origin, host, site, here, force, navMode, learnAncestry, onIndex } = opts
+  const { answer, index, origin, host, site, here, force, navMode, learnAncestry, onIndex, parts } = opts
+
+  // En Jira, la lista de tickets vive en el buscador: si el modelo buscó, se
+  // lleva a esa búsqueda, con la consulta que de verdad hizo. No hace falta
+  // índice ni preguntarle a nadie.
+  if (site?.product === 'jira') {
+    const busqueda = jqlDestination(parts, { origin })
+    if (busqueda) return { plan: jqlPlan(busqueda), source: 'jql' }
+  }
 
   if (!force && !shouldPlan(answer, index)) {
     return { reason: 'la respuesta no apunta a ningún sitio del índice' }
@@ -288,8 +390,13 @@ export async function planNavigation(client, opts) {
   let raw = null
   let source = 'modelo'
 
+  // Dónde está ya el usuario: la página abierta, o en Jira la incidencia
+  // abierta. Ninguna de las dos es un destino, diga quien lo diga: el modelo
+  // la nombra en casi todas sus respuestas porque se le dice cuál es, y en
+  // Jira una clave corta dispara la heurística en casi todas.
+  const excludeId = String(site?.pageId || site?.issueKey || currentPageId(index, here) || '')
+
   if (force) {
-    const excludeId = site?.pageId || currentPageId(index, here)
     const declarado = declaredDestination(answer, index, { excludeId })
     if (declarado?.none) return { reason: declarado.reason || 'la respuesta dice que no hay destino' }
 
@@ -301,14 +408,17 @@ export async function planNavigation(client, opts) {
   }
 
   if (!raw) {
-    const asked = await askModel(client, opts)
+    const asked = await askModel(client, { ...opts, current: excludeId })
     if (asked.error) return { reason: asked.error }
     raw = asked.raw
   }
 
-  let result = validatePlan(raw, { index, origin, host, here })
+  let result = validatePlan(raw, { index, origin, host, here, site })
   if (!result.ok) return { reason: result.reason }
   if (!result.plan.navigate) return { reason: 'el modelo decidió que no hay destino' }
+  if (excludeId && String(result.plan.destination.id).toUpperCase() === excludeId.toUpperCase()) {
+    return { reason: 'el destino es donde ya estás' }
+  }
 
   // El camino sólo hace falta para poder ofrecer «Paso a paso». Se lee SIEMPRE
   // en modo guiado, aunque el índice ya crea saber el padre: lo que sabe puede
@@ -330,7 +440,7 @@ export async function planNavigation(client, opts) {
       })
       const enriquecido = mergeIndex(index, arbol)
       await onIndex?.(enriquecido)
-      const reintento = validatePlan(raw, { index: enriquecido, origin, host, here })
+      const reintento = validatePlan(raw, { index: enriquecido, origin, host, here, site })
       if (reintento.ok && reintento.plan.navigate) result = reintento
     }
   }
@@ -339,11 +449,29 @@ export async function planNavigation(client, opts) {
 }
 
 /**
+ * El plan que abre el buscador de Jira con una consulta. Tiene la misma forma
+ * que un plan validado —la tarjeta y el service worker no distinguen—, con un
+ * solo paso: en Jira no hay árbol que recorrer. Pura.
+ */
+export function jqlPlan({ jql, count, path, url }) {
+  const title = count === 1 ? 'El resultado de la búsqueda en Jira' : `Los ${count} resultados de la búsqueda en Jira`
+  const destination = { kind: 'jira-jql', id: jql, title, path, url }
+  return {
+    navigate: true,
+    mode: 'direct',
+    destination,
+    anchor: null,
+    steps: [{ ...destination, label: title, action: 'open' }],
+    explanation: jql,
+  }
+}
+
+/**
  * El turno del planificador, en una sesión aparte y desechable: así el chat no
  * se llena del JSON del plan ni de sus instrucciones. Sólo se abre si hace
  * falta preguntar.
  */
-async function askModel(client, { question, answer, index, model, plannerModel }) {
+async function askModel(client, { question, answer, index, model, plannerModel, current = '' }) {
   if (!client) return { error: 'sin cliente de opencode' }
 
   let session = null
@@ -357,7 +485,7 @@ async function askModel(client, { question, answer, index, model, plannerModel }
     const raw = await client.promptStructured(session.id, {
       // El digest se acota a lo que tiene que ver con la respuesta: con un
       // índice grande, mandarlo entero hacía el turno mucho más lento.
-      text: plannerPrompt({ question, answer, digest: indexDigest(index, { relevantTo: answer, maxPages: 60 }) }),
+      text: plannerPrompt({ question, answer, digest: indexDigest(index, { relevantTo: answer, maxPages: 60 }), current }),
       model: plannerModel || model,
       system: plannerSystemPrompt(),
       schema: NAVIGATION_PLAN_SCHEMA,

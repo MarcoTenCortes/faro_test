@@ -54,3 +54,13 @@ test('siempre hay exactamente una opción destacada', () => {
     }
   }
 })
+
+test('EL CAMBIO: una búsqueda de Jira se abre, no se «lleva»', () => {
+  // La lista de tickets vive en el buscador de Jira: el botón dice lo que hace.
+  const busqueda = { mode: 'direct', destination: { kind: 'jira-jql' }, steps: [{ id: 'x' }] }
+  eq(navOptions(busqueda).map((o) => o.label), ['Abrir la búsqueda en Jira'])
+  eq(navOptions(busqueda, { navMode: 'quick' }).map((o) => o.label), ['Abrir la búsqueda en Jira'])
+  eq(navOptions(busqueda)[0].mode, 'direct')
+  // Y lo demás sigue diciendo «Llévame».
+  eq(navOptions(sinCamino).map((o) => o.label), ['Llévame'])
+})

@@ -32,7 +32,37 @@ la respuesta**.
   siguiente pregunta. La imagen viaja de verdad, no su `alt`.
 - **Skills**: General, Búsqueda, Resumen y Análisis, junto al selector de modelo.
   Las dos primeras te llevan; las otras dos trabajan sobre lo que tienes delante
-  y no ofrecen viaje.
+  y no ofrecen viaje. Y saben **dónde están**: en Confluence, *Búsqueda*
+  localiza la página y te enseña el camino por el árbol; en **Jira**, donde no
+  hay árbol, escribe una **consulta JQL** con lo que preguntas, te dice cuál
+  ha usado, nombra las incidencias por su clave y la tarjeta te abre **esa
+  búsqueda en el buscador de Jira**, con la lista entera. La consulta no se
+  lee de lo que el modelo escribe: se lee de la llamada real que hizo a
+  `jira_search`, la que devolvió esos resultados.
+- **Contexto de Jira**: en un proyecto, el mapa que Faro levanta la primera
+  vez no es un árbol: son los **tipos de incidencia**, los **estados del
+  flujo** (contados en una muestra de tickets) y las **convenciones de
+  nombre** que el equipo sigue sin haberlas escrito («[Backend][Update] …»,
+  «PSO | …»), con ejemplos. Y si el proyecto tiene un Confluence enlazado,
+  busca ahí si están documentadas y apunta las páginas. Es lo que hace que
+  una búsqueda con JQL sepa poner `issuetype`, `status` o un prefijo del
+  resumen donde una búsqueda por palabras sueltas no encuentra nada.
+- **Análisis de una incidencia de Jira**: el mismo modo Análisis, sobre un
+  ticket. La incidencia se le enseña al modelo en bloques numerados leídos de
+  lo que tienes en pantalla —título, campos, descripción, comentarios con su
+  autor y su fecha— y **sin la interfaz**: ni la barra de acciones, ni las
+  pestañas, ni el botón de plegar cada comentario, ni el editor. El modelo
+  juzga lo que juzga un ticket: qué pide y para quién, si los criterios de
+  aceptación son comprobables, qué falta, y si la descripción, los comentarios
+  y los campos se contradicen entre sí o con la documentación del Confluence
+  enlazado. Y subraya igual: un párrafo de la descripción, un comentario
+  entero, un campo.
+- **Jira y Confluence, cada uno con su token**: la pantalla de claves pide un
+  bloque por producto —dirección, correo en Cloud, token—, porque en Server /
+  Data Center son dos instalaciones con su token personal cada una. Un solo
+  MCP sirve a los dos, y si viven en hosts distintos el otro queda enlazado:
+  no vuelve a pedir claves, y desde Jira se lleva el contexto del Confluence
+  de su pareja para saber qué páginas mirar.
 - **Análisis con marcas numeradas**: el modo Análisis numera sus observaciones y
   **subraya en la página el pasaje del que habla cada una**, con su número
   detrás, como una nota al pie. En el chat, pulsar un `[2]` te lleva a su
@@ -58,7 +88,7 @@ la respuesta**.
 | `opencode` ≥ 1.2 | Es el motor. La extensión no habla con ninguna nube. | 1.2.25 |
 | Chrome ≥ 116 | `chrome.sidePanel` y la CSS Custom Highlight API. | |
 | `uvx` (o Docker) | Para ejecutar `mcp-atlassian`. | uvx en Windows |
-| Un API token de Atlassian | Para leer Jira y Confluence. | |
+| Un API token por producto | Para leer Jira y Confluence. En Cloud el mismo vale para los dos; en Data Center es un token personal por instalación. | |
 
 ---
 
@@ -108,14 +138,19 @@ $env:OPENCODE_SERVER_PASSWORD = "algo-largo-y-tuyo"; opencode serve --port 4096 
 
 ### 3. Abre Jira o Confluence y pulsa el icono
 
-La primera vez en cada sitio, Faro te pedirá el correo y el API token
-(`id.atlassian.com` → Security → API tokens).
+La primera vez en cada sitio, Faro te pedirá las claves de cada producto:
+dirección, correo (en Cloud) y API token de Jira, y los de Confluence
+(`id.atlassian.com` → Security → API tokens en Cloud; *Personal Access Tokens*
+de cada producto en Data Center). Si tu Jira y tu Confluence viven en hosts
+distintos, dalos juntos aquí: el otro host queda enlazado y no volverá a pedir
+nada.
 
 Después te enseñará un bloque de configuración para pegar en el `opencode.json`
-de tu opencode, y te pedirá reiniciarlo. **Esto es una vez por sitio**, y es
-inevitable: opencode 1.2.25 sólo carga los servidores MCP al arrancar, y su
-endpoint para registrarlos en caliente responde `200` sin hacer nada. Faro se
-queda vigilando y, en cuanto detecta el MCP conectado, sigue solo.
+de tu opencode, y te pedirá reiniciarlo. **Esto es una vez por sitio** (o por
+pareja de sitios), y es inevitable: opencode 1.2.25 sólo carga los servidores
+MCP al arrancar, y su endpoint para registrarlos en caliente responde `200` sin
+hacer nada. Faro se queda vigilando y, en cuanto detecta el MCP conectado,
+comprueba los dos tokens y sigue solo.
 
 Luego te ofrecerá construir el contexto, traer el tuyo, o empezar sin él.
 
@@ -165,7 +200,7 @@ De ahí que haya dos caminos hasta el mismo sitio: la extensión ve **la página
 que tienes delante**, y opencode consulta **la API**. Ninguno de los dos
 escribe nada.
 
-Doce decisiones que sostienen el diseño:
+Trece decisiones que sostienen el diseño:
 
 1. **El panel es el único que habla con opencode.** El content script vive
    dentro de una página que no controlamos: no conoce la contraseña del
@@ -297,12 +332,34 @@ Doce decisiones que sostienen el diseño:
    (`mergeIndexKeepingTree`). Sin eso, el camino leído de la API se perdía en la
    pregunta siguiente. Pasó de verdad, en la revisión de este cambio.
 
+13. **Faro sabe si está en Jira o en Confluence, y la misma Skill habla
+   distinto en cada uno.** Buscar en Confluence es localizar una página en un
+   árbol y enseñar el camino; buscar en Jira es escribir una **consulta JQL**
+   —acotada al proyecto en el que estás, salvo que pidas otra cosa— y nombrar
+   claves de incidencia. Ahí la línea de cierre es `Destino: CLAVE-123`, la
+   clave se cosecha del JSON que devolvió `jira_search` (con su resumen, para
+   que la tarjeta diga de qué va) y la tarjeta sólo ofrece «Llévame»: Jira no
+   tiene árbol, y el proyecto por delante de la incidencia sería una carga de
+   página antes de otra, justo lo que un paso intermedio nunca hace. La
+   incidencia que ya tienes abierta se descarta como destino igual que la
+   página abierta en Confluence.
+
+   Y como son dos productos, son **dos tokens**: en Server / Data Center Jira y
+   Confluence son dos instalaciones con su token personal cada una, y copiar el
+   mismo en los dos —lo que se hacía antes— sólo funcionaba en Cloud. Un solo
+   MCP sirve a los dos; si viven en hosts distintos, el otro host queda
+   enlazado al mismo MCP (no se levanta un segundo proceso con el mismo token,
+   ni se vuelven a pedir claves) y desde ese Jira viaja en cada pregunta el
+   contexto del Confluence de su pareja, delimitado y con su propio
+   presupuesto: sirve para saber qué páginas mirar, que es lo que necesitará el
+   análisis de una incidencia.
+
 ---
 
 ## Comprobaciones
 
 ```bash
-npm run check              # sintaxis + orden + manifest + 464 pruebas unitarias
+npm run check              # sintaxis + orden + manifest + 497 pruebas unitarias
 npm run test:integration   # contra un opencode real que arranca la propia prueba
 npm run harness            # banco de pruebas visual en http://127.0.0.1:5175
 ```
@@ -368,6 +425,17 @@ Con el banco levantado hay dos páginas:
   el bloque entero en una barra por línea; que si alguien añade un párrafo por
   encima la marca sigue donde estaba el texto; y que si Confluence repinta el
   párrafo marcado, ir a la observación la vuelve a resolver.
+
+  Y las de Jira: el banco trae también **una incidencia** con la forma exacta
+  del Jira Data Center real —cabecera con la barra de acciones, módulos con su
+  cabecera, pestañas de campos, comentarios con su botón de plegar y sus
+  acciones, el editor pegado abajo, el panel lateral con integraciones— y se
+  comprueba que en bloques sale primero el título, luego los campos («Tipo:
+  Tarea»), la descripción y cada comentario con su autor y su fecha, que **nada
+  de la interfaz** entra en ningún bloque (ni «Editar», ni «Contraer el
+  comentario», ni las pestañas, ni la pestaña de campos que está oculta), y que
+  tres observaciones se subrayan donde tienen que caer: la cita en un párrafo de
+  la descripción, un comentario entero y un campo.
 
   Y las del camino leído por la API: la Confluence de mentira contesta a
   `…/rest/api/content/<id>?expand=ancestors` como la de verdad —con la portada
@@ -503,7 +571,8 @@ manifest.json               MV3 · key fija el id · sidePanel
 src/
   panel/
     panel.js                chat, ajustes, memoria, indexador, planificador
-    skills.js               General · Búsqueda · Resumen · Análisis (puro)
+    skills.js               General · Búsqueda · Resumen · Análisis; Búsqueda habla distinto en Jira (JQL) y en Confluence (árbol) (puro)
+    setup.js                claves por producto → bloque MCP; hosts enlazados (puro salvo las llamadas a opencode)
     sources.js              páginas base del análisis: forma, alcance, autocompletado desde el índice, URL pegada, vigilancia del alcance (puro)
     notes.js                observaciones numeradas: el bloque JSON de anclas, su validación, la segunda pasada (puro)
     prompts.js              plantillas, incluido el bloque de lo señalado y la página en bloques
@@ -513,6 +582,7 @@ src/
     anchor.js               escalera de anclaje + Custom Highlight API
     anchor-match.js         localización de citas (puro)
     digest.js               la página en bloques numerados, y de «¶7 + cita» a un Range
+    jira-issue.js           qué es una incidencia de Jira en pantalla: título, campos, descripción, comentarios; y qué es interfaz
     overlay/rects.js        funde por línea y recorta a su caja (puro)
     tree-dom.js             qué es el árbol, una fila y su control · diagnóstico
     locators.js             cascada href → rol → texto + lista blanca de clics

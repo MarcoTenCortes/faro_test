@@ -57,13 +57,34 @@ No hay paso de compilación: son módulos ES que Chrome carga tal cual.
 
 ## 3. Claves de Atlassian
 
-1. Consigue un token:
-   - **Cloud** -> [id.atlassian.com -> Security -> API tokens](https://id.atlassian.com/manage-profile/security/api-tokens)
-   - **Server / Data Center** -> tu perfil -> *Personal Access Tokens*
-2. Abre Jira o Confluence, pulsa el icono de Faro y pega el correo y el token.
-   En Data Center marca la casilla: se usa el token personal y no hace falta correo.
+Jira y Confluence son dos productos, y cada uno lleva **su dirección y su
+token**. Un solo servidor MCP sirve a los dos.
 
-Faro construye entonces el bloque de configuración y te lo deja copiado.
+1. Consigue los tokens:
+   - **Cloud** -> [id.atlassian.com -> Security -> API tokens](https://id.atlassian.com/manage-profile/security/api-tokens).
+     El mismo token vale para Jira y para Confluence: pégalo en los dos bloques.
+   - **Server / Data Center** -> en *cada* producto, tu perfil -> *Personal
+     Access Tokens*. Son dos tokens distintos, de dos instalaciones distintas.
+2. Abre Jira o Confluence, pulsa el icono de Faro y rellena un bloque por
+   producto: dirección, correo (sólo en Cloud) y token. La dirección del
+   producto en el que estás viene rellena; en Cloud también la del otro, porque
+   comparten host. En Data Center el otro producto sale sin marcar: márcalo y
+   escribe dónde vive (`https://jira.tuempresa.com`). Puedes pegar cualquier
+   URL del sitio, una incidencia o una página: Faro se queda con el sitio, y
+   conserva una ruta de contexto si la hay (`/jira`, `/confluence`, `/wiki`).
+   En Data Center marca la casilla: se usan los tokens personales y no hace
+   falta correo.
+
+Faro construye entonces el bloque de configuración y te lo deja copiado. Con
+el MCP conectado comprueba **los dos tokens**, uno detrás de otro, y lo dice.
+
+Si Jira y Confluence viven en **hosts distintos**, el otro host queda
+**enlazado** a éste: comparte el MCP —no se levanta un segundo proceso con el
+mismo token— y al abrirlo no se vuelven a pedir claves. En el registro sale
+como «Sitio enlazado». Y desde ese Jira, el contexto del Confluence enlazado
+(su `CONTEXT.md`, si lo construiste) va en cada pregunta: sirve para saber
+qué páginas mirar, y en el registro sale como «Contexto de Confluence
+enlazado», con el host y su tamaño.
 
 ### Por qué hay un paso manual
 
@@ -113,18 +134,25 @@ está configurado.
 
 ### Server / Data Center
 
-Además del token personal, ten en cuenta que el wiki cuelga de la raíz en lugar
-de `/wiki`, y que Chrome pedirá permiso para ese dominio la primera vez porque
-no está en el manifest. Si tu Confluence usa un certificado interno, añade
-`"CONFLUENCE_SSL_VERIFY": "false"` al bloque `environment`.
+Además de los tokens personales, ten en cuenta que el wiki cuelga de la raíz
+en lugar de `/wiki` (Faro no lo añade: usa la dirección tal como la escribas),
+y que Chrome pedirá permiso para cada dominio la primera vez porque no están
+en el manifest. Si tu Confluence o tu Jira usan un certificado interno, añade
+`"CONFLUENCE_SSL_VERIFY": "false"` o `"JIRA_SSL_VERIFY": "false"` al bloque
+`environment`.
 
 ## 4. Contexto
 
 Al entrar por primera vez en un sitio, Faro ofrece tres caminos:
 
-- **Que lo genere Faro** — recorre el árbol del espacio o el proyecto, con tope
-  de páginas y profundidad, progreso visible y botón de cancelar. Produce el
-  documento de contexto y el índice de navegación.
+- **Que lo genere Faro** — en Confluence recorre el árbol del espacio, con
+  tope de páginas y profundidad; en un proyecto de **Jira** recorre los tipos
+  de incidencia, cuenta los estados del flujo en una muestra de tickets
+  recientes y deduce las **convenciones de nombre** de los resúmenes (los
+  prefijos y separadores tipo «[Backend][Update] …» o «PSO | …»), con ejemplos
+  literales; y si el proyecto tiene un Confluence enlazado, busca ahí si todo
+  eso está documentado y apunta las páginas. Progreso visible y botón de
+  cancelar. Produce el documento de contexto y el índice de navegación.
 - **Traigo el mío** — un `.md` que ya tengas escrito. El índice se construye
   igualmente en segundo plano, porque sin él no hay navegación.
 - **Empezar sin contexto** — el chat funciona igual vía MCP. Puedes indexar
@@ -154,6 +182,22 @@ Junto al selector de modelo hay otras dos cosas:
     selección si la hay, y si no la página abierta— y **no** ofrecen tarjeta de
     navegación, porque no hay ningún sitio al que ir.
 
+  Faro sabe si estás en Jira o en Confluence, y la misma Skill habla distinto
+  según dónde. En **Confluence**, *Búsqueda* localiza la página y te enseña el
+  camino por el árbol. En **Jira** no hay árbol: *Búsqueda* escribe una
+  **consulta JQL** con lo que preguntas —acotada al proyecto en el que estás,
+  salvo que pidas otra cosa, y apoyándose en el contexto del proyecto para
+  poner `issuetype`, `status` o un prefijo del resumen—, te dice qué JQL ha
+  usado para que puedas afinarla, y nombra cada incidencia por su clave y su
+  resumen. La tarjeta de abajo ofrece **«Abrir la búsqueda en Jira»**: te
+  lleva al buscador con esa consulta y la lista entera. La consulta no se lee
+  de lo que el modelo escribe, sino de la llamada real que hizo a
+  `jira_search` (la última que devolvió resultados): un modelo que escribe
+  una JQL en su respuesta y busca con otra no puede mandarte a una lista que
+  no ha visto. Si no buscó nada y nombra una sola incidencia, la tarjeta abre
+  esa incidencia: el proyecto no es un paso intermedio, sería otra carga de
+  página. Y la incidencia que ya tienes abierta nunca es el destino.
+
   El modo **Análisis** hace además una cosa más: numera sus observaciones y
   subraya en la página el pasaje del que habla cada una, con su número detrás.
   En el chat aparece la lista; al pulsar una fila, la página salta a su marca y
@@ -168,6 +212,24 @@ Junto al selector de modelo hay otras dos cosas:
   un script de la extensión decide qué subrayar: la cita si está tal cual, el
   bloque entero si no. Todo en el mismo turno. Si un modelo numera pero se
   olvida del bloque JSON, se le pide aparte en una segunda pasada.
+
+  **En Jira** el modo Análisis trabaja sobre la incidencia abierta. Lo que se
+  trocea en bloques es lo que tienes en pantalla, y sólo eso: el título, los
+  campos de la pestaña visible («Tipo: Tarea», «Prioridad: Crítica»), la
+  descripción, los enlaces a otras incidencias, cada comentario con su autor y
+  su fecha, y el panel de personas y fechas. La interfaz no entra —ni la barra
+  de acciones, ni las pestañas, ni el editor de comentarios, ni los paneles de
+  Git o Structure—, así que el modelo no habla de botones. Lo que analiza es lo
+  que se le pide a un ticket: qué pide exactamente y para quién, si los
+  criterios de aceptación existen y son comprobables, qué falta (entorno,
+  versiones, pasos, dependencias), y si la descripción, los comentarios y los
+  campos se contradicen entre sí o con la documentación del Confluence
+  enlazado. Y subraya igual: un párrafo de la descripción, un comentario
+  entero, un campo. Las **páginas base** desde Jira son páginas del Confluence
+  enlazado: se eligen de su índice, o pegando su URL o su id; desde un Jira
+  Data Center no se puede buscar en la API de Confluence, y la pantalla lo
+  dice. En el alcance *Sólo estas*, leer la propia incidencia por el MCP (sus
+  comentarios plegados, su historial) no cuenta como salirse.
 
   La elección se recuerda por sitio, igual que el modelo.
 
@@ -245,6 +307,33 @@ El MCP no conectó. Comprueba, en este orden:
 **«El modelo no tenía ninguna herramienta del MCP disponible»**
 Es lo que sale cuando se pregunta antes de que el MCP haya terminado de
 arrancar. No es culpa del token: espera y reintenta desde ajustes.
+
+**Dice «Jira: …» o «Confluence: …» y no sigue**
+Son dos tokens y se comprueban los dos; el resultado queda en el registro como
+«MCP verificado», con una línea por producto. El que falla se dice con su nombre:
+revisa ese, no el otro. En Data Center, comprueba además que la dirección de
+ese producto es la suya (`https://jira.…`, no la de Confluence).
+
+**Abro el Jira de mi Confluence (u otro host) y me vuelve a pedir claves**
+Sólo pasa si configuraste un solo producto. Para enlazar los dos hosts hay que
+darlos juntos en la misma pantalla de claves: entonces el segundo host queda
+apuntando al mismo MCP («Sitio enlazado» en el registro) y no pide nada. Si ya
+lo hiciste por separado, tienes dos MCP con el mismo token: funciona, pero es
+un proceso de más. Desde **Ajustes → Cambiar las claves** puedes rehacerlo con
+los dos productos.
+
+**En Jira la tarjeta no ofrece abrir la búsqueda**
+Sólo sale cuando el modelo llamó de verdad a `jira_search` y esa búsqueda
+devolvió algo: en el registro aparece «Búsqueda de Jira como destino» con la
+consulta y cuántos resultados dio. Si no está, es que el modelo contestó sin
+buscar (pásale la Skill Búsqueda, que le obliga) o que todas sus consultas
+volvieron vacías; entonces, si nombra una sola incidencia, la tarjeta abre esa.
+
+**En Jira la Skill Búsqueda no encuentra nada**
+Mira qué JQL ha usado: lo dice en la respuesta. Casi siempre es que acotó al
+proyecto de la URL y lo que buscas está en otro: dile «en todos los proyectos»
+o nombra el proyecto. Y en Jira Data Center `text ~` busca por palabras
+enteras.
 
 **«El modelo no aceptó la petición» o el turno se queda pensando**
 Es el modelo, no Faro. Cambia de modelo en el desplegable: el propio mensaje
@@ -342,6 +431,17 @@ de cada número, cómo se resolvió: `block+quote` es la cita dentro de su bloqu
 `block+whole` el bloque entero, `block-moved` que el número no coincidía pero
 el texto sí, y `global` que el bloque ya no estaba y la cita se buscó en toda
 la página.
+
+**En Jira el análisis habla de botones o de la barra lateral**
+La incidencia se lee por sus módulos —título, campos, descripción, comentarios—
+y la interfaz queda fuera; si algo de la interfaz se cuela en los bloques, es
+que tu Jira pinta la vista de otra forma (Cloud no está comprobado; Data Center
+9 sí). Con la Skill Análisis puesta, mira en el **registro** «Turno enviado ·
+página en N bloques» y, en el banco de pruebas, el botón «Jira: la incidencia
+en bloques» enseña qué sale; lo que hay que ajustar está en
+`src/content/jira-issue.js`, el único sitio donde se decide qué es una
+incidencia en pantalla. Mientras tanto, el análisis funciona igual: sólo hay
+más texto del que hace falta.
 
 **Algunas observaciones salen en gris, sin marca**
 Son las que no apuntan a ningún bloque de la página: hablan de ella en general,

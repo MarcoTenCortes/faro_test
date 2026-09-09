@@ -77,36 +77,46 @@ export function parseAtlassianUrl(url) {
   }
 
   // ---- Jira -------------------------------------------------------------
+  // Las claves entran en el prompt del sistema como palabras de Faro: sólo
+  // valen con la forma de una clave. Un `?selectedIssue=` o un proyecto con
+  // cualquier otra cosa (un enlace de una página de Confluence puede llevar lo
+  // que quiera) se descarta, no se sube a mayúsculas.
+  const claveDeConsulta = validIssueKey(u.searchParams.get('selectedIssue'))
   // /browse/ABC-123
   const browse = path.match(/^\/browse\/([A-Za-z][A-Za-z0-9_]*-\d+)/)
   if (browse) {
     out.product = 'jira'
-    out.issueKey = browse[1].toUpperCase()
-    out.projectKey = out.issueKey.split('-')[0]
+    const clave = validIssueKey(browse[1])
+    if (clave) {
+      out.issueKey = clave
+      out.projectKey = clave.split('-')[0]
+    }
     return out
   }
   // /jira/software/projects/ABC/boards/1  |  /jira/core/projects/ABC/...
   const proj = path.match(/\/jira\/[^/]+\/projects\/([^/]+)/i)
   if (proj) {
     out.product = 'jira'
-    out.projectKey = decodeURIComponent(proj[1]).toUpperCase()
+    const proyecto = validProjectKey(safeDecode(proj[1]))
+    if (proyecto) out.projectKey = proyecto
     const board = path.match(/\/boards\/(\d+)/)
     if (board) out.boardId = board[1]
-    const selected = u.searchParams.get('selectedIssue')
-    if (selected) out.issueKey = selected.toUpperCase()
+    if (claveDeConsulta) out.issueKey = claveDeConsulta
     return out
   }
-  // /projects/ABC/issues/...  (DC)
-  const dcProj = path.match(/^\/projects\/([A-Za-z][A-Za-z0-9_]*)/)
+  // /projects/ABC/issues/ABC-7  |  /projects/ABC/summary  (DC)
+  const dcProj = path.match(/^\/projects\/([A-Za-z][A-Za-z0-9_]*)(?:\/issues\/([A-Za-z][A-Za-z0-9_]*-\d+))?/)
   if (dcProj) {
     out.product = 'jira'
-    out.projectKey = dcProj[1].toUpperCase()
+    const proyecto = validProjectKey(dcProj[1])
+    if (proyecto) out.projectKey = proyecto
+    const clave = validIssueKey(dcProj[2]) || claveDeConsulta
+    if (clave) out.issueKey = clave
     return out
   }
   if (/^\/(jira|secure|issues)(\/|$)/i.test(path)) {
     out.product = 'jira'
-    const selected = u.searchParams.get('selectedIssue')
-    if (selected) out.issueKey = selected.toUpperCase()
+    if (claveDeConsulta) out.issueKey = claveDeConsulta
     return out
   }
 
@@ -146,6 +156,26 @@ export function parseAtlassianUrl(url) {
   }
 
   return null
+}
+
+/** Una clave de incidencia con forma de clave («ABC-123»), en mayúsculas, o ''. Pura. */
+export function validIssueKey(value) {
+  const k = String(value || '').trim().toUpperCase()
+  return /^[A-Z][A-Z0-9_]{0,19}-\d{1,9}$/.test(k) ? k : ''
+}
+
+/** Una clave de proyecto con forma de clave («ABC»), en mayúsculas, o ''. Pura. */
+export function validProjectKey(value) {
+  const k = String(value || '').trim().toUpperCase()
+  return /^[A-Z][A-Z0-9_]{0,19}$/.test(k) ? k : ''
+}
+
+function safeDecode(s) {
+  try {
+    return decodeURIComponent(s)
+  } catch {
+    return String(s || '')
+  }
 }
 
 /**

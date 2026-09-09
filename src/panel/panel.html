@@ -119,25 +119,55 @@
 <section class="screen hidden" id="screen-setup" aria-labelledby="setup-title">
   <div class="screen-inner" id="setup-main">
     <h1 id="setup-title">Conectar con <span id="setup-host"></span></h1>
-    <p>Este sitio todavía no tiene claves configuradas. Se guardan en tu opencode local, no en el navegador.</p>
+    <p>Este sitio todavía no tiene claves configuradas. Se guardan en tu opencode local, no en el navegador.
+      Jira y Confluence llevan cada uno su dirección y su token; un solo MCP sirve a los dos, y si viven en
+      hosts distintos el otro queda enlazado a éste y no volverá a pedirlas.</p>
 
-    <div class="field">
-      <label for="setup-email">Correo de tu cuenta Atlassian</label>
-      <input id="setup-email" type="email" spellcheck="false" placeholder="tu@empresa.com">
-    </div>
-    <div class="field">
-      <label for="setup-token">API token</label>
-      <input id="setup-token" type="password" spellcheck="false" placeholder="pega aquí el token">
-      <p class="fine">Se crea en <span class="link-like" id="link-token">id.atlassian.com → Security → API tokens</span>.</p>
-    </div>
-    <fieldset class="field">
-      <legend>Qué habilitar</legend>
-      <label class="check"><input type="checkbox" id="setup-jira" checked> Jira</label>
-      <label class="check"><input type="checkbox" id="setup-confluence" checked> Confluence</label>
-    </fieldset>
     <div class="field" id="setup-dc-field">
-      <label class="check"><input type="checkbox" id="setup-dc"> Es Server / Data Center (token personal, sin correo)</label>
+      <label class="check"><input type="checkbox" id="setup-dc"> Es Server / Data Center (token personal de cada producto, sin correo)</label>
     </div>
+
+    <!-- Un bloque por producto: dirección, correo (sólo en Cloud) y token. Son dos tokens
+         porque son dos productos: en Data Center, dos instalaciones con su token personal. -->
+    <fieldset class="field product-keys" id="setup-jira-block">
+      <legend><label class="check"><input type="checkbox" id="setup-jira" checked> Jira</label></legend>
+      <div id="setup-jira-fields">
+        <div class="field">
+          <label for="setup-jira-url">Dirección de Jira</label>
+          <input id="setup-jira-url" type="text" spellcheck="false" placeholder="https://jira.tuempresa.com">
+        </div>
+        <div class="field" id="setup-jira-email-field">
+          <label for="setup-jira-email">Correo de la cuenta</label>
+          <input id="setup-jira-email" type="email" spellcheck="false" placeholder="tu@empresa.com">
+        </div>
+        <div class="field">
+          <label for="setup-jira-token">API token de Jira</label>
+          <input id="setup-jira-token" type="password" spellcheck="false" placeholder="pega aquí el token de Jira">
+        </div>
+      </div>
+    </fieldset>
+
+    <fieldset class="field product-keys" id="setup-confluence-block">
+      <legend><label class="check"><input type="checkbox" id="setup-confluence" checked> Confluence</label></legend>
+      <div id="setup-confluence-fields">
+        <div class="field">
+          <label for="setup-confluence-url">Dirección de Confluence</label>
+          <input id="setup-confluence-url" type="text" spellcheck="false" placeholder="https://confluence.tuempresa.com">
+        </div>
+        <div class="field" id="setup-confluence-email-field">
+          <label for="setup-confluence-email">Correo de la cuenta</label>
+          <input id="setup-confluence-email" type="email" spellcheck="false" placeholder="tu@empresa.com">
+        </div>
+        <div class="field">
+          <label for="setup-confluence-token">API token de Confluence</label>
+          <input id="setup-confluence-token" type="password" spellcheck="false" placeholder="pega aquí el token de Confluence">
+        </div>
+      </div>
+    </fieldset>
+
+    <p class="fine">En Cloud los tokens se crean en <span class="link-like" id="link-token">id.atlassian.com → Security → API tokens</span>
+      y el mismo vale para los dos productos: pégalo en ambos. En Server / Data Center cada producto tiene el suyo:
+      tu perfil → <em>Personal Access Tokens</em>, en Jira y en Confluence.</p>
 
     <div class="row">
       <button class="primary" id="btn-setup-save" type="button">Conectar y comprobar</button>
@@ -193,7 +223,7 @@
 
     <div class="choice" id="choice-generate" tabindex="0" role="button">
       <div class="choice-title">Que lo genere Faro</div>
-      <div class="choice-text">Recorre el árbol, los títulos y las etiquetas. Con tope, progreso visible y botón de cancelar.</div>
+      <div class="choice-text" id="context-generate-text">Recorre el árbol, los títulos y las etiquetas. Con tope, progreso visible y botón de cancelar.</div>
     </div>
     <div class="choice" id="choice-upload" tabindex="0" role="button">
       <div class="choice-title">Traigo el mío</div>

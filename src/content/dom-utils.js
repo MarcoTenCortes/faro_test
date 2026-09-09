@@ -196,12 +196,19 @@ export function isVisible(el) {
  */
 export function isEditing() {
   if (/\/edit(-v2)?\//.test(location.pathname)) return true
-  if (document.querySelector('[data-testid="editor-container"], .ak-editor-content-area, [contenteditable="true"]')) {
-    const ce = document.querySelector('[contenteditable="true"]')
-    if (ce && ce.getBoundingClientRect().height > 120) return true
+  // El editor de comentarios de una incidencia no es editar la incidencia:
+  // escribir un comentario mientras se analiza es el uso normal en Jira, y
+  // además ese módulo no se lee (SKIP_MODULES). Se mira cualquier editor
+  // abierto, no sólo el primero: el de comentarios suele ir el último.
+  for (const ce of document.querySelectorAll('[contenteditable="true"]')) {
+    if (ce.closest(COMMENT_EDITORS)) continue
+    if (ce.getBoundingClientRect().height > 120) return true
   }
   return false
 }
+
+/** Dónde vive el editor de comentarios: Jira Data Center, Jira Cloud, Confluence. */
+const COMMENT_EDITORS = '#addcomment, #footer-comment-button, [data-testid*="comment" i], .quick-comment-container, #comments-section'
 
 /**
  * Avisa cuando cambia la URL, incluidos los cambios por pushState que no

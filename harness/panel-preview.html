@@ -246,7 +246,14 @@ frame.addEventListener('load', async () => {
   // ---- relleno de las pantallas
   $('connect-cmd').textContent = 'opencode serve --port 4096 --cors chrome-extension://ickohiffpicdfeameogbihbcanbjibmk'
   $('server-url').value = 'http://127.0.0.1:4096'
-  $('setup-host').textContent = 'acme.atlassian.net'
+  // La pantalla de claves, como en un Data Center: Confluence es el sitio
+  // abierto y Jira vive en otro host, con su propio token.
+  $('setup-host').textContent = 'confluence.simplprogramme.eu'
+  $('setup-dc').checked = true
+  $('setup-jira-url').value = 'https://jira.simplprogramme.eu'
+  $('setup-confluence-url').value = 'https://confluence.simplprogramme.eu'
+  $('setup-jira-email-field').classList.add('hidden')
+  $('setup-confluence-email-field').classList.add('hidden')
   $('context-scope').textContent = 'el espacio ENG'
   $('settings-site-info').textContent = 'acme.atlassian.net · 212 entradas indexadas · con contexto'
   $('delay-value').textContent = '900'
@@ -262,8 +269,10 @@ frame.addEventListener('load', async () => {
         type: 'local',
         command: ['uvx', 'mcp-atlassian'],
         environment: {
+          JIRA_URL: 'https://jira.simplprogramme.eu',
+          JIRA_PERSONAL_TOKEN: 'tu-token-personal-de-jira',
           CONFLUENCE_URL: 'https://confluence.simplprogramme.eu',
-          CONFLUENCE_PERSONAL_TOKEN: 'tu-token-personal',
+          CONFLUENCE_PERSONAL_TOKEN: 'tu-token-personal-de-confluence',
           READ_ONLY_MODE: 'true',
         },
         enabled: true,

@@ -5,44 +5,40 @@
  * servidor MCP, que opencode escribe en su propia configuración en disco. La
  * extensión sólo recuerda «este host ya está configurado».
  *
- * `buildMcpConfig` es pura y está cubierta por pruebas, porque un error aquí
- * significa mandar credenciales a donde no toca.
+ * Jira y Confluence llevan CADA UNO su dirección y su token. Antes se pedía un
+ * token y se copiaba en los dos productos con la misma dirección, y eso sólo
+ * es verdad en Cloud: en Server/Data Center son dos instalaciones distintas,
+ * en hosts distintos, con un token personal cada una. Un solo servidor MCP
+ * sirve a los dos productos; si viven en hosts distintos, el otro host queda
+ * ENLAZADO a éste (`siteRecords`): comparte el MCP y, desde Jira, el contexto
+ * del Confluence de su pareja.
+ *
+ * `buildMcpConfig`, `siteBaseUrl` y `siteRecords` son puras y están cubiertas
+ * por pruebas, porque un error aquí significa mandar credenciales a donde no
+ * toca, o pedirlas dos veces.
  */
 
 import { mcpNameForHost } from '../shared/config.js'
 
+/** Los dos productos, en el orden en que se enseñan y se comprueban. */
+export const PRODUCTS = ['jira', 'confluence']
+
+const LABEL = { jira: 'Jira', confluence: 'Confluence' }
+const PREFIX = { jira: 'JIRA', confluence: 'CONFLUENCE' }
+
 /**
- * @param {{origin:string, email:string, token:string, jira:boolean,
- *          confluence:boolean, dataCenter:boolean}} opts
+ * @typedef {{url:string, email?:string, token:string}} ProductKeys
+ *
+ * @param {{jira?: ProductKeys|null, confluence?: ProductKeys|null, dataCenter?: boolean}} opts
+ *        Las claves de cada producto habilitado; null o ausente si no se
+ *        habilita. `dataCenter` vale para los dos: token personal, sin correo.
  */
-export function buildMcpConfig({ origin, email, token, jira = true, confluence = true, dataCenter = false }) {
-  const base = String(origin || '').replace(/\/+$/, '')
-  if (!base) throw new Error('Falta la dirección del sitio.')
-  if (!token) throw new Error('Falta el API token.')
-  if (!dataCenter && !email) throw new Error('Falta el correo de la cuenta.')
+export function buildMcpConfig({ jira = null, confluence = null, dataCenter = false } = {}) {
   if (!jira && !confluence) throw new Error('Hay que habilitar al menos Jira o Confluence.')
 
-  const cloud = /\.atlassian\.net$/i.test(hostOf(base))
   const environment = {}
-
-  if (jira) {
-    environment.JIRA_URL = base
-    if (dataCenter) environment.JIRA_PERSONAL_TOKEN = token
-    else {
-      environment.JIRA_USERNAME = email
-      environment.JIRA_API_TOKEN = token
-    }
-  }
-
-  if (confluence) {
-    // En Cloud el wiki cuelga de /wiki; en Data Center está en la raíz.
-    environment.CONFLUENCE_URL = cloud ? base + '/wiki' : base
-    if (dataCenter) environment.CONFLUENCE_PERSONAL_TOKEN = token
-    else {
-      environment.CONFLUENCE_USERNAME = email
-      environment.CONFLUENCE_API_TOKEN = token
-    }
-  }
+  if (jira) Object.assign(environment, productEnv('jira', jira, dataCenter))
+  if (confluence) Object.assign(environment, productEnv('confluence', confluence, dataCenter))
 
   // Sólo lectura: Faro no necesita escribir en Jira ni en Confluence, y no
   // habilitar la escritura es la forma más simple de que no pueda.
@@ -57,6 +53,59 @@ export function buildMcpConfig({ origin, email, token, jira = true, confluence =
   }
 }
 
+/** Las variables de UN producto. Cada dato que falta se dice con su nombre. */
+function productEnv(product, keys, dataCenter) {
+  const label = LABEL[product]
+  const prefix = PREFIX[product]
+  const base = siteBaseUrl(keys?.url)
+  if (!base) throw new Error(`Falta la dirección de ${label} (https://…).`)
+  const token = String(keys?.token || '')
+  if (!token) throw new Error(`Falta el API token de ${label}.`)
+  const email = String(keys?.email || '').trim()
+  if (!dataCenter && !email) throw new Error(`Falta el correo de la cuenta de ${label}.`)
+
+  const env = {}
+  // En Cloud el wiki cuelga de /wiki; en Data Center está donde el usuario
+  // diga (la raíz, o una ruta de contexto como /confluence o /wiki).
+  env[`${prefix}_URL`] = product === 'confluence' && isCloudHost(hostOf(base)) ? base + '/wiki' : base
+  if (dataCenter) env[`${prefix}_PERSONAL_TOKEN`] = token
+  else {
+    env[`${prefix}_USERNAME`] = email
+    env[`${prefix}_API_TOKEN`] = token
+  }
+  return env
+}
+
+/**
+ * La dirección base de un producto a partir de lo que el usuario escribe.
+ *
+ * Se acepta una URL cualquiera del sitio —la portada, una incidencia, una
+ * página— y se queda en el sitio: en Cloud, el origen a secas (el /wiki lo
+ * pone `buildMcpConfig`); en Data Center, el origen más la ruta de contexto si
+ * la hay (/jira, /confluence, /wiki), quitando lo que sea claramente una ruta
+ * de producto (/browse/…, /display/…, /pages/…). Cadena vacía si no es una
+ * dirección http(s). Pura.
+ */
+export function siteBaseUrl(url) {
+  let u
+  try {
+    u = new URL(String(url || '').trim())
+  } catch {
+    return ''
+  }
+  if (!/^https?:$/.test(u.protocol)) return ''
+  if (isCloudHost(u.hostname)) return u.origin
+
+  const path = u.pathname
+    .replace(/\/(browse|secure|issues|projects|spaces|display|pages|label|rest|[a-z]+\.action)(\/.*)?$/i, '')
+    .replace(/\/+$/, '')
+  return u.origin + path
+}
+
+export function isCloudHost(host) {
+  return /\.atlassian\.net$/i.test(String(host || ''))
+}
+
 function hostOf(url) {
   try {
     return new URL(url).hostname
@@ -66,15 +115,50 @@ function hostOf(url) {
 }
 
 /**
+ * Qué recordar de cada host tras configurar el MCP.
+ *
+ * El MCP se registra con el nombre del host desde el que se configuró. Si el
+ * otro producto vive en otro host —Jira en `jira.empresa.com`, Confluence en
+ * `confluence.empresa.com`—, ese host queda enlazado: mismo `mcpName`, para
+ * que al abrirlo no se vuelvan a pedir claves ni se levante un segundo MCP
+ * con el mismo token, y la referencia cruzada (`jiraHost`/`confluenceHost`)
+ * que es lo que permite compartir el contexto de Confluence desde Jira. En
+ * Cloud los dos productos comparten host y no hay nada que enlazar. Pura.
+ *
+ * @param {{host:string, product:string, mcpName:string, jiraHost?:string, confluenceHost?:string}} input
+ * @returns {Array<{host:string, patch:object}>} el del host actual primero
+ */
+export function siteRecords({ host, product, mcpName, jiraHost = '', confluenceHost = '' }) {
+  const h = String(host || '').toLowerCase()
+  const j = String(jiraHost || '').toLowerCase()
+  const c = String(confluenceHost || '').toLowerCase()
+
+  const record = (target, prod) => {
+    const patch = { configured: true, mcpName, product: prod, cloud: isCloudHost(target) }
+    if (j && j !== target) patch.jiraHost = j
+    if (c && c !== target) patch.confluenceHost = c
+    return { host: target, patch }
+  }
+
+  const out = [record(h, product || 'unknown')]
+  if (j && j !== h) out.push(record(j, 'jira'))
+  if (c && c !== h && c !== j) out.push(record(c, 'confluence'))
+  return out
+}
+
+/**
  * ¿Está ya configurado y conectado el MCP de este host?
  *
  * `GET /mcp` devuelve `{ "<nombre>": { "status": "connected" } }`. Cualquier
  * estado que no sea exactamente «connected» se trata como no listo: es
  * preferible esperar de más que preguntarle al modelo cuando aún no tiene
  * herramientas.
+ *
+ * @param {string} [mcpName] el nombre guardado para este host, si lo hay: un
+ *        host enlazado usa el MCP de su pareja, no uno con su propio nombre.
  */
-export function mcpStatusFor(mcpList, host) {
-  const name = mcpNameForHost(host)
+export function mcpStatusFor(mcpList, host, mcpName = '') {
+  const name = mcpName || mcpNameForHost(host)
   const entry = mcpList?.[name]
   if (!entry) return { name, present: false, connected: false, status: null }
   const status = typeof entry === 'string' ? entry : entry.status || entry.state || null
@@ -88,13 +172,13 @@ export function mcpStatusFor(mcpList, host) {
  * y exponer sus herramientas. Preguntarle al modelo antes de eso hace que
  * responda sin usar el MCP, y desde fuera parece que las claves no valen.
  */
-export async function waitForMcpReady(client, host, { timeoutMs = 90000, intervalMs = 1500, onTick, signal } = {}) {
+export async function waitForMcpReady(client, host, { timeoutMs = 90000, intervalMs = 1500, onTick, signal, mcpName = '' } = {}) {
   const deadline = Date.now() + timeoutMs
   let last = null
   for (;;) {
     if (signal?.aborted) return { ...last, connected: false, aborted: true }
     const list = await client.listMcp().catch(() => ({}))
-    last = mcpStatusFor(list, host)
+    last = mcpStatusFor(list, host, mcpName)
     if (last.connected) return last
     onTick?.(last, Math.max(0, deadline - Date.now()))
     if (Date.now() >= deadline) return last
@@ -112,9 +196,9 @@ export async function waitForMcpReady(client, host, { timeoutMs = 90000, interva
  * `opencode.json` y reiniciar el servidor. Por eso esto devuelve `ready`
  * en vez de dar por hecho que quedó configurado.
  */
-export async function configureMcp(client, { host, origin, email, token, jira, confluence, dataCenter }) {
+export async function configureMcp(client, { host, jira, confluence, dataCenter }) {
   const name = mcpNameForHost(host)
-  const config = buildMcpConfig({ origin, email, token, jira, confluence, dataCenter })
+  const config = buildMcpConfig({ jira, confluence, dataCenter })
 
   await client.addMcp(name, config).catch(() => {})
   await client.connectMcp(name).catch(() => {})
@@ -146,11 +230,20 @@ export function fullConfigSnippet(name, config) {
   )
 }
 
-/** Prueba real contra la API, para no dar por bueno un token que no vale. */
-export async function verifyCredentials(client, { sessionID, model, host, jira, confluence }) {
-  const tool = jira ? 'jira_get_user_profile' : 'confluence_search'
+/**
+ * Prueba real contra la API de UN producto, para no dar por bueno un token
+ * que no vale. Con los dos habilitados se llama dos veces: son dos tokens.
+ *
+ * En Jira se busca una incidencia cualquiera con JQL (`jira_search`, límite
+ * 1): es la misma herramienta que usa la Skill de búsqueda, y no necesita
+ * saber ningún proyecto. La de perfil de usuario pide un identificador que
+ * aquí no se conoce.
+ */
+export async function verifyCredentials(client, { sessionID, model, host, product }) {
+  const jira = product === 'jira'
+  const tool = jira ? 'jira_search' : 'confluence_search'
   const ask = jira
-    ? 'Usa la herramienta del MCP de Atlassian para leer mi propio perfil de Jira. Responde SOLO con: OK <mi nombre> o ERROR <motivo breve>.'
+    ? 'Usa la herramienta de búsqueda de Jira del MCP de Atlassian con el JQL «order by created DESC» y límite 1, para comprobar que las claves valen. Responde SOLO con: OK <clave de la incidencia encontrada> o ERROR <motivo breve>.'
     : 'Usa el MCP de Atlassian para buscar en Confluence una sola página cualquiera (límite 1). Responde SOLO con: OK <título encontrado> o ERROR <motivo breve>.'
 
   // Por `runTurn` y no por `prompt`: opencode reparte el turno en varios
@@ -161,7 +254,7 @@ export async function verifyCredentials(client, { sessionID, model, host, jira, 
     {
       text: ask,
       model,
-      system: `Estás comprobando credenciales del sitio ${host}. Usa la herramienta ${tool} si existe. No inventes nada.`,
+      system: `Estás comprobando las credenciales de ${LABEL[product] || 'Atlassian'} del sitio ${host}. Usa la herramienta ${tool} si existe. No inventes nada.`,
     },
     { stallMs: 60000, maxMs: 180000 }
   )

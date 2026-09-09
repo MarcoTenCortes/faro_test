@@ -161,6 +161,120 @@ const PAGES = {
       <h2>Identity Provider</h2>
       <p>Este componente se despliega dentro del Governance Authority Agent y genera y renueva credenciales para los participantes recién incorporados.</p>`,
   },
+
+  // Una incidencia de Jira con la forma del Data Center real del usuario
+  // (Jira 9): cabecera con el título y la barra de acciones, módulos con su
+  // cabecera y su contenido, pestañas de campos, comentarios con su botón de
+  // plegar y sus acciones, el editor de comentarios pegajoso y el panel lateral
+  // con integraciones. Es lo que la lectura en bloques tiene que saber trocear
+  // sin llevarse la interfaz.
+  'issue:ENG-7': {
+    path: '/browse/ENG-7',
+    title: 'ENG-7 Rotar los tokens de servicio antes del despliegue de marzo',
+    crumb: 'Jira · ENG · ENG-7',
+    raw: true,
+    body: `
+      <div id="issue-content" class="issue-edit-form">
+        <div class="issue-view">
+          <header id="stalker" class="issue-header js-stalker">
+            <div class="issue-header-content">
+              <div class="issue-header-keys"><a href="/browse/ENG-7" id="key-val">ENG-7</a></div>
+              <div id="summary-val" class="issue-summary">Rotar los tokens de servicio antes del despliegue de marzo</div>
+              <div class="command-bar">
+                <ul class="ops-menus aui-toolbar2">
+                  <li><a href="#" class="tb-btn">Editar</a></li>
+                  <li><a href="#" class="tb-btn">Añadir comentario</a></li>
+                  <li><a href="#" class="tb-btn">Asignar</a></li>
+                  <li><a href="#" class="tb-btn">Más</a></li>
+                </ul>
+              </div>
+              <div id="issue-header-pager">1 de 45196 · <a href="#">Siguiente incidencia</a></div>
+            </div>
+          </header>
+          <div class="issue-body-content">
+            <div class="aui-item issue-main-column">
+              <div id="details-module" class="module toggle-wrap">
+                <div class="mod-header"><h3 class="toggle-header">Detalles</h3><button class="aui-button toggle-title" type="button"><span>Contraer Detalles</span></button></div>
+                <div class="mod-content">
+                  <ul id="issuedetails" class="property-list two-cols">
+                    <li class="item"><div class="wrap"><strong class="name">Tipo:</strong> <span class="value">Tarea</span></div></li>
+                    <li class="item item-right"><div class="wrap"><strong class="name">Estado:</strong> <span class="value"><span class="lozenge">En curso</span></span></div></li>
+                    <li class="item"><div class="wrap"><strong class="name">Prioridad:</strong> <span class="value">Crítica</span></div></li>
+                    <li class="item item-right"><div class="wrap"><strong class="name">Versión correctora:</strong> <span class="value">Major Release Q4-2026</span></div></li>
+                    <li class="item"><div class="wrap"><strong class="name">Etiquetas:</strong> <span class="value"><ul class="labels"><li><a href="#">seguridad</a></li><li><a href="#">tokens</a></li></ul></span></div></li>
+                  </ul>
+                  <ul class="tabs-menu"><li class="menu-item active-tab"><a href="#">Main</a></li><li class="menu-item"><a href="#">Planning</a></li></ul>
+                  <div class="tabs-pane active-pane"><ul class="property-list"><li class="item"><div class="wrap"><strong class="name">Epic Link:</strong> <span class="value">Rotación de credenciales</span></div></li></ul></div>
+                  <div class="tabs-pane" style="display:none"><ul class="property-list"><li class="item"><div class="wrap"><strong class="name">Sprint:</strong> <span class="value">S37 Infra</span></div></li></ul></div>
+                </div>
+              </div>
+              <div id="descriptionmodule" class="module toggle-wrap">
+                <div class="mod-header"><h3 class="toggle-header">Descripción</h3><button class="aui-button toggle-title" type="button"><span>Contraer Descripción</span></button></div>
+                <div class="mod-content"><div id="description-val" class="field-ignore-highlight"><div class="user-content-block">
+                  <p><b>Objetivo:</b> rotar los tokens de servicio de todos los componentes antes del despliegue de marzo, sin ventana de corte.</p>
+                  <p>Por política de seguridad el token expira a los 90 días naturales y debe rotarse desde el panel de administración.</p>
+                  <p><b>Criterios de aceptación:</b></p>
+                  <ul>
+                    <li>Ningún servicio queda fuera durante la rotación.</li>
+                    <li>El exportador de métricas heredado mantiene su token fijo hasta el próximo trimestre.</li>
+                  </ul>
+                </div></div></div>
+              </div>
+              <div id="attachmentmodule" class="module toggle-wrap">
+                <div class="mod-header"><h3 class="toggle-header">Adjuntos</h3><a href="#" class="ops">Opciones</a></div>
+                <div class="mod-content issue-drop-zone"><div class="issue-drop-zone"><p>Suelte los archivos para adjuntarlos o <a href="#">explorar</a>.</p></div></div>
+              </div>
+              <div id="linkingmodule" class="module toggle-wrap">
+                <div class="mod-header"><h3 class="toggle-header">Enlace a Incidencias</h3></div>
+                <div class="mod-content"><dl class="links-list"><dt>relates to</dt><dd><div class="link-content"><a href="/browse/ENG-8">ENG-8</a> Revisar permisos del exportador</div></dd></dl></div>
+              </div>
+              <div id="activitymodule" class="module toggle-wrap">
+                <div class="mod-header"><h3 class="toggle-header">Actividad</h3></div>
+                <div class="mod-content">
+                  <ul class="tabs-menu" id="issue-tabs"><li class="menu-item"><a href="#">Todo</a></li><li class="menu-item active-tab"><a href="#">Comentarios</a></li><li class="menu-item"><a href="#">Histórico de Cambios</a></li></ul>
+                  <div id="issue_actions_container" class="issuePanelContainer">
+                    <div id="comment-1001" class="issue-data-block activity-comment twixi-block expanded">
+                      <div class="twixi-wrap verbose actionContainer">
+                        <div class="action-head">
+                          <button class="twixi icon-default" type="button"><span>Contraer el comentario: Ana Ruiz</span></button>
+                          <div class="action-details"><a class="user-hover" href="#">Ana Ruiz</a> añadió un comentario - <span class="date">14/ago/26 6:18 AM</span></div>
+                        </div>
+                        <div class="action-body flooded"><p>El exportador de métricas heredado no admite recarga en caliente: la rotación de su token tiene que ser a mano, en ventana de mantenimiento.</p></div>
+                        <div class="action-links action-comment-actions"><button class="pinbutton" type="button">Anclar</button><a href="#">Editar</a><a href="#">Borrar</a></div>
+                      </div>
+                    </div>
+                    <div id="comment-1002" class="issue-data-block activity-comment twixi-block expanded">
+                      <div class="twixi-wrap verbose actionContainer">
+                        <div class="action-head">
+                          <button class="twixi icon-default" type="button"><span>Contraer el comentario: Marco</span></button>
+                          <div class="action-details"><a class="user-hover" href="#">Marco</a> añadió un comentario - <span class="date">15/ago/26 9:02 AM</span></div>
+                        </div>
+                        <div class="action-body flooded"><p>De acuerdo. Entonces el criterio de «ningún servicio queda fuera» no se cumple para el exportador: hay que decirlo en la descripción.</p></div>
+                        <div class="action-links action-comment-actions"><button class="pinbutton" type="button">Anclar</button></div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div id="addcomment" class="module sticky">
+                <div id="addcomment-inner" class="module"><div class="mod-content"><textarea placeholder="Añadir un comentario…"></textarea><p>Consejo de expertos: pulsa m para añadir un comentario</p></div></div>
+              </div>
+            </div>
+            <div id="viewissuesidebar" class="aui-item">
+              <div id="peoplemodule" class="module toggle-wrap">
+                <div class="mod-header"><h3 class="toggle-header">Personas</h3></div>
+                <div class="mod-content"><dl><dt>Persona asignada:</dt><dd>Sin asignar</dd><dt>Informador:</dt><dd>Paulo Cabrita</dd></dl></div>
+              </div>
+              <div id="datesmodule" class="module toggle-wrap">
+                <div class="mod-header"><h3 class="toggle-header">Fechas</h3></div>
+                <div class="mod-content"><dl><dt>Creada:</dt><dd>Hace 4 horas</dd></dl></div>
+              </div>
+              <div id="git-issue-webpanel" class="module"><div class="mod-header"><h3>Git Integration</h3></div><div class="mod-content"><p>0 commits</p><a href="#">Create branch</a></div></div>
+            </div>
+          </div>
+        </div>
+      </div>`,
+  },
 }
 
 const content = document.getElementById('page-content')
@@ -170,7 +284,9 @@ const log = document.getElementById('rig-log')
 function renderPage(key, { push = true } = {}) {
   const page = PAGES[key]
   if (!page) return
-  content.innerHTML = `<article class="doc"><h1>${page.title}</h1>${page.body}</article>`
+  // Una incidencia de Jira trae su propia estructura entera; una página de
+  // Confluence es un artículo con su título.
+  content.innerHTML = page.raw ? page.body : `<article class="doc"><h1>${page.title}</h1>${page.body}</article>`
   crumbs.textContent = page.crumb
   // Como el Confluence real: la pagina en la que estas se pinta en negrita y
   // SIN enlace. Es justo el caso que hacia decir «no encuentro este paso».
@@ -194,7 +310,7 @@ function renderPage(key, { push = true } = {}) {
     }
   })
   if (push && location.pathname !== page.path) history.pushState({ key }, '', page.path)
-  document.title = page.title + ' · Confluence'
+  document.title = page.title + (page.raw ? ' - Jira' : ' · Confluence')
 }
 
 function keyForPath(path) {
@@ -510,6 +626,24 @@ function observacionesPorBloques(digest) {
   ]
 }
 
+/**
+ * Tres observaciones sobre la incidencia, construidas con sus bloques: un
+ * párrafo de la descripción con cita, un comentario entero y un campo. Es lo
+ * que el análisis en Jira tiene que poder subrayar.
+ */
+function observacionesDeIncidencia(digest) {
+  const bloque = (inicio) => digest.blocks.find((b) => b.text.startsWith(inicio))
+  const politica = bloque('Por política de seguridad')
+  const comentario = bloque('El exportador de métricas heredado no admite')
+  const prioridad = bloque('Prioridad:')
+  const ancla = (b, exact) => ({ kind: 'block-quote', block: b?.id || 999, hint: blockHint(b?.text || ''), exact })
+  return [
+    { n: 1, title: 'La caducidad no se justifica', kind: 'supuesto', anchor: ancla(politica, 'el token expira a los 90 días naturales') },
+    { n: 2, title: 'El comentario contradice un criterio', kind: 'contradiccion', anchor: ancla(comentario, '') },
+    { n: 3, title: 'Prioridad sin fecha', kind: 'riesgo', anchor: ancla(prioridad, '') },
+  ]
+}
+
 /** Imita el bucle del service worker: un paso por vuelta. */
 async function driveSteps(steps, anchor) {
   for (let i = 0; i < steps.length; i++) {
@@ -659,6 +793,19 @@ const actions = {
       'ok'
     )
     for (const d of r.detail || []) say(`  ${d.n} → ${d.strategy}${d.approximate ? ' (aproximada)' : ''}`)
+  },
+
+  async jira() {
+    renderPage('issue:ENG-7')
+    await wait(320)
+    runner.clear()
+    const d = pageDigest()
+    say(`incidencia en ${d.blocks.length} bloques · ${d.chars} caracteres`, 'ok')
+    for (const l of formatDigest(d.blocks).split('\n').slice(0, 8)) say(l.length > 110 ? l.slice(0, 107) + '…' : l)
+    const r = await runner.applyNotes({ notes: observacionesDeIncidencia(d) })
+    say(`marcadas ${r.placed.join(', ') || 'ninguna'}${r.missed.length ? ' · sin anclar ' + r.missed.join(', ') : ''}`, 'ok')
+    for (const x of r.detail || []) say(`  ${x.n} → ${x.strategy}${x.approximate ? ' (aproximada)' : ''}`)
+    say('pulsa «Limpiar» y navega a otra página para volver a la Confluence simulada')
   },
 
   unsafe() {
@@ -1397,6 +1544,21 @@ const actions = {
       `${d1.blocks.length} bloques · ${d1.chars} caracteres · ${lineasDigest[0]}`
     )
 
+    // Y no depende de por dónde esté mirando el usuario: lo que decide si un
+    // bloque se ve es su sitio en el DOCUMENTO, no en la ventana. Pasó de
+    // verdad al filtrar por cajas visibles: con la página desplazada se
+    // perdían los primeros bloques, el título incluido.
+    window.scrollTo(0, 3000)
+    await wait(200)
+    const conScroll = pageDigest()
+    window.scrollTo(0, 0)
+    await wait(200)
+    ok(
+      'digest: los bloques no dependen de por donde este el scroll',
+      formatDigest(conScroll.blocks) === formatDigest(d1.blocks),
+      `${conScroll.blocks.length} bloques desplazado · ${d1.blocks.length} arriba`
+    )
+
     const articulo = document.querySelector('#page-content article')
     const oculto = document.createElement('p')
     oculto.textContent = 'Párrafo oculto que no debe verse'
@@ -1503,6 +1665,76 @@ const actions = {
     )
     runner.clearNotes()
 
+    // 34. Una incidencia de Jira en bloques: el título como h1, los campos,
+    //     la descripción y los comentarios, y NADA de la interfaz —botones,
+    //     pestañas, «Contraer el comentario», el editor, los paneles de
+    //     integraciones ni la pestaña de campos que está oculta—.
+    runner.clear()
+    renderPage('issue:ENG-7')
+    await wait(320)
+    const dj1 = pageDigest()
+    const dj2 = pageDigest()
+    const textosJira = dj1.blocks.map((b) => b.text)
+    const lineaJira = (i) => formatDigest(dj1.blocks).split('\n')[i]
+    const interfaz = ['Editar', 'Añadir comentario', 'Asignar', 'Contraer', 'Main', 'Planning', 'Anclar', 'Suelte los archivos', 'Consejo de expertos', 'Sprint:', 'Git Integration', 'Create branch', '45196', 'Opciones']
+    const colada = interfaz.filter((t) => textosJira.some((x) => x.includes(t)))
+    ok(
+      'jira: la incidencia en bloques empieza por su titulo y trae campos, descripcion y comentarios',
+      formatDigest(dj1.blocks) === formatDigest(dj2.blocks) &&
+        /^¶1 \[h1\] Rotar los tokens de servicio antes del despliegue de marzo$/.test(lineaJira(0)) &&
+        dj1.blocks.some((b) => b.tag === 'h2' && b.text === 'Descripción') &&
+        dj1.blocks.some((b) => b.tag === 'h2' && b.text === 'Actividad') &&
+        dj1.blocks.some((b) => b.text === 'Tipo: Tarea') &&
+        dj1.blocks.some((b) => b.text === 'Prioridad: Crítica') &&
+        dj1.blocks.some((b) => b.text === 'Epic Link: Rotación de credenciales') &&
+        dj1.blocks.some((b) => b.tag === 'p' && b.text.startsWith('Por política de seguridad el token expira')) &&
+        dj1.blocks.some((b) => b.text === 'Ana Ruiz añadió un comentario - 14/ago/26 6:18 AM') &&
+        dj1.blocks.some((b) => b.text.startsWith('El exportador de métricas heredado no admite recarga')) &&
+        dj1.blocks.some((b) => b.text === 'Persona asignada:') &&
+        dj1.blocks.some((b) => b.text.startsWith('relates to')),
+      `${dj1.blocks.length} bloques · ${lineaJira(0)}`
+    )
+    ok('jira: la interfaz no entra en los bloques', colada.length === 0, colada.length ? 'se colo: ' + colada.join(', ') : `${dj1.blocks.length} bloques limpios`)
+
+    // Y una cita que sólo existe en la interfaz o en una pestaña oculta no se
+    // marca: buscarla en toda la página la habría encontrado ahí y la tarjeta
+    // diría que está subrayada sin que se vea nada.
+    const fantasmas = [
+      { n: 1, title: 'Cita de la interfaz', kind: '', anchor: { kind: 'text-quote', exact: 'Consejo de expertos', prefix: '', suffix: '' } },
+      { n: 2, title: 'Cita de una pestaña oculta', kind: '', anchor: { kind: 'text-quote', exact: 'S37 Infra', prefix: '', suffix: '' } },
+      { n: 3, title: 'Cita de la descripción', kind: '', anchor: { kind: 'text-quote', exact: 'sin ventana de corte', prefix: '', suffix: '' } },
+    ]
+    const resFantasma = await runner.applyNotes({ notes: fantasmas })
+    await wait(300)
+    ok(
+      'jira: una cita que solo esta en la interfaz o en una pestana oculta no se marca',
+      resFantasma.placed.join(',') === '3' && resFantasma.missed.sort().join(',') === '1,2',
+      `puestas ${resFantasma.placed.join(',')} · sin anclar ${resFantasma.missed.join(',')}`
+    )
+    runner.clearNotes()
+
+    // 35. Y se subraya igual que una página: la cita dentro de un párrafo de la
+    //     descripción, un comentario entero y un campo, cada uno con su número.
+    const notasJira = observacionesDeIncidencia(dj1)
+    const resJira = await runner.applyNotes({ notes: notasJira })
+    await wait(500)
+    const estrategiaJira = (n) => resJira.detail?.find((x) => x.n === n)?.strategy || 'sin detalle'
+    ok(
+      'jira: tres marcas sobre la incidencia, en la descripcion, en un comentario y en un campo',
+      resJira.placed.join(',') === '1,2,3' &&
+        estrategiaJira(1) === 'block+quote' &&
+        estrategiaJira(2) === 'block+whole' &&
+        estrategiaJira(3) === 'block+whole' &&
+        highlighted().includes('el token expira a los 90 días naturales') &&
+        highlighted().some((t) => t.startsWith('El exportador de métricas heredado no admite')) &&
+        highlighted().includes('Prioridad: Crítica') &&
+        runner.overlay.el.noteLayer.children.length === 3,
+      `puestas ${resJira.placed.join(',')} · ${[1, 2, 3].map(estrategiaJira).join(' ')} · ${highlighted().length} resaltados`
+    )
+    runner.clearNotes()
+    renderPage('page:200')
+    await wait(320)
+
     runner.clear()
     const passed = results.filter((x) => x.pass).length
     say(`—— ${passed}/${results.length} comprobaciones ——`, passed === results.length ? 'ok' : 'bad')
@@ -1536,5 +1768,6 @@ window.faroHarness = {
   pageDigest,
   formatDigest,
   observacionesPorBloques,
+  observacionesDeIncidencia,
 }
 say('banco listo')

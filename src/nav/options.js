@@ -21,7 +21,10 @@
  * @returns {Array<{mode:'direct'|'assisted', label:string, kind:'primary'|'ghost'}>}
  */
 export function navOptions(plan, { navMode = 'guided' } = {}) {
-  const directa = { mode: 'direct', label: 'Llévame', kind: 'ghost' }
+  // Una búsqueda de Jira no es un sitio al que «llevar»: es una lista que se
+  // abre. El botón lo dice.
+  const esBusqueda = plan?.destination?.kind === 'jira-jql'
+  const directa = { mode: 'direct', label: esBusqueda ? 'Abrir la búsqueda en Jira' : 'Llévame', kind: 'ghost' }
   const asistida = { mode: 'assisted', label: 'Paso a paso', kind: 'ghost' }
 
   // Sin al menos dos paradas no hay recorrido que enseñar: enseñar un único

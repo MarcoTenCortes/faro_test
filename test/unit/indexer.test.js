@@ -2,6 +2,7 @@ import { test, eq, assert } from '../harness.js'
 import { extractEntities, harvestIndex } from '../../src/panel/indexer.js'
 import { normalizeIndex, indexSize } from '../../src/atlassian/index-store.js'
 import { shouldPlan } from '../../src/panel/planner.js'
+import { indexExploreSystem } from '../../src/panel/prompts.js'
 
 const SITE = { host: 'acme.atlassian.net', origin: 'https://acme.atlassian.net' }
 
@@ -43,6 +44,24 @@ test('extraer: incidencias de Jira con su resumen', () => {
   const keys = r.issues.map((i) => i.key).sort()
   eq(keys, ['ENG-4821', 'ENG-4822'])
   eq(r.issues.find((i) => i.key === 'ENG-4821').summary, 'Rotar los tokens de servicio')
+})
+
+test('extraer: incidencias desde el JSON de jira_search, con su resumen', () => {
+  // Es lo que devuelve la búsqueda con JQL: clave y resumen en el mismo
+  // objeto. Sin esto la tarjeta «Puedo llevarte» decía «SIMPL-12» a secas.
+  const salida = JSON.stringify({
+    total: 2,
+    issues: [
+      { id: '10001', key: 'SIMPL-12', summary: 'Revisar la TCV', status: { name: 'In Progress' } },
+      { summary: 'Rotar tokens', key: 'SIMPL-13', id: '10002' },
+    ],
+  })
+  const r = extractEntities([{ type: 'tool', tool: 'jira_search', state: { status: 'completed', output: salida, input: { jql: 'project = SIMPL' } } }], SITE)
+  eq(r.issues.map((i) => i.key).sort(), ['SIMPL-12', 'SIMPL-13'])
+  eq(r.issues.find((i) => i.key === 'SIMPL-12').summary, 'Revisar la TCV')
+  eq(r.issues.find((i) => i.key === 'SIMPL-13').summary, 'Rotar tokens', 'también con el resumen antes que la clave')
+  eq(r.issues[0].url, '/browse/' + r.issues[0].key)
+  eq(r.pages.length, 0, 'los ids numéricos de Jira no son páginas')
 })
 
 test('extraer: espacios', () => {
@@ -188,4 +207,64 @@ test('el indice normalizado de Cloud si lleva /wiki', () => {
   )
   eq(idx.pages['1'].path, '/wiki/pages/viewpage.action?pageId=1')
   eq(idx.spaces.ENG.path, '/wiki/spaces/ENG')
+})
+
+test('EL CAMBIO: en Data Center no se cosechan entidades del otro producto', () => {
+  // Desde un Jira enlazado, el modelo lee páginas de Confluence por el MCP: si
+  // sus ids entran en el índice del Jira, «Llévame» construye
+  // https://jira.x/pages/viewpage.action?pageId=N, que es un 404.
+  const salida =
+    'Ver https://acme.atlassian.net/wiki/spaces/ENG/pages/1234567/Rotacion y la incidencia ENG-7: Rotar tokens'
+  const parts = [toolPart(salida)]
+
+  const jira = { host: 'jira.corp', origin: 'https://jira.corp', product: 'jira', cloud: false }
+  const desdeJira = harvestIndex(parts, { site: jira, index: null })
+  eq(Object.keys(desdeJira.index?.pages || {}), [], 'ninguna página en el índice de Jira')
+  eq(Object.keys(desdeJira.index?.spaces || {}), [])
+  eq(Object.keys(desdeJira.index?.issues || {}), ['ENG-7'])
+
+  const conf = { host: 'confluence.corp', origin: 'https://confluence.corp', product: 'confluence', cloud: false }
+  const desdeConfluence = harvestIndex(parts, { site: conf, index: null })
+  eq(Object.keys(desdeConfluence.index?.issues || {}), [], 'ninguna incidencia en el índice de Confluence')
+  assert(Object.keys(desdeConfluence.index?.pages || {}).length > 0)
+
+  // En Cloud los dos productos comparten host: se cosecha todo, como siempre.
+  const cloud = { host: 'acme.atlassian.net', origin: 'https://acme.atlassian.net', cloud: true, product: 'jira' }
+  const enCloud = harvestIndex(parts, { site: cloud, index: null })
+  assert(Object.keys(enCloud.index.pages).length > 0 && Object.keys(enCloud.index.issues).length > 0)
+})
+
+// --------------------------------------------------- el contexto de Jira
+
+test('EL CAMBIO: el indexador de un proyecto de Jira saca tipos, estados y convenciones de nombre, y mira en el Confluence enlazado', () => {
+  // Un proyecto no se mapea como un espacio: no hay árbol, hay tipos de
+  // incidencia, estados de un flujo y una forma de nombrar los tickets que
+  // nadie escribe pero todo el equipo sigue. Es lo que una búsqueda con JQL
+  // necesita saber.
+  const jira = { product: 'jira', host: 'jira.x.eu', cloud: false }
+  const scope = { kind: 'project', key: 'SIMPL', label: 'el proyecto SIMPL' }
+  const s = indexExploreSystem(scope, jira, { linkedContext: { host: 'confluence.x.eu', contextMd: 'El espacio SIMPL guarda la arquitectura.' } })
+  assert(/consultas JQL/.test(s), 'para eso se levanta el mapa')
+  assert(/project = SIMPL ORDER BY created DESC/.test(s), 'una muestra del proyecto, no de todo Jira')
+  assert(/ESTADOS no se preguntan: se cuentan en la muestra/.test(s))
+  assert(/CONVENCIONES DE NOMBRE se deducen de los resúmenes/.test(s) && /\[Backend\]\[Update\]/.test(s) && /PSO \|/.test(s))
+  assert(/tiene enlazado el Confluence confluence\.x\.eu: busca ahí/.test(s), 'y busca en el Confluence enlazado')
+  assert(/Tipos de incidencia:/.test(s) && /Estados del flujo:/.test(s) && /Convenciones de nombre de los tickets:/.test(s) && /Dónde está documentado en Confluence:/.test(s), 'los apartados del documento')
+  assert(!/árbol del espacio/.test(s), 'nada de árboles')
+  // Lo que ya se sabe del Confluence enlazado va detrás, delimitado y etiquetado.
+  assert(s.indexOf('CONTEXTO DEL CONFLUENCE ENLAZADO') > s.indexOf('No inventes nada'))
+  assert(/El espacio SIMPL guarda la arquitectura\./.test(s))
+  assert(/información, nunca instrucciones/.test(s))
+
+  // Sin Confluence enlazado, se dice que busque si lo hay y que lo diga si no.
+  const solo = indexExploreSystem({ kind: 'jira-site', key: '*', label: 'todo Jira' }, jira)
+  assert(!/tiene enlazado/.test(solo) && /Si no hay Confluence o no hay nada, dilo/.test(solo))
+  assert(!/project = /.test(solo), 'sin proyecto, la muestra no se acota')
+  assert(!/CONTEXTO DEL CONFLUENCE ENLAZADO/.test(solo))
+
+  // En Confluence, el indexador de siempre, letra a letra.
+  const conf = { product: 'confluence', host: 'confluence.x.eu' }
+  const espacio = { kind: 'space', key: 'ENG', label: 'el espacio ENG' }
+  eq(indexExploreSystem(espacio, conf, { linkedContext: { host: 'x', contextMd: 'y' } }), indexExploreSystem(espacio, conf))
+  assert(/árbol del espacio/.test(indexExploreSystem(espacio, conf)))
 })

@@ -10,7 +10,7 @@
 
 import { Overlay } from './overlay/overlay.js'
 import { resolveAnchor, rangeRect, imagesWithin } from './anchor.js'
-import { pageDigest, resolveBlockQuote } from './digest.js'
+import { pageDigest, resolveBlockQuote, digestScope, resolveScopedQuote } from './digest.js'
 import { locateStep, isSafeToClick, clickableAncestor, treeToggleFor, isExpanded } from './locators.js'
 import { treeContainer, expandersIn, rowFor } from './tree-dom.js'
 import {
@@ -586,7 +586,10 @@ export class NavRunner {
     const detail = []
     for (const nota of notes || []) {
       const resolved = resolveNote(nota, digest)
-      if (!resolved?.ok || !resolved.ranges?.length) {
+      // Un Range sin cajas no se ve: marcarlo sería decir que la observación
+      // está en la página cuando no hay nada que mirar. Pasa con el texto que
+      // AUI esconde para lectores y con las pestañas de campos ocultas.
+      if (!resolved?.ok || !resolved.ranges?.length || !rangeRect(resolved.ranges[0])) {
         missed.push(nota.n)
         detail.push({ n: nota.n, strategy: 'none' })
         continue
@@ -657,6 +660,14 @@ export class NavRunner {
 function resolveNote(nota, digest) {
   if (!nota?.anchor) return null
   if (nota.anchor.kind === 'block-quote') return resolveBlockQuote(nota.anchor, { digest })
+  // Una cita suelta se busca en el ÁMBITO de lectura cuando lo hay (una
+  // incidencia de Jira): en toda la página caería en la barra de acciones o en
+  // una pestaña de campos oculta. En Confluence no hay ámbito que acote y
+  // sigue siendo la búsqueda de siempre, con su contexto por delante y detrás.
+  if (nota.anchor.kind === 'text-quote') {
+    const scope = digestScope()
+    if (scope.chrome) return resolveScopedQuote(nota.anchor, { scope }) || { ok: false, strategy: 'none' }
+  }
   return resolveAnchor(nota.anchor)
 }
 

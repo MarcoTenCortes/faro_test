@@ -31,15 +31,17 @@ export function clean(value, max) {
 
 /**
  * @param {object} raw plan tal cual lo devolvió el modelo
- * @param {{index: object, origin: string, host: string, here?: string}} ctx
+ * @param {{index: object, origin: string, host: string, here?: string, site?: object}} ctx
  *        `here` es la URL o la ruta que el usuario tiene abierta ahora mismo.
  *        Sirve para no meter en el recorrido un salto al espacio en el que ya
  *        estamos, que sólo consigue recargar la página y plegar el árbol.
+ *        `site` es el sitio de la pestaña: en Data Center, Jira y Confluence
+ *        son hosts distintos, y un destino del otro producto no vive aquí.
  * @returns {{ok: boolean, reason?: string, plan?: object}}
  */
 export function validatePlan(raw, ctx) {
   if (!raw || typeof raw !== 'object') return fail('El plan no es un objeto.')
-  const { index, origin, here } = ctx || {}
+  const { index, origin, here, site } = ctx || {}
   if (!origin) return fail('Falta el origen de la pestaña.')
 
   if (raw.navigate === false) {
@@ -59,6 +61,9 @@ export function validatePlan(raw, ctx) {
     )
   }
   if (!sameOrigin(destination.url, origin)) return fail('El destino apunta fuera del sitio actual.')
+  // Una página de Confluence cosechada desde un Jira Data Center tendría una
+  // ruta relativa a un host que no la sirve: «Llévame» acabaría en un 404.
+  if (!productOfSite(site, destination.kind)) return fail('El destino vive en el otro producto, que en este despliegue es otro sitio.')
 
   const anchor = validateAnchor(raw.anchor)
 
@@ -72,8 +77,13 @@ export function validatePlan(raw, ctx) {
   // origen y la de destino— que son ramas hermanas del árbol, no un recorrido.
   // La navegación guiada se quedaba sin nada que desplegar y acababa en un salto
   // seco. Quién cuelga de quién lo sabe el índice; el modelo no puede saberlo.
+  //
+  // Y para una incidencia de Jira el camino es ella sola. Jira no tiene árbol
+  // que desplegar: un «paso» por el proyecto sería una carga de página entera
+  // antes de otra, justo lo que un paso intermedio nunca hace. La tarjeta sólo
+  // ofrece «Llévame», y el `path` del modelo tampoco cuenta.
   let steps = treeSteps(index, origin, destination, here)
-  if (destination.kind !== 'confluence-page') {
+  if (destination.kind !== 'confluence-page' && destination.kind !== 'jira-issue') {
     const delModelo = resolveSteps(raw.path, index, origin)
     if (delModelo.length > steps.length) steps = delModelo
   }
@@ -106,6 +116,21 @@ export function sameOrigin(url, origin) {
   } catch {
     return false
   }
+}
+
+/**
+ * ¿Este tipo de destino vive en el sitio de la pestaña?
+ *
+ * En Cloud, Jira y Confluence comparten host y todo vale. En Data Center son
+ * dos instalaciones: desde Jira sólo incidencias y proyectos, desde Confluence
+ * sólo páginas y espacios. Sin sitio, o con producto desconocido, no se
+ * descarta nada: es la barrera del origen la que manda. Pura.
+ */
+export function productOfSite(site, kind) {
+  if (!site || site.cloud || !kind) return true
+  if (site.product === 'jira') return !String(kind).startsWith('confluence-')
+  if (site.product === 'confluence') return !String(kind).startsWith('jira-')
+  return true
 }
 
 export function validateAnchor(raw) {
@@ -168,7 +193,9 @@ function resolveSteps(path, index, origin) {
  *
  * Es la fuente de verdad de la navegación guiada. Guiar por el árbol consiste
  * en desplegar la cadena de padres del destino, así que los pasos SON esa
- * cadena; cualquier otra cosa es un recorrido inventado.
+ * cadena; cualquier otra cosa es un recorrido inventado. Sólo Confluence tiene
+ * árbol: una incidencia de Jira no tiene camino (antes se le ponía el proyecto
+ * por delante, y eso era una segunda carga de página, no un paso).
  */
 export function treeSteps(index, origin, destination, here = '') {
   const steps = []
@@ -185,12 +212,6 @@ export function treeSteps(index, origin, destination, here = '') {
     for (const ancestor of ancestryOf(index, destination.id)) {
       const t = resolveTarget(index, origin, { kind: 'confluence-page', id: ancestor.id })
       if (t) steps.push({ ...t, label: t.title })
-    }
-  } else if (destination.kind === 'jira-issue') {
-    const issue = index.issues?.[destination.id]
-    if (issue?.projectKey) {
-      const project = resolveTarget(index, origin, { kind: 'jira-project', id: issue.projectKey })
-      if (project) steps.push({ ...project, label: `Proyecto ${project.title}` })
     }
   }
 

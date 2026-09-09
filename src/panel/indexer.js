@@ -26,7 +26,7 @@ import { prettyTool } from '../shared/format.js'
  * @param {{scope:object, site:object, model:object, onProgress:Function, signal:AbortSignal}} opts
  * @returns {Promise<{contextMd:string, index:object}>}
  */
-export async function buildContext(client, { scope, site, model, onProgress, signal }) {
+export async function buildContext(client, { scope, site, model, onProgress, signal, linkedContext = null }) {
   const report = (text) => onProgress?.(text)
 
   report('Abriendo una sesión de indexado…')
@@ -36,7 +36,7 @@ export async function buildContext(client, { scope, site, model, onProgress, sig
     report(`Recorriendo ${scope?.label || 'la zona actual'}. Esto puede tardar un par de minutos.`)
     const explore = await client.runTurn(
       session.id,
-      { text: indexExplorePrompt(scope), model, system: indexExploreSystem(scope, site) },
+      { text: indexExplorePrompt(scope), model, system: indexExploreSystem(scope, site, { linkedContext }) },
       {
         signal,
         stallMs: 120000,
@@ -114,7 +114,7 @@ export async function buildContext(client, { scope, site, model, onProgress, sig
  * @returns {{index: object, added: number}}
  */
 export function harvestIndex(parts, { site, index }) {
-  const found = extractEntities(parts, site)
+  const found = ownProductEntities(extractEntities(parts, site), site)
   if (!found.pages.length && !found.issues.length && !found.spaces.length) {
     return { index, added: 0 }
   }
@@ -128,6 +128,21 @@ export function harvestIndex(parts, { site, index }) {
   return { index: merged, added: indexSize(merged) - before }
 }
 
+/**
+ * Sólo las entidades del producto del sitio, en Data Center.
+ *
+ * Desde un Jira enlazado a un Confluence, el modelo lee páginas de Confluence
+ * por el MCP y su salida trae ids y rutas de página; cosecharlas en el índice
+ * del host de Jira las convertía en destinos de «Llévame» contra ese host, y
+ * eso es un 404. En Cloud los dos productos comparten host y todo vale. Pura.
+ */
+export function ownProductEntities(found, site) {
+  if (!site || site.cloud) return found
+  if (site.product === 'jira') return { ...found, pages: [], spaces: [] }
+  if (site.product === 'confluence') return { ...found, issues: [], projects: [] }
+  return found
+}
+
 // El `/wiki` es OPCIONAL: sólo lo lleva Confluence Cloud. En Server/Data
 // Center las mismas rutas cuelgan de la raíz, y exigir el prefijo hacía que no
 // reconociéramos ninguna URL real del sitio.
@@ -138,6 +153,13 @@ const VIEWPAGE_URL = /(?:\/wiki)?\/pages\/viewpage\.action\?pageId=(\d+)/g
 const ISSUE_KEY = /\b([A-Z][A-Z0-9_]{1,9}-\d+)\b/g
 const JSON_PAGE = /"(?:id|page_?id)"\s*:\s*"?(\d+)"?[^}]{0,240}?"title"\s*:\s*"([^"]{1,200})"/g
 const JSON_TITLE_FIRST = /"title"\s*:\s*"([^"]{1,200})"[^}]{0,240}?"(?:id|page_?id)"\s*:\s*"?(\d+)"?/g
+/**
+ * Una incidencia tal como la devuelve `jira_search`: `"key": "ABC-1", …,
+ * "summary": "…"`. Sin esto, el índice se quedaba con la clave como título y
+ * la tarjeta «Puedo llevarte» decía «SIMPL-12» en vez de de qué va.
+ */
+const JSON_ISSUE = /"key"\s*:\s*"([A-Z][A-Z0-9_]{1,9}-\d+)"[^}]{0,400}?"summary"\s*:\s*"([^"]{1,200})"/g
+const JSON_SUMMARY_FIRST = /"summary"\s*:\s*"([^"]{1,200})"[^}]{0,400}?"key"\s*:\s*"([A-Z][A-Z0-9_]{1,9}-\d+)"/g
 
 /**
  * Saca entidades de Atlassian del texto que devolvieron las herramientas.
@@ -203,6 +225,14 @@ export function extractEntities(parts, site) {
   for (const [key, entry] of issues) {
     const m = blob.match(new RegExp(escapeRe(key) + '\\s*[:\\-–]\\s*([^\\n"]{3,140})'))
     if (m) entry.summary = m[1].trim()
+  }
+  // Y en el JSON de `jira_search`, como clave y resumen en el mismo objeto.
+  for (const re of [JSON_ISSUE, JSON_SUMMARY_FIRST]) {
+    for (const m of blob.matchAll(re)) {
+      const [key, summary] = re === JSON_ISSUE ? [m[1], m[2]] : [m[2], m[1]]
+      const entry = issues.get(key)
+      if (entry && entry.summary === key) entry.summary = summary.trim()
+    }
   }
 
   const known = site?.host
