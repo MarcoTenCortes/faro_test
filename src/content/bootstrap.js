@@ -133,11 +133,12 @@
             // La pagina en bloques numerados, tal como se ve en pantalla: es lo
             // que lee el modelo en el modo Analisis y lo mismo contra lo que
             // despues se resuelven sus observaciones. Leer no toca nada.
-            const [{ pageDigest, serializeDigest }, { formatDigest }, { isEditing, waitFor, contentRoot }] =
+            const [{ pageDigest, serializeDigest }, { formatDigest }, { isEditing, waitFor, contentRoot }, { jiraIssueFields }] =
               await Promise.all([
                 import(url('src/content/digest.js')),
                 import(url('src/shared/digest.js')),
                 import(url('src/content/dom-utils.js')),
+                import(url('src/content/jira-issue.js')),
               ])
             if (isEditing()) {
               sendResponse({ ok: false, reason: 'editando' })
@@ -155,6 +156,9 @@
               ...serializeDigest(digest),
               title: document.title,
               url: location.href,
+              // En una incidencia de Jira, sus campos: el tipo y el estado
+              // deciden cómo se analiza. null en cualquier otra página.
+              issue: jiraIssueFields(),
             })
             return
           }

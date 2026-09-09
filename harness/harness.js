@@ -16,6 +16,7 @@ import { scrollWithinScrollers } from '../src/content/dom-utils.js'
 import { imagesWithin } from '../src/content/anchor.js'
 import { Picker } from '../src/content/picker.js'
 import { pageDigest } from '../src/content/digest.js'
+import { jiraIssueFields } from '../src/content/jira-issue.js'
 import { formatDigest, blockHint } from '../src/shared/digest.js'
 
 // --------------------------------------------------------------- contenido
@@ -197,10 +198,10 @@ const PAGES = {
                 <div class="mod-header"><h3 class="toggle-header">Detalles</h3><button class="aui-button toggle-title" type="button"><span>Contraer Detalles</span></button></div>
                 <div class="mod-content">
                   <ul id="issuedetails" class="property-list two-cols">
-                    <li class="item"><div class="wrap"><strong class="name">Tipo:</strong> <span class="value">Tarea</span></div></li>
-                    <li class="item item-right"><div class="wrap"><strong class="name">Estado:</strong> <span class="value"><span class="lozenge">En curso</span></span></div></li>
-                    <li class="item"><div class="wrap"><strong class="name">Prioridad:</strong> <span class="value">Crítica</span></div></li>
-                    <li class="item item-right"><div class="wrap"><strong class="name">Versión correctora:</strong> <span class="value">Major Release Q4-2026</span></div></li>
+                    <li class="item"><div class="wrap"><strong class="name">Tipo:</strong> <span id="type-val" class="value">Tarea</span></div></li>
+                    <li class="item item-right"><div class="wrap"><strong class="name">Estado:</strong> <span id="status-val" class="value"><span class="lozenge">En curso</span></span></div></li>
+                    <li class="item"><div class="wrap"><strong class="name">Prioridad:</strong> <span id="priority-val" class="value">Crítica</span></div></li>
+                    <li class="item item-right"><div class="wrap"><strong class="name">Versión correctora:</strong> <span id="fixfor-val" class="value">Major Release Q4-2026</span></div></li>
                     <li class="item"><div class="wrap"><strong class="name">Etiquetas:</strong> <span class="value"><ul class="labels"><li><a href="#">seguridad</a></li><li><a href="#">tokens</a></li></ul></span></div></li>
                   </ul>
                   <ul class="tabs-menu"><li class="menu-item active-tab"><a href="#">Main</a></li><li class="menu-item"><a href="#">Planning</a></li></ul>
@@ -802,6 +803,9 @@ const actions = {
     const d = pageDigest()
     say(`incidencia en ${d.blocks.length} bloques · ${d.chars} caracteres`, 'ok')
     for (const l of formatDigest(d.blocks).split('\n').slice(0, 8)) say(l.length > 110 ? l.slice(0, 107) + '…' : l)
+    // Y sus campos, que son lo que decide cómo se analiza.
+    const campos = jiraIssueFields()
+    say(`campos: tipo «${campos?.type}» · estado «${campos?.status}» · prioridad «${campos?.priority}» · etiquetas «${campos?.labels.join(', ')}»`, 'ok')
     const r = await runner.applyNotes({ notes: observacionesDeIncidencia(d) })
     say(`marcadas ${r.placed.join(', ') || 'ninguna'}${r.missed.length ? ' · sin anclar ' + r.missed.join(', ') : ''}`, 'ok')
     for (const x of r.detail || []) say(`  ${x.n} → ${x.strategy}${x.approximate ? ' (aproximada)' : ''}`)
@@ -1732,6 +1736,72 @@ const actions = {
       `puestas ${resJira.placed.join(',')} · ${[1, 2, 3].map(estrategiaJira).join(' ')} · ${highlighted().length} resaltados`
     )
     runner.clearNotes()
+
+    // 37. Los campos de la incidencia: el tipo y el estado por su id (como en
+    //     el Data Center real), lo demás por su etiqueta —también lo de la
+    //     pestaña de campos oculta y el panel de personas—, y nada de la
+    //     interfaz. En una página de Confluence, ninguno.
+    const campos = jiraIssueFields()
+    ok(
+      'jira: los campos de la incidencia se leen por su id y por su etiqueta',
+      !!campos &&
+        campos.type === 'Tarea' &&
+        campos.status === 'En curso' &&
+        campos.priority === 'Crítica' &&
+        campos.resolution === '' &&
+        campos.assignee === 'Sin asignar' &&
+        campos.reporter === 'Paulo Cabrita' &&
+        campos.epic === 'Rotación de credenciales' &&
+        campos.sprint === 'S37 Infra' &&
+        campos.fixVersions.join('|') === 'Major Release Q4-2026' &&
+        campos.affectsVersions.length === 0 &&
+        campos.components.length === 0 &&
+        campos.labels.join('|') === 'seguridad|tokens',
+      campos ? `tipo ${campos.type} · estado ${campos.status} · ${campos.labels.length} etiquetas` : 'sin campos'
+    )
+    // Y un <dl> escrito en la descripción no es un campo: un «Estado:» de un
+    // usuario no puede cambiar la fase del análisis.
+    const dl = document.createElement('dl')
+    dl.append(Object.assign(document.createElement('dt'), { textContent: 'Estado:' }), Object.assign(document.createElement('dd'), { textContent: 'Cerrada' }))
+    document.querySelector('#description-val .user-content-block').appendChild(dl)
+    const conDl = jiraIssueFields()
+    dl.remove()
+    ok('jira: un campo escrito en la descripcion no es un campo', conDl?.status === 'En curso', `estado ${conDl?.status}`)
+    renderPage('page:200')
+    await wait(320)
+    ok('confluence: una página no tiene campos de incidencia', jiraIssueFields() === null)
+
+    // 38. En la vista de incidencia de un Jira Data Center el que hace scroll
+    //     es un panel interno, no la ventana: ir a una observación tiene que
+    //     mover ESE panel. Pasó de verdad: las marcas se ponían y al pulsar
+    //     cada hallazgo la página no se movía.
+    renderPage('issue:ENG-7')
+    await wait(320)
+    const panel = document.getElementById('page-content')
+    const estiloPanel = panel.getAttribute('style') || ''
+    panel.setAttribute('style', 'height: 260px; overflow: auto')
+    panel.scrollTop = 0
+    const dPanel = pageDigest()
+    const resPanel = await runner.applyNotes({ notes: observacionesDeIncidencia(dPanel) })
+    await wait(400)
+    panel.scrollTop = 0
+    await wait(100)
+    const focoPanel = await runner.focusNote({ n: 2 })
+    await wait(500)
+    const marca2 = runner.overlay.notes.find((x) => x.n === 2)?.ranges[0]?.getBoundingClientRect()
+    const cajaPanel = panel.getBoundingClientRect()
+    // La marca dentro del panel, y el panel dentro de la ventana: el de fuera
+    // no puede pasarse de largo mientras el de dentro aún se mueve.
+    const aLaVista = !!marca2 && marca2.top >= cajaPanel.top && marca2.bottom <= cajaPanel.bottom
+    const panelALaVista = cajaPanel.top >= 0 && cajaPanel.bottom <= window.innerHeight
+    ok(
+      'jira: ir a una observacion desplaza el panel con scroll propio y deja el panel a la vista',
+      resPanel.placed.includes(2) && focoPanel.ok && panel.scrollTop > 0 && aLaVista && panelALaVista,
+      `scrollTop ${Math.round(panel.scrollTop)} · marca ${marca2 ? Math.round(marca2.top) + '-' + Math.round(marca2.bottom) : 'sin caja'} · panel ${Math.round(cajaPanel.top)}-${Math.round(cajaPanel.bottom)} · ventana ${window.innerHeight}`
+    )
+    runner.clearNotes()
+    panel.setAttribute('style', estiloPanel)
+    if (!estiloPanel) panel.removeAttribute('style')
     renderPage('page:200')
     await wait(320)
 
@@ -1766,6 +1836,7 @@ window.faroHarness = {
   PAGES,
   OBSERVACIONES,
   pageDigest,
+  jiraIssueFields,
   formatDigest,
   observacionesPorBloques,
   observacionesDeIncidencia,

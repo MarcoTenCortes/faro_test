@@ -11,6 +11,20 @@
 import { test, eq, assert } from '../harness.js'
 import {
   numberedIn,
+  numbersInAnchors,
+  observationNumbers,
+  expectedCount,
+  normalizeNumbering,
+  unwrapWholeFence,
+  saysNothingToSay,
+  looksLikeFollowUp,
+  questionCitesPoint,
+  numberedReminder,
+  stripNumberedReminder,
+  insertMarks,
+  collectSegmentedNotes,
+  segmentSystem,
+  segmentPrompt,
   splitAnchorsBlock,
   validateNotes,
   collectNotes,
@@ -20,10 +34,12 @@ import {
   notesSystem,
   notesPrompt,
   NOTES_SCHEMA,
+  SEGMENT_SCHEMA,
   NOTE_KINDS,
   NOTE_LIMITS,
+  NOTHING_TO_SAY,
 } from '../../src/panel/notes.js'
-import { parseInline } from '../../src/panel/markdown.js'
+import { parseInline, parseBlocks } from '../../src/panel/markdown.js'
 import { skillSystem } from '../../src/panel/skills.js'
 
 const CITA = 'el token expira a los 90 días naturales'
@@ -455,4 +471,327 @@ test('[3] es una marca; [texto](url) sigue siendo un enlace', () => {
 
 test('lo que no es un número entre corchetes se queda como texto', () => {
   eq(parseInline('[algo] y [123]').map((t) => t.type), ['text'])
+})
+
+test('una marca dentro de una negrita («**[1] Título**») sigue contando', () => {
+  eq(numberedIn('**[1] Título** texto'), [1])
+})
+
+// --- EL CAMBIO: cuando el modelo no numera como se le pide ---------------
+//
+// Pasó de verdad (gpt-5.6-luna, 2026-09-09, en una incidencia de Jira): ocho
+// observaciones perfectas como lista «1.» bajo un apartado «Observaciones», con
+// el bloque JSON de anclas impecable, y la extensión lo tiraba todo por no ver
+// «[1]» en la prosa: «Este modelo no ha numerado sus observaciones».
+
+const INFORME = [
+  '**Análisis de SIMPL-31875**',
+  '',
+  '**Qué pide**',
+  '- La tarea solicita extender la API del servicio `query-mapper-adapter`.',
+  '- Está en **PBI For DG Review**, sin asignar.',
+  '',
+  '**Observaciones**',
+  '1. **Objetivo funcional todavía ambiguo.** La descripción mezcla la API con la delegación.',
+  '2. **Contrato HTTP incompleto.** No se especifican método, ruta ni errores.',
+  '3. **Dependencia crítica con `SIMPL-31880`.** No define el contrato entre ambas.',
+  '',
+  '**Dependencias y riesgos**',
+  '- `SIMPL-31880` está en **PBI Defined**.',
+  '',
+  '**Conclusión**',
+  'La tarea no está lista para aprobarse como contrato API.',
+].join('\n')
+const ANCLAS_INFORME = { notes: [{ n: 1, block: 3, quote: CITA }, { n: 2, block: 2 }, { n: 3, block: 0 }] }
+
+test('numberedIn tolera lo que un modelo escribe queriendo decir [n]: escapado, ancho completo; y sólo las vallas al principio de línea', () => {
+  eq(numberedIn('\\[1\\] a \\[2\\] b'), [1, 2], 'escapado para el Markdown')
+  eq(numberedIn('［1］ a [２] b'), [1, 2], 'corchetes o dígitos de ancho completo')
+  eq(numberedIn('cierro con ```json abajo\n\n[1] a'), [1], 'un ``` a mitad de frase es texto, no una valla')
+  eq(numberedIn('```json\n{"a": [1]}'), [], 'una valla sin cerrar sigue siendo código')
+  eq(numberedIn('[ 1 ] con espacios'), [], 'con espacios no es la marca que pinta el chat')
+})
+
+test('observationNumbers: la prosa manda; sin prosa numerada valen los números del JSON si empiezan en 1', () => {
+  eq(numbersInAnchors(ANCLAS_INFORME), [1, 2, 3])
+  eq(numbersInAnchors({ notes: [{ n: 3 }, { n: 'x' }, { n: 3 }, { n: 0 }] }), [3])
+  eq(observationNumbers(INFORME, ANCLAS_INFORME), { numeros: [1, 2, 3], origen: 'json' }, 'el JSON salva el análisis')
+  eq(observationNumbers('[1] a', ANCLAS_INFORME), { numeros: [1], origen: 'prosa' }, 'la prosa manda')
+  eq(observationNumbers('sin nada', { notes: [{ n: 3, block: 2 }] }), { numeros: [], origen: '' }, 'un JSON que no empieza en 1 no es un análisis')
+  eq(observationNumbers('sin nada', null), { numeros: [], origen: '' })
+})
+
+test('EL CAMBIO: normalizeNumbering reescribe la lista «1.» del informe real como [n], sin tocar las viñetas ni los apartados', () => {
+  const r = normalizeNumbering(INFORME)
+  eq(r.style, 'ordered')
+  eq(r.numbers, [1, 2, 3])
+  assert(r.prose.includes('\n[1] **Objetivo funcional todavía ambiguo.** La descripción'), 'la marca va delante de la negrita')
+  assert(r.prose.includes('\n[3] **Dependencia crítica con `SIMPL-31880`.**'))
+  assert(r.prose.includes('- La tarea solicita extender'), 'las viñetas de «Qué pide» se quedan')
+  assert(r.prose.includes('**Conclusión**\nLa tarea no está lista'), 'los apartados se quedan')
+  eq(numberedIn(r.prose), [1, 2, 3], 'y numberedIn ya los ve')
+  eq(titleFromProse(r.prose, 2), 'Contrato HTTP incompleto.', 'la fila de la tarjeta sale de la prosa')
+  // Con el JSON del modelo, todo casa como si hubiera obedecido.
+  eq(validateNotes(ANCLAS_INFORME, { allowed: r.numbers, blocks: BLOQUES }).map((x) => x.n), [1, 2, 3])
+})
+
+test('normalizeNumbering: los estilos que usan los modelos', () => {
+  eq(normalizeNumbering('Intro.\n1. **Falta el entorno**: no dice versión.\n2. Texto plano.').prose, 'Intro.\n\n[1] **Falta el entorno**: no dice versión.\n\n[2] Texto plano.')
+  eq(normalizeNumbering('1) uno\n2) dos').prose, '[1] uno\n\n[2] dos')
+  eq(normalizeNumbering('**1.** Primera.\n\n**2.** Segunda.').prose, '[1] Primera.\n\n[2] Segunda.')
+  const bt = normalizeNumbering('**1. Sin entorno**: nada.\n**2. Sin datos:** nada.')
+  eq(bt.style, 'bold-title')
+  eq(bt.prose, '[1] **Sin entorno**: nada.\n\n[2] **Sin datos:** nada.')
+  const h = normalizeNumbering('### 1. La caducidad\nNo se justifica.\n\n### 2. El solape\nNo está medido.')
+  eq(h.style, 'heading')
+  eq(h.prose, '### [1] La caducidad\nNo se justifica.\n\n### [2] El solape\nNo está medido.')
+  eq(titleFromProse(h.prose, 1), 'La caducidad', 'un encabezado también es «al principio de línea»')
+  const lab = normalizeNumbering('**Observación 1**: falta el entorno.\n**Observación 2:** sin criterios.\n- **Punto 3 —** riesgo.')
+  eq(lab.style, 'labeled')
+  eq(lab.prose, '[1] falta el entorno.\n\n[2] sin criterios.\n\n[3] riesgo.')
+  eq(normalizeNumbering('## Observación 1: Falta el entorno\nTexto.\n## Observación 2 — Sin criterios\nTexto.').prose, '## [1] Falta el entorno\nTexto.\n## [2] Sin criterios\nTexto.')
+  eq(normalizeNumbering('(1) uno\n(2) dos').style, 'paren')
+  eq(normalizeNumbering('#1 uno\n#2: dos').prose, '[1] uno\n\n[2] dos')
+  eq(normalizeNumbering('1 — uno\n2 - dos').style, 'dash')
+  eq(normalizeNumbering('[1.] uno\n[ 2 ] dos').prose, '[1] uno\n\n[2] dos')
+  eq(normalizeNumbering('a) uno\nb) dos\nc) tres').numbers, [1, 2, 3])
+  // Viñetas sin número: sólo cuando no hay ninguna numeración, y de corrido.
+  const b = normalizeNumbering('Qué pide:\n- Falta el entorno.\n- Sin criterios.\n\nRiesgos:\n* Depende de otro equipo.')
+  eq(b.style, 'bullets')
+  eq(b.prose, 'Qué pide:\n\n[1] Falta el entorno.\n\n[2] Sin criterios.\n\nRiesgos:\n\n[3] Depende de otro equipo.')
+  // Una sola observación también vale; un estilo débil con una sola, no.
+  eq(normalizeNumbering('1. La única cosa que decir.').numbers, [1])
+  eq(normalizeNumbering('(1) ver nota al pie').numbers, [])
+  eq(normalizeNumbering('a) alternativa').numbers, [])
+  // Con el título en la línea siguiente, el párrafo lo absorbe.
+  eq(normalizeNumbering('**1.**\nFalta el entorno.\n**2.**\nSin criterios.').prose, '[1]\nFalta el entorno.\n\n[2]\nSin criterios.')
+})
+
+test('normalizeNumbering: lo que no se toca', () => {
+  const ya = '[1] uno\n1. paso\n2. paso'
+  eq(normalizeNumbering(ya), { prose: ya, numbers: [1], style: 'brackets' }, 'si ya lleva [n], intacta')
+  const nada = 'Un párrafo normal.\n\nOtro párrafo sin lista.'
+  eq(normalizeNumbering(nada), { prose: nada, numbers: [], style: '' })
+  eq(normalizeNumbering(''), { prose: '', numbers: [], style: '' })
+  eq(normalizeNumbering(null), { prose: '', numbers: [], style: '' })
+  // Manda el estilo más explícito: los encabezados; los pasos «1. 2.» de dentro no se tocan.
+  const src = '### 1. Falta el entorno\nPara reproducirlo:\n1. Abre la incidencia.\n2. Pulsa Editar.\n\n### 2. Sin criterios\nTexto.'
+  eq(normalizeNumbering(src).prose, '### [1] Falta el entorno\nPara reproducirlo:\n1. Abre la incidencia.\n2. Pulsa Editar.\n\n### [2] Sin criterios\nTexto.')
+  // Ni las listas sangradas, ni las citadas, ni las de dentro de una valla.
+  eq(normalizeNumbering('1. Uno\n   1. sub uno\n   2. sub dos\n2. Dos\n> 1. citada\n> 2. citada').prose, '[1] Uno\n   1. sub uno\n   2. sub dos\n\n[2] Dos\n> 1. citada\n> 2. citada')
+  eq(normalizeNumbering('Texto.\n```\n1. no\n2. no\n```\n1. sí\n2. sí').prose, 'Texto.\n```\n1. no\n2. no\n```\n\n[1] sí\n\n[2] sí')
+  eq(normalizeNumbering('1. sí\n```json\n1. no\n2. no').prose, '[1] sí\n```json\n1. no\n2. no', 'una valla sin cerrar también es código')
+  // La secuencia tiene que empezar en 1 y ser consecutiva, con tope.
+  eq(normalizeNumbering('3. tres\n4. cuatro').numbers, [], 'empieza en 3')
+  eq(normalizeNumbering('1. uno\n3. tres').numbers, [], 'salto')
+  eq(normalizeNumbering('1. uno\n2. dos\n1. otra vez\n2. otra vez').numbers, [], 'dos listas que reinician: ambiguo')
+  eq(normalizeNumbering('1. uno\n1. uno bis').numbers, [], 'repetida')
+  const doce = Array.from({ length: 12 }, (_, k) => `${k + 1}. obs ${k + 1}`).join('\n')
+  eq(normalizeNumbering(doce).numbers.length, 12)
+  eq(normalizeNumbering(doce + '\n13. obs 13').numbers, [], 'trece ya no')
+  eq(normalizeNumbering(doce.replace(/\d+\. /g, '- ')).numbers.length, 12)
+  // Falsos positivos conocidos.
+  eq(normalizeNumbering('2026. Fue el año del cambio.').numbers, [], 'cuatro cifras')
+  eq(normalizeNumbering('1.5 segundos de espera es mucho.').numbers, [], 'decimal')
+  eq(normalizeNumbering('Hay que esperar 3) segundos y 1) minuto.').numbers, [], 'dentro del párrafo')
+  eq(normalizeNumbering('**Resumen**: nada que decir.').numbers, [])
+  eq(normalizeNumbering('# 1\ntexto').numbers, [], 'un h1 con texto «1» no es «#1»')
+  // Falso positivo ASUMIDO: unos pasos de nivel superior sin nada más son las observaciones.
+  eq(normalizeNumbering('Para reproducirlo:\n1. Abre la incidencia.\n2. Pulsa Editar.').numbers, [1, 2])
+  // CRLF se normaliza y el código en línea sigue sin contar.
+  const r = normalizeNumbering('Intro\r\n1. uno\r\n2. dos\r\n\r\nCierre `x[1]` en código.')
+  eq(r.prose, 'Intro\n\n[1] uno\n\n[2] dos\n\nCierre `x[1]` en código.')
+  eq(numberedIn(r.prose), [1, 2])
+})
+
+test('una respuesta entera envuelta en una valla se desenvuelve primero', () => {
+  eq(numberedIn('```markdown\n[1] a\n\n[2] b\n```'), [])
+  eq(normalizeNumbering('```markdown\n[1] a\n\n[2] b\n```'), { prose: '[1] a\n\n[2] b', numbers: [1, 2], style: 'brackets' })
+  eq(normalizeNumbering('```\n1. a\n2. b\n```').prose, '[1] a\n\n[2] b', 'sin idioma también, y luego se numera')
+  eq(normalizeNumbering('Texto.\n```\n1. a\n2. b\n```').numbers, [], 'con algo fuera de la valla no es la respuesta entera')
+  eq(normalizeNumbering('```js\n1. a\n2. b\n```').numbers, [], 'una valla con idioma de código es código')
+  eq(unwrapWholeFence('```\na\n```\nfuera\n```\nb\n```'), '```\na\n```\nfuera\n```\nb\n```', 'dos vallas no son una')
+})
+
+test('«Sin observaciones.» es un resultado: se reconoce como última línea, con o sin negrita', () => {
+  eq(NOTHING_TO_SAY, 'Sin observaciones.')
+  eq(saysNothingToSay('Está completa.\n\nSin observaciones.'), true)
+  eq(saysNothingToSay('**Sin observaciones**'), true)
+  eq(saysNothingToSay('Sin observaciones sobre esto, pero [1] algo'), false)
+  eq(saysNothingToSay('Sin observaciones.\n```\ncódigo\n```'), true, 'una valla al final no cuenta')
+  eq(saysNothingToSay(''), false)
+})
+
+test('looksLikeFollowUp: una pregunta sobre un punto, una respuesta corta o «Sin observaciones.» son seguimiento; un análisis largo sin números no', () => {
+  eq(looksLikeFollowUp('amplía el punto 3', 'x'.repeat(2000)), true)
+  eq(looksLikeFollowUp('¿y la [2]?', 'x'.repeat(2000)), true)
+  eq(looksLikeFollowUp('analiza esto', 'Corta.'), true)
+  eq(looksLikeFollowUp('analiza esto', 'x'.repeat(2000) + '\n\nSin observaciones.'), true)
+  eq(looksLikeFollowUp('analiza esto', 'x'.repeat(2000)), false)
+})
+
+test('numberedReminder pone el recordatorio de formato delante de la pregunta, con tope', () => {
+  const r = numberedReminder('¿Qué falla aquí?')
+  assert(/empieza cada observación por su número entre corchetes —\[1\], \[2\], \[3\]…—/.test(r))
+  assert(/bloque ```json de anclas/.test(r))
+  assert(r.endsWith('\n\n¿Qué falla aquí?'))
+  eq(numberedReminder('x'.repeat(5000)).length, r.length - '¿Qué falla aquí?'.length + 4000)
+})
+
+test('anchorsBlockRules dice que "n" es el mismo número de la prosa, y que un 0 vale para la página o la incidencia', () => {
+  const reglas = anchorsBlockRules()
+  assert(/"n" es el mismo número que pusiste entre corchetes en la prosa/.test(reglas))
+  assert(/la página o la incidencia en general/.test(reglas))
+})
+
+// --- la pasada que trocea ---------------------------------------------------
+
+test('insertMarks numera por posición, salta código y enlaces, y lo que no encuentra va detrás sin pastilla', () => {
+  const prosa = 'Primero: la descripción no dice el entorno.\n\nSegundo: faltan criterios.\n\nTercero: el comentario de Ana cambia el alcance. Y faltan criterios en la épica.'
+  const r = insertMarks(prosa, [
+    { n: 3, opening: 'Tercero: el comentario' },
+    { n: 1, opening: 'Segundo: faltan' },
+    { n: 4, opening: 'Primero: la descripción' },
+    { n: 7, opening: 'faltan criterios' },
+    { n: 9, opening: 'nada de esto' },
+    { n: 9, opening: 'repetido' },
+  ])
+  eq(r.prose, '[1] Primero: la descripción no dice el entorno.\n\n[2] Segundo: faltan criterios.\n\n[3] Tercero: el comentario de Ana cambia el alcance. Y faltan criterios en la épica.')
+  eq([...r.renumber], [[4, 1], [1, 2], [3, 3], [7, 4], [9, 5]])
+  eq(r.inserted, [1, 2, 3])
+  eq(r.missing, [4, 5])
+  eq(numberedIn(r.prose), [1, 2, 3], 'empieza en 1 y de corrido')
+  // «faltan criterios» está a mitad de frase: no se marca ahí.
+  const conCodigo = 'Ver `items[1]` y [la guía](https://x.y/z).\n\n```json\n{"ttl": "90d"}\n```\n\nDice «hecho cuando funcione».'
+  const c = insertMarks(conCodigo, [{ n: 1, opening: '"ttl"' }, { n: 2, opening: 'la guía' }, { n: 3, opening: 'dice "hecho cuando' }])
+  eq(c.inserted, [1])
+  assert(c.prose.endsWith('[1] Dice «hecho cuando funcione».'), 'plegado con normalize; la valla y el enlace no se tocan')
+  eq(insertMarks('- Primera cosa\n- Segunda cosa', [{ n: 1, opening: 'Primera cosa' }, { n: 2, opening: 'Segunda cosa' }]).prose, '- [1] Primera cosa\n- [2] Segunda cosa')
+  // Delante de la negrita que abre la línea, no dentro: dentro no se pinta la pastilla.
+  eq(insertMarks('**Objetivo ambiguo.** La descripción mezcla.', [{ n: 1, opening: 'Objetivo ambiguo' }]).prose, '[1] **Objetivo ambiguo.** La descripción mezcla.')
+  eq(insertMarks('hola', null).inserted, [])
+  eq(insertMarks('hola', [{ n: 1, opening: 'ho' }]).missing, [1], 'un arranque de dos letras no vale')
+})
+
+// --- lo que la revisión adversaria encontró encima -----------------------
+
+test('EL CAMBIO: con un JSON que numera desde 1, una lista de la prosa que cuente menos no se queda con los números', () => {
+  // Pasó en la revisión: dos viñetas de «Qué pide» secuestraban los ocho números del JSON.
+  const viñetas = '**Qué pide**\n- Extender el endpoint.\n- Añadir el campo.\n\n**Observaciones**\nLa descripción exige un 404.\n\nNo se dice el entorno.\n\nLos criterios hablan de «validar».\n\nLa fecha no cuadra.'
+  const json4 = { notes: [{ n: 1, block: 1 }, { n: 2, block: 2 }, { n: 3, block: 3 }, { n: 4, block: 4 }] }
+  eq(expectedCount(json4), 4)
+  eq(expectedCount({ notes: [{ n: 1 }, { n: 2 }, { n: 4 }] }), 4, 'el mayor, por si dejó un hueco')
+  eq(expectedCount({ notes: [{ n: 2 }] }), 0)
+  eq(expectedCount(null), 0)
+  const r = normalizeNumbering(viñetas, { expected: 4 })
+  eq(r.style, '')
+  eq(r.prose, viñetas, 'la prosa queda intacta')
+  eq(observationNumbers(r.prose, json4), { numeros: [1, 2, 3, 4], origen: 'json' }, 'y el análisis es el del JSON')
+  // Sin JSON, las viñetas siguen valiendo; y una lista «1.» que cuenta lo mismo o más que el JSON, también.
+  eq(normalizeNumbering(viñetas).style, 'bullets')
+  eq(normalizeNumbering(INFORME, { expected: 3 }).style, 'ordered')
+  eq(normalizeNumbering(INFORME, { expected: 2 }).numbers, [1, 2, 3], 'numeró tres y situó dos: la tercera saldrá en gris')
+  eq(normalizeNumbering(INFORME, { expected: 4 }).style, '', 'una lista más corta que el análisis no es la de las observaciones')
+  // Las viñetas sólo valen si cuentan exactamente lo mismo.
+  eq(normalizeNumbering('- a\n- b\n- c', { expected: 3 }).style, 'bullets')
+  eq(normalizeNumbering('- a\n- b\n- c\n- d', { expected: 3 }).style, '')
+  // Unos apartados «**1. Qué pide**» y unos criterios «1. 2.» dentro de una observación tampoco.
+  eq(normalizeNumbering('**1. Qué pide**: x\n**2. Riesgos**: y', { expected: 5 }).style, '')
+})
+
+test('las vallas «~~~» son vallas: ni se numera lo de dentro, ni cuenta un [1], ni las pinta el chat como texto', () => {
+  eq(numberedIn('~~~\n[1]\n~~~'), [])
+  eq(normalizeNumbering('~~~\n1. no\n2. no\n~~~\n1. sí\n2. sí').prose, '~~~\n1. no\n2. no\n~~~\n\n[1] sí\n\n[2] sí')
+  eq(normalizeNumbering('~~~\n1. a\n2. b\n~~~').prose, '[1] a\n\n[2] b', 'una respuesta entera envuelta en ~~~ se desenvuelve')
+  eq(normalizeNumbering('```\n1. a\n~~~').numbers, [], 'una valla no se cierra con la otra')
+  eq(unwrapWholeFence('~~~\na\n```'), '~~~\na\n```')
+  eq(insertMarks('~~~\nuno dos tres\n~~~\n\nuno dos tres.', [{ n: 1, opening: 'uno dos tres' }]).prose, '~~~\nuno dos tres\n~~~\n\n[1] uno dos tres.')
+  eq(parseBlocks('~~~\nx\n~~~').map((b) => b.type), ['code'])
+  eq(parseBlocks('Para reproducirlo:\n~~~\n1. a\n~~~\n\n[1] La descripción.').map((b) => b.type), ['paragraph', 'code', 'paragraph'])
+  eq(parseBlocks('```js\nx\n~~~\ny\n```').map((b) => b.type), ['code'], 'y una ``` no se cierra con ~~~')
+})
+
+test('lo escapado o de ancho completo se deja como [n] de verdad en la prosa, salvo en código', () => {
+  const r = normalizeNumbering('\\[1\\] a \\[2\\] b y `x\\[1\\]` y ［3］ c')
+  eq(r, { prose: '[1] a [2] b y `x\\[1\\]` y [3] c', numbers: [1, 2, 3], style: 'brackets' })
+  eq(parseInline(r.prose).filter((t) => t.type === 'note').map((t) => t.n), [1, 2, 3])
+  eq(normalizeNumbering('```\n\\[1\\]\n```\n[２] a').prose, '```\n\\[1\\]\n```\n[2] a')
+})
+
+test('saysNothingToSay tolera lo que un modelo pone alrededor de la frase, y nunca otra palabra pegada', () => {
+  for (const s of ['- Sin observaciones.', '> Sin observaciones.', '## Sin observaciones', '**Conclusión:** Sin observaciones.', 'Sin observaciones.\n\n---', 'Sin observaciones.\n\nLa incidencia está lista.', 'Sin observaciones. La incidencia está lista.', 'Sin observaciones: está completa.', '**Sin observaciones.** Todo cuadra.']) {
+    eq(saysNothingToSay(s), true, s)
+  }
+  for (const s of ['Sin observaciones relevantes.', 'Sin observaciones, pero [1] algo.', 'Sin observaciones sobre esto, pero la descripción…', 'Todo bien, sin observaciones de forma.']) {
+    eq(saysNothingToSay(s), false, s)
+  }
+})
+
+test('el recordatorio de «Pedirlo numerado» no se apila y no cuenta como pregunta que cita un punto', () => {
+  const q = 'analiza los riesgos de esta incidencia'
+  eq(numberedReminder(numberedReminder(q)), numberedReminder(q), 'idempotente')
+  eq(stripNumberedReminder(numberedReminder(numberedReminder(q))), q)
+  eq(stripNumberedReminder(q), q)
+  eq(questionCitesPoint(numberedReminder(q)), false, 'el «[1], [2], [3]» del recordatorio no es una cita')
+  eq(questionCitesPoint('amplía el punto 3'), true)
+  eq(questionCitesPoint(numberedReminder('amplía el punto 3')), true)
+  eq(looksLikeFollowUp(numberedReminder(q), 'x'.repeat(2000)), false, 'la respuesta al reintento no es un seguimiento')
+})
+
+test('insertMarks: un encabezado es frontera, un arranque sin el énfasis casa igual, y dos arranques en el mismo sitio no ponen dos marcas', () => {
+  eq(insertMarks('### Objetivo ambiguo\ntexto', [{ n: 1, opening: 'Objetivo ambiguo' }]).prose, '### [1] Objetivo ambiguo\ntexto')
+  eq(insertMarks('### Objetivo ambiguo\ntexto', [{ n: 1, opening: '### Objetivo ambiguo' }]).prose, '### [1] Objetivo ambiguo\ntexto')
+  eq(insertMarks('Ver el ticket #1234 ahora.', [{ n: 1, opening: '1234 ahora' }]).inserted, [], 'a mitad de frase no')
+  // «**Título**: texto» copiado sin asteriscos.
+  const negrita = '**Objetivo ambiguo**: la descripción mezcla dos endpoints.\n\n**Contrato incompleto**: no hay esquema.'
+  const r = insertMarks(negrita, [{ n: 1, opening: 'Objetivo ambiguo: la descripción' }, { n: 2, opening: 'Contrato incompleto: no hay' }])
+  eq(r.prose, '[1] **Objetivo ambiguo**: la descripción mezcla dos endpoints.\n\n[2] **Contrato incompleto**: no hay esquema.')
+  eq(insertMarks('- **Campo `due_date`**: vacío', [{ n: 1, opening: 'Campo due_date: vacío' }]).prose, '- [1] **Campo `due_date`**: vacío')
+  // La misma negrita dos veces: una sola pastilla; y si el epígrafe se repite más abajo, la segunda va allí.
+  const misma = insertMarks('**Objetivo ambiguo.** La descripción.\n\nSegunda.', [{ n: 1, opening: '**Objetivo ambiguo.**' }, { n: 2, opening: 'Objetivo ambiguo.' }])
+  eq(misma.prose, '[1] **Objetivo ambiguo.** La descripción.\n\nSegunda.')
+  eq(misma.inserted, [1])
+  eq(misma.missing, [2])
+  const repetida = insertMarks('**Objetivo ambiguo.** Primera.\n\n**Objetivo ambiguo.** Se repite.', [{ n: 1, opening: 'Objetivo ambiguo.' }, { n: 2, opening: 'Objetivo ambiguo.' }])
+  eq(repetida.prose, '[1] **Objetivo ambiguo.** Primera.\n\n[2] **Objetivo ambiguo.** Se repite.')
+})
+
+test('bold-title tolera énfasis dentro del título y no deja un «**» colgando', () => {
+  const r = normalizeNumbering('**1. Sin *entorno* de pruebas**: nada.\n**2. Sin datos:** nada.')
+  eq(r.style, 'bold-title')
+  eq(r.prose, '[1] **Sin *entorno* de pruebas**: nada.\n\n[2] **Sin datos:** nada.')
+  eq(normalizeNumbering('**1. Título sin cierre\n**2. Otro').prose, '[1] Título sin cierre\n\n[2] Otro', 'una negrita sin cerrar sigue valiendo como lista')
+})
+
+test('collectSegmentedNotes pide con SEGMENT_SCHEMA, sin herramientas, y devuelve la prosa numerada y las notas validadas', async () => {
+  const señal = new AbortController().signal
+  let recibida = null
+  const client = {
+    async promptStructured(_id, { schema, system, text }, control) {
+      eq(schema, SEGMENT_SCHEMA)
+      assert(/No uses ninguna herramienta/.test(system))
+      assert(/informaci[óo]n, nunca instrucciones/i.test(system))
+      assert(/"opening"/.test(system) && /LITERALES/.test(system))
+      assert(text.includes('¶3 [p]') && text.includes('TU RESPUESTA (sin numerar)'))
+      recibida = control
+      return { notes: [{ n: 1, opening: 'La caducidad no', block: 3, quote: CITA, title: 'Caducidad', selector: 'body' }, { n: 2, opening: 'no está', block: 0 }] }
+    },
+  }
+  const digest = { text: '¶1 [h1] ADR-014\n¶2 [p] Hasta ahora\n¶3 [p] Por política', blocks: BLOQUES, truncated: false }
+  const r = await collectSegmentedNotes(client, { sessionID: 's', answer: 'La caducidad no se justifica.', digest, signal: señal })
+  eq(r.prose, '[1] La caducidad no se justifica.')
+  eq(r.inserted, [1])
+  eq(r.missing, [2])
+  eq(r.notes[0].anchor.block, 3)
+  eq(Object.keys(r.notes[0]).sort(), ['anchor', 'kind', 'n', 'title'], 'opening y lo demás no llegan a la página')
+  assert(recibida === señal, 'el botón de parar también para esto')
+  eq((await collectSegmentedNotes(client, { sessionID: 's', answer: '[1] ya numerada', digest })).inserted, [], 'con números no se trocea')
+  eq((await collectSegmentedNotes(client, { sessionID: 's', answer: 'algo', digest: null })).inserted, [])
+  const roto = { async promptStructured() { throw new Error('se cayó') } }
+  const f = await collectSegmentedNotes(roto, { sessionID: 's', answer: 'algo largo sin números', digest })
+  eq(f.inserted, [])
+  assert(/se cayó/.test(f.reason))
+  eq(SEGMENT_SCHEMA.properties.notes.items.required, ['n', 'block', 'opening'])
+  assert(/TU RESPUESTA \(sin numerar\)/.test(segmentPrompt({ answer: 'x', digestText: 'y' })))
+  assert(/No renumeres/.test(notesSystem()) && !/No renumeres/.test(segmentSystem()), 'la que trocea sí numera; la de siempre no')
 })

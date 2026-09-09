@@ -16,6 +16,25 @@ test('turn: los deltas se van sumando', () => {
   eq(t.text, 'Hola mundo')
 })
 
+test('turn: dos mensajes del asistente no se pegan en la misma línea', () => {
+  // Una valla ``` que cerraba el primero y un «[1]» que abría el segundo
+  // quedaban en una sola línea, y ni la valla ni la marca se reconocían.
+  const t = new TurnTracker(SID)
+  t.handle(ev('message.updated', { info: { id: 'msg_1', sessionID: SID, role: 'assistant' } }))
+  t.handle(ev('message.part.updated', { part: { id: 'prt_1', sessionID: SID, messageID: 'msg_1', type: 'text', text: 'Leo.\n```' } }))
+  t.handle(ev('message.updated', { info: { id: 'msg_2', sessionID: SID, role: 'assistant' } }))
+  t.handle(ev('message.part.updated', { part: { id: 'prt_2', sessionID: SID, messageID: 'msg_2', type: 'text', text: '[1] Primera.' } }))
+  eq(t.text, 'Leo.\n```\n[1] Primera.')
+  // Dentro del mismo mensaje, los trozos se pegan tal cual; y si ya acaba en salto, no se dobla.
+  const u = new TurnTracker(SID)
+  u.handle(ev('message.updated', { info: { id: 'msg_1', sessionID: SID, role: 'assistant' } }))
+  u.handle(ev('message.part.updated', { part: { id: 'prt_1', sessionID: SID, messageID: 'msg_1', type: 'text', text: 'Ho' } }))
+  u.handle(ev('message.part.updated', { part: { id: 'prt_2', sessionID: SID, messageID: 'msg_1', type: 'text', text: 'la\n' } }))
+  u.handle(ev('message.updated', { info: { id: 'msg_2', sessionID: SID, role: 'assistant' } }))
+  u.handle(ev('message.part.updated', { part: { id: 'prt_3', sessionID: SID, messageID: 'msg_2', type: 'text', text: 'mundo' } }))
+  eq(u.text, 'Hola\nmundo')
+})
+
 test('turn: la instantánea manda sobre los deltas', () => {
   const t = new TurnTracker(SID)
   t.handle(ev('message.updated', { info: { id: 'msg_1', sessionID: SID, role: 'assistant' } }))

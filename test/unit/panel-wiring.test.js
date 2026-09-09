@@ -237,14 +237,14 @@ test('EL CAMBIO: las páginas base del análisis viajan con el turno, se ven y s
   const remota = JS.slice(JS.indexOf('async function searchSourcesRemote'), JS.indexOf('function searchFailText'))
   assert(/MSG\.PAGE_SEARCH/.test(remota))
   assert(/token !== state\.sourcesSearch\.token/.test(remota), 'una respuesta tardía se tira')
-  assert(/mergeSuggestions\(local, r\.pages, \{[^}]*host: state\.site\.host/.test(remota), 'lo de la API se limpia contra el host')
+  assert(/mergeSuggestions\(local, paginas, \{[^}]*host: state\.site\.host/.test(remota), 'lo de la API se limpia contra el host')
   // Elegir una sugerencia mata la búsqueda que quedara en marcha: si no, la
   // lista volvía a aparecer bajo el campo vacío con la página recién añadida.
   const alta = JS.slice(JS.indexOf('async function addSource('), JS.indexOf('async function removeSource'))
   assert(/state\.sourcesSearch\.token\+\+/.test(alta) && /clearTimeout\(state\.sourcesSearch\.timer\)/.test(alta), 'añadir cancela la búsqueda pendiente')
-  // Desde un Jira Data Center no se pregunta a una API que no está en ese origen.
+  // Sin Confluence al que preguntar (un Jira Data Center sin enlace) se añade por id.
   const porId = JS.slice(JS.indexOf('async function addSourceById'), JS.indexOf('async function fetchPageChain'))
-  assert(/product === 'jira' && !state\.site\.cloud/.test(porId), 'en Jira Data Center se añade por id sin comprobar')
+  assert(/const target = sourcesTarget\(\)\s*\n\s*if \(!target\) \{/.test(porId), 'sin a quién preguntar se añade por id sin comprobar')
 
   // Restaurar la conversación reconstruye la nota desde el sistema guardado.
   const restaurar = JS.slice(JS.indexOf('async function restoreConversation'), JS.indexOf('function showWelcome'))
@@ -355,7 +355,7 @@ test('EL CAMBIO: el análisis en Jira lee la incidencia, permite leerla en el al
   const entrada = JS.slice(JS.indexOf('function onSourcesInput'), JS.indexOf('function refReasonText'))
   assert(/pageRefFromUrl\(text, state\.site, \{ linkedHost: linkedHost\(\) \}\)/.test(entrada), 'una URL del Confluence enlazado vale')
   assert(/suggestFromIndex\(indice, q/.test(entrada) && /const indice = sourcesIndex\(\)/.test(entrada), 'las sugerencias salen del índice que toca')
-  assert(/product === 'jira' && !state\.site\.cloud\) return/.test(entrada), 'desde un Jira Data Center no se pregunta a la API del sitio')
+  assert(/if \(!sourcesTarget\(\)\) return/.test(entrada), 'sin nadie a quien preguntar, sólo el índice')
   const porId = JS.slice(JS.indexOf('async function addSourceById'), JS.indexOf('async function fetchPageChain'))
   assert(/sourcesIndex\(\)\?\.pages\?\.\[id\]/.test(porId), 'y el título por id también')
 
@@ -384,6 +384,93 @@ test('EL CAMBIO: en Jira la tarjeta abre la búsqueda que hizo el modelo, y el i
   assert(htmlIds.has('context-generate-text'), 'la pantalla de contexto dice qué se recorre según el producto')
   const pantalla = JS.slice(JS.indexOf('function showContextScreen'), JS.indexOf('async function showMemoryScreen'))
   assert(/context-generate-text/.test(pantalla) && /tipos de incidencia/.test(pantalla))
+})
+
+test('EL CAMBIO: desde un Jira Data Center el panel pregunta al Confluence enlazado, y el análisis sabe qué incidencia es', () => {
+  // Las páginas base desde Jira DC: la búsqueda y el título por id van al
+  // Confluence enlazado desde el PANEL (su API está en otro origen: el content
+  // script de Jira no puede), con permiso sobre ese dominio y las cookies de
+  // su sesión; lo que vuelve no se guarda en el índice de este Jira.
+  assert(/function sourcesTarget\(\)/.test(JS) && /async function hasHostPermission\(origin\)/.test(JS))
+  const remota = JS.slice(JS.indexOf('async function searchSourcesRemote'), JS.indexOf('function searchFailText'))
+  assert(/target\.via === 'linked'/.test(remota) && /hasHostPermission\(target\.site\.origin\)/.test(remota), 'sin permiso no se intenta')
+  assert(/searchPages\(\(u, o\) => fetch\(u, o\), target\.site, q, \{[^}]*credentials: 'include'/.test(remota), 'la petición la hace el panel, con las cookies de ese origen')
+  assert(/MSG\.PAGE_SEARCH/.test(remota), 'y en el sitio de la pestaña sigue yendo por el content script')
+  assert(/source: 'linked'/.test(remota), 'lo del Confluence enlazado se marca como suyo')
+  const cadena = JS.slice(JS.indexOf('async function fetchPageChain'), JS.indexOf('async function mergePagesIntoIndex'))
+  assert(/fetchAncestors\(\(u, o\) => fetch\(u, o\), target\.site, id, \{ credentials: 'include' \}\)/.test(cadena))
+  assert(/needsPermission: true/.test(cadena))
+  const porId = JS.slice(JS.indexOf('async function addSourceById'), JS.indexOf('async function fetchPageChain'))
+  assert(/if \(!enlazado\) await mergePagesIntoIndex\(r\.pages\)/.test(porId), 'el índice del Confluence enlazado nunca se guarda desde Jira')
+  assert(/from: enlazado \? 'linked' : 'confluence'/.test(porId))
+  const alta = JS.slice(JS.indexOf('async function addSource('), JS.indexOf('async function removeSource'))
+  assert(/if \(from === 'confluence'\) await mergePagesIntoIndex/.test(alta), 'y tampoco al elegir una sugerencia suya')
+  const enlazado = JS.slice(JS.indexOf('async function loadLinkedContext'), JS.indexOf('async function ensureContentAccess'))
+  assert(/await getSite\(host\)/.test(enlazado) && /wikiPrefix/.test(enlazado), 'el prefijo del wiki enlazado, si se observó')
+  // El permiso se pide sobre el dominio que toca, desde la pantalla, y sin inyectar en la pestaña de Jira.
+  assert(/async function requestSourcesPermission\(\)/.test(JS))
+  assert(/requestHostPermission\(\{ origin: target\.site\.origin, host: target\.site\.host, tabId: null \}\)/.test(JS))
+  const pantalla = JS.slice(JS.indexOf('async function showSourcesScreen'), JS.indexOf('function setSourcesStatus'))
+  assert(/hasHostPermission\(target\.site\.origin\)/.test(pantalla) && /sources-perm-text/.test(pantalla))
+  assert(htmlIds.has('sources-perm-text'))
+
+  // El análisis en Jira: los campos de la incidencia llegan con el digest, se
+  // reconstruyen con claves blancas y viajan al prompt por el digest.
+  const lectura = JS.slice(JS.indexOf('async function readPageDigest'), JS.indexOf('function attachToBubble'))
+  assert(/const issue = normalizeIssueFields\(r\.issue\)/.test(lectura))
+  assert(/const digest = \{ \.\.\.r, issue \}/.test(lectura))
+  const bootstrap = readFileSync(join(ROOT, 'src/content/bootstrap.js'), 'utf8')
+  assert(/issue: jiraIssueFields\(\)/.test(bootstrap), 'el content script los manda con el digest')
+})
+
+test('EL CAMBIO: un análisis sin «[n]» ya no acaba en «no ha numerado»: se adapta, se lee del JSON, se trocea o se pide numerado', () => {
+  // Pasó de verdad (gpt-5.6-luna): ocho observaciones como lista «1.» y el
+  // JSON perfecto, y la extensión lo tiraba todo. Ahora, antes de rendirse:
+  const cuerpo = JS.slice(JS.indexOf('async function offerNotes'), JS.indexOf('function notesCard'))
+  assert(/const adaptada = normalizeNumbering\(answer, \{ expected: expectedCount\(anchors\) \}\)/.test(cuerpo), 'la numeración «a su manera» se reescribe en local, sin pisar la cuenta del JSON')
+  assert(/adaptada\.prose !== answer/.test(cuerpo) && /repaint\?\.\(answer\)/.test(cuerpo), 'y la burbuja se repinta cuando la prosa cambia (también plegada o desenvuelta)')
+  assert(/const sinNada = saysNothingToSay\(original\)/.test(cuerpo), '«Sin observaciones.» se mira en la respuesta original')
+  assert(/const seguimientoCitado = state\.notes\.length > 0 && questionCitesPoint\(/.test(cuerpo), 'un seguimiento que cita un punto no se adapta')
+  assert(/const \{ numeros, origen \} = observationNumbers\(answer, anchors\)/.test(cuerpo), 'los números del JSON valen si la prosa no los trae')
+  assert(cuerpo.indexOf('normalizeNumbering(answer,') < cuerpo.indexOf('const analisisNuevo = numeros[0] === 1'), 'antes de decidir si es un análisis nuevo')
+  assert(cuerpo.indexOf("'Sin observaciones'") < cuerpo.indexOf('const analisisNuevo = numeros[0] === 1'), 'y «Sin observaciones.» se dice antes de conservar marcas en silencio')
+  assert(/'Sin observaciones'/.test(cuerpo) && /las marcas de antes se quedan/.test(cuerpo), '«Sin observaciones.» es un resultado, no un fallo')
+  assert(/looksLikeFollowUp\(/.test(cuerpo), 'una prosa larga sin números con marcas previas no es un seguimiento')
+  assert(/NOTE_LIMITS\.shortAnswer/.test(cuerpo) && /status === 'error'/.test(cuerpo), 'una respuesta corta o con una consulta rota no se trocea')
+  assert(/\} else if \(!numeros\.length \|\| origen === 'json'\) \{/.test(cuerpo), 'sin números en la prosa —o con un JSON sin bloques que sirvan—, la pasada que trocea')
+  assert(/segmentedPassNotes\(answer, digest, signal\)/.test(cuerpo))
+  assert(/withRetryNumbered\(/.test(cuerpo), 'y si tampoco, el botón «Pedirlo numerado»')
+  assert(!/no ha numerado sus observaciones/.test(cuerpo), 'el aviso de antes ya no existe')
+  assert(/filasNumeros/.test(cuerpo), 'la tarjeta lista los números que quedaron en la prosa')
+  assert(/prosaOriginal: original/.test(cuerpo), 'y guarda la prosa original para reconocer su burbuja al repintar')
+
+  const envio = JS.slice(JS.indexOf('async function send('), JS.indexOf('function paintTurn('))
+  assert(/question: text,\s*\n\s*parts: turn\.parts,/.test(envio), 'la pregunta y las partes del turno llegan a las marcas')
+  assert(/repaint: \(prose\) => \{/.test(envio) && /renderMarkdown\(prose, \{ onLink: openUrl, onNote: focusNote \}\)/.test(envio))
+  assert(/body\.isConnected \? body : liveBubble\(null\)/.test(envio), 'si el chat se repintó a mitad de turno, la prosa va a la burbuja viva')
+  assert(/function liveBubble\(bubble\)/.test(JS))
+
+  for (const fn of ['function withRetryNumbered', 'async function segmentedPassNotes']) {
+    assert(JS.indexOf(fn) > JS.indexOf('function notesCard'), fn + ' va después de notesCard')
+  }
+  const reintento = JS.slice(JS.indexOf('function withRetryNumbered'), JS.indexOf('async function segmentedPassNotes'))
+  assert(/Pedirlo numerado/.test(reintento) && /numberedReminder\(question \|\| state\.lastQuestion\)/.test(reintento) && /send\(\)/.test(reintento))
+  assert(/setSkill\('analisis'\)/.test(reintento), 'el botón fija la Skill que promete')
+  const trocea = JS.slice(JS.indexOf('async function segmentedPassNotes'), JS.indexOf('async function secondPassNotes'))
+  assert(/collectSegmentedNotes\(state\.client/.test(trocea) && /deleteSession\(session\.id\)/.test(trocea), 'en una sesión desechable, como la segunda pasada')
+  assert(/question: stripNumberedReminder\(state\.lastQuestion\)/.test(trocea), 'sin el recordatorio de «Pedirlo numerado» como pregunta')
+  const segunda = JS.slice(JS.indexOf('async function secondPassNotes'), JS.indexOf('function staleNotesCard'))
+  assert(/question: stripNumberedReminder\(state\.lastQuestion\)/.test(segunda))
+
+  // Al restaurar, la numeración «a su manera» se adapta sólo en los turnos de
+  // Análisis, no en un seguimiento que cita un punto, y los números del JSON valen.
+  const restaurar = JS.slice(JS.indexOf('async function restoreConversation'), JS.indexOf('function showWelcome'))
+  assert(/const adaptar = !!cruda && \(turno\.analisis \|\| !!anchors\) && !\(questionCitesPoint\(turno\.pregunta\) && !anchors\)/.test(restaurar))
+  assert(/normalizeNumbering\(cruda, \{ expected: expectedCount\(anchors\) \}\)\.prose/.test(restaurar))
+  assert(/includes\('MODO ANÁLISIS\.'\)/.test(restaurar), 'un turno fue un Análisis si su sistema llevó la cabecera del modo')
+  assert(/observationNumbers\(prose, anchors\)\.numeros\.length/.test(restaurar))
+  assert(/prosaOriginal/.test(restaurar), 'la tarjeta viva reconoce su burbuja también por la prosa original')
+  assert(!/numberedIn\(prose\)/.test(JS.slice(JS.indexOf('function staleNotesCard'))), 'ni la tarjeta atenuada ni volver a marcar miran sólo la prosa')
 })
 
 test('la navegación no se cae en silencio cuando falta el índice', () => {

@@ -228,11 +228,36 @@ Junto al selector de modelo hay otras dos cosas:
   versiones, pasos, dependencias), y si la descripción, los comentarios y los
   campos se contradicen entre sí o con la documentación del Confluence
   enlazado. Y subraya igual: un párrafo de la descripción, un comentario
-  entero, un campo. Las **páginas base** desde Jira son páginas del Confluence
-  enlazado: se eligen de su índice, o pegando su URL o su id; desde un Jira
-  Data Center no se puede buscar en la API de Confluence, y la pantalla lo
-  dice. En el alcance *Sólo estas*, leer la propia incidencia por el MCP (sus
-  comentarios plegados, su historial) no cuenta como salirse.
+  entero, un campo.
+
+  Y **sabe qué ticket es**. Antes de mandar la pregunta lee de los campos en
+  pantalla el tipo, el estado, la prioridad, la resolución, las personas, la
+  épica, el sprint, las versiones, los componentes y las etiquetas (en el
+  registro: «Página leída en bloques · … · tipo Tarea · estado En curso»), y
+  se los enseña al modelo con lo que hay que comprobar según lo que sea: una
+  definición de API, por si está el contrato, qué cambia, si rompe
+  compatibilidad y si sigue la guía de API del sitio; un error, por si se
+  puede reproducir; una historia, por sus criterios y su alcance; una épica,
+  por lo que la compone; un test, por lo que prueba y su evidencia; una
+  tarea, por su resultado comprobable. Y según el estado: por empezar, si
+  está lista para cogerla; en marcha, qué falta por decidir y qué cambian los
+  comentarios; en revisión o en pruebas, si lo entregado cubre lo pedido y
+  cada criterio; cerrada, si se cumplió con evidencia y qué quedó sin
+  resolver; bloqueada, qué la bloquea. Los nombres se reconocen en español y
+  en inglés; lo que no se reconoce no se inventa: se le pide al modelo que lo
+  deduzca, y lo que ese tipo y ese estado significan en tu proyecto se lo
+  remite al contexto que Faro construyó (que en Jira recoge tipos, estados y
+  convenciones). Si tu Jira pinta los campos de otra forma y no se leen, el
+  análisis funciona igual: se le pide que los mire él con la herramienta.
+
+  Las **páginas base** desde Jira son páginas del Confluence enlazado: se
+  eligen de su índice, buscándolas por título en su API, o pegando su URL o
+  su id. Desde un Jira Data Center la API de ese Confluence está en otro
+  dominio, así que la búsqueda la hace el propio panel con tu sesión, y hace
+  falta darle permiso sobre ese dominio una vez: la pantalla lo pide con un
+  botón **Dar permiso**. Sin él sólo se busca en el índice. En el alcance
+  *Sólo estas*, leer la propia incidencia por el MCP (sus comentarios
+  plegados, su historial) no cuenta como salirse.
 
   La elección se recuerda por sitio, igual que el modelo.
 
@@ -423,8 +448,20 @@ Faro te dirá por qué, debajo de la respuesta. Los motivos, por frecuencia:
    vuelve a pedir el análisis. Si el diálogo no llega a aparecer,
    `chrome://extensions` → Faro → Detalles → Acceso al sitio → «En sitios
    específicos» → añade tu dominio.
-2. **El modelo no ha numerado sus observaciones.** Sin `[1]`, `[2]`… no hay nada
-   que anclar. Pasa con los modelos pequeños; cambia de modelo.
+2. **El modelo no ha numerado como se le pide.** Ya no es motivo para no
+   marcar: si numeró a su manera —una lista «1.», «**1.**», «Observación 1:»,
+   encabezados «### 1.», o la respuesta entera dentro de un bloque de código—
+   Faro lo reescribe como `[1]`, `[2]`… en el propio chat («Numeración
+   adaptada» en el registro); si la prosa no lleva números pero el bloque JSON
+   de anclas sí, valen los del JSON («Numeración del JSON»); si no hay números
+   en ningún sitio, se le pide aparte que trocee su respuesta en observaciones
+   y las sitúe («Pasada que trocea»), y los números aparecen en el chat
+   después. Sólo si tampoco así sale un aviso con el botón **Pedirlo
+   numerado**, que repite la misma pregunta con el formato por delante. Y si el
+   modelo cierra con «Sin observaciones.», es que no encontró nada que decir:
+   se dice en neutro y no hay nada que subrayar. Una respuesta muy corta o con
+   una consulta fallida («no he podido leer la incidencia») no se trocea: no
+   es un análisis, y el aviso ofrece pedirlo de nuevo.
 3. **No se ha podido leer la página en bloques.** Casi siempre es que la
    pestaña se cargó antes que la versión nueva de la extensión: recárgala. Si
    estás en el editor, Faro no lee ni marca nada a propósito. En el registro
@@ -437,7 +474,9 @@ Faro te dirá por qué, debajo de la respuesta. Los motivos, por frecuencia:
 5. **La Skill no es Análisis.** En General no se marca nada.
 
 En el **registro** queda lo mismo, con más detalle: «Sin marcas» con la razón, o
-«Sin anclar» con los números que no se pudieron situar. «Análisis marcado» dice,
+«Sin anclar» con los números que no se pudieron situar; «Numeración adaptada»,
+«Numeración del JSON» y «Pasada que trocea» cuentan cómo se recuperó una
+respuesta que no venía numerada. «Análisis marcado» dice,
 de cada número, cómo se resolvió: `block+quote` es la cita dentro de su bloque,
 `block+whole` el bloque entero, `block-moved` que el número no coincidía pero
 el texto sí, y `global` que el bloque ya no estaba y la cita se buscó en toda
@@ -465,6 +504,14 @@ párrafo de al lado sería peor que no subrayar nada.
 La cita del modelo no estaba tal cual en el bloque que señaló —la parafraseó, o
 la página cambió—, así que se marca el bloque entero, que es lo que él señaló;
 o se encontró por aproximación. La fila lo dice para que no pase por exacta.
+
+**Pulso [2] y la marca está, pero la página no se mueve**
+Pasaba en la vista de incidencia de un Jira Data Center: ahí el que hace
+scroll es un panel interno, no la ventana, y Faro sólo movía la ventana. Ahora
+al ir a una observación se desplazan primero los contenedores con scroll
+propio que la envuelven y después la ventana, como ya hacía la navegación por
+el árbol. Si aun así no se mueve, recarga la pestaña: el content script que
+tiene cargado es anterior a este cambio.
 
 **Pulso [2] y dice que esa marca ya no está**
 Las marcas viven en la página donde se hicieron. Si has navegado, recargado o
@@ -501,7 +548,11 @@ Por orden de probabilidad:
 
 1. **Falta el permiso del dominio.** Sin él sólo se busca en el índice del
    sitio, y la pantalla lo dice con un botón **Dar permiso**. En
-   `*.atlassian.net` viene de fábrica.
+   `*.atlassian.net` viene de fábrica. Desde un **Jira Data Center** el
+   permiso que hace falta es el del **Confluence enlazado** (es a él a quien
+   se le pregunta, desde el panel y con tu sesión): la pantalla lo nombra y
+   lo pide. Si al buscar dice que tu sesión de ese host no vale para su API,
+   ábrelo en otra pestaña, entra, y vuelve a intentarlo.
 2. **No hay índice.** Si además el sitio no tiene contexto construido, no hay
    dónde buscar hasta que Confluence conteste: pega la URL de la página, que
    siempre vale.

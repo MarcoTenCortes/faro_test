@@ -58,14 +58,27 @@ import {
   pageRefFromUrl,
   consultedOutside,
   titlesFromTab,
+  sourcesSearchTarget,
 } from './sources.js'
+import { normalizeIssueFields } from './issue-profile.js'
+import { searchPages, fetchAncestors } from '../shared/confluence-rest.js'
 import {
   collectNotes,
+  collectSegmentedNotes,
   numberedIn,
+  observationNumbers,
+  normalizeNumbering,
+  expectedCount,
+  saysNothingToSay,
+  looksLikeFollowUp,
+  questionCitesPoint,
+  numberedReminder,
+  stripNumberedReminder,
   validateNotes,
   splitAnchorsBlock,
   titleFromProse,
   surplusNumbers,
+  NOTE_LIMITS,
 } from './notes.js'
 import { baseSystem, selectionBlock, stripSelectionBlock, pageUrlFromSystem, PAGE_OPEN } from './prompts.js'
 import * as memory from './memory.js'
@@ -117,7 +130,9 @@ const state = {
   // sitio anterior.
   sources: emptySources(),
   mcpConnected: false,
-  // Desde Jira, el contexto del Confluence enlazado: {host, contextMd} o null.
+  // Desde Jira, el contexto del Confluence enlazado: {host, contextMd, index,
+  // wikiPrefix} o null. El prefijo es el observado al visitarlo, si se
+  // visitó: hace falta para preguntarle a su API desde aquí.
   linkedContext: null,
   // La búsqueda de páginas base en curso: un testigo para descartar la
   // respuesta tardía de una consulta que el usuario ya ha reescrito.
@@ -396,6 +411,10 @@ async function loadLinkedContext(saved) {
   // Y su índice: es donde se buscan las páginas base de un análisis desde
   // Jira, que son páginas de ESE Confluence. Nunca se guarda desde aquí.
   const { index } = await getIndex(host)
+  // Y el prefijo de su wiki, si se observó al visitarlo: su API cuelga de ahí
+  // (`/confluence/rest/api/…` en un Data Center con ruta de contexto).
+  const suyo = await getSite(host)
+  const wikiPrefix = typeof suyo?.wikiPrefix === 'string' ? suyo.wikiPrefix : ''
   // El enlace es un hecho del sitio guardado, no de que ya haya contexto: sin
   // esto, una URL de ese Confluence pegada en las páginas base se rechazaba
   // como «otro sitio» justo antes de indexarlo, que es cuando más falta hace.
@@ -405,7 +424,7 @@ async function loadLinkedContext(saved) {
       `${host} · ${contextMd?.length || 0} caracteres · ${index ? indexSize(index) + ' entradas' : 'sin índice'}`
     )
   }
-  return { host, contextMd: contextMd || '', index: index || null }
+  return { host, contextMd: contextMd || '', index: index || null, wikiPrefix }
 }
 
 /**
@@ -421,6 +440,25 @@ function sourcesIndex() {
 /** El host del Confluence enlazado, si estamos en un Jira que lo tiene. */
 function linkedHost() {
   return state.site?.product === 'jira' ? state.linkedContext?.host || '' : ''
+}
+
+/**
+ * A quién se le pregunta por páginas de Confluence desde aquí: al sitio de la
+ * pestaña por el content script, o al Confluence enlazado desde el panel
+ * (Jira Data Center). null si no hay a quién.
+ */
+function sourcesTarget() {
+  return sourcesSearchTarget(state.site, state.linkedContext)
+}
+
+/**
+ * ¿Tiene Faro permiso sobre ese origen? Es lo que hace falta para que una
+ * página de la extensión —este panel— pueda hacerle un GET a un dominio que
+ * no está en el manifest, con las cookies de su sesión.
+ */
+async function hasHostPermission(origin) {
+  const pattern = String(origin || '').replace(/\/+$/, '') + '/*'
+  return chrome.permissions.contains({ origins: [pattern] }).catch(() => false)
 }
 
 /**
@@ -514,30 +552,51 @@ function showPermissionNotice() {
  * sendMessage. Lo usan la tarjeta del chat y la pantalla de páginas base, que
  * tapa al chat y necesita su propio botón.
  *
+ * Por defecto, sobre el sitio de la pestaña, inyectando el content script en
+ * ella. Con `target`, sobre otro dominio —el Confluence enlazado a este Jira,
+ * para poder preguntarle a su API desde el panel—: el service worker registra
+ * el content script para cuando el usuario lo abra, y no hay pestaña en la
+ * que inyectar nada.
+ *
+ * @param {{origin:string, host:string, tabId?:number|null}} [target]
  * @returns {Promise<{ok:true}|{ok:false, denied:true}|{ok:false, error:string}>}
  */
-async function requestHostPermission() {
-  const pattern = state.site.origin.replace(/\/+$/, '') + '/*'
+async function requestHostPermission(target = null) {
+  const origin = target?.origin || state.site.origin
+  const host = target?.host || state.site.host
+  const tabId = target ? target.tabId ?? null : state.tabId
+  const pattern = origin.replace(/\/+$/, '') + '/*'
   const granted = await chrome.permissions.request({ origins: [pattern] }).catch(() => false)
   if (!granted) {
-    log.warn('Permiso de host denegado', state.site.host)
+    log.warn('Permiso de host denegado', host)
     return { ok: false, denied: true }
   }
   const r = await chrome.runtime
-    .sendMessage({ type: MSG.REQUEST_HOST_PERMISSION, origin: state.site.origin, tabId: state.tabId })
+    .sendMessage({ type: MSG.REQUEST_HOST_PERMISSION, origin, tabId })
     .catch(() => null)
   if (r?.ok) {
-    log.ok('Permiso concedido', state.site.host)
+    log.ok('Permiso concedido', host)
     return { ok: true }
   }
   return { ok: false, error: r?.error || 'motivo desconocido' }
 }
 
-function manualPermissionText() {
+/**
+ * El permiso que le falta a la pantalla de páginas base: el del Confluence
+ * enlazado si es a él a quien hay que preguntar, o el del sitio.
+ */
+async function requestSourcesPermission() {
+  const target = sourcesTarget()
+  if (target?.via === 'linked') return requestHostPermission({ origin: target.site.origin, host: target.site.host, tabId: null })
+  return requestHostPermission()
+}
+
+/** @param {string} [origin] otro origen que no sea el del sitio (el Confluence enlazado) */
+function manualPermissionText(origin = '') {
   return (
     'No se concedió. Si no llegó a salir el diálogo, dalo a mano: chrome://extensions → Faro → ' +
     'Detalles → Acceso al sitio → «En sitios específicos», y añade ' +
-    state.site.origin +
+    (origin || state.site.origin) +
     '.'
   )
 }
@@ -632,18 +691,27 @@ async function restoreConversation() {
       let turno = null
       let urlDelTurno = ''
       let baseDelTurno = null
+      let analisisDelTurno = false
+      let preguntaDelTurno = ''
       const cerrarTurno = () => {
         if (!turno) return
         // Un análisis cierra con su bloque JSON de anclas: no es para leerlo.
         // Las marcas no se rehacen solas al restaurar —vivían en la página
         // donde se hicieron—, pero las anclas se guardan para poder volver a
         // ponerlas con un clic.
-        const { prose, anchors } = splitAnchorsBlock(turno.textos.join('\n\n'))
+        const { prose: cruda, anchors } = splitAnchorsBlock(turno.textos.join('\n\n'))
+        // La numeración «a su manera» se adapta también aquí —lo guardado es
+        // lo que escribió el modelo, no lo que el panel repintó—, pero sólo en
+        // los turnos de Análisis (una lista «1.» de Búsqueda o de General no
+        // son observaciones) y no en un seguimiento que cita un punto sin
+        // traer anclas (sus pasos no son observaciones). Lo encontró la revisión.
+        const adaptar = !!cruda && (turno.analisis || !!anchors) && !(questionCitesPoint(turno.pregunta) && !anchors)
+        const prose = !cruda ? '' : adaptar ? normalizeNumbering(cruda, { expected: expectedCount(anchors) }).prose : cruda
         if (prose) {
           const bubble = addAssistantMessage(prose)
           state.turns.push({ role: 'assistant', text: prose })
           burbujas.push({ prose, bubble })
-          if (anchors && numberedIn(prose).length) {
+          if (anchors && observationNumbers(prose, anchors).numeros.length) {
             ultimoAnalisis = { prose, anchors, bubble, url: turno.url, conBase: turno.conBase }
           }
         }
@@ -659,12 +727,15 @@ async function restoreConversation() {
           // Las páginas base viajaron en el sistema de ese mensaje: la nota
           // de abajo se reconstruye de ahí, con el mismo texto que al mandar.
           baseDelTurno = sourcesFromSystem(m.info.system)
+          // Y si el turno fue un Análisis: la cabecera del modo va en su sistema.
+          analisisDelTurno = String(m.info.system || '').includes('MODO ANÁLISIS.')
           if (!text.trim()) continue
           // En opencode quedó guardado con el fragmento señalado por delante;
           // aquí se enseña sólo la pregunta, y una nota de que iba acompañada.
           // La página en bloques viajó en el sistema de ese mensaje: se dice
           // igual, que estuvo ahí.
           const limpio = stripSelectionBlock(text)
+          preguntaDelTurno = limpio
           const conPagina = String(m.info.system || '').includes(PAGE_OPEN)
           // Lo que se analizó era una incidencia si la URL del turno lo dice.
           const productoDelTurno = parseAtlassianUrl(urlDelTurno)?.product || state.site?.product || ''
@@ -683,7 +754,15 @@ async function restoreConversation() {
         }
 
         if (!text.trim()) continue
-        if (!turno) turno = { textos: [], url: urlDelTurno, conBase: (baseDelTurno?.count || 0) > 0 }
+        if (!turno) {
+          turno = {
+            textos: [],
+            url: urlDelTurno,
+            conBase: (baseDelTurno?.count || 0) > 0,
+            analisis: analisisDelTurno,
+            pregunta: preguntaDelTurno,
+          }
+        }
         turno.textos.push(text)
       }
       cerrarTurno()
@@ -692,10 +771,20 @@ async function restoreConversation() {
       // reindexar…—, la tarjeta viva se vuelve a pintar bajo la respuesta de
       // la que salieron (o bajo la última, si aquélla ya no está). Si no hay
       // marcas, la atenuada del último análisis con anclas, con su botón.
+      // La respuesta se reconoce por su prosa, o por la prosa ORIGINAL si los
+      // «[n]» los puso la pasada que trocea (opencode guarda la original):
+      // entonces se repinta con la numerada, para que las pastillas vuelvan.
       if (state.notes.length && state.notesResult) {
-        const { prose, filas, placed, missed, detail, conBase, product } = state.notesResult
+        const { prose, prosaOriginal, filas, placed, missed, detail, conBase, product } = state.notesResult
         const misma = (a, b) => String(a || '').replace(/\s+/g, ' ').trim() === String(b || '').replace(/\s+/g, ' ').trim()
-        const dueña = burbujas.find((b) => misma(b.prose, prose)) || burbujas[burbujas.length - 1]
+        const porProsa = burbujas.find((b) => misma(b.prose, prose))
+        const porOriginal = !porProsa && prosaOriginal ? burbujas.find((b) => misma(b.prose, prosaOriginal)) : null
+        const dueña = porProsa || porOriginal || burbujas[burbujas.length - 1]
+        if (porOriginal) {
+          const cuerpo = porOriginal.bubble
+          cuerpo.textContent = ''
+          cuerpo.append(renderMarkdown(prose, { onLink: openUrl, onNote: focusNote }))
+        }
         if (dueña) {
           state.noteRows = new Map()
           state.notesCard = attachToBubble(dueña.bubble, notesCard(filas, placed, missed, detail, { conBase, product }))
@@ -1058,6 +1147,21 @@ async function send() {
       signal: abort.signal,
       conBase: (sources?.pages.length || 0) > 0,
       product: productoAlPedir,
+      question: text,
+      parts: turn.parts,
+      // Si la numeración se adapta o se pone a posteriori, la burbuja se
+      // repinta con la prosa nueva (y la memoria del turno la sigue).
+      repaint: (prose) => {
+        const ultimo = state.turns[state.turns.length - 1]
+        if (ultimo?.role === 'assistant') ultimo.text = prose
+        // El chat ha podido repintarse entero a mitad de turno (cerrar
+        // Ajustes, reindexar): entonces `body` está fuera del documento y la
+        // prosa va a la última burbuja viva, que es la restaurada de este turno.
+        const destino = body.isConnected ? body : liveBubble(null)
+        if (!destino) return
+        destino.textContent = ''
+        destino.appendChild(renderMarkdown(prose, { onLink: openUrl, onNote: focusNote }))
+      },
     })
   } catch (err) {
     if (err?.name !== 'AbortError') {
@@ -1138,8 +1242,17 @@ async function readPageDigest() {
     log.info('Página sin bloques', reason === 'editando' ? 'estás en el editor' : reason)
     return { digest: null, reason }
   }
-  log.ok('Página leída en bloques', `${r.count} bloques · ${r.chars} caracteres${r.truncated ? ' · recortada' : ''}`)
-  return { digest: r, reason: '' }
+  // En una incidencia de Jira vienen además sus campos: el tipo y el estado
+  // deciden cómo se analiza. Llegan de la página y se reconstruyen aquí con
+  // claves blancas y valores de una línea, como todo lo que viene de ella.
+  const issue = normalizeIssueFields(r.issue)
+  const digest = { ...r, issue }
+  log.ok(
+    'Página leída en bloques',
+    `${r.count} bloques · ${r.chars} caracteres${r.truncated ? ' · recortada' : ''}` +
+      (issue ? ` · tipo ${issue.type || '?'} · estado ${issue.status || '?'}` : '')
+  )
+  return { digest, reason: '' }
 }
 
 /**
@@ -1156,6 +1269,13 @@ function attachToBubble(bubble, node) {
   destino.appendChild(node)
   scrollChat()
   return node
+}
+
+/** La burbuja del asistente viva: la dada si sigue en el documento; si no, la última que haya en el chat, o null. */
+function liveBubble(bubble) {
+  if (bubble?.isConnected) return bubble
+  const vivas = el.chat.querySelectorAll('.msg.assistant')
+  return vivas[vivas.length - 1] || null
 }
 
 function noticeNode(text, bad) {
@@ -1455,7 +1575,19 @@ async function learnAncestry(destination) {
 async function offerNotes(
   answer,
   bubble,
-  { skill = state.skill, anchors = null, digest = null, digestReason = '', urlAlPedir = '', signal = null, conBase = false, product = '' } = {}
+  {
+    skill = state.skill,
+    anchors = null,
+    digest = null,
+    digestReason = '',
+    urlAlPedir = '',
+    signal = null,
+    conBase = false,
+    product = '',
+    question = '',
+    parts = [],
+    repaint = null,
+  } = {}
 ) {
   // De qué se habla en los avisos y en la tarjeta: en Jira lo abierto es una
   // incidencia, y «esta página» ahí significa una página de Confluence.
@@ -1464,35 +1596,97 @@ async function offerNotes(
   if (!state.site || !state.tabId || !state.client) return
   if (signal?.aborted) return
 
-  // Un análisis nuevo numera desde el 1. Lo demás es una respuesta de
-  // seguimiento —«amplía el punto 3»—, traiga o no anclas: las marcas que hay
-  // se conservan, sus pastillas siguen llevando a ellas, y no se gasta una
-  // segunda pasada en buscarle sitio a un punto que ya lo tiene.
-  const numeros = numberedIn(answer)
-  const analisisNuevo = numeros[0] === 1
-  if (!analisisNuevo && state.notes.length) {
-    log.info(
-      'Marcas conservadas',
-      numeros.length ? 'la respuesta cita observaciones sueltas; las marcas que hay se quedan' : 'la respuesta no numera nada; las marcas que hay se quedan'
+  // Peldaño 1, gratis: el modelo numeró «a su manera» —una lista «1.»,
+  // «**1.**», «Observación 1:», encabezados «### 1.», o la respuesta entera
+  // dentro de una valla— y se reescribe como «[n]» para que las pastillas, la
+  // tarjeta y las anclas funcionen igual que si hubiera obedecido. Pasó de
+  // verdad (gpt-5.6-luna, 2026-09-09): ocho observaciones como lista «1.»
+  // bajo un apartado «Observaciones», con el bloque JSON perfecto, y la
+  // extensión lo tiraba todo por no ver «[1]».
+  // Con dos frenos: la frase «Sin observaciones.» se mira en la respuesta
+  // ORIGINAL (una viñeta «- Sin observaciones.» no es una observación), y un
+  // seguimiento que cita un punto («amplía el punto 3») con marcas previas no
+  // se adapta: su lista «1. 2. 3.» son pasos, no un análisis nuevo. Y el
+  // bloque JSON, si numera desde 1, dice cuántas observaciones hay: una lista
+  // que cuente menos no es la de las observaciones.
+  const original = answer
+  const sinNada = saysNothingToSay(original)
+  const seguimientoCitado = state.notes.length > 0 && questionCitesPoint(question || state.lastQuestion)
+  const adaptada = normalizeNumbering(answer, { expected: expectedCount(anchors) })
+  if (!sinNada && !seguimientoCitado && adaptada.prose !== answer) {
+    answer = adaptada.prose
+    repaint?.(answer)
+    if (adaptada.style !== 'brackets') log.info('Numeración adaptada', `${adaptada.numbers.length} observaciones venían como «${adaptada.style}»`)
+  } else if (seguimientoCitado && adaptada.style && adaptada.style !== 'brackets') {
+    log.info('Marcas conservadas', `la pregunta cita un punto y la lista «${adaptada.style}» de la respuesta son pasos, no observaciones`)
+  }
+
+  // Peldaño 2: los números del análisis son los de la prosa y, si no los
+  // hay, los del bloque JSON (desde 1): el modelo escribió y situó las
+  // observaciones, y sólo se saltó los corchetes.
+  const { numeros, origen } = observationNumbers(answer, anchors)
+  if (origen === 'json') log.info('Numeración del JSON', `la prosa no lleva [n]; valen los ${numeros.length} números del bloque de anclas, si sus bloques sirven`)
+
+  // «No hay nada que decir» es un resultado, no un fallo: la frase fija que
+  // pide el prompt. Se dice en neutro y no se ofrece repetir nada; con marcas
+  // previas, se dice que se quedan.
+  const cierraSinNada = !numeros.length && sinNada
+  if (cierraSinNada) {
+    log.info('Sin observaciones', state.notes.length ? 'nada nuevo que observar; las marcas que hay se quedan' : 'el modelo no ha encontrado nada que observar')
+    attachToBubble(
+      bubble,
+      noticeNode(
+        state.notes.length
+          ? `El análisis no ha encontrado nada nuevo que observar en ${abierta}; las marcas de antes se quedan.`
+          : `El análisis no ha encontrado nada que observar en ${abierta}, así que no hay nada que subrayar.`
+      )
     )
     return
   }
 
-  // Sin números no hay nada que anclar. Pasa con los modelos pequeños, que se
-  // saltan el formato que se les pide; se dice, porque desde fuera es
-  // indistinguible de que Faro no funcione.
+  // Un análisis nuevo numera desde el 1. Lo demás es una respuesta de
+  // seguimiento —«amplía el punto 3»—, traiga o no anclas: las marcas que hay
+  // se conservan, sus pastillas siguen llevando a ellas, y no se gasta una
+  // segunda pasada en buscarle sitio a un punto que ya lo tiene. Pero una
+  // respuesta larga sin ningún número, que no cite ningún punto, es un
+  // análisis nuevo sin numerar, no un seguimiento (también cuando viene de
+  // «Pedirlo numerado»: el recordatorio no cuenta como pregunta).
+  const analisisNuevo = numeros[0] === 1
+  if (!analisisNuevo && state.notes.length) {
+    if (numeros.length || looksLikeFollowUp(question || state.lastQuestion, answer)) {
+      log.info(
+        'Marcas conservadas',
+        numeros.length ? 'la respuesta cita observaciones sueltas; las marcas que hay se quedan' : 'la respuesta no numera nada; las marcas que hay se quedan'
+      )
+      return
+    }
+  }
+
+  // Sin números en ningún sitio: o no es un análisis (una consulta falló, o
+  // la respuesta es corta: «no he podido leer la incidencia»), y se ofrece
+  // pedirlo de nuevo; o es un análisis en prosa corrida, que se trocea más
+  // abajo, cuando ya se sabe que se puede marcar.
   if (!numeros.length) {
-    log.info('Sin marcas', 'la respuesta no trae observaciones numeradas')
-    attachToBubble(
-      bubble,
-      noticeNode('Este modelo no ha numerado sus observaciones, así que no hay nada que subrayar en la página.')
-    )
-    return
+    const herramientaRota = (parts || []).some((p) => p?.type === 'tool' && p.state?.status === 'error')
+    if (herramientaRota || answer.length < NOTE_LIMITS.shortAnswer) {
+      log.info('Sin marcas', herramientaRota ? 'una consulta falló y la respuesta no numera nada' : 'la respuesta es corta y no numera nada')
+      attachToBubble(
+        bubble,
+        withRetryNumbered(
+          noticeNode(
+            `La respuesta no parece un análisis${herramientaRota ? ' (una consulta falló)' : ''}: no hay observaciones que subrayar en ${abierta}.`
+          ),
+          question
+        )
+      )
+      return
+    }
+    log.info('Sin bloque de anclas', 'la respuesta no numera nada; se troceará aparte')
   }
 
   // Números sueltos sin un análisis del que vengan: no hay nada que marcar, y
   // se dice, porque desde fuera parecería que Faro se ha olvidado.
-  if (!analisisNuevo) {
+  if (numeros.length && !analisisNuevo) {
     log.info('Sin marcas', 'la respuesta cita observaciones sueltas y no hay un análisis del que vengan')
     attachToBubble(
       bubble,
@@ -1532,6 +1726,7 @@ async function offerNotes(
   // Lo normal: las anclas venían en la respuesta. Sólo pasan los números que
   // de verdad aparecen en ella, y cada bloque se comprueba contra la lista que
   // se le enseñó al modelo.
+  let filasNumeros = numeros
   let notes = anchors ? validateNotes(anchors, { allowed: numeros, blocks: digest.blocks }) : []
   if (anchors) {
     const sobran = surplusNumbers(anchors, numeros)
@@ -1539,6 +1734,29 @@ async function offerNotes(
   }
   if (notes.some((x) => x.anchor)) {
     log.ok('Anclas en la respuesta', `${notes.filter((x) => x.anchor).length} de ${numeros.length} observaciones`)
+  } else if (!numeros.length || origen === 'json') {
+    // Peldaño 3: sin números en la prosa —ni en el JSON, o con un JSON cuyos
+    // bloques no sirven—, una pasada que trocea la respuesta en
+    // observaciones —con las primeras palabras de cada una, para poner el
+    // «[n]» delante— y las sitúa. La prosa se renumera por posición y se
+    // repinta. Si tampoco así, queda pedirlo numerado.
+    const seg = await segmentedPassNotes(answer, digest, signal)
+    if (signal?.aborted) return
+    if (!seg.inserted.length || !seg.notes.some((x) => x.anchor)) {
+      log.info('Sin marcas', seg.inserted.length ? 'ninguna observación apunta a un bloque del texto' : 'la respuesta no numera nada y no he sabido trocearla')
+      attachToBubble(
+        bubble,
+        withRetryNumbered(
+          noticeNode(`No he sabido separar la respuesta en observaciones que apunten a un pasaje de ${abierta}.`),
+          question
+        )
+      )
+      return
+    }
+    answer = seg.prose
+    repaint?.(answer)
+    filasNumeros = [...seg.inserted, ...seg.missing]
+    notes = seg.notes
   } else {
     log.info('Sin bloque de anclas', anchors ? 'venía, pero sin ningún bloque utilizable' : 'la respuesta no lo traía; se pide aparte')
     notes = await secondPassNotes(answer, digest, signal)
@@ -1547,8 +1765,11 @@ async function offerNotes(
       log.info('Sin marcas', 'ninguna observación apunta a un bloque del texto')
       attachToBubble(
         bubble,
-        noticeNode(
-          `No he sabido situar en ${abierta} ninguna de las observaciones: se marcan sólo las que apuntan a un bloque del texto.`
+        withRetryNumbered(
+          noticeNode(
+            `No he sabido situar en ${abierta} ninguna de las observaciones: se marcan sólo las que apuntan a un bloque del texto.`
+          ),
+          question
         )
       )
       return
@@ -1569,7 +1790,7 @@ async function offerNotes(
   // TODOS los números de la respuesta: las que el JSON no trajo, en gris y con
   // la frase que las abre, para que la lista sea la del chat y no la del JSON.
   const anclables = notes.filter((x) => x.anchor)
-  const filas = numeros.map(
+  const filas = filasNumeros.map(
     (n) => notes.find((x) => x.n === n) || { n, title: titleFromProse(answer, n), kind: '', anchor: null }
   )
 
@@ -1592,12 +1813,14 @@ async function offerNotes(
   // Con la prosa de la que salieron: al repintar el chat, la tarjeta viva
   // vuelve bajo esa respuesta y no bajo otra. Y con si llevaba páginas base:
   // cambia lo que se dice de una observación sin pasaje.
-  state.notesResult = { prose: answer, filas, placed, missed, detail, conBase, product }
+  // Y con la prosa tal como la escribió el modelo: lo que opencode guarda es
+  // eso, y al repintar el chat la tarjeta viva tiene que volver a su burbuja.
+  state.notesResult = { prose: answer, prosaOriginal: original, filas, placed, missed, detail, conBase, product }
   state.notesCard = attachToBubble(bubble, notesCard(filas, placed, missed, detail, { conBase, product }))
 
   log.ok(
     'Análisis marcado',
-    `${placed.length} de ${numeros.length} marcadas` +
+    `${placed.length} de ${filasNumeros.length} marcadas` +
       (detail.length ? ' · ' + detail.map((d) => `${d.n}:${d.strategy}`).join(' ') : '')
   )
   if (missed.length) log.warn('Sin anclar', 'observaciones ' + missed.join(', '))
@@ -1725,6 +1948,70 @@ function quoteLabel(nota, info) {
 }
 
 /**
+ * Un aviso con el botón «Pedirlo numerado»: la misma pregunta vuelve al
+ * modelo con el recordatorio de formato delante. Es el último recurso cuando
+ * ni la numeración «a su manera», ni el JSON, ni la pasada que trocea han
+ * dado nada: el usuario no acepta un análisis sin subrayar, y repetirlo bien
+ * pedido es lo que queda.
+ */
+function withRetryNumbered(node, question = '') {
+  const row = document.createElement('div')
+  row.className = 'nav-actions'
+  const btn = document.createElement('button')
+  btn.className = 'primary'
+  btn.type = 'button'
+  btn.textContent = 'Pedirlo numerado'
+  btn.addEventListener('click', () => {
+    if (state.streaming) return
+    // El botón promete marcas: el turno va en Análisis aunque el desplegable
+    // haya cambiado, con la misma secuencia que el propio desplegable.
+    if (state.skill !== 'analisis') {
+      setSkill('analisis')
+      log.info('Skill', skillById(state.skill).label)
+      if (state.site) saveSite(state.site.host, { skill: state.skill }).catch(() => null)
+    }
+    el.input.value = numberedReminder(question || state.lastQuestion)
+    autoGrow()
+    send()
+  })
+  row.appendChild(btn)
+  node.appendChild(row)
+  return node
+}
+
+/**
+ * La pasada que trocea: para una respuesta sin ningún número, en una sesión
+ * desechable como la segunda pasada. Devuelve también la prosa con los «[n]»
+ * puestos por posición. Nunca lanza; si algo falla, lo apunta.
+ */
+async function segmentedPassNotes(answer, digest, signal = null) {
+  const nada = { notes: [], prose: answer, inserted: [], missing: [] }
+  let session = null
+  try {
+    session = await state.client.createSession({ title: 'Faro · observaciones' })
+  } catch (err) {
+    log.warn('Pasada que trocea', 'no se pudo abrir la sesión: ' + (err?.message || err))
+    return nada
+  }
+  try {
+    const r = await collectSegmentedNotes(state.client, {
+      sessionID: session.id,
+      model: state.model,
+      // Sin el recordatorio de «Pedirlo numerado» delante: no es la pregunta.
+      question: stripNumberedReminder(state.lastQuestion),
+      answer,
+      digest,
+      signal,
+    })
+    if (r.reason) log.info('Pasada que trocea', r.reason)
+    else log.ok('Pasada que trocea', `${r.inserted.length} observaciones numeradas en la respuesta · ${r.notes.filter((x) => x.anchor).length} situadas`)
+    return r
+  } finally {
+    state.client.deleteSession(session.id).catch(() => {})
+  }
+}
+
+/**
  * La segunda pasada: pide las anclas aparte, en una sesión desechable —igual
  * que el planificador: el chat no tiene por qué llenarse del JSON—. Sólo se
  * llega aquí cuando la respuesta numeró observaciones y no trajo el bloque.
@@ -1742,7 +2029,7 @@ async function secondPassNotes(answer, digest, signal = null) {
     const { notes, reason } = await collectNotes(state.client, {
       sessionID: session.id,
       model: state.model,
-      question: state.lastQuestion,
+      question: stripNumberedReminder(state.lastQuestion),
       answer,
       digest,
       signal,
@@ -1764,7 +2051,7 @@ async function secondPassNotes(answer, digest, signal = null) {
  * con un botón se vuelven a poner —si se sigue en la misma página.
  */
 function staleNotesCard({ prose, anchors, bubble, url = '', conBase = false }) {
-  const numeros = numberedIn(prose)
+  const numeros = observationNumbers(prose, anchors).numeros
   const notes = validateNotes(anchors, { allowed: numeros })
   const filas = numeros.map(
     (n) => notes.find((x) => x.n === n) || { n, title: titleFromProse(prose, n), kind: '', anchor: null }
@@ -1851,7 +2138,7 @@ async function remarkFromAnchors({ prose, anchors, bubble, card, url = '', conBa
     return
   }
 
-  const numeros = numberedIn(prose)
+  const numeros = observationNumbers(prose, anchors).numeros
   const notes = validateNotes(anchors, { allowed: numeros, blocks: digest.blocks, strict: true })
   const anclables = notes.filter((x) => x.anchor)
   if (!anclables.length) {
@@ -2139,16 +2426,33 @@ async function showSourcesScreen() {
   $('sources-query').focus()
 
   // Las páginas base son de Confluence: desde Jira, según el despliegue, se
-  // pueden buscar (Cloud comparte host) o sólo elegir del índice del
-  // Confluence enlazado y pegar por URL o id (Data Center: la API de
-  // Confluence no está en este origen).
+  // buscan en el sitio de la pestaña (Cloud comparte host) o en el Confluence
+  // ENLAZADO, desde el panel y con permiso sobre ese dominio (Data Center: su
+  // API vive en su origen, no en el de esta pestaña). Sin enlace, queda el
+  // índice y pegar el id. Pasó de verdad: desde Jira no encontraba ninguna
+  // página de Confluence porque sólo miraba un índice que aún no existía.
   if (state.site.product === 'jira' && !state.site.cloud) {
-    const enlazado = linkedHost()
+    const target = sourcesTarget()
     const n = Object.keys(sourcesIndex()?.pages || {}).length
+    if (!target) {
+      setSourcesStatus(
+        'Las páginas base son de Confluence; este Jira no tiene ningún Confluence enlazado, así que no puedo buscarlas ni comprobar una URL: pega el id numérico de la página.'
+      )
+      return
+    }
+    const host = target.site.host
+    if (await hasHostPermission(target.site.origin)) {
+      setSourcesStatus(
+        `Las páginas base son del Confluence enlazado (${host}): busco en su índice (${n} páginas) y en su API, con tu sesión, y acepto sus URL o su id.`
+      )
+      return
+    }
+    $('sources-perm').classList.remove('hidden')
+    $('sources-perm-text').textContent = `Sin permiso sobre ${host} sólo busco en su índice.`
     setSourcesStatus(
-      enlazado
-        ? `Las páginas base son del Confluence enlazado (${enlazado}): busco en su índice (${n} páginas) y acepto sus URL o su id. Desde este Jira no puedo preguntarle a Confluence.`
-        : 'Las páginas base son de Confluence; desde este Jira no puedo buscarlas ni comprobar una URL: pega el id numérico de la página.'
+      n
+        ? `Las páginas base son del Confluence enlazado (${host}). Sin permiso sobre ese dominio sólo busco en su índice (${n} páginas); con él, también en su API, con tu sesión. Sus URL y su id valen igual.`
+        : `Las páginas base son del Confluence enlazado (${host}). No tengo nada indexado de él y sin permiso sobre ese dominio no puedo preguntarle: dame permiso, o pega la URL o el id de la página.`
     )
     return
   }
@@ -2160,6 +2464,7 @@ async function showSourcesScreen() {
   const puede = await ensureContentAccess({ announce: false })
   if (!puede) {
     $('sources-perm').classList.remove('hidden')
+    $('sources-perm-text').textContent = `Sin permiso sobre ${state.site.host} sólo busco en lo que ya tengo indexado.`
     const n = Object.keys(state.index?.pages || {}).length
     setSourcesStatus(
       n
@@ -2244,9 +2549,9 @@ function onSourcesInput() {
   const local = suggestFromIndex(indice, q, { limit: SOURCE_LIMITS.suggestions, exclude })
   paintSuggestions(local)
   setSourcesStatus(local.length ? '' : 'Nada en el índice con ese título.')
-  // Desde un Jira Data Center la API de Confluence no está en este origen:
-  // no hay a quién preguntar, y queda lo del índice del Confluence enlazado.
-  if (state.site.product === 'jira' && !state.site.cloud) return
+  // Sin nadie a quien preguntar (un Jira Data Center sin Confluence enlazado)
+  // queda lo del índice.
+  if (!sourcesTarget()) return
   state.sourcesSearch.timer = setTimeout(
     () => searchSourcesRemote(q, local, exclude).catch(console.error),
     SOURCE_LIMITS.searchDebounceMs
@@ -2266,46 +2571,79 @@ function refReasonText(reason, text) {
 }
 
 /**
- * La búsqueda en Confluence, con la sesión del navegador y desde el content
- * script. Con testigo: si el usuario ha seguido escribiendo, la respuesta
- * llega tarde y se tira. Lo que vuelve se funde con lo del índice.
+ * La búsqueda en Confluence, con la sesión del navegador: en el sitio de la
+ * pestaña desde el content script, o en el Confluence enlazado desde el
+ * propio panel (un Jira Data Center: su API está en otro origen, y el panel,
+ * que es una página de la extensión, puede pedírselo con permiso sobre ese
+ * dominio; el content script de Jira no). Mismo módulo y mismas garantías en
+ * los dos casos. Con testigo: si el usuario ha seguido escribiendo, la
+ * respuesta llega tarde y se tira. Lo que vuelve se funde con lo del índice.
  */
 async function searchSourcesRemote(q, local, exclude) {
   const token = state.sourcesSearch.token
-  if (!state.site || state.tabId == null) return
-  if (!(await ensureContentAccess({ announce: false }))) return
-  if (token !== state.sourcesSearch.token) return
+  if (!state.site) return
+  const target = sourcesTarget()
+  if (!target) return
 
-  setSourcesStatus('Buscando en Confluence…')
-  const r = await chrome.tabs
-    .sendMessage(state.tabId, {
-      type: MSG.PAGE_SEARCH,
-      query: q,
-      wikiPrefix: wikiPrefixOf(state.site),
-      cloud: state.site.cloud,
+  let r = null
+  if (target.via === 'linked') {
+    // Sin permiso sobre ese dominio Chrome no deja ni intentarlo: se ofrece.
+    if (!(await hasHostPermission(target.site.origin))) {
+      $('sources-perm').classList.remove('hidden')
+      return
+    }
+    if (token !== state.sourcesSearch.token) return
+    setSourcesStatus(`Buscando en ${target.site.host}…`)
+    // `include`: es otro origen, y sin eso no viajan las cookies de su sesión.
+    r = await searchPages((u, o) => fetch(u, o), target.site, q, {
       limit: SOURCE_LIMITS.suggestions,
-    })
-    .catch(() => null)
+      credentials: 'include',
+    }).catch((err) => ({ ok: false, reason: String(err?.message || err) }))
+  } else {
+    if (state.tabId == null) return
+    if (!(await ensureContentAccess({ announce: false }))) return
+    if (token !== state.sourcesSearch.token) return
+    setSourcesStatus('Buscando en Confluence…')
+    r = await chrome.tabs
+      .sendMessage(state.tabId, {
+        type: MSG.PAGE_SEARCH,
+        query: q,
+        wikiPrefix: wikiPrefixOf(state.site),
+        cloud: state.site.cloud,
+        limit: SOURCE_LIMITS.suggestions,
+      })
+      .catch(() => null)
+  }
   if (token !== state.sourcesSearch.token) return
 
+  const donde = target.via === 'linked' ? target.site.host : ''
   if (!r?.ok) {
-    log.warn('Búsqueda de páginas', r?.reason || 'la pestaña no contestó')
-    setSourcesStatus(searchFailText(r) + (local.length ? ' Mientras, sólo busco en lo indexado.' : ''))
+    log.warn('Búsqueda de páginas', `${donde ? donde + ' · ' : ''}${r?.reason || 'la pestaña no contestó'}`)
+    setSourcesStatus(searchFailText(r, donde) + (local.length ? ' Mientras, sólo busco en lo indexado.' : ''))
     return
   }
 
-  const merged = mergeSuggestions(local, r.pages, { limit: SOURCE_LIMITS.suggestions, exclude, host: state.site.host })
+  // Las páginas del Confluence enlazado no tienen ruta relativa a ESTE sitio:
+  // como una URL suya pegada, van sin ruta, y se marcan como suyas para que
+  // no acaben fundidas en el índice de este Jira.
+  const paginas = target.via === 'linked' ? r.pages.map((p) => ({ ...p, url: '' })) : r.pages
+  const merged = mergeSuggestions(local, paginas, { limit: SOURCE_LIMITS.suggestions, exclude, host: state.site.host }).map((s) =>
+    s.source === 'confluence' && target.via === 'linked' ? { ...s, source: 'linked' } : s
+  )
   paintSuggestions(merged)
   setSourcesStatus(merged.length ? '' : 'Nada con ese título. Prueba con otra palabra o pega su URL.')
-  log.debug('Búsqueda de páginas', `«${q}» · ${r.pages.length} de Confluence · API ${r.via} · ${r.ms} ms`)
+  log.debug('Búsqueda de páginas', `«${q}» · ${r.pages.length} de ${donde || 'Confluence'} · API ${r.via} · ${r.ms} ms`)
 }
 
-function searchFailText(r) {
+/** @param {string} [host] el Confluence enlazado, si se le preguntó a él y no al sitio de la pestaña */
+function searchFailText(r, host = '') {
   const status = Number(r?.status) || 0
   if (status === 401 || status === 403 || /JSON/.test(String(r?.reason || ''))) {
-    return 'Tu sesión de Confluence no vale para su API: recarga la pestaña y vuelve a entrar.'
+    return host
+      ? `Tu sesión de ${host} no vale para su API: ábrelo en otra pestaña, entra, y vuelve a intentarlo.`
+      : 'Tu sesión de Confluence no vale para su API: recarga la pestaña y vuelve a entrar.'
   }
-  return 'No he podido preguntarle a Confluence: ' + (r?.reason || 'la pestaña no contestó') + '.'
+  return `No he podido preguntarle a ${host || 'Confluence'}: ` + (r?.reason || 'la pestaña no contestó') + '.'
 }
 
 /** La lista de sugerencias bajo el campo, como un listbox con teclado. */
@@ -2334,7 +2672,13 @@ function paintSuggestions(list) {
     meta.textContent =
       s.source === 'add'
         ? 'por su id'
-        : [s.spaceKey, `id ${s.id}`, s.source === 'confluence' ? 'desde Confluence' : 'en el índice'].filter(Boolean).join(' · ')
+        : [
+            s.spaceKey,
+            `id ${s.id}`,
+            s.source === 'confluence' ? 'desde Confluence' : s.source === 'linked' ? `desde ${linkedHost() || 'el Confluence enlazado'}` : 'en el índice',
+          ]
+            .filter(Boolean)
+            .join(' · ')
 
     row.append(title, meta)
     row.addEventListener('click', () => chooseSuggestion(s).catch(console.error))
@@ -2415,40 +2759,66 @@ async function addSourceById(id, path = '') {
     return addSource({ id, title: conocida.title, path: conocida.path || path, spaceKey: conocida.spaceKey }, { from: 'index' })
   }
 
-  // Desde un Jira Data Center la API de Confluence no está en este origen:
-  // preguntarle daría un 404 que no significa «no hay página». Se añade por
-  // su id, que es lo que la pantalla prometió.
-  if (state.site.product === 'jira' && !state.site.cloud) {
-    log.warn('Página base sin título', `${id} · desde Jira no se puede leer`)
+  // Desde un Jira Data Center la página es del Confluence enlazado, y se le
+  // pregunta a él desde el panel. Sin enlace no hay a quién preguntar: se
+  // añade por su id, que es lo que la pantalla prometió.
+  const target = sourcesTarget()
+  if (!target) {
+    log.warn('Página base sin título', `${id} · sin Confluence al que preguntar`)
     await addSource({ id, title: '', path }, { from: 'id' })
     setSourcesStatus(`Añadida por su id ${id}: desde este Jira no puedo leer su título.`)
     return
   }
+  const enlazado = target.via === 'linked'
+  const donde = enlazado ? target.site.host : 'Confluence'
 
   // La comprobación tarda: si mientras tanto la pestaña se va a otro sitio,
   // lo que vuelva no es de aquí.
   const host = state.site.host
-  setSourcesStatus(`Comprobando la página ${id} en Confluence…`)
+  setSourcesStatus(`Comprobando la página ${id} en ${donde}…`)
   const r = await fetchPageChain(id)
   if (state.site?.host !== host) return
   if (r.ok && r.pages?.length) {
     const propia = r.pages[r.pages.length - 1]
-    await mergePagesIntoIndex(r.pages)
-    return addSource({ id, title: propia.title, path: propia.url || path, spaceKey: propia.spaceKey }, { from: 'confluence' })
+    // Lo que se aprende del sitio propio se queda en su índice. Lo del
+    // Confluence enlazado no: es otro origen, y su índice es suyo (nunca se
+    // guarda desde Jira); la página va sin ruta, como una URL suya pegada.
+    if (!enlazado) await mergePagesIntoIndex(r.pages)
+    return addSource(
+      { id, title: propia.title, path: enlazado ? '' : propia.url || path, spaceKey: propia.spaceKey },
+      { from: enlazado ? 'linked' : 'confluence' }
+    )
   }
   if (r.status === 404) {
-    log.warn('Página base', `id ${id} · la API respondió 404`)
-    setSourcesStatus(`Confluence no encuentra ninguna página con el id ${id}.`)
+    log.warn('Página base', `id ${id} · ${donde} · la API respondió 404`)
+    setSourcesStatus(`${donde} no encuentra ninguna página con el id ${id}.`)
     return
   }
+  if (r.needsPermission) $('sources-perm').classList.remove('hidden')
   log.warn('Página base sin título', `${id} · ${r.reason}`)
   await addSource({ id, title: '', path }, { from: 'id' })
   setSourcesStatus(`Añadida por su id ${id}: no he podido leer su título (${r.reason}).`)
 }
 
-/** La cadena de una página por la API del sitio, vía content script. Nunca lanza. */
+/**
+ * La cadena de una página por la API de Confluence: la del sitio, vía content
+ * script; o la del Confluence enlazado, desde el panel (con permiso sobre su
+ * dominio y las cookies de su sesión). Nunca lanza.
+ */
 async function fetchPageChain(id) {
-  if (!state.site || state.tabId == null) return { ok: false, reason: 'sin pestaña' }
+  if (!state.site) return { ok: false, reason: 'sin sitio' }
+  const target = sourcesTarget()
+  if (!target) return { ok: false, reason: 'sin Confluence al que preguntar' }
+  if (target.via === 'linked') {
+    if (!(await hasHostPermission(target.site.origin))) {
+      return { ok: false, reason: `sin permiso sobre ${target.site.host}`, needsPermission: true }
+    }
+    return fetchAncestors((u, o) => fetch(u, o), target.site, id, { credentials: 'include' }).catch((err) => ({
+      ok: false,
+      reason: String(err?.message || err),
+    }))
+  }
+  if (state.tabId == null) return { ok: false, reason: 'sin pestaña' }
   if (!(await ensureContentAccess({ announce: false }))) return { ok: false, reason: 'sin acceso a la pestaña' }
   const r = await chrome.tabs
     .sendMessage(state.tabId, {
@@ -2487,13 +2857,13 @@ async function addSource(page, { from = 'index' } = {}) {
   }
   state.sources = r.sources
   await saveSite(state.site.host, { analysisSources: state.sources })
+  // Lo que devolvió la API del sitio se queda en su índice; lo del Confluence
+  // enlazado (`linked`) no: es de otro origen y su índice nunca se guarda desde Jira.
   if (from === 'confluence') await mergePagesIntoIndex([page])
 
   const añadida = state.sources.pages[state.sources.pages.length - 1]
-  log.ok(
-    'Página base añadida',
-    `${añadida.title} (id ${añadida.id}) · ${from === 'index' ? 'del índice' : from === 'confluence' ? 'de Confluence' : 'por su id'}`
-  )
+  const origen = { index: 'del índice', confluence: 'de Confluence', linked: `de ${linkedHost() || 'el Confluence enlazado'}` }
+  log.ok('Página base añadida', `${añadida.title} (id ${añadida.id}) · ${origen[from] || 'por su id'}`)
   // La búsqueda que estuviera en marcha era de lo que había en el campo, que
   // se vacía ahora: si llegara después, volvería a pintar la lista —con la
   // página recién añadida dentro— bajo un campo vacío.
@@ -2923,14 +3293,20 @@ function wireEvents() {
   $('btn-sources-permission').addEventListener('click', async () => {
     const btn = $('btn-sources-permission')
     btn.disabled = true
-    const r = await requestHostPermission()
+    // El del Confluence enlazado si es a él a quien hay que preguntar.
+    const target = sourcesTarget()
+    const r = await requestSourcesPermission()
     btn.disabled = false
     if (r.ok) {
       $('sources-perm').classList.add('hidden')
-      setSourcesStatus('Listo. Ya puedo buscar en Confluence.')
+      setSourcesStatus(`Listo. Ya puedo buscar en ${target?.via === 'linked' ? target.site.host : 'Confluence'}.`)
       onSourcesInput()
     } else {
-      setSourcesStatus(r.denied ? manualPermissionText() : 'Permiso dado, pero no he podido inyectarme: ' + r.error)
+      setSourcesStatus(
+        r.denied
+          ? manualPermissionText(target?.via === 'linked' ? target.site.origin : '')
+          : 'Permiso dado, pero no he podido inyectarme: ' + r.error
+      )
     }
   })
 

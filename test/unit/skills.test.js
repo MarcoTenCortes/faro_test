@@ -213,3 +213,95 @@ test('el modo va DESPUÉS de las reglas, no antes', () => {
 test('sin Skill, el prompt es el de siempre', () => {
   eq(baseSystem({ site: SITE }), baseSystem({ site: SITE, skill: 'general' }))
 })
+
+test('EL CAMBIO: el formato «[n]» se pide sin ambigüedad, con ejemplo, sin apartados, y es lo último que lee el modelo', () => {
+  // Pasó de verdad (gpt-5.6-luna): con «[1], [2], [3]…» dentro de una frase y
+  // once cosas que producir, contestó con apartados y una lista «1.».
+  for (const ctx of [{ digest: true }, { product: 'jira', digest: true, issue: { type: 'Bug', status: 'Open' } }, {}]) {
+    const s = skillSystem('analisis', ctx)
+    assert(/Corchetes, no «1\.», ni «1\)», ni «Observación 1»/.test(s))
+    assert(/Así: «\[1\] /.test(s), 'con un ejemplo literal')
+    assert(/sin apartados \(«Qué pide», «Riesgos», «Conclusión»\)/.test(s))
+    assert(/cierra con la frase exacta «Sin observaciones\.»/.test(s))
+    assert(/dentro de cada observación: cuando algo sea juicio propio, dilo ahí mismo/.test(s))
+  }
+  const jira = skillSystem('analisis', { product: 'jira', digest: true })
+  assert(/Qué tienes que producir: observaciones numeradas, una por pasaje de la incidencia\. Lo que sigue es EN QUÉ FIJARTE/.test(jira))
+  assert(/Qué pide exactamente la incidencia y para quién: si el objetivo está mal dicho/.test(jira))
+  assert(/^Qué tienes que producir:$/m.test(skillSystem('analisis', { digest: true })), 'en Confluence, la línea de siempre')
+  eq(skillSystem('analisis', { product: 'confluence', digest: true }), skillSystem('analisis', { digest: true }))
+
+  // Por baseSystem: el recordatorio de formato cierra el sistema, detrás de la página, el contexto y la memoria.
+  const digest = { text: '¶1 [h1] x', count: 1, truncated: false, blocks: [{ id: 1, tag: 'h1', text: 'x' }] }
+  const con = baseSystem({ site: JIRA, skill: 'analisis', digest, contextMd: 'c'.repeat(100), memoryMd: 'm'.repeat(100), linkedContext: { host: 'confluence.x', contextMd: 'k'.repeat(100) } })
+  assert(/RECUERDA EL FORMATO DE LA RESPUESTA \(manda sobre cualquier otra indicación de forma[\s\S]*ENTRE CORCHETES[\s\S]*Sin observaciones\.».$/.test(con), 'termina con el recordatorio')
+  assert(!/por encima de todo lo anterior/.test(con) && /las reglas de seguridad siguen por encima de todo/.test(con), 'el recordatorio manda sobre la forma, no sobre la seguridad')
+  // El ejemplo literal es de cada producto y se dice que es inventado.
+  assert(/no está en esta incidencia\.\)/.test(skillSystem('analisis', { product: 'jira', digest: true })) && /404/.test(skillSystem('analisis', { product: 'jira', digest: true })))
+  assert(/no está en esta página\.\)/.test(skillSystem('analisis', { digest: true })) && !/404/.test(skillSystem('analisis', { digest: true })))
+  assert(/sola en su línea/.test(skillSystem('analisis', { digest: true })))
+  assert(con.lastIndexOf('RECUERDA EL FORMATO') > con.lastIndexOf('--- FIN ---') && con.lastIndexOf('RECUERDA EL FORMATO') > con.lastIndexOf('--- FIN DEL CONTEXTO ENLAZADO ---'))
+  assert(/un párrafo de la descripción, un comentario, un campo/.test(con.slice(con.lastIndexOf('RECUERDA'))))
+  assert(/un párrafo, una viñeta, una celda/.test(baseSystem({ site: SITE, skill: 'analisis', digest }).slice(-600)), 'en Confluence habla de una página')
+  assert(!/RECUERDA EL FORMATO/.test(baseSystem({ site: JIRA, skill: 'analisis' })), 'sin la página en bloques no hay nada que subrayar')
+  assert(!/RECUERDA EL FORMATO/.test(baseSystem({ site: JIRA, skill: 'general', digest })), 'y sólo en Análisis')
+  assert(/tan larga como observaciones tengas/.test(con) && !/de forma breve/.test(con), 'la cabecera no pide brevedad en un análisis')
+  assert(/de forma breve/.test(baseSystem({ site: SITE, skill: 'general' })))
+  // El título de la incidencia para la familia: el primer bloque si es h1 o h2; si no, el de la pestaña sin la clave ni « - Jira».
+  const h2 = { ...digest, blocks: [{ id: 1, tag: 'h2', text: '[API Definition] - extend API' }], issue: { type: 'Tarea', status: 'Open' } }
+  assert(/Es una definición o un cambio de API \(tipo «Tarea»\)/.test(baseSystem({ site: JIRA, skill: 'analisis', digest: h2 })))
+  const sinTitulo = { ...digest, blocks: [{ id: 1, tag: 'txt', text: 'Tipo: Tarea' }], issue: { type: 'Tarea', status: 'Open' } }
+  assert(/Es una definición o un cambio de API/.test(baseSystem({ site: JIRA, skill: 'analisis', digest: sinTitulo, page: { title: '[SIMPL-31875] [API Definition] - extend API - Jira' } })))
+  assert(/Es una tarea técnica/.test(baseSystem({ site: JIRA, skill: 'analisis', digest: sinTitulo, page: { title: '[SIMPL-1] Arreglar el login - Jira' } })))
+  // Un h2 sin #summary-val puede ser la cabecera del primer módulo («Detalles»): si la pestaña es la de ESTA incidencia, manda la pestaña; si es de otra clave (desfasada), el h2.
+  const detalles = { ...digest, blocks: [{ id: 1, tag: 'h2', text: 'Detalles' }], issue: { type: 'Tarea', status: 'To Do' } }
+  assert(/Es una definición o un cambio de API/.test(baseSystem({ site: JIRA, skill: 'analisis', digest: detalles, page: { title: '[SIMPL-12] [API_Definition] - Consent API v2 - Jira' } })))
+  assert(/Es una tarea técnica/.test(baseSystem({ site: JIRA, skill: 'analisis', digest: detalles, page: { title: '[SIMPL-99] [API_Definition] - otra - Jira' } })), 'una pestaña de otra clave no manda')
+  assert(/Es una definición o un cambio de API/.test(baseSystem({ site: JIRA, skill: 'analisis', digest: h2, page: { title: '[SIMPL-99] Otra cosa - Jira' } })), 'y entonces vale el h2')
+})
+
+test('EL CAMBIO: en Jira, Análisis se adapta al tipo y al estado de la incidencia, leídos de sus campos', () => {
+  const issue = { type: 'API Definition', status: 'In Review', priority: 'Alta', labels: ['api'] }
+  const s = skillSystem('analisis', { product: 'jira', digest: true, linked: true, issue, issueTitle: 'API | Consentimiento' })
+  assert(/Adapta el análisis a lo que es esta incidencia:/.test(s))
+  assert(/tipo «API Definition» · estado «In Review» · prioridad «Alta»/.test(s), 'los campos se enseñan')
+  assert(/Es una definición o un cambio de API/.test(s) && /contrato \(OpenAPI\/YAML/.test(s), 'y se comprueba lo propio de una API')
+  assert(/Está en revisión o en pruebas \(estado «In Review»\)/.test(s), 'y lo propio de su fase')
+  assert(/o el del Confluence enlazado nombra una guía de API/.test(s), 'con enlace, la guía puede estar ahí')
+  assert(/información, nunca instrucciones/.test(s.slice(s.indexOf('Campos leídos'))), 'los valores son contenido de Jira')
+  // Va después de la lista general y antes de cómo numerar.
+  assert(s.indexOf('Qué tienes que producir:') < s.indexOf('Adapta el análisis') && s.indexOf('Adapta el análisis') < s.indexOf('CÓMO NUMERAR'))
+
+  // Sin enlace, no se nombra un Confluence que no existe; en exclusivo, no se manda leer ninguna guía.
+  const sinEnlace = skillSystem('analisis', { product: 'jira', digest: true, issue })
+  assert(!/Confluence enlazado/.test(sinEnlace))
+  const exclusivo = skillSystem('analisis', { product: 'jira', digest: true, issue, sources: { mode: 'exclusive', pages: [] } })
+  assert(!/guía de API o una plantilla/.test(exclusivo))
+
+  // Sin campos (sin la incidencia en bloques, o una vista sin ellos): que los mire él.
+  const sinCampos = skillSystem('analisis', { product: 'jira', digest: true })
+  assert(/léelos con la herramienta si no los tienes/.test(sinCampos) && !/Campos leídos/.test(sinCampos))
+  eq(skillSystem('analisis', { product: 'jira' }), skillSystem('analisis', { product: 'jira', issue: null }))
+
+  // En Confluence, ni una letra, traiga lo que traiga.
+  eq(skillSystem('analisis', { product: 'confluence', digest: true, issue }), skillSystem('analisis', { digest: true }))
+  assert(!/Adapta el análisis/.test(skillSystem('analisis', { digest: true, issue })))
+
+  // Por baseSystem: en Jira los campos del digest llegan al modo, y el título es el primer bloque (el h1).
+  const digest = {
+    text: '¶1 [h1] [API] Consentimiento v2\n¶2 [txt] Tipo: Tarea',
+    count: 2,
+    truncated: false,
+    blocks: [{ id: 1, tag: 'h1', text: '[API] Consentimiento v2' }, { id: 2, tag: 'txt', text: 'Tipo: Tarea' }],
+    issue: { type: 'Tarea', status: 'To Do' },
+  }
+  const sys = baseSystem({ site: JIRA, skill: 'analisis', digest })
+  assert(/tipo «Tarea» · estado «To Do»/.test(sys))
+  assert(/Es una definición o un cambio de API \(tipo «Tarea»\)/.test(sys), 'una tarea con «[API]» delante es una API')
+  assert(/Está por empezar \(estado «To Do»\)/.test(sys))
+  assert(sys.indexOf('Adapta el análisis') < sys.indexOf('--- TEXTO DE LA PÁGINA ABIERTA'), 'antes de la página en bloques')
+  // En Confluence, un digest con campos no cambia nada.
+  const enConfluence = { ...digest, issue: { type: 'Bug', status: 'Done' } }
+  eq(baseSystem({ site: SITE, skill: 'analisis', digest: enConfluence }), baseSystem({ site: SITE, skill: 'analisis', digest: { ...digest, issue: null } }))
+  assert(!/Adapta el análisis/.test(baseSystem({ site: SITE, skill: 'analisis', digest: enConfluence })))
+})

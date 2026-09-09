@@ -90,34 +90,50 @@ export async function scrollToRect(rect, { extra = 24, behavior = 'smooth' } = {
 export async function scrollWithinScrollers(el, { behavior = 'smooth', margin = 24 } = {}) {
   if (!el) return false
 
+  // De dentro afuera, y sin tope corto: la vista de incidencia de un Jira
+  // Data Center anida el contenido a más de doce niveles.
   const cajas = []
   let cur = el.parentElement
-  for (let i = 0; cur && i < 12; i++) {
+  for (let i = 0; cur && i < 40; i++) {
     if (isScrollable(cur)) cajas.push(cur)
     cur = cur.parentElement
   }
 
   let movido = false
-  for (const caja of cajas) {
+  const suaves = []
+  cajas.forEach((caja, k) => {
     const r = el.getBoundingClientRect()
     const b = caja.getBoundingClientRect()
     // Si ya está holgadamente dentro, no se toca: moverlo por moverlo marea.
-    if (r.top >= b.top + margin && r.bottom <= b.bottom - margin) continue
+    if (r.top >= b.top + margin && r.bottom <= b.bottom - margin) return
 
     const delta = r.top + r.height / 2 - (b.top + b.height / 2)
     const max = Math.max(0, caja.scrollHeight - caja.clientHeight)
     const destino = Math.max(0, Math.min(caja.scrollTop + delta, max))
-    if (Math.abs(destino - caja.scrollTop) < 4) continue
+    if (Math.abs(destino - caja.scrollTop) < 4) return
 
+    // Los contenedores interiores se mueven de golpe: el siguiente —el de
+    // fuera— mide dónde ha QUEDADO el elemento, y con un desplazamiento suave
+    // a medias medía dónde estaba y se pasaba de largo (pasó de verdad con la
+    // incidencia de un Jira dentro de un panel con scroll propio). Sólo el de
+    // más afuera va suave, y se comprueba que llegó.
+    const suave = behavior === 'smooth' && k === cajas.length - 1
     try {
-      caja.scrollTo({ top: destino, behavior })
+      caja.scrollTo({ top: destino, behavior: suave ? 'smooth' : 'auto' })
     } catch {
       caja.scrollTop = destino
     }
+    if (suave) suaves.push({ caja, destino })
     movido = true
-  }
+  })
 
-  if (movido) await sleep(behavior === 'smooth' ? 320 : 40)
+  if (suaves.length) {
+    await sleep(320)
+    for (const { caja, destino } of suaves) if (Math.abs(caja.scrollTop - destino) > 24) caja.scrollTop = destino
+    await sleep(40)
+  } else if (movido) {
+    await sleep(40)
+  }
   return movido
 }
 

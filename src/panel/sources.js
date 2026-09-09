@@ -269,9 +269,9 @@ export function sourcesBlock(sources, { digest = false, product = '', linked = f
     out.push(
       enJira
         ? linked
-          ? 'ALCANCE: ABIERTO. Las páginas base son, como mínimo, lo que tienes que leer: además, consulta las páginas del Confluence enlazado y las incidencias relacionadas que consideres relevantes para el análisis, y di cuáles has usado y por qué.'
-          : 'ALCANCE: ABIERTO. Las páginas base son, como mínimo, lo que tienes que leer: además, consulta las incidencias relacionadas que consideres relevantes para el análisis, y di cuáles has usado y por qué.'
-        : 'ALCANCE: ABIERTO. Las páginas base son, como mínimo, lo que tienes que leer: además, consulta las otras páginas del sitio que consideres relevantes para el análisis, y di cuáles has usado y por qué.'
+          ? 'ALCANCE: ABIERTO. Las páginas base son, como mínimo, lo que tienes que leer: además, consulta las páginas del Confluence enlazado y las incidencias relacionadas que consideres relevantes para el análisis, y di cuáles has usado y por qué (título o clave) dentro de la observación que se apoye en cada una, como con las páginas base.'
+          : 'ALCANCE: ABIERTO. Las páginas base son, como mínimo, lo que tienes que leer: además, consulta las incidencias relacionadas que consideres relevantes para el análisis, y di cuáles has usado y por qué (título o clave) dentro de la observación que se apoye en cada una, como con las páginas base.'
+        : 'ALCANCE: ABIERTO. Las páginas base son, como mínimo, lo que tienes que leer: además, consulta las otras páginas del sitio que consideres relevantes para el análisis, y di cuáles has usado y por qué (título) dentro de la observación que se apoye en cada una, como con las páginas base.'
     )
   }
 
@@ -431,6 +431,60 @@ export function pageRefFromUrl(text, site, { linkedHost = '' } = {}) {
   if (parsed.product === 'jira') return { ok: false, reason: 'jira' }
   if (!ID.test(String(parsed.pageId || ''))) return { ok: false, reason: 'sin-id' }
   return { ok: true, id: parsed.pageId, path: propio ? toSafePath(t, site.host) || '' : '' }
+}
+
+// ------------------------------------------------- el Confluence enlazado
+
+/** Un nombre de host con forma de nombre de host: etiquetas de letras, cifras y guiones. */
+const HOSTNAME = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/
+/** Un prefijo del wiki tiene forma de ruta: nada, o segmentos normales que no empiezan por punto (ni `..` ni ocultos). */
+const WIKI_PREFIX = /^(\/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)*$/
+
+/**
+ * El Confluence enlazado a este Jira, como sitio para su API REST.
+ *
+ * Desde un Jira Data Center las páginas base son suyas, y su API vive en su
+ * origen, no en el de la pestaña: el content script de Jira no puede
+ * preguntarle (sería una petición a otro origen desde una página que no es la
+ * suya). Quien pregunta es el PANEL —una página de la extensión, con permiso
+ * sobre ese dominio y con la sesión del navegador—, con el mismo módulo y las
+ * mismas garantías (`searchPages`/`fetchAncestors` comprueban que ninguna
+ * petición salga del origen que se les da). Sólo https: es lo único que el
+ * permiso opcional del manifest admite. El host viene de lo guardado al
+ * configurar las claves (`siteRecords`), nunca del modelo; el prefijo, de lo
+ * observado al visitar ese Confluence, si se visitó. Pura.
+ *
+ * @param {{host?: string, wikiPrefix?: string}|null} linked lo que sabe el panel del enlace
+ * @returns {{host:string, origin:string, wikiPrefix:string, cloud:false}|null}
+ */
+export function linkedSite(linked) {
+  const host = String(linked?.host || '')
+    .trim()
+    .toLowerCase()
+  if (!HOSTNAME.test(host)) return null
+  const raw = typeof linked?.wikiPrefix === 'string' ? linked.wikiPrefix.replace(/\/+$/, '') : ''
+  const wikiPrefix = WIKI_PREFIX.test(raw) ? raw : ''
+  return { host, origin: 'https://' + host, wikiPrefix, cloud: false }
+}
+
+/**
+ * A quién se le pregunta por páginas de Confluence —buscar por título, leer
+ * el título de un id— desde donde está el usuario:
+ *  - `tab`: al sitio de la pestaña, por el content script (Confluence, o un
+ *    Jira Cloud, que comparte host con su Confluence);
+ *  - `linked`: al Confluence enlazado, desde el panel (Jira Data Center con
+ *    el enlace guardado);
+ *  - null: a nadie (un Jira Data Center sin Confluence enlazado). Queda el
+ *    índice y pegar el id.
+ * Pura.
+ *
+ * @returns {{via:'tab'}|{via:'linked', site:{host:string, origin:string, wikiPrefix:string, cloud:false}}|null}
+ */
+export function sourcesSearchTarget(site, linked = null) {
+  if (!site || typeof site !== 'object') return null
+  if (site.product !== 'jira' || site.cloud) return { via: 'tab' }
+  const s = linkedSite(linked)
+  return s ? { via: 'linked', site: s } : null
 }
 
 // ------------------------------------------------------- alcance exclusivo

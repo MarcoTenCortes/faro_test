@@ -514,11 +514,7 @@ export class NavRunner {
     }
 
     if (resolved.ranges?.length) {
-      const rect = rangeRect(resolved.ranges[0])
-      if (rect) {
-        await scrollToRect(rect, { extra: 90, behavior: this.behavior })
-        await sleep(60)
-      }
+      if (await scrollToRange(resolved.ranges[0], { extra: 90, behavior: this.behavior })) await sleep(60)
       // Al llegar NO se oscurece la página. El foco sirve para guiarte por el
       // árbol, donde hay que ver dónde va el siguiente clic; una vez estás
       // delante de lo que buscabas, oscurecer tapa justo lo que has venido a
@@ -604,9 +600,7 @@ export class NavRunner {
     this.overlay.annotate(items)
 
     // A la vista de la primera, sin destacarla: al principio todas valen igual.
-    const rect = rangeRect(items[0].ranges[0])
-    if (rect) {
-      await scrollToRect(rect, { extra: 110, behavior: this.behavior })
+    if (await scrollToRange(items[0].ranges[0], { extra: 110, behavior: this.behavior })) {
       await sleep(80)
       this.overlay.refreshMarks()
     }
@@ -631,11 +625,7 @@ export class NavRunner {
       this.overlay.annotate(this.overlay.notes)
     }
 
-    const rect = rangeRect(nota.ranges[0])
-    if (rect) {
-      await scrollToRect(rect, { extra: 110, behavior: this.behavior })
-      await sleep(80)
-    }
+    if (await scrollToRange(nota.ranges[0], { extra: 110, behavior: this.behavior })) await sleep(80)
     this.overlay.focusNote(n)
     return { ok: true }
   }
@@ -674,6 +664,37 @@ function resolveNote(nota, digest) {
 /** ¿Este Range sigue apuntando a nodos del documento, y se ve? */
 function rangeAlive(range) {
   return !!range && !!range.startContainer?.isConnected && !!rangeRect(range)
+}
+
+/** El elemento en el que empieza un Range (un nodo de texto no tiene caja de scroll). */
+function rangeElement(range) {
+  const nodo = range?.startContainer
+  if (!nodo) return null
+  return nodo.nodeType === 1 ? nodo : nodo.parentElement
+}
+
+/**
+ * Lleva una marca a la vista: primero los contenedores con scroll propio que
+ * la envuelven, después la ventana.
+ *
+ * Pasó de verdad: en la vista de incidencia de un Jira Data Center el que hace
+ * scroll no es la ventana sino un panel interno, y `scrollToRect` —que sólo
+ * mueve la ventana— dejaba las marcas puestas pero fuera de la vista al pulsar
+ * cada observación; en Confluence, donde el contenido va con la ventana,
+ * funcionaba. Es lo mismo que hace `scrollToElement` para el árbol, aplicado
+ * a un Range: la caja se vuelve a medir después de mover los contenedores,
+ * porque cambia.
+ *
+ * @returns {Promise<boolean>} si hubo algo que desplazar
+ */
+async function scrollToRange(range, { extra = 110, behavior = 'smooth' } = {}) {
+  if (!range) return false
+  const el = rangeElement(range)
+  const dentro = el ? await scrollWithinScrollers(el, { behavior }) : false
+  const rect = rangeRect(range)
+  if (!rect) return dentro
+  const ventana = await scrollToRect(rect, { extra, behavior })
+  return dentro || ventana
 }
 
 /**

@@ -21,8 +21,9 @@
  * Funciones puras: se pueden leer y comprobar sin arrancar nada.
  */
 
-import { anchorsBlockRules } from './notes.js'
+import { anchorsBlockRules, NOTHING_TO_SAY } from './notes.js'
 import { sourcesBlock, hasSources } from './sources.js'
+import { issueBlock } from './issue-profile.js'
 
 export const DEFAULT_SKILL = 'general'
 
@@ -182,14 +183,23 @@ export const SKILLS = [
 
       const out = ['MODO ANÁLISIS.', sobreQue({ digest: !!ctx.digest, exclusive, product: ctx.product })]
       if (base) out.push('', base)
-      out.push('', 'Qué tienes que producir:')
+      // En Jira la lista de abajo, junto con la del tipo de incidencia, se
+      // leía como el índice de un informe por apartados, y el modelo
+      // contestaba con apartados sin numerar (pasó de verdad): se dice que son
+      // lentes, no capítulos. En Confluence, la línea de siempre.
+      out.push(
+        '',
+        enJira
+          ? 'Qué tienes que producir: observaciones numeradas, una por pasaje de la incidencia. Lo que sigue es EN QUÉ FIJARTE, no el índice de la respuesta: cada cosa de estas que veas en el texto es una observación más; lo que esté bien o no se vea, no se menciona.'
+          : 'Qué tienes que producir:'
+      )
       if (enJira) {
         // Una incidencia no se analiza como una página: lo que importa es si
         // pide algo claro, comprobable y coherente con sus campos, sus
         // comentarios y la documentación de la que sale. Del Confluence
         // enlazado sólo se habla si lo hay.
         out.push(
-          '- Qué pide exactamente la incidencia y para quién: el objetivo, y en qué se apoya (épica, incidencias enlazadas, documentación).',
+          '- Qué pide exactamente la incidencia y para quién: si el objetivo está mal dicho, incompleto o sin apoyo (épica, incidencias enlazadas, documentación), anclado a la frase de la descripción que lo dice.',
           '- Criterios de aceptación: si los hay, si son comprobables; si faltan, qué habría que añadir.',
           '- Supuestos que da por hechos sin justificar, y huecos: entorno, versiones, datos, pasos o dependencias que haría falta saber y no están.',
           conPaginasBase
@@ -201,7 +211,12 @@ export const SKILLS = [
                 : '- Contradicciones o incoherencias: entre la descripción, los comentarios y los campos (estado, prioridad, versión, asignado), o con las incidencias relacionadas que conozcas.',
           '- Riesgos, dependencias y bloqueos que se ven en lo que hay.',
           '',
-          'Separa siempre lo que dice la incidencia de lo que aportas tú. Cuando algo sea juicio propio, dilo.'
+          'Separa siempre lo que dice la incidencia de lo que aportas tú, dentro de cada observación: cuando algo sea juicio propio, dilo ahí mismo, sin un apartado de «lo que dice» y otro de «lo que opino».',
+          '',
+          // Y lo que es ESTA incidencia: su tipo y su estado, leídos de sus
+          // campos en pantalla, cambian qué se comprueba. Sin campos, se le
+          // pide que los mire él.
+          issueBlock(ctx.issue || null, { summary: ctx.issueTitle || '', exclusive, linked: !!ctx.linked, digest: !!ctx.digest })
         )
       } else {
         out.push(
@@ -217,18 +232,29 @@ export const SKILLS = [
               : '- Contradicciones o incoherencias, dentro del texto o con otras páginas que conozcas del sitio.',
           '- Riesgos y consecuencias de lo que se decide ahí.',
           '',
-          'Separa siempre lo que dice la fuente de lo que aportas tú. Cuando algo sea juicio propio, dilo.'
+          'Separa siempre lo que dice la fuente de lo que aportas tú, dentro de cada observación: cuando algo sea juicio propio, dilo ahí mismo, sin un apartado de «lo que dice» y otro de «lo que opino».'
         )
       }
+      // El formato, sin ambigüedad y con un ejemplo: «[1], [2]…» dentro de
+      // una frase no bastaba, y un modelo mediano contestaba con una lista
+      // «1.» y apartados. Con otra forma la extensión no subraya nada.
       out.push(
         '',
         'CÓMO NUMERAR, y esto es importante:',
-        '- Cada observación empieza por su número entre corchetes: [1], [2], [3]… Numera de corrido, sin saltos y sin repetir.',
+        '- Cada observación empieza por su número entre corchetes: [1], [2], [3]… Numera de corrido, sin saltos y sin repetir. Corchetes, no «1.», ni «1)», ni «Observación 1»: la extensión busca exactamente [n] y con otra forma no subraya nada.',
+        // El ejemplo habla de lo que hay en cada producto (una incidencia: descripción y comentarios; una página: apartados y tablas) y se dice que es inventado, para que nadie lo copie como observación real.
+        '- Así: «[1] ' +
+          (enJira
+            ? 'La descripción exige un 404 si el consentimiento no existe, pero el último comentario pide además un 409 que nadie cierra.'
+            : 'El apartado de errores fija un formato único, pero la tabla de más abajo devuelve un cuerpo distinto que nadie explica.') +
+          '» (Ejemplo inventado; no está en ' +
+          (enJira ? 'esta incidencia' : 'esta página') +
+          '.) Un párrafo corto por observación, y la respuesta es esa lista y nada más: sin introducción, sin apartados («Qué pide», «Riesgos», «Conclusión») y sin resumen final.',
         '- Una observación, un pasaje. Si tienes dos cosas que decir sobre el mismo párrafo, son dos observaciones.',
         enJira
           ? '- Habla de trozos concretos del texto, no de la incidencia en general: después se subrayará en la página el fragmento del que habla cada número —un párrafo de la descripción, un comentario, un campo—, y una observación que no apunte a ninguna frase no se podrá marcar.'
           : '- Habla de trozos concretos del texto, no de la página en general: después se subrayará en la página el fragmento del que habla cada número, y una observación que no apunte a ninguna frase no se podrá marcar.',
-        '- Como mucho ocho observaciones. Mejor cinco que importen que doce que no.'
+        `- Como mucho ocho observaciones. Mejor cinco que importen que doce que no. Si de verdad no hay nada que observar, no numeres nada: cierra con la frase exacta «${NOTHING_TO_SAY}», sola en su línea (debajo, si quieres, una línea con el porqué).`
       )
       // Sin la página en bloques no hay a qué apuntar: el bloque de anclas
       // sobraría, y la extensión no tendría contra qué resolverlo.
@@ -246,12 +272,14 @@ export function skillById(id) {
 /**
  * El bloque de sistema de una Skill. Cadena vacía si no aporta nada.
  * @param {string} id
- * @param {{digest?: boolean, sources?: object|null, product?: string, projectKey?: string, cloud?: boolean, linked?: boolean}} [ctx]
+ * @param {{digest?: boolean, sources?: object|null, product?: string, projectKey?: string, cloud?: boolean, linked?: boolean, issue?: object|null, issueTitle?: string}} [ctx]
  *        si la página va en el prompt en bloques ¶; las páginas base del
  *        análisis con su alcance (sólo las mira el modo Análisis); el
  *        producto en el que está el usuario ('jira' | 'confluence'), con su
- *        proyecto y si es Cloud si es Jira (Búsqueda); y si hay un Confluence
- *        enlazado del que hablar (Análisis en Jira)
+ *        proyecto y si es Cloud si es Jira (Búsqueda); si hay un Confluence
+ *        enlazado del que hablar (Análisis en Jira); y los campos de la
+ *        incidencia abierta (`normalizeIssueFields`) con su título, que
+ *        deciden cómo se analiza (Análisis en Jira)
  */
 export function skillSystem(id, ctx = {}) {
   return skillById(id).system(ctx) || ''

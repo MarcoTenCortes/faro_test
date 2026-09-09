@@ -19,13 +19,14 @@ export function parseBlocks(src) {
   while (i < lines.length) {
     const line = lines[i]
 
-    // Bloque de código
-    const fence = line.match(/^\s*```+\s*(\S*)\s*$/)
+    // Bloque de código: ``` o ~~~ (CommonMark), y cierra con el mismo carácter.
+    const fence = line.match(/^\s*(`{3,}|~{3,})\s*(\S*)\s*$/)
     if (fence) {
-      const lang = fence[1] || ''
+      const lang = fence[2] || ''
+      const cierre = fence[1][0] === '`' ? /^\s*`{3,}\s*$/ : /^\s*~{3,}\s*$/
       const body = []
       i++
-      while (i < lines.length && !/^\s*```+\s*$/.test(lines[i])) body.push(lines[i++])
+      while (i < lines.length && !cierre.test(lines[i])) body.push(lines[i++])
       i++ // cierre
       blocks.push({ type: 'code', lang, text: body.join('\n') })
       continue
@@ -87,7 +88,7 @@ export function parseBlocks(src) {
 
 function isBlockStart(line) {
   return (
-    /^\s*```/.test(line) ||
+    /^\s*(```|~~~)/.test(line) ||
     /^#{1,4}\s/.test(line) ||
     /^\s*>\s?/.test(line) ||
     /^\s*[-*+]\s+/.test(line) ||
@@ -243,7 +244,11 @@ function appendInline(parent, text, onLink, onNote) {
       parent.appendChild(a)
     } else {
       const el = document.createElement(tok.type === 'strong' ? 'strong' : tok.type === 'em' ? 'em' : 'code')
-      el.textContent = tok.text
+      // Una marca «[1]» dentro de una negrita («**[1] Título**») también es
+      // una pastilla: los modelos la ponen ahí a menudo, y numberedIn la
+      // cuenta. En código, nada: `arr[1]` es código.
+      if (tok.type === 'code' || !onNote) el.textContent = tok.text
+      else appendInline(el, tok.text, onLink, onNote)
       parent.appendChild(el)
     }
   }

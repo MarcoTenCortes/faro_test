@@ -56,7 +56,15 @@ la respuesta**.
   aceptación son comprobables, qué falta, y si la descripción, los comentarios
   y los campos se contradicen entre sí o con la documentación del Confluence
   enlazado. Y subraya igual: un párrafo de la descripción, un comentario
-  entero, un campo.
+  entero, un campo. Además **sabe qué ticket es**: lee de los campos en
+  pantalla el tipo y el estado (y prioridad, versiones, etiquetas, asignado)
+  y adapta el análisis: una definición de API se juzga por su contrato, su
+  versión y la guía que debe cumplir; un error, por si se puede reproducir;
+  una historia, por sus criterios; una épica, por lo que la compone. Y según
+  el estado: por empezar, si está lista para cogerla; en marcha, qué falta
+  por decidir; en revisión, si lo entregado cubre lo pedido; cerrada, si se
+  cumplió con evidencia. Lo que ese tipo y ese estado significan en tu
+  proyecto lo sabe el contexto que Faro construyó.
 - **Jira y Confluence, cada uno con su token**: la pantalla de claves pide un
   bloque por producto —dirección, correo en Cloud, token—, porque en Server /
   Data Center son dos instalaciones con su token personal cada una. Un solo
@@ -71,12 +79,22 @@ la respuesta**.
   subrayado; pulsar el número en la página te lleva a su fila en el chat. La
   página se le enseña al modelo **troceada en bloques numerados** («¶7»), y él
   cierra su respuesta con un JSON que dice de qué bloque habla cada número: el
-  subrayado lo decide un script a partir de ese JSON, no el modelo.
+  subrayado lo decide un script a partir de ese JSON, no el modelo. Y **siempre
+  subraya, salvo que no haya nada que decir**: si el modelo numera a su manera
+  —una lista «1.», «Observación 1:», encabezados— Faro lo reescribe en local;
+  si la prosa no lleva números pero el JSON sí, se fía del JSON; si no hay
+  números en ningún sitio, trocea la prosa en observaciones en una pasada
+  aparte; y si tampoco, un botón vuelve a pedirlo numerado. Cuando de verdad
+  no hay nada que observar, el modelo cierra con «Sin observaciones.» y Faro
+  lo dice tal cual, sin tratarlo como un fallo.
 - **Páginas base del análisis**: junto al selector de Skill, en Análisis, un
   botón para decir **en base a qué páginas** se analiza la abierta: una guía,
   una decisión anterior, la página con la que hay que comparar. Se añaden
   pegando su URL o buscándolas por título, con autocompletado desde el índice
-  del sitio y desde la API del propio Confluence. Y un **alcance** a elegir:
+  del sitio y desde la API del propio Confluence. Desde un **Jira Data
+  Center**, las páginas son las del Confluence enlazado y se buscan ahí, con
+  tu sesión y desde el propio panel (hace falta darle permiso sobre ese
+  dominio una vez; la pantalla lo pide). Y un **alcance** a elegir:
   *sólo estas* —la página abierta y las base, nada más— o *estas como mínimo*,
   y las que el modelo decida consultar. Se recuerdan por sitio y se ven siempre
   en un chip sobre el cuadro de texto.
@@ -361,7 +379,7 @@ Trece decisiones que sostienen el diseño:
 ## Comprobaciones
 
 ```bash
-npm run check              # sintaxis + orden + manifest + 503 pruebas unitarias
+npm run check              # sintaxis + orden + manifest + 540 pruebas unitarias
 npm run test:integration   # contra un opencode real que arranca la propia prueba
 npm run harness            # banco de pruebas visual en http://127.0.0.1:5175
 ```
@@ -435,9 +453,15 @@ Con el banco levantado hay dos páginas:
   comprueba que en bloques sale primero el título, luego los campos («Tipo:
   Tarea»), la descripción y cada comentario con su autor y su fecha, que **nada
   de la interfaz** entra en ningún bloque (ni «Editar», ni «Contraer el
-  comentario», ni las pestañas, ni la pestaña de campos que está oculta), y que
+  comentario», ni las pestañas, ni la pestaña de campos que está oculta), que
   tres observaciones se subrayan donde tienen que caer: la cita en un párrafo de
-  la descripción, un comentario entero y un campo.
+  la descripción, un comentario entero y un campo; y que los **campos** de la
+  incidencia —tipo, estado, prioridad, personas, épica, sprint, versiones,
+  etiquetas— se leen por su id como en el Data Center real y, si no lo llevan,
+  por su etiqueta, mientras que una página de Confluence no tiene ninguno. Y
+  que, con la incidencia dentro de un panel con scroll propio —como en la
+  vista de incidencia de un Data Center—, ir a una observación desplaza ese
+  panel y deja la marca a la vista, no sólo la ventana.
 
   Y las del camino leído por la API: la Confluence de mentira contesta a
   `…/rest/api/content/<id>?expand=ancestors` como la de verdad —con la portada
@@ -465,14 +489,17 @@ ninguna depende de que el modelo se porte bien:
 - **Lista blanca de clics.** Sólo enlaces de navegación del propio sitio y
   botones de desplegar. Nunca «Guardar», «Publicar», «Comentar»,
   «Transicionar» ni «Eliminar». La navegación asistida navega; no actúa.
-- **La API se lee, nunca se escribe.** La extensión hace al sitio dos tipos de
-  petición, ambas `GET` al mismo origen en el que ya estás y con tu sesión:
-  leer de quién cuelga una página (con un id numérico validado) y buscar
-  páginas por título para elegir las páginas base de un análisis (con texto
-  tuyo, limpiado, acotado a cien caracteres y seis palabras, y sin comillas,
-  barras ni comodines antes de convertirse en CQL). La respuesta se trata como
-  datos —ids numéricos, títulos recortados, rutas del propio sitio— y todo lo
-  demás se ignora.
+- **La API se lee, nunca se escribe.** La extensión hace a Confluence dos
+  tipos de petición, ambas `GET` y con tu sesión: leer de quién cuelga una
+  página (con un id numérico validado) y buscar páginas por título para
+  elegir las páginas base de un análisis (con texto tuyo, limpiado, acotado a
+  cien caracteres y seis palabras, y sin comillas, barras ni comodines antes
+  de convertirse en CQL). Van al mismo origen en el que ya estás o, desde un
+  Jira Data Center, al del Confluence que enlazaste al configurar las claves
+  —un host que apuntó Faro, nunca uno que diga el modelo—, y el módulo que
+  las hace comprueba que ninguna salga de ese origen. La respuesta se trata
+  como datos —ids numéricos, títulos recortados, rutas del propio sitio— y
+  todo lo demás se ignora.
 
 **Y el modelo no puede tocar tu máquina.** El agente por defecto de opencode
 trae herramientas de shell y de ficheros, y las usa: comprobado, ejecutaba
@@ -577,6 +604,7 @@ src/
     setup.js                claves por producto → bloque MCP; hosts enlazados (puro salvo las llamadas a opencode)
     sources.js              páginas base del análisis: forma, alcance, autocompletado desde el índice, URL pegada, vigilancia del alcance (puro)
     notes.js                observaciones numeradas: el bloque JSON de anclas, su validación, la segunda pasada (puro)
+    issue-profile.js        qué ticket es: tipo y estado leídos de sus campos → qué comprobar en el análisis (puro)
     prompts.js              plantillas, incluido el bloque de lo señalado y la página en bloques
   background/               orquestador del recorrido paso a paso
   content/

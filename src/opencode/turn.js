@@ -35,13 +35,24 @@ export class TurnTracker {
     this.rawError = null
   }
 
-  /** Texto visible del asistente, con las partes en orden de llegada. */
+  /**
+   * Texto visible del asistente, con las partes en orden de llegada.
+   *
+   * Dos mensajes del asistente seguidos —una vuelta de herramientas en
+   * medio— no se pegan en la misma línea: una valla ``` que cerraba el
+   * primero y un «[1]» que abría el segundo quedaban en una sola línea, y ni
+   * la valla ni la marca se reconocían después.
+   */
   get text() {
-    return this.order
-      .map((id) => this.parts.get(id))
-      .filter((p) => p && p.type === 'text' && this._isAssistant(p))
-      .map((p) => p.text)
-      .join('')
+    let out = ''
+    let previo = null
+    for (const p of this.order.map((id) => this.parts.get(id))) {
+      if (!p || p.type !== 'text' || !this._isAssistant(p)) continue
+      if (out && previo !== p.messageID && !out.endsWith('\n')) out += '\n'
+      out += p.text
+      previo = p.messageID
+    }
+    return out
   }
 
   /**

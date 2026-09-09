@@ -35,8 +35,19 @@
 /** La vista de incidencia, si la página lo es. Data Center primero; Cloud sin verificar. */
 const VIEW = ['#issue-content', '.issue-view', '[data-testid="issue.views.issue-details.issue-layout.container-left"]']
 
-/** El título de la incidencia, que se lee como h1. */
-const SUMMARY = ['#summary-val', '#stalker h1', '[data-testid="issue.views.issue-base.foundation.summary.heading"]']
+/**
+ * El título de la incidencia, que se lee como h1. En un Jira 9 DC real el
+ * `#summary-val` no siempre está donde se espera (pasó de verdad: el título
+ * salía como el h2 de un módulo); por eso valen también el bloque del
+ * encabezado y su h1.
+ */
+const SUMMARY = [
+  '#summary-val',
+  '#issue_header_summary',
+  '#stalker h1',
+  '.issue-header-content h1',
+  '[data-testid="issue.views.issue-base.foundation.summary.heading"]',
+]
 
 /** Los módulos de la vista de Data Center, columna principal y panel lateral, en orden de documento. */
 const MODULES = '.issue-main-column .module, #viewissuesidebar .module'
@@ -129,4 +140,110 @@ export function jiraIssueScope(doc = document) {
   // cabecera de este módulo.
   const cuerpo = roots.filter((r) => r.el !== summary)
   return cuerpo.length ? { roots, chrome: ISSUE_CHROME } : null
+}
+
+// ------------------------------------------------------------- los campos
+
+/**
+ * Los campos de la incidencia, por el id que llevan en Data Center (el
+ * `<span id="type-val" class="value">` de siempre) y, si no lo llevan, por su
+ * etiqueta en pantalla, en español o en inglés. Sólo los que cambian cómo se
+ * analiza un ticket: el tipo y el estado sobre todo, y lo que sitúa el
+ * trabajo (prioridad, resolución, personas, épica, sprint, versiones,
+ * componentes, etiquetas). No se leen para marcarlos —para eso están los
+ * bloques— sino para decirle al modelo qué es la incidencia; por eso valen
+ * también los de una pestaña de campos que no esté a la vista.
+ */
+const FIELD_IDS = {
+  type: ['#type-val'],
+  // El estado no siempre está en la lista de detalles (pasó de verdad: un
+  // Jira 9 DC lo tenía sólo como pastilla en la cabecera, y el modelo se iba
+  // a buscarlo con la herramienta). La pastilla de estado tiene una clase
+  // propia; se acota a la cabecera y al módulo de detalles para no coger la
+  // de una incidencia enlazada.
+  status: [
+    '#status-val',
+    '#issue-header .jira-issue-status-lozenge',
+    '.issue-header-content .jira-issue-status-lozenge',
+    '.status-view .jira-issue-status-lozenge',
+    '#details-module .jira-issue-status-lozenge',
+  ],
+  priority: ['#priority-val'],
+  resolution: ['#resolution-val'],
+  assignee: ['#assignee-val'],
+  reporter: ['#reporter-val'],
+  fixVersions: ['#fixfor-val'],
+  affectsVersions: ['#versions-val'],
+  components: ['#components-val'],
+}
+
+/** La etiqueta del campo tal como Jira la pinta («Tipo:», «Issue Type:»), sin los dos puntos. */
+const FIELD_LABELS = {
+  type: /^(tipo|tipo de incidencia|type|issue type)$/i,
+  status: /^(estado|status)$/i,
+  priority: /^(prioridad|priority)$/i,
+  resolution: /^(resoluci[oó]n|resolution)$/i,
+  assignee: /^(persona asignada|asignad[oa] a|responsable|assignee)$/i,
+  reporter: /^(informador|informante|reporter)$/i,
+  epic: /^(epic link|enlace de [eé]pica|[eé]pica|epic|epic name|parent|padre)$/i,
+  sprint: /^sprint$/i,
+  fixVersions: /^(versi[oó]n(?:es)? correctora(?:s)?|versi[oó]n(?:es)? de correcci[oó]n|fix version\/?s?|fix versions?)$/i,
+  affectsVersions: /^(versi[oó]n(?:es)? afectada(?:s)?|affects version\/?s?|affected versions?)$/i,
+  components: /^(componente\/?s|componentes?|components?)$/i,
+  labels: /^(etiquetas?|labels?)$/i,
+}
+const LIST_FIELDS = new Set(['fixVersions', 'affectsVersions', 'components', 'labels'])
+/** Lo que escribió un usuario: la descripción, los comentarios y la actividad. Un campo nunca sale de ahí. */
+const USER_CONTENT = '#description-val, .user-content-block, .action-body, .activity-comment, #issue_actions_container'
+
+/** Texto de una línea, como lo ve el usuario. */
+function texto(el) {
+  return String(el?.textContent || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+/** Un valor que es una lista (etiquetas, versiones, componentes): sus elementos; si no, el texto entero, separado por comas. */
+function lista(el) {
+  if (!el) return []
+  const items = el.querySelectorAll('li, .lozenge, a')
+  const partes = items.length ? [...items].map(texto).filter(Boolean) : texto(el).split(/\s*,\s*/)
+  return [...new Set(partes.map((s) => s.replace(/,$/, '').trim()).filter(Boolean))]
+}
+
+/**
+ * Los campos de la incidencia abierta, o null si esta página no es una.
+ *
+ * @param {Document} [doc]
+ * @returns {{type:string, status:string, priority:string, resolution:string, assignee:string, reporter:string, epic:string, sprint:string, fixVersions:string[], affectsVersions:string[], components:string[], labels:string[]}|null}
+ */
+export function jiraIssueFields(doc = document) {
+  if (!VIEW.some((s) => doc.querySelector(s))) return null
+
+  // Los pares etiqueta → valor que Jira pinta en los módulos: el `li.item`
+  // de la lista de detalles («Tipo: Tarea») y los `dt`/`dd` del panel lateral
+  // («Persona asignada:» / «Sin asignar»). Nunca lo que escribió un usuario:
+  // un <dl> en la descripción o en un comentario podría fabricar un «Estado:»
+  // y cambiar la fase del análisis (lo encontró la revisión).
+  const pares = []
+  for (const item of doc.querySelectorAll('#issuedetails li.item, .property-list li.item')) {
+    if (item.closest(USER_CONTENT)) continue
+    const nombre = item.querySelector('.name')
+    const valorEl = item.querySelector('.value')
+    if (nombre && valorEl) pares.push({ nombre: texto(nombre).replace(/:$/, ''), el: valorEl })
+  }
+  for (const dt of doc.querySelectorAll('#viewissuesidebar dt, .issue-view dt')) {
+    if (dt.closest(USER_CONTENT)) continue
+    const dd = dt.nextElementSibling
+    if (dd && dd.tagName === 'DD') pares.push({ nombre: texto(dt).replace(/:$/, ''), el: dd })
+  }
+
+  const out = {}
+  for (const [k, re] of Object.entries(FIELD_LABELS)) {
+    // Por id, en orden de preferencia (el primero que exista); si no, por etiqueta.
+    const porId = (FIELD_IDS[k] || []).map((s) => doc.querySelector(s)).find(Boolean) || null
+    const el = porId || pares.find((p) => re.test(p.nombre))?.el || null
+    out[k] = LIST_FIELDS.has(k) ? lista(el) : texto(el)
+  }
+  return out
 }

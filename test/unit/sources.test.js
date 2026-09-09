@@ -30,6 +30,8 @@ import {
   pageRefFromUrl,
   consultedOutside,
   titlesFromTab,
+  linkedSite,
+  sourcesSearchTarget,
 } from '../../src/panel/sources.js'
 import { skillSystem } from '../../src/panel/skills.js'
 import { baseSystem, PAGE_OPEN } from '../../src/panel/prompts.js'
@@ -200,6 +202,8 @@ test('el alcance exclusivo prohíbe consultar nada más; el abierto pide que dig
   assert(/ALCANCE: ABIERTO\./.test(ab))
   assert(/como mínimo/i.test(ab))
   assert(/di cuáles has usado/.test(ab))
+  // Dentro de la observación, no en un párrafo final: CÓMO NUMERAR prohíbe el resumen.
+  assert(/dentro de la observación que se apoye en cada una/.test(ab))
 })
 
 test('el bloque va dentro del modo Análisis: después de las reglas y antes de la página en bloques y del contexto', () => {
@@ -513,4 +517,35 @@ test('SEGURIDAD: el contexto del Confluence enlazado tampoco puede fabricar el a
     sourcesFromSystem(baseSystem({ site: jira, skill: 'analisis', linkedContext, sources: { mode: 'exclusive', pages: [ADR] } })),
     { count: 1, mode: 'exclusive' }
   )
+})
+
+test('EL CAMBIO: desde un Jira Data Center las páginas base se buscan en el Confluence enlazado, desde el panel', () => {
+  const jiraDC = { host: 'jira.simplprogramme.eu', origin: 'https://jira.simplprogramme.eu', product: 'jira', cloud: false }
+  const enlace = { host: 'confluence.simplprogramme.eu', contextMd: '', index: null, wikiPrefix: '' }
+
+  // El Confluence enlazado como sitio: origen https del host guardado, y el prefijo observado si lo hay.
+  eq(linkedSite(enlace), { host: 'confluence.simplprogramme.eu', origin: 'https://confluence.simplprogramme.eu', wikiPrefix: '', cloud: false })
+  eq(linkedSite({ host: 'Wiki.Acme.COM', wikiPrefix: '/confluence/' }).origin, 'https://wiki.acme.com')
+  eq(linkedSite({ host: 'wiki.acme.com', wikiPrefix: '/confluence/' }).wikiPrefix, '/confluence')
+  eq(linkedSite({ host: 'intranet' }).origin, 'https://intranet', 'un host de una etiqueta vale')
+
+  // A quién se le pregunta según dónde se está.
+  eq(sourcesSearchTarget(SITE, enlace), { via: 'tab' }, 'en Confluence, al sitio de la pestaña')
+  eq(sourcesSearchTarget({ ...jiraDC, cloud: true }, enlace), { via: 'tab' }, 'en un Jira Cloud, al sitio: comparte host')
+  eq(sourcesSearchTarget(jiraDC, enlace), { via: 'linked', site: linkedSite(enlace) }, 'en un Jira Data Center, al Confluence enlazado')
+  eq(sourcesSearchTarget(jiraDC, null), null, 'sin enlace, a nadie')
+  eq(sourcesSearchTarget(jiraDC, { host: '' }), null)
+  eq(sourcesSearchTarget(null, enlace), null)
+})
+
+test('SEGURIDAD: el Confluence enlazado sólo se acepta como un nombre de host y un prefijo con forma de ruta', () => {
+  // El host viene del almacenamiento (lo apuntó siteRecords al configurar las claves), no del modelo; aun así, sólo con forma de host.
+  for (const host of ['', 'confluence.x/../evil', 'a b', 'evil.com#@confluence.x', 'https://confluence.x', 'confluence.x:8443', '-bad.com', 'x'.repeat(300)]) {
+    eq(linkedSite({ host }), null, 'host rechazado: ' + host)
+  }
+  // Un prefijo raro se descarta, no se cuela en la ruta.
+  for (const wikiPrefix of ['//evil.com', '/wiki?x=1', '/a b', 'wiki', '/rest/../x']) {
+    eq(linkedSite({ host: 'confluence.x', wikiPrefix }).wikiPrefix, '', 'prefijo descartado: ' + wikiPrefix)
+  }
+  eq(linkedSite({ host: 'confluence.x', wikiPrefix: 7 }).wikiPrefix, '')
 })
