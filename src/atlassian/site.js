@@ -4,17 +4,6 @@
  * sin tocar el DOM, y lo que permite probarlo sin navegador.
  */
 
-/** ¿Es una URL de Jira/Confluence que nos interesa? */
-export function isAtlassianUrl(url) {
-  try {
-    const u = new URL(url)
-    if (u.protocol !== 'https:' && u.protocol !== 'http:') return false
-    return true
-  } catch {
-    return false
-  }
-}
-
 /**
  * Analiza una URL de Atlassian.
  * @returns {{host:string, origin:string, product:'jira'|'confluence'|'unknown',

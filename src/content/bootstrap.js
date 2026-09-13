@@ -21,15 +21,18 @@
   async function boot() {
     if (ready) return ready
     ready = (async () => {
-      const [{ NavRunner }, { MSG }, { onUrlChange }] = await Promise.all([
+      const [{ NavRunner }, { MSG }, { onUrlChange }, { NAV_TIMING }] = await Promise.all([
         import(url('src/content/runner.js')),
         import(url('src/shared/messages.js')),
         import(url('src/content/dom-utils.js')),
+        import(url('src/shared/config.js')),
       ])
 
-      const runner = new NavRunner({
-        timing: { locateTimeoutMs: 2500, stepPauseMs: 1600, settleQuietMs: 220, settleMaxMs: 6000 },
-      })
+      // Los tiempos viven en config.js; aquí sólo se copian, porque
+      // MSG.SETTINGS los muta con lo que ajusta el usuario y la constante
+      // compartida no debe cambiar por debajo. Nada de esto hace falta antes
+      // del import(): el NavRunner se construye después.
+      const runner = new NavRunner({ timing: { ...NAV_TIMING } })
 
       onUrlChange((href) => {
         chrome.runtime.sendMessage({ type: MSG.URL_CHANGED, url: href }).catch(() => {})
@@ -87,11 +90,6 @@
 
           case MSG.CANCEL:
             runner.cancel(msg.reason || 'sw')
-            sendResponse({ ok: true })
-            return
-
-          case MSG.CLEAR:
-            runner.clear()
             sendResponse({ ok: true })
             return
 

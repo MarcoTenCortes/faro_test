@@ -13,6 +13,7 @@ import { resolveAnchor, rangeRect, imagesWithin } from './anchor.js'
 import { pageDigest, resolveBlockQuote, digestScope, resolveScopedQuote } from './digest.js'
 import { locateStep, isSafeToClick, clickableAncestor, treeToggleFor, isExpanded } from './locators.js'
 import { treeContainer, expandersIn, rowFor } from './tree-dom.js'
+import { NAV_TIMING } from '../shared/config.js'
 import {
   waitFor,
   waitForSettle,
@@ -37,6 +38,8 @@ export const STEP_RESULT = {
 export class NavRunner {
   constructor(options = {}) {
     this.overlay = new Overlay()
+    // Lo que no llegue de fuera cae en NAV_TIMING (config.js), el único sitio
+    // donde viven los tiempos: aquí no hay ningún número copiado.
     this.timing = options.timing || {}
     this.origin = location.origin
     this.cancelled = false
@@ -110,7 +113,7 @@ export class NavRunner {
     }
 
     const desplegando = step.action === 'expand'
-    const timeout = this.timing.locateTimeoutMs ?? 2500
+    const timeout = this.timing.locateTimeoutMs ?? NAV_TIMING.locateTimeoutMs
     const found = await waitFor(() => locateStep(step, document), { timeout })
 
     if (!found) {
@@ -160,14 +163,14 @@ export class NavRunner {
     // El árbol tiene su propio scroll: sin esto la rama se abre por debajo del
     // borde visible y parece que no ha pasado nada.
     await this._traerALaVista(toggle.row || toggle.toggle)
-    await sleep(this.timing.scrollSettleMs ?? 340)
+    await sleep(this.timing.scrollSettleMs ?? NAV_TIMING.scrollSettleMs)
 
     const marca = toggle.row || toggle.toggle
     const rect = marca.getBoundingClientRect()
     this.overlay.spotlight(rect, { padding: 6 })
     this.overlay.follow(marca, { padding: 6 })
 
-    const pause = this.timing.expandPauseMs ?? Math.round((this.timing.stepPauseMs ?? 1600) * 0.6)
+    const pause = this.timing.expandPauseMs ?? Math.round((this.timing.stepPauseMs ?? NAV_TIMING.stepPauseMs) * 0.6)
     const decision = await this._presentCard({
       step,
       index,
@@ -307,8 +310,8 @@ export class NavRunner {
    */
   async _tryExpandTowards(step) {
     const t0 = Date.now()
-    const budgetMs = this.timing.expandBudgetMs ?? 15000
-    const maxClicks = this.timing.maxExpandClicks ?? 40
+    const budgetMs = this.timing.expandBudgetMs ?? NAV_TIMING.expandBudgetMs
+    const maxClicks = this.timing.maxExpandClicks ?? NAV_TIMING.maxExpandClicks
     const tried = new WeakSet()
     const claves = targetKeywords(step)
     const container = treeContainer()
@@ -373,13 +376,13 @@ export class NavRunner {
     // El árbol lateral tiene su propio scroll: sin esto, el objetivo puede
     // quedarse fuera de la vista aunque la ventana esté bien colocada.
     await this._traerALaVista(target)
-    await sleep(this.timing.scrollSettleMs ?? 340)
+    await sleep(this.timing.scrollSettleMs ?? NAV_TIMING.scrollSettleMs)
 
     const rect = target.getBoundingClientRect()
     this.overlay.spotlight(rect)
     this.overlay.follow(target)
 
-    const pause = this.timing.stepPauseMs ?? 1600
+    const pause = this.timing.stepPauseMs ?? NAV_TIMING.stepPauseMs
     const decision = await this._presentCard({
       step,
       index,
@@ -413,8 +416,8 @@ export class NavRunner {
     this.overlay.hideSpot()
 
     await waitForSettle({
-      quietMs: this.timing.settleQuietMs ?? 220,
-      maxMs: this.timing.settleMaxMs ?? 6000,
+      quietMs: this.timing.settleQuietMs ?? NAV_TIMING.settleQuietMs,
+      maxMs: this.timing.settleMaxMs ?? NAV_TIMING.settleMaxMs,
     })
 
     return { status: STEP_RESULT.CLICKED, url: location.href }
@@ -495,7 +498,7 @@ export class NavRunner {
     }
 
     // La página puede estar todavía montándose tras la navegación.
-    await waitForSettle({ quietMs: 220, maxMs: 4000 })
+    await waitForSettle({ quietMs: this.timing.settleQuietMs ?? NAV_TIMING.settleQuietMs, maxMs: 4000 })
     await waitFor(() => contentRoot()?.textContent?.trim()?.length > 40, { timeout: 3000 })
 
     const resolved = resolveAnchor(anchor)

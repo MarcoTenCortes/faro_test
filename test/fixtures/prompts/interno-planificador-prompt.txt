@@ -1,0 +1,18 @@
+Decide si merece la pena llevar al usuario a algún sitio, a partir de esta conversación.
+
+PREGUNTA DEL USUARIO:
+¿Dónde están las convenciones REST que cita esta guía?
+
+TU RESPUESTA:
+Las convenciones están en la página «Convenciones REST» (id 234567), hija de la Guía de APIs.
+
+ÍNDICE DEL SITIO (los únicos identificadores que puedes usar):
+ESPACIOS DE CONFLUENCE
+  ENG — Ingeniería
+PÁGINAS (3)
+  undefined — Guía de APIs [ENG]
+  undefined — Convenciones REST [ENG]
+  undefined — Decisiones de arquitectura [ENG]
+
+El usuario YA está en 123456: no es un destino.
+Si tu respuesta no apunta a un sitio concreto que esté en el índice, devuelve navigate=false.

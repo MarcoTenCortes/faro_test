@@ -11,12 +11,12 @@
  *
  * Todo lo que tiene que ver con la FORMA del árbol vive en `tree-dom.js`, que
  * es el único sitio donde se decide qué es una fila y cuál es su control de
- * desplegar. Aquí sólo se re-exporta lo que ya usaban otros.
+ * desplegar. Aquí no se reexporta nada de allí: quien lo necesite lo importa
+ * de tree-dom.js (una reexportación de paso que nadie pedía vivió aquí hasta
+ * que dead-exports.test.js aprendió a distinguir importar de mencionar).
  */
 
-import { rowFor, toggleFor, isRowExpanded, visible, hasVisibleChildRows } from './tree-dom.js'
-
-export { hasVisibleChildRows }
+import { rowFor, toggleFor, isRowExpanded, visible } from './tree-dom.js'
 
 /** Palabras que jamás se pulsan automáticamente. Navegar no es actuar. */
 export const FORBIDDEN_ACTIONS = [
@@ -331,14 +331,6 @@ export function clickableAncestor(el) {
     cur = cur.parentElement
   }
   return el
-}
-
-/** Botón de desplegar de la rama que contiene al elemento, si lo hay. */
-export function expanderFor(el) {
-  const item = rowFor(el)
-  if (!item) return null
-  const btn = item.querySelector('[aria-expanded="false"]')
-  return btn && visible(btn) ? btn : null
 }
 
 /**

@@ -1205,6 +1205,8 @@ const actions = {
       `${rMarker.strategy} · ${highlighted().length} resaltados`
     )
 
+    // 21. Una imagen se marca con un recuadro exterior, no con un Range: es
+    //     la segunda mitad de la 20 («las imagenes con un recuadro fino»).
     const figura = document.querySelector('#page-content figure')
     const marcadas = runner.overlay.outlineElements(imagesWithin(figura))
     ok(
@@ -1700,9 +1702,11 @@ const actions = {
     )
     ok('jira: la interfaz no entra en los bloques', colada.length === 0, colada.length ? 'se colo: ' + colada.join(', ') : `${dj1.blocks.length} bloques limpios`)
 
-    // Y una cita que sólo existe en la interfaz o en una pestaña oculta no se
-    // marca: buscarla en toda la página la habría encontrado ahí y la tarjeta
-    // diría que está subrayada sin que se vea nada.
+    // 36. Una cita que sólo existe en la interfaz o en una pestaña oculta no
+    //     se marca: buscarla en toda la página la habría encontrado ahí y la
+    //     tarjeta diría que está subrayada sin que se vea nada. Va aquí, entre
+    //     la 34 y la 35, porque usa la incidencia que acaba de leer la 34; el
+    //     número es el que CLAUDE.md le da.
     const fantasmas = [
       { n: 1, title: 'Cita de la interfaz', kind: '', anchor: { kind: 'text-quote', exact: 'Consejo de expertos', prefix: '', suffix: '' } },
       { n: 2, title: 'Cita de una pestaña oculta', kind: '', anchor: { kind: 'text-quote', exact: 'S37 Infra', prefix: '', suffix: '' } },

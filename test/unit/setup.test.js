@@ -334,3 +334,124 @@ test('EL FALLO: el MCP conectado gana al caído aunque tenga menos productos, y 
   // Y chosenMcpName pasa los estados.
   eq(chosenMcpName(config, { mcpName: 'apuntado' }, 'confluence.x.eu', { status: estados }), 'atlassian-confluence-x-eu')
 })
+
+// ---------------------------------------------------------------------------
+// waitForMcpReady (plan 2026-09-13, D6: puras sin test).
+//
+// No admite reloj inyectado: sondea `client.listMcp()` con `setTimeout` y
+// `Date.now()`. Se prueba con un cliente falso e intervalos de milisegundos
+// (en total, unas decenas de ms de temporizadores reales).
+// ---------------------------------------------------------------------------
+import { waitForMcpReady } from '../../src/panel/setup.js'
+
+/** Cliente falso: cada listMcp() devuelve la siguiente respuesta (la última se repite); un Error se lanza. */
+function clienteMcp(respuestas) {
+  const llamadas = []
+  return {
+    llamadas,
+    listMcp: async () => {
+      const r = respuestas[Math.min(llamadas.length, respuestas.length - 1)]
+      llamadas.push(Date.now())
+      if (r instanceof Error) throw r
+      return r
+    },
+  }
+}
+
+test('waitForMcpReady: conectado a la primera → vuelve sin esperar ni avisar', async () => {
+  const host = 'confluence.x.eu'
+  const nombre = mcpNameForHost(host)
+  const client = clienteMcp([{ [nombre]: { status: 'connected' } }])
+  const ticks = []
+  const t0 = Date.now()
+  const r = await waitForMcpReady(client, host, { timeoutMs: 50, intervalMs: 5, onTick: (s, ms) => ticks.push([s, ms]) })
+  eq(r.connected, true)
+  eq(r.name, nombre)
+  eq(r.present, true)
+  eq(r.status, 'connected')
+  eq(client.llamadas.length, 1)
+  eq(ticks, [], 'la vuelta que conecta no avisa')
+  assert(Date.now() - t0 < 500, 'no espera ningún intervalo')
+})
+
+test('waitForMcpReady: sondea hasta que aparece conectado, avisando en cada vuelta con el plazo que queda', async () => {
+  const host = 'confluence.x.eu'
+  const nombre = mcpNameForHost(host)
+  const client = clienteMcp([{}, { [nombre]: { status: 'failed' } }, { [nombre]: { status: 'connected' } }])
+  const ticks = []
+  const r = await waitForMcpReady(client, host, {
+    timeoutMs: 1000,
+    intervalMs: 5,
+    onTick: (s, ms) => ticks.push({ present: s.present, status: s.status, ms }),
+  })
+  eq(r.connected, true)
+  eq(client.llamadas.length, 3)
+  eq(ticks.length, 2, 'un aviso por vuelta sin conectar')
+  eq(ticks[0].present, false, 'el MCP aún no está registrado')
+  eq(ticks[1].present, true)
+  eq(ticks[1].status, 'failed', 'registrado pero caído: es lo que enseña la pantalla de claves')
+  assert(ticks.every((t) => t.ms >= 0 && t.ms <= 1000), 'el plazo restante va en ms y nunca es negativo')
+  assert(ticks[1].ms <= ticks[0].ms, 'y decrece')
+})
+
+test('waitForMcpReady: al agotar el plazo devuelve el último estado, sin conectar y sin lanzar', async () => {
+  const host = 'confluence.x.eu'
+  const client = clienteMcp([{ otro: { status: 'connected' } }])
+  const ticks = []
+  const t0 = Date.now()
+  const r = await waitForMcpReady(client, host, { timeoutMs: 25, intervalMs: 5, onTick: () => ticks.push(1) })
+  const dur = Date.now() - t0
+  eq(r.connected, false)
+  eq(r.present, false, 'otro MCP conectado no es el de este host')
+  eq(r.name, mcpNameForHost(host))
+  eq(r.aborted, undefined)
+  assert(client.llamadas.length >= 2 && client.llamadas.length <= 30, 'varias vueltas: ' + client.llamadas.length)
+  eq(ticks.length, client.llamadas.length, 'cada vuelta sin conectar avisa, también la última')
+  assert(dur >= 20 && dur < 1000, 'respeta el plazo (' + dur + ' ms)')
+})
+
+test('waitForMcpReady: si listMcp falla se toma como lista vacía y se sigue sondeando', async () => {
+  const host = 'confluence.x.eu'
+  const nombre = mcpNameForHost(host)
+  // El estado puede venir como cadena («connected») o como objeto: mcpStatusFor admite los dos.
+  const client = clienteMcp([new Error('sin conexión'), { [nombre]: 'connected' }])
+  const r = await waitForMcpReady(client, host, { timeoutMs: 1000, intervalMs: 5 })
+  eq(r.connected, true)
+  eq(client.llamadas.length, 2)
+})
+
+test('waitForMcpReady: con la señal ya abortada no pregunta nada', async () => {
+  const ctrl = new AbortController()
+  ctrl.abort()
+  const client = clienteMcp([{}])
+  const r = await waitForMcpReady(client, 'confluence.x.eu', { timeoutMs: 50, intervalMs: 5, signal: ctrl.signal })
+  eq(r, { connected: false, aborted: true })
+  eq(client.llamadas.length, 0)
+})
+
+test('waitForMcpReady: abortar a mitad devuelve lo último visto, marcado como abortado', async () => {
+  const host = 'confluence.x.eu'
+  const nombre = mcpNameForHost(host)
+  const ctrl = new AbortController()
+  const client = clienteMcp([{ [nombre]: { status: 'failed' } }])
+  const r = await waitForMcpReady(client, host, {
+    timeoutMs: 1000,
+    intervalMs: 5,
+    signal: ctrl.signal,
+    onTick: () => ctrl.abort(),
+  })
+  eq(client.llamadas.length, 1, 'tras abortar no se vuelve a preguntar')
+  eq(r.name, nombre)
+  eq(r.present, true)
+  eq(r.status, 'failed')
+  eq(r.connected, false)
+  eq(r.aborted, true)
+})
+
+test('waitForMcpReady: con mcpName se mira ese bloque, no el nombre derivado del host', async () => {
+  const host = 'confluence.x.eu'
+  const client = clienteMcp([{ 'mi-atlassian': { status: 'connected' }, [mcpNameForHost(host)]: { status: 'failed' } }])
+  const r = await waitForMcpReady(client, host, { timeoutMs: 50, intervalMs: 5, mcpName: 'mi-atlassian' })
+  eq(r.connected, true)
+  eq(r.name, 'mi-atlassian')
+})

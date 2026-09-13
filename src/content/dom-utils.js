@@ -196,15 +196,6 @@ export function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms))
 }
 
-/** ¿Está el elemento realmente visible y en el viewport o cerca? */
-export function isVisible(el) {
-  if (!el || !el.isConnected) return false
-  const style = getComputedStyle(el)
-  if (style.visibility === 'hidden' || style.display === 'none' || style.opacity === '0') return false
-  const r = el.getBoundingClientRect()
-  return r.width > 0 && r.height > 0
-}
-
 /**
  * ¿Estamos en el editor de Confluence?
  * Si lo estamos, Faro se aparta: tocar nada mientras se edita es pedir

@@ -177,7 +177,7 @@ export function toggleFor(row) {
  * `aria-expanded` puede mentir: hay árboles que lo dejan en `true` con las
  * hijas ocultas. Lo que cuenta es si de verdad se ven filas debajo.
  */
-export function hasVisibleChildRows(row) {
+function hasVisibleChildRows(row) {
   if (!row) return false
   for (const hija of row.querySelectorAll(ROW_SELECTORS)) {
     if (hija === row) continue

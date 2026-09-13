@@ -1,6 +1,6 @@
 /** Ejecuta comprobación de sintaxis y todas las pruebas unitarias. */
 import { readdirSync, statSync, readFileSync } from 'node:fs'
-import { join, dirname } from 'node:path'
+import { join, dirname, basename } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { registry } from './harness.js'
 import { checkSyntax, listJsFiles } from './syntax.js'
@@ -11,6 +11,7 @@ const ROOT = join(HERE, '..')
 
 const GREEN = '\x1b[32m'
 const RED = '\x1b[31m'
+const YELLOW = '\x1b[33m'
 const DIM = '\x1b[2m'
 const BOLD = '\x1b[1m'
 const OFF = '\x1b[0m'
@@ -72,8 +73,17 @@ async function main() {
   console.log(`${GREEN}✓${OFF} manifest    ${DIM}MV3 válido · id ${man.id}${OFF}`)
 
   // ---- 4. unitarias -------------------------------------------------------
+  // Cuántas registra cada fichero: CLAUDE.md §10 dice «`x.test.js` (…; N
+  // pruebas» de los de H1 y el paso «docs» lo compara (sólo el total se
+  // quedaba atrás sin que nada avisara: la revisión de H1 encontró un 22 que
+  // registraba 24).
   const files = walk(join(HERE, 'unit')).sort()
-  for (const f of files) await import(pathToFileURL(f).href)
+  const porFichero = {}
+  for (const f of files) {
+    const antes = registry.length
+    await import(pathToFileURL(f).href)
+    porFichero[basename(f)] = registry.length - antes
+  }
 
   let pass = 0
   const failures = []
@@ -103,6 +113,30 @@ async function main() {
     process.exitCode = 1
     return
   }
+
+  // ---- 5. docs ------------------------------------------------------------
+  // La documentación es el mapa para una sesión nueva y se quedaba atrás sin
+  // que nada avisara (docs/PLAN.md §2.7 D2: 35 títulos del registro sin
+  // documentar y el número de pruebas del README a mano). El número de pruebas
+  // (el total y el de cada fichero que §10 declara) es estricto; títulos,
+  // mensajes y ficheros son error según `STRICT` de tools/check-docs.mjs, y un
+  // mensaje con receptor y sin emisor sólo avisa. Sólo corre si las unitarias
+  // pasan: `registry.length` es el número que tienen que decir README y CLAUDE.md.
+  const { checkDocs, formatReport } = await import('../tools/check-docs.mjs')
+  const docs = checkDocs(ROOT, { tests: registry.length, porFichero })
+  const paint = (text, kind) => `${kind === 'error' ? RED : YELLOW}${text}${OFF}`
+  if (docs.errors.length) {
+    console.log(`${RED}✗ docs${OFF}       ${DIM}${docs.errors.length} error(es) · ${docs.warnings.length} aviso(s)${OFF}`)
+    for (const line of formatReport(docs, paint)) console.log(`   ${line}`)
+    process.exitCode = 1
+    return
+  }
+  console.log(
+    `${GREEN}✓${OFF} docs        ${DIM}README y CLAUDE.md dicen ${registry.length} pruebas` +
+      (docs.warnings.length ? ` · ${docs.warnings.length} aviso(s)` : '') +
+      `${OFF}`
+  )
+  for (const line of formatReport(docs, paint)) console.log(`   ${line}`)
 
   console.log(`\n${GREEN}${BOLD}Todo en verde.${OFF}`)
 }

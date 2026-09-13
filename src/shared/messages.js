@@ -5,7 +5,6 @@ export const MSG = {
   START_PLAN: 'faro:start-plan',
   CANCEL_PLAN: 'faro:cancel-plan',
   NAVIGATE_DIRECT: 'faro:navigate-direct',
-  GET_TAB_INFO: 'faro:get-tab-info',
   REQUEST_HOST_PERMISSION: 'faro:request-host-permission',
   CONTENT_STATUS: 'faro:content-status',
 
@@ -14,7 +13,6 @@ export const MSG = {
   STEP: 'faro:step',
   ANCHOR: 'faro:anchor',
   CANCEL: 'faro:cancel',
-  CLEAR: 'faro:clear',
   SETTINGS: 'faro:settings',
   TREE_SNAPSHOT: 'faro:tree-snapshot',
   TREE_DEBUG: 'faro:tree-debug',
@@ -44,14 +42,6 @@ export const MSG = {
 export async function sendToTab(tabId, message) {
   try {
     return await chrome.tabs.sendMessage(tabId, message)
-  } catch {
-    return null
-  }
-}
-
-export async function sendToRuntime(message) {
-  try {
-    return await chrome.runtime.sendMessage(message)
   } catch {
     return null
   }

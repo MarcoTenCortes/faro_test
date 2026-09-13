@@ -12,6 +12,7 @@
 
 import { MSG, sendToTab } from '../shared/messages.js'
 import { getSettings } from '../shared/storage.js'
+import { NAV_TIMING } from '../shared/config.js'
 
 const PLANS_KEY = 'faro:plans'
 
@@ -71,10 +72,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   ;(async () => {
     try {
       switch (msg.type) {
-        case MSG.GET_TAB_INFO:
-          sendResponse(await tabInfo(msg.tabId))
-          return
-
         case MSG.START_PLAN:
           sendResponse(await startPlan(msg.tabId, msg.plan))
           return
@@ -119,14 +116,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 })
 
 // -------------------------------------------------------------- información
-
-async function tabInfo(tabId) {
-  const tab = tabId ? await chrome.tabs.get(tabId).catch(() => null) : (await chrome.tabs.query({ active: true, currentWindow: true }))[0]
-  if (!tab) return { ok: false, error: 'no hay pestaña activa' }
-  const granted = await chrome.permissions.contains({ origins: [originOf(tab.url) + '/*'] }).catch(() => false)
-  const ping = await sendToTab(tab.id, { type: MSG.PING })
-  return { ok: true, tabId: tab.id, url: tab.url, title: tab.title, granted, contentReady: !!ping?.ok }
-}
 
 function originOf(url) {
   try {
@@ -195,7 +184,7 @@ async function ensureContentScript(origin, tabId) {
  * un motivo. Quedarse callado es lo peor que puede hacer: parece que el botón
  * no funciona.
  */
-function watchStalledStep(tabId, index, ms = 9000) {
+function watchStalledStep(tabId, index, ms = NAV_TIMING.stepStallMs) {
   setTimeout(async () => {
     const state = await getPlan(tabId)
     if (!state || state.index !== index || state.phase !== 'steps') return

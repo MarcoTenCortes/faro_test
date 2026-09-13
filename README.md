@@ -379,9 +379,12 @@ Trece decisiones que sostienen el diseño:
 ## Comprobaciones
 
 ```bash
-npm run check              # sintaxis + orden + manifest + 540 pruebas unitarias
+npm run check              # sintaxis + orden + manifest + 703 pruebas unitarias + docs
+npm run check:docs         # sólo el paso docs: número de pruebas, títulos del registro, mensajes y ficheros del mapa
 npm run test:integration   # contra un opencode real que arranca la propia prueba
 npm run harness            # banco de pruebas visual en http://127.0.0.1:5175
+npm run turn -- --n 1      # el último turno real (pregunta, sistema, herramientas, respuesta) desde una copia de opencode.db
+npm run snapshots          # regenera las instantáneas de los prompts (test/fixtures/prompts) cuando un cambio de prompt es intencionado
 ```
 
 Con el banco levantado hay dos páginas:
@@ -398,7 +401,21 @@ Con el banco levantado hay dos páginas:
   corre las pruebas de lógica pura:
   detección de sitio, índice, validación de planes, anclaje de texto,
   localizadores, markdown, memoria y la máquina de estados del service worker
-  con un `chrome` simulado.
+  con un `chrome` simulado, el cliente de opencode con un servidor falso
+  (autenticación, SSE, vigilante, salida estructurada), y los prompts completos
+  de 33 escenarios comparados byte a byte con sus instantáneas (dos de ellos
+  con contexto, memoria y Confluence enlazado más largos que el presupuesto,
+  para que los recortes se vean).
+
+  El último paso, «docs», vigila que README y CLAUDE.md digan el número real
+  de pruebas (el total, y el de cada fichero de test que CLAUDE.md §10
+  declara), que cada título del registro esté documentado (en
+  `docs/INSTALL.md` o en CLAUDE.md), que cada mensaje entre las piezas tenga
+  quien lo atienda y esté descrito —y avisa del que nadie manda—, y que ningún
+  fichero de `src/` falte en el mapa (`npm run check:docs` para verlo entero,
+  con las líneas). Y `AGENTS.md`
+  no es una copia de CLAUDE.md: es un puntero de tres líneas, para que no se
+  quede atrás.
 
   Lo del orden hace falta porque parsear no ejecuta: una zona muerta temporal
   —leer una constante dos líneas antes de declararla— pasa la comprobación de
@@ -473,6 +490,28 @@ Con el banco levantado hay dos páginas:
   «ADR» devuelve las dos ADR y nada más, «Arqui» encuentra «Arquitectura»
   porque el último término lleva comodín, con una letra no se pide nada, y las
   comillas y barras del usuario no llegan al CQL.
+
+- **`npm run turn`** enseña lo que el modelo contestó DE VERDAD en el último
+  turno de la última sesión del panel: la pregunta, cuánto sistema llevaba (con
+  sus primeras y últimas líneas), cada consulta a Atlassian con su JQL o su id y
+  400 caracteres de lo que devolvió, y el texto completo con el bloque de
+  anclas señalado. Lee una COPIA de la base de datos de opencode
+  (`~/.local/share/opencode/opencode.db`), abierta en sólo lectura y borrada al
+  acabar; la original no se toca. Necesita Node ≥22.13 (todo lo demás sigue
+  con Node ≥18). `--host jira` elige la última sesión de ese host, `--n 3` los
+  tres últimos turnos, `--all` incluye las sesiones internas (planificador,
+  observaciones…). Es lo primero que hay que mirar cuando el panel dice algo
+  raro: qué se le pidió y qué contestó, no lo que el panel pintó después.
+
+- **`npm run snapshots`** reescribe `test/fixtures/prompts/*.txt` con los
+  prompts que el código produce hoy para 33 escenarios fijos (Confluence y Jira
+  Data Center × cada Skill × con y sin página en bloques, páginas base,
+  contexto, memoria y Confluence enlazado, más los turnos internos).
+  `npm run check` los compara byte a byte y, si difieren, enseña la primera
+  línea distinta con su número. Se regenera SÓLO cuando el cambio de prompt es
+  intencionado, y se revisa el `git diff` de los `.txt` antes de commitear:
+  regenerar es aceptar. Sin `--update` (`node tools/prompt-snapshots.mjs`)
+  sólo lista los escenarios y si coinciden.
 
 ---
 
@@ -625,8 +664,12 @@ src/
   shared/
     confluence-rest.js      el árbol y la búsqueda de páginas por la API REST del sitio, con tu sesión (puro)
     digest.js               cómo se enseñan los bloques y cómo se reconoce uno después (puro)
-    config.js               ajustes por defecto y su migración
+    config.js               ajustes por defecto y su migración; NAV_TIMING, el único sitio con los tiempos de la navegación
 harness/                    Confluence de mentira para pruebas visuales
-test/                       arnés propio, sin dependencias
-tools/                      generación de iconos, clave del manifest, servidor
+test/                       arnés propio, sin dependencias; test/fixtures/prompts/ son las instantáneas de los prompts
+tools/                      generación de iconos, clave del manifest, servidor del banco
+  check-docs.mjs            el paso «docs» de npm run check (npm run check:docs suelto)
+  last-turn.mjs             el último turno real desde una copia de opencode.db (npm run turn)
+  prompt-snapshots.mjs      comprobar o regenerar (--update) las instantáneas de los prompts (npm run snapshots)
+AGENTS.md                   puntero a CLAUDE.md, que es el mapa del proyecto para una sesión nueva
 ```

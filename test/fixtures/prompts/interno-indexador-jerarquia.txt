@@ -1,0 +1,7 @@
+Ahora saca la JERARQUÍA de páginas del espacio ENG.
+
+Usa la herramienta del MCP que devuelve el árbol de páginas del espacio (la que se llama algo como `confluence_get_space_page_tree`). Si no existe, tira de la de hijos de una página, empezando por la raíz.
+
+Para CADA página devuelve su id, su título y el id de su página padre. La raíz del espacio no tiene padre: déjalo vacío.
+Esto es lo más importante de todo el indexado: sin los padres no se puede enseñar el camino hasta una página.
+No te inventes ninguna relación. Si no sabes el padre de una página, mejor no la incluyas.

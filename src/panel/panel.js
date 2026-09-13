@@ -147,7 +147,6 @@ const state = {
   // apagar el estado del siguiente.
   turnToken: null,
   defaults: {},
-  tracker: null,
   streaming: false,
   lastQuestion: '',
   tabUrl: '',
@@ -205,7 +204,6 @@ function buildClient() {
     log.warn('Stream de eventos cerrado', 'reintentando…')
   })
   client.on('faro.stream.error', (p) => log.error('Stream de eventos', p?.error))
-  client.on('*', (event) => state.tracker?.handle(event))
   state.client = client
   return client
 }
@@ -1168,9 +1166,6 @@ async function send() {
       showNotice(err instanceof OpencodeError ? err.message : 'Fallo enviando: ' + err.message, true)
     }
   } finally {
-    // Sin esto, un fallo a mitad de turno dejaría un tracker huérfano
-    // recibiendo eventos de la sesión para siempre.
-    state.tracker = null
     if (state.turnToken === testigo) {
       state.turnToken = null
       setStreaming(false)

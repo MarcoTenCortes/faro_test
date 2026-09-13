@@ -7,6 +7,7 @@
  */
 import { test, eq, assert } from '../harness.js'
 import { MSG } from '../../src/shared/messages.js'
+import { NAV_TIMING } from '../../src/shared/config.js'
 
 // El worker registra sus manejadores UNA vez, al importarse. Por eso la lista
 // se comparte entre todos los entornos simulados: lo que cambia en cada prueba
@@ -120,6 +121,36 @@ async function loadWorker(rig) {
   rig.state.sentToTab.length = 0
   rig.state.panelMessages.length = 0
   return rig
+}
+
+const esperar = (ms) => new Promise((r) => setTimeout(r, ms))
+
+/** El margen del vigilante de pasos mientras dura una prueba: 30 ms, no 9 s. */
+const MARGEN_MS = 30
+
+/**
+ * Acorta `NAV_TIMING.stepStallMs` mientras corre `fn` y, al salir, cancela el
+ * recorrido y espera a que venza lo que quedara armado.
+ *
+ * Pasó de verdad (revisión de H1): las dos pruebas que pasan por la rama
+ * «Permiso hay, así que se le da un margen» de `runCurrentStep` dejaban armados
+ * dos `setTimeout` de 9 s (`watchStalledStep`) que mantenían vivo el proceso:
+ * las unitarias acababan a los 6,6 s y `npm run check` tardaba 15,5 s.
+ * `NAV_TIMING` es un objeto exportado mutable y `watchStalledStep` lee su valor
+ * por defecto AL LLAMAR, así que basta con cambiarlo antes y restaurarlo en
+ * `finally`. Se espera a que venza para que ningún temporizador se dispare
+ * durante la prueba siguiente, que ya habrá cambiado el `chrome` global.
+ */
+async function conMargenCorto(rig, fn) {
+  const original = NAV_TIMING.stepStallMs
+  NAV_TIMING.stepStallMs = MARGEN_MS
+  try {
+    await fn()
+  } finally {
+    NAV_TIMING.stepStallMs = original
+    await rig.send({ type: MSG.CANCEL_PLAN, tabId: 1 })
+    await esperar(MARGEN_MS + 20)
+  }
 }
 
 test('sw: la asistida recorre los tres pasos y termina anclando', async () => {
@@ -241,12 +272,14 @@ test('sw: el estado del recorrido se guarda para sobrevivir a una recarga', asyn
   const rig = makeChrome()
   await loadWorker(rig)
 
-  rig.state.contentReply = () => null // la pestaña no contesta: está recargando
-  await rig.send({ type: MSG.START_PLAN, tabId: 1, plan: PLAN })
+  await conMargenCorto(rig, async () => {
+    rig.state.contentReply = () => null // la pestaña no contesta: está recargando
+    await rig.send({ type: MSG.START_PLAN, tabId: 1, plan: PLAN })
 
-  const saved = rig.state.session['faro:plans']
-  assert(saved, 'debe quedar guardado en storage.session')
-  eq(saved['1'].index, 0, 'debe recordar por qué paso iba')
+    const saved = rig.state.session['faro:plans']
+    assert(saved, 'debe quedar guardado en storage.session')
+    eq(saved['1'].index, 0, 'debe recordar por qué paso iba')
+  })
 })
 
 test('sw: el panel recibe el progreso', async () => {
@@ -294,11 +327,65 @@ test('sw: con permiso pero recargando, espera en vez de abortar', async () => {
   const rig = makeChrome()
   await loadWorker(rig)
 
-  rig.state.contentReply = () => null
-  globalThis.chrome.permissions.contains = async () => true
+  await conMargenCorto(rig, async () => {
+    rig.state.contentReply = () => null
+    globalThis.chrome.permissions.contains = async () => true
 
-  const res = await rig.send({ type: MSG.START_PLAN, tabId: 1, plan: PLAN })
-  eq(res.ok, true)
-  eq(res.waiting, true)
-  assert(rig.state.session['faro:plans']?.['1'], 'el recorrido se conserva para retomarlo')
+    const res = await rig.send({ type: MSG.START_PLAN, tabId: 1, plan: PLAN })
+    eq(res.ok, true)
+    eq(res.waiting, true)
+    assert(rig.state.session['faro:plans']?.['1'], 'el recorrido se conserva para retomarlo')
+  })
+})
+
+// --- el vigilante de pasos --------------------------------------------------
+// Esperar está bien; esperar para siempre, no. `watchStalledStep` da a la
+// pestaña `NAV_TIMING.stepStallMs` para avisar y después decide: si ya contesta
+// al PING, retoma el MISMO paso; si sigue muda, abandona con un motivo que el
+// panel enseña. Aquí el margen se acorta a 30 ms (`conMargenCorto`): con los
+// 9 s reales, además de eternizar la prueba, el temporizador sobrevivía a todas
+// las demás y mantenía vivo el proceso.
+
+test('sw: si la pestaña sigue muda al vencer el margen, se abandona el paso con motivo', async () => {
+  const rig = makeChrome()
+  await loadWorker(rig)
+
+  await conMargenCorto(rig, async () => {
+    rig.state.contentReply = () => null // ni al paso ni al PING de después
+    const res = await rig.send({ type: MSG.START_PLAN, tabId: 1, plan: PLAN })
+    eq(res.waiting, true, 'primero espera')
+    eq(rig.state.panelMessages.filter((m) => m.type === MSG.PLAN_FINISHED).length, 0, 'sin rendirse aún')
+
+    await esperar(MARGEN_MS + 20)
+
+    const avisos = rig.state.panelMessages.filter((m) => m.type === MSG.PLAN_FINISHED)
+    eq(avisos.length, 1, 'el panel tiene que enterarse de que se abandonó')
+    assert(/no responde/i.test(avisos[0].result.error), 'con un motivo: ' + avisos[0].result.error)
+    eq(rig.state.session['faro:plans']?.['1'], undefined, 'y el recorrido no se queda a medias')
+  })
+})
+
+test('sw: si al vencer el margen la pestaña ya contesta, se retoma el MISMO paso', async () => {
+  const rig = makeChrome()
+  await loadWorker(rig)
+
+  await conMargenCorto(rig, async () => {
+    let pasos = 0
+    rig.state.contentReply = (msg) => {
+      if (msg.type === MSG.PING) return { ok: true } // la recarga ya terminó
+      if (msg.type !== MSG.STEP) return { status: 'done' }
+      pasos++
+      // El primer paso cayó en plena recarga; al reintentarlo, el usuario para.
+      return pasos === 1 ? null : { status: 'cancelled', reason: 'user' }
+    }
+
+    const res = await rig.send({ type: MSG.START_PLAN, tabId: 1, plan: PLAN })
+    eq(res.waiting, true)
+
+    await esperar(MARGEN_MS + 20)
+
+    const steps = rig.state.sentToTab.filter((m) => m.type === MSG.STEP)
+    eq(steps.map((s) => s.index), [0, 0], 'el mismo paso, dos veces: no se salta ninguno')
+    eq(rig.state.panelMessages.filter((m) => m.type === MSG.PLAN_FINISHED).map((m) => m.result), [{ cancelled: true }])
+  })
 })

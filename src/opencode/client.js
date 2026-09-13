@@ -164,10 +164,6 @@ export class OpencodeClient {
 
   // --------------------------------------------------------------- sesiones
 
-  listSessions() {
-    return this.request('GET', '/session')
-  }
-
   /**
    * Crea una sesión. Por defecto va con los permisos recortados: Faro sólo
    * necesita las herramientas MCP de Atlassian, nunca shell ni ficheros.
@@ -367,24 +363,6 @@ export class OpencodeClient {
 
   connectMcp(name) {
     return this.request('POST', `/mcp/${encodeURIComponent(name)}/connect`, { body: {} })
-  }
-
-  disconnectMcp(name) {
-    return this.request('POST', `/mcp/${encodeURIComponent(name)}/disconnect`, { body: {} })
-  }
-
-  // --------------------------------------------------------------- ficheros
-
-  async readFile(path) {
-    try {
-      const r = await this.request('GET', '/file/content', { params: { path } })
-      if (r == null) return null
-      if (typeof r === 'string') return r
-      return r.content ?? r.text ?? null
-    } catch (err) {
-      if (err instanceof OpencodeError && (err.status === 404 || err.status === 400)) return null
-      throw err
-    }
   }
 
   // ------------------------------------------------------------- permisos

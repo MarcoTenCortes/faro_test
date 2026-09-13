@@ -312,9 +312,256 @@ destino sale de ahí, sin gastar un turno en preguntárselo. Si un modelo se
 salta esa línea pero nombra una sola página del índice, vale igual. La tarjeta
 aparece nada más terminar la respuesta.
 
+## 8. Herramientas de desarrollo
+
+### Cómo ver el último turno real
+
+Cuando el panel dice algo raro («Sin marcas», una tarjeta que no aparece, un
+análisis por apartados), lo que hay que mirar es qué contestó el modelo de
+verdad y con qué instrucciones se le preguntó, no lo que el panel pintó
+después. opencode guarda cada turno entero —sistema incluido— en su base de
+datos, y Faro trae un comando para leerlo:
+
+```
+npm run turn                     # el último turno de la última sesión del panel
+npm run turn -- --n 3            # los tres últimos turnos
+npm run turn -- --host jira      # la última sesión cuyo host contiene «jira» (por el título o por la «URL abierta» del sistema)
+npm run turn -- --all            # también las sesiones internas de Faro (planificador, observaciones, comprobación, índice de …)
+npm run turn -- --db copia.db    # otra base de datos (una copia que hayas guardado)
+```
+
+Qué enseña, por turno: la pregunta tal como la mandó el panel (sin el fragmento
+señalado, si lo había; se avisa de los adjuntos); el sistema con su longitud en
+caracteres y líneas y sus primeras y últimas seis líneas (ahí se ve, por
+ejemplo, si iba el RECUERDA EL FORMATO del Análisis); y cada mensaje del
+asistente —opencode parte un turno en varios, uno por vuelta de herramientas—
+con el modelo, la duración, los tokens, y sus partes: cada herramienta con su
+nombre, su `jql`, `page_id`, `issue_key`, `query`, `title` o `space_key`
+enteros (en una línea), el nombre de los demás campos y 400
+caracteres de lo que devolvió (o su error); el texto entero, con una línea
+«— bloque de anclas (N notas) —» delante del JSON de anclas para verlo de un
+vistazo; y el razonamiento sólo por longitud. El número de caracteres del
+texto es el del texto guardado (la línea «— bloque de anclas» la pone el
+comando, no cuenta). Si opencode compactó la sesión (lo hace solo cuando el
+contexto se le llena), no aparece como un turno más: bajo el turno tras el que
+ocurrió sale «(compactación automática de opencode tras este turno: resumen de
+N caracteres)» y la cabecera de la sesión cuenta cuántas hubo. Arriba lista las
+ocho sesiones más recientes con la elegida marcada (▶).
+
+Cómo lo hace: copia `opencode.db` (y sus `-wal` y `-shm`, para no leer
+atrasado) de `~/.local/share/opencode/` (en Windows,
+`%USERPROFILE%\.local\share\opencode\`) a un directorio temporal, abre LA
+COPIA en sólo lectura con `node:sqlite` y borra el directorio al acabar,
+también si algo falla. La base de datos original nunca se abre ni se toca (se
+puede comprobar: su fecha de modificación no cambia). Necesita Node 22.13 o
+más reciente (con 22.5-22.12 hay que arrancar
+`node --experimental-sqlite tools/last-turn.mjs` o poner esa bandera en
+NODE_OPTIONS; el script lo dice si no consigue cargar node:sqlite); todo lo
+demás de Faro sigue funcionando con Node 18.
+
+Si no encuentra la base de datos, dice dónde ha mirado: pásale la ruta con
+`--db`. Si lo que le pasas con `--db` es un directorio, o un fichero que no es
+SQLite o no es de opencode (sin tabla `session`), lo dice en una línea
+(««ruta» no es una base de datos de opencode») y sale con 1, sin traza. Si
+opencode no está en esta máquina o nunca se ha usado el panel, no hay sesiones
+«Faro · …» y lo dice.
+
+### `npm run check` y el paso «docs»
+
+`npm run check` tiene cinco pasos: sintaxis, orden (nada se usa antes de
+declararse), manifest, las pruebas unitarias y, sólo si todas pasan, «docs»:
+compara los documentos con el código. Si sale en rojo por «README.md: dice N
+pruebas unitarias y hay M», actualiza el número en README.md y en CLAUDE.md
+§2 (es el `M/M` que imprime el propio `npm run check`); si sale por
+«CLAUDE.md §10 (línea L): «x.test.js» dice N pruebas y registra M», pon M en
+esa línea de §10 (o «N pruebas más» si esa entrada sólo cuenta las que añadió
+un hito a un fichero que ya existía: ésas no se comprueban). Si sale por
+«Títulos de registro sin documentar», cada título nuevo que emita
+`log.ok/info/warn/error('Título', …)` en `src/` tiene que aparecer entre «»
+aquí (en la lista de abajo) o en CLAUDE.md; si sale por «MSG.X: nadie lo
+atiende», el `MSG` nuevo necesita receptor (`case MSG.X` en `bootstrap.js` o
+en el service worker, `=== MSG.X` en el panel) y su línea en CLAUDE.md §5; «lo
+atiende … y nadie lo manda» es sólo aviso (código que espera algo que nadie
+envía: cablea quien lo manda o bórralo); y el fichero nuevo de `src/` va en el
+mapa de §3. `npm run check:docs` da el informe entero con la línea de cada
+título.
+
+`npm run snapshots` regenera las instantáneas de los prompts
+(`test/fixtures/prompts/*.txt`): `npm run check` las compara byte a byte con
+lo que el código produce y, si un prompt cambió, falla con la primera línea
+distinta. Se regenera sólo cuando el cambio es intencionado, revisando el
+`git diff` de los `.txt` antes de commitear.
+
+### Qué significa cada título del registro
+
+El registro del panel (el icono de las líneas) apunta cada cosa con un título
+corto y un detalle. Todos los títulos, por dónde salen:
+
+**Arranque y conexión**
+
+- «Stream de eventos abierto» — el panel abrió el stream de eventos (`/event`)
+  de opencode; el estado pasa a «conectado».
+- «Stream de eventos cerrado» — el stream se cortó; el cliente reintenta solo
+  y el estado pasa a «sin conexión» mientras tanto.
+- «Stream de eventos» — el stream devolvió un error; el detalle es el error.
+- «Prefijo de Confluence detectado» — al entrar en un host se vio por primera
+  vez (o cambió) el prefijo del wiki: `/wiki` en Cloud, «(raiz, Data Center)»
+  en un Confluence propio. Se guarda para ese sitio.
+- «Índice descartado» — el índice guardado era de una versión anterior de
+  Faro; hay que reconstruir el contexto.
+- «MCP reconocido» — un servidor MCP de opencode lleva este dominio en su
+  configuración y Faro lo adopta (con qué productos sirve).
+- «MCP sin conectar» — el MCP que lleva este dominio existe pero no está
+  conectado: se arregla o se quita del `opencode.json`.
+- «MCP verificado» — los tokens se comprobaron, con una línea por producto
+  («Jira: … · Confluence: …»).
+- «Sitio enlazado» — el otro host (Jira o Confluence) comparte el MCP de
+  éste y no pedirá claves.
+- «Contexto de Confluence enlazado» — desde Jira, se cargó el contexto del
+  Confluence enlazado: host, caracteres y si tiene índice.
+- «Content script inyectado» — con el permiso ya concedido, el content script
+  se inyectó en la pestaña abierta sin recargarla.
+- «Permiso concedido» — concediste el permiso sobre el dominio; el content
+  script queda registrado para él.
+- «Permiso de host denegado» — cerraste o rechazaste el diálogo de permiso de
+  Chrome sobre ese host.
+
+**Un turno**
+
+- «Turno enviado» — la pregunta salió hacia opencode: modelo, caracteres,
+  Skill, lo señalado, «página en N bloques» (y «recortada» si llegó al tope)
+  y las páginas base.
+- «Turno colgado» — 90 segundos sin contenido (o 15 minutos en total): el
+  vigilante abortó el turno y el mensaje ofrece reintentar con otro modelo.
+- «Turno fallido» — opencode o el proveedor devolvieron un error; el detalle
+  es el mensaje.
+- «Turno cancelado por el usuario» — pulsaste Parar: se abortan el turno y la
+  sesión.
+- «Respuesta recibida» — el turno terminó: caracteres de la respuesta y
+  número de herramientas que llamó.
+- «Skill» — cambió la Skill (desde el desplegable, o porque «Pedirlo
+  numerado» la fija en Análisis).
+- «Modelo cambiado» — elegiste otro modelo; se recuerda para el sitio.
+- «Sesión nueva» — pulsaste «nueva sesión»: se olvidan la sesión de opencode y
+  las marcas; «la anterior quedó resumida» si la memoria entre sesiones está
+  activa.
+
+**Análisis**
+
+- «Página leída en bloques» — antes de un Análisis, la página o la incidencia
+  se leyó en bloques ¶: cuántos, cuántos caracteres, «recortada» si llegó al
+  tope y, en Jira, el tipo y el estado leídos de los campos.
+- «Página sin bloques» — no se pudo leer en bloques: estás en el editor, o la
+  pestaña no contesta (recárgala).
+- «Anclas en la respuesta» — el bloque JSON de anclas señala un bloque válido
+  para N de las M observaciones.
+- «Sin bloque de anclas» — la respuesta numera pero no trae el bloque JSON (o
+  ninguno utilizable): se pide aparte.
+- «Segunda pasada» — la petición aparte de las anclas, en una sesión
+  desechable: cuántas observaciones situó, por qué no, o que no se pudo abrir
+  la sesión.
+- «Pasada que trocea» — la respuesta no numeraba nada: se le pidió aparte que
+  la trocee en observaciones y las sitúe; cuántas se numeraron y situaron.
+- «Numeración adaptada» — el modelo numeró a su manera («1.», «Observación
+  1:», encabezados) y Faro lo reescribió como `[n]`.
+- «Numeración del JSON» — la prosa no lleva `[n]`; valen los números del
+  bloque de anclas.
+- «Sin observaciones» — el modelo cerró con «Sin observaciones.»: no hay nada
+  que subrayar; con marcas previas, se quedan.
+- «Marcas conservadas» — la respuesta es un seguimiento (cita observaciones
+  sueltas, o no numera nada): las marcas que hay se quedan.
+- «Marcas sobrantes» — el bloque JSON trae números que la respuesta no tiene.
+- «Sin marcas» — no se marcó nada, con la razón (las ocho que emite el panel):
+  la respuesta es corta y no numera nada, o una consulta falló y la respuesta
+  no numera nada (y se ofrece «Pedirlo numerado»); la respuesta cita
+  observaciones sueltas y no hay un análisis del que vengan; falta permiso en
+  ese host; estás en el editor (antes de leer la página, o al ir a marcar); no
+  se pudo leer la página en bloques; ninguna observación apunta a un bloque
+  del texto; la respuesta no numera nada y no se supo trocearla; la pestaña
+  cambió de página mientras se preparaban.
+- «Sin anclar» — las observaciones que no se pudieron situar en la página.
+- «Análisis marcado» — de cada número, cómo se resolvió: `block+quote`,
+  `block+whole`, `block-moved`, `global`.
+- «Análisis marcado de nuevo» — pulsaste «Volver a marcar en esta página» y
+  las marcas se volvieron a poner (cuántas de cuántas).
+
+**Páginas base**
+
+- «Página base» — al añadir una página por su id, la API del Confluence
+  respondió 404: no se añade.
+- «Página base añadida» — con su título, su id y de dónde salió (índice, API
+  del sitio, del Confluence enlazado o por su id).
+- «Página base quitada» — la quitaste de la lista.
+- «Página base sin título» — se añadió por id como «Página N» porque no había
+  Confluence al que preguntar o la API no contestó (motivo al lado).
+- «Páginas base quitadas» — «Quitar las páginas»; el alcance se queda como
+  estaba.
+- «Alcance del análisis» — cambiaste el alcance: sólo estas, o estas como
+  mínimo.
+- «Búsqueda de páginas» — la búsqueda por título en la API falló, con el
+  motivo (sesión, login, la pestaña no contestó).
+- «Fuera del alcance» — con «sólo estas», el modelo consultó algo que no
+  estaba en la lista; el detalle dice qué.
+- «Páginas base sin leer» — este sitio no tiene el MCP conectado: el modelo no
+  pudo leerlas.
+
+**Navegación**
+
+- «Índice ampliado» — las salidas de las herramientas descubrieron páginas o
+  incidencias nuevas y el índice creció (+N · total).
+- «Árbol leído de la página» — tras la respuesta se leyó del DOM la parte
+  desplegada del árbol lateral: relaciones nuevas y filas leídas.
+- «Destino leído de la respuesta» — en Búsqueda, la línea «Destino: …» dio el
+  destino sin preguntar al modelo.
+- «Búsqueda de Jira como destino» — la tarjeta abre la búsqueda JQL real que
+  hizo el modelo, con cuántos resultados dio.
+- «Sin navegación» — no hay índice de este sitio, o no hay dónde ir (con la
+  razón).
+- «Camino leído de Confluence» — la cadena de padres del destino se leyó de
+  la API REST del sitio (ramas, versión de la API, milisegundos).
+- «Sin camino» — no se pudo leer (sin acceso a la pestaña, 401/403, login,
+  404): te lleva de golpe.
+- «Asistida bloqueada» — pulsaste «Paso a paso» sin permiso sobre el dominio
+  («falta permiso»); sale la tarjeta **Dar permiso**.
+- «Navegación lanzada» — el plan salió al service worker: modo, destino y
+  URL.
+- «Navegación fallida» — el service worker no aceptó el plan, o no contestó.
+- «Navegación detenida» — el recorrido acabó mal: «sin permiso de host», o el
+  error del paso.
+- «Navegación cancelada» — cancelaste el recorrido.
+- «Fragmento resaltado» — al llegar, el fragmento se subrayó; el detalle es la
+  estrategia con la que se encontró.
+- «Sin resaltar» — se llegó al destino pero el fragmento no se encontró, con
+  el motivo.
+- «Diagnóstico del árbol» — Ajustes → Diagnóstico del árbol leyó la barra
+  lateral; cada línea del informe va debajo como «debug» (fuera del filtro
+  «Solo problemas»).
+
+**Señalar en la página**
+
+- «Señalado en la página» — lo que subrayaste o la imagen que pulsaste llegó
+  al panel.
+- «Selección cancelada» — saliste del modo de señalar sin elegir nada.
+
+**Contexto**
+
+- «Contexto construido» — el indexado terminó: entradas del índice y
+  caracteres del documento de contexto.
+- «Indexado fallido» — el indexado falló, con el mensaje (cancelarlo no es un
+  fallo: se dice aparte).
+
 ---
 
 ## Problemas frecuentes
+
+**`npm run check` acaba en rojo por «docs»**
+Es el quinto paso, que compara los documentos con el código. «README.md: dice
+N pruebas unitarias y hay M» → pon M en README.md y en CLAUDE.md §2.
+«CLAUDE.md §10 (línea L): «x.test.js» dice N pruebas y registra M» → pon M en
+esa línea de §10. Un título del registro sin documentar → una línea en la
+lista de arriba. Un mensaje sin receptor o sin mención, o un fichero de `src/`
+fuera del mapa → CLAUDE.md §5 y §3; «nadie lo manda» es aviso, no error.
+`npm run check:docs` lo enseña entero con las líneas.
 
 **«opencode no responde»**
 El servidor no está arrancado, o el puerto de los ajustes no coincide. El panel

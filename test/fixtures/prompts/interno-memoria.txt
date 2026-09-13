@@ -1,0 +1,9 @@
+Resume esta sesión para que una conversación futura sepa por dónde ibas.
+
+Como mucho seis líneas. Incluye:
+- Qué buscaba el usuario.
+- Qué se encontró, con títulos o claves concretas.
+- Qué quedó a medias, si algo quedó.
+
+No copies contenido sensible de los tickets: nombres de personas, credenciales, cifras de negocio. Con el título y la clave basta.
+Escribe en español, en prosa seca, sin encabezados.

@@ -634,14 +634,6 @@ export const TREE_SCHEMA = {
   required: ['pages'],
 }
 
-/** Índice incremental: lo que se descubrió durante una conversación normal. */
-export function incrementalIndexPrompt() {
-  return [
-    'Antes de terminar: lista las páginas, incidencias, espacios o proyectos concretos que hayas consultado o mencionado en tu última respuesta.',
-    'Sólo los que conozcas de verdad, con su identificador y su ruta relativa. Si no has mencionado ninguno, devuelve listas vacías.',
-  ].join('\n')
-}
-
 /**
  * Planificador de navegación: el contrato está en nav/schema.js.
  * @param {{question:string, answer:string, digest:string, current?:string}} input

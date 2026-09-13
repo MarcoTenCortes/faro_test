@@ -78,3 +78,38 @@ test('si ya usas uno rapido, no lo toca', () => {
 test('sin modelo no inventa nada', () => {
   eq(pickPlannerModel(MODELS, null), null)
 })
+
+// ---------------------------------------------------------------------------
+// «¿Merece la pena ofrecer otro modelo?» (plan 2026-09-13, D6: puras sin test).
+//
+// La función vive en src/opencode/turn.js, junto a describeError, porque
+// decide sobre el error crudo del turno (`turn.rawError`); se prueba aquí
+// porque gobierna la elección de modelo del panel: `pickAlternativeModel`
+// sólo se ofrece cuando ésta dice que sí.
+// ---------------------------------------------------------------------------
+import { suggestsAnotherModel } from '../../src/opencode/turn.js'
+
+test('suggestsAnotherModel: credenciales caducadas y errores del proveedor → sí', () => {
+  eq(suggestsAnotherModel({ name: 'ProviderAuthError' }), true)
+  eq(suggestsAnotherModel({ type: 'ProviderAuthError' }), true, 'también con `type` en vez de `name`')
+  // El caso que motivó el módulo: el OAuth caducado llega como UnknownError con el motivo dentro.
+  eq(suggestsAnotherModel({ name: 'UnknownError', data: { message: 'Error: Token refresh failed: 401' } }), true)
+  eq(suggestsAnotherModel({ name: 'UnknownError', message: 'Unauthorized' }), true, 'el mensaje puede venir en `message` a secas')
+  eq(suggestsAnotherModel({ name: 'APIError', data: { message: 'Bad Request' } }), true, 'un APIError siempre es del proveedor')
+  eq(suggestsAnotherModel({ name: 'UnknownError', data: { message: 'upstream connect error 502' } }), true)
+  eq(suggestsAnotherModel({ name: 'UnknownError', data: { message: 'Rate limit exceeded' } }), true)
+  eq(suggestsAnotherModel({ name: 'UnknownError', data: { message: 'invalid_request_error' } }), true)
+})
+
+test('suggestsAnotherModel: lo que no es culpa del proveedor → no', () => {
+  eq(suggestsAnotherModel({ name: 'MessageAbortedError' }), false, 'cancelar no es un fallo')
+  eq(suggestsAnotherModel({ name: 'ContextOverflowError', data: { message: 'context too long' } }), false)
+  eq(suggestsAnotherModel({ name: 'MessageOutputLengthError' }), false)
+  // El formato es cosa del turno interno (planificador, pasadas), no del proveedor:
+  // ni siquiera con «bad request» en el mensaje.
+  eq(suggestsAnotherModel({ name: 'StructuredOutputError', data: { message: 'bad request' } }), false)
+  eq(suggestsAnotherModel({ name: 'UnknownError', data: { message: 'algo raro' } }), false)
+  eq(suggestsAnotherModel(null), false)
+  eq(suggestsAnotherModel(undefined), false)
+  eq(suggestsAnotherModel({}), false)
+})

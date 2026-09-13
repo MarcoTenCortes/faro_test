@@ -1,0 +1,6 @@
+Ahora vuelca lo que has visto como índice de navegación.
+
+Incluye TODAS las páginas, espacios, proyectos e incidencias que hayas encontrado, aunque no las hayas leído por dentro: el índice sirve para poder llevar al usuario allí.
+Para cada entrada da su identificador real (id numérico de página, clave de espacio, clave de incidencia) y su ruta dentro del sitio.
+Las rutas deben ser relativas (empezando por /), no direcciones completas.
+Si conoces la página padre de una página, ponla: sirve para enseñar el camino.

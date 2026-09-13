@@ -214,3 +214,107 @@ test('EL CAMBIO: en Data Center, /projects/KEY/issues/KEY-N sí da la incidencia
   eq(parseAtlassianUrl('https://jira.corp/projects/ENG/summary').issueKey, undefined)
   eq(parseAtlassianUrl('https://jira.corp/projects/ENG/summary').projectKey, 'ENG')
 })
+
+// ---------------------------------------------------------------------------
+// Las rutas canónicas del índice (plan 2026-09-13, D6: puras sin test).
+//
+// Son las funciones que deciden qué rutas entran en el índice (§6 «SÓLO
+// rutas», §8.3) y con qué prefijo se reconstruyen contra el origen de la
+// pestaña: un `/wiki` de más en un Data Center es un 404, que es justo lo que
+// pasó la primera vez que Faro intentó llevar a alguien a una página.
+// ---------------------------------------------------------------------------
+import { fixWikiPrefix, canonicalPagePath, canonicalSpacePath, isRealSpaceKey } from '../../src/atlassian/site.js'
+
+test('fixWikiPrefix: en Data Center se quita el /wiki que el modelo pone de memoria', () => {
+  eq(fixWikiPrefix('/wiki/spaces/ENG/pages/1/T', ''), '/spaces/ENG/pages/1/T')
+  eq(fixWikiPrefix('/wiki/display/ENG', ''), '/display/ENG')
+  eq(fixWikiPrefix('/wiki/pages/viewpage.action?pageId=1', ''), '/pages/viewpage.action?pageId=1')
+  eq(fixWikiPrefix('/wiki/label/adr', ''), '/label/adr')
+  // El prefijo se compara sin distinguir mayúsculas; el resto de la ruta se conserva tal cual.
+  eq(fixWikiPrefix('/WIKI/Spaces/ENG', ''), '/Spaces/ENG')
+  // Sin prefijo (null/undefined) es lo mismo que ''.
+  eq(fixWikiPrefix('/wiki/spaces/A', null), '/spaces/A')
+  eq(fixWikiPrefix('/wiki/spaces/A'), '/spaces/A')
+})
+
+test('fixWikiPrefix: en Cloud se pone el /wiki que falta, y no se duplica el que ya está', () => {
+  eq(fixWikiPrefix('/display/ENG', '/wiki'), '/wiki/display/ENG')
+  eq(fixWikiPrefix('/spaces/ENG', '/wiki'), '/wiki/spaces/ENG')
+  eq(fixWikiPrefix('/pages/viewpage.action?pageId=1', '/wiki'), '/wiki/pages/viewpage.action?pageId=1')
+  eq(fixWikiPrefix('/label/adr', '/wiki'), '/wiki/label/adr')
+  // Idempotente: lo que ya lleva el prefijo observado se queda igual.
+  eq(fixWikiPrefix('/wiki/spaces/ENG', '/wiki'), '/wiki/spaces/ENG')
+  eq(fixWikiPrefix(fixWikiPrefix('/spaces/ENG', '/wiki'), '/wiki'), '/wiki/spaces/ENG')
+  // `/spaces` a secas también es una ruta de Confluence (frontera `/`, `?` o fin).
+  eq(fixWikiPrefix('/spaces', '/wiki'), '/wiki/spaces')
+  eq(fixWikiPrefix('/spaces?key=ENG', '/wiki'), '/wiki/spaces?key=ENG')
+})
+
+test('fixWikiPrefix: lo que no es una ruta de Confluence se devuelve intacto', () => {
+  // Una incidencia de Jira no lleva prefijo de wiki, tenga o no `/wiki` delante.
+  eq(fixWikiPrefix('/browse/ENG-1', '/wiki'), '/browse/ENG-1')
+  eq(fixWikiPrefix('/wiki/browse/ENG-1', ''), '/wiki/browse/ENG-1')
+  // La API REST no es contenido: tampoco se toca.
+  eq(fixWikiPrefix('/wiki/rest/api/content/1', ''), '/wiki/rest/api/content/1')
+  eq(fixWikiPrefix('/rest/api/content/1', '/wiki'), '/rest/api/content/1')
+  // `/wikipedia` no es `/wiki/`, y `/spacesX` no es `/spaces`.
+  eq(fixWikiPrefix('/wikipedia/spaces/A', ''), '/wikipedia/spaces/A')
+  eq(fixWikiPrefix('/spacesX/A', '/wiki'), '/spacesX/A')
+  // Rutas relativas, vacías o que no son texto: se devuelven como llegaron.
+  eq(fixWikiPrefix('spaces/ENG', '/wiki'), 'spaces/ENG')
+  eq(fixWikiPrefix('', '/wiki'), '')
+  eq(fixWikiPrefix(null, '/wiki'), null)
+  eq(fixWikiPrefix(undefined, '/wiki'), undefined)
+  eq(fixWikiPrefix(123, '/wiki'), 123)
+  eq(fixWikiPrefix('https://acme.atlassian.net/spaces/ENG', '/wiki'), 'https://acme.atlassian.net/spaces/ENG', 'una URL absoluta no empieza por /')
+})
+
+test('canonicalPagePath: viewpage.action?pageId= con el prefijo del sitio', () => {
+  eq(canonicalPagePath({ cloud: true }, '123'), '/wiki/pages/viewpage.action?pageId=123')
+  eq(canonicalPagePath({ cloud: false }, '123'), '/pages/viewpage.action?pageId=123')
+  // El prefijo OBSERVADO manda sobre lo que diga `cloud`: hay Cloud con dominio
+  // propio y Data Center bajo /wiki.
+  eq(canonicalPagePath({ cloud: true, wikiPrefix: '' }, '123'), '/pages/viewpage.action?pageId=123')
+  eq(canonicalPagePath({ cloud: false, wikiPrefix: '/wiki' }, '123'), '/wiki/pages/viewpage.action?pageId=123')
+  // Sin sitio, sin prefijo.
+  eq(canonicalPagePath(null, '7'), '/pages/viewpage.action?pageId=7')
+  eq(canonicalPagePath(undefined, 7), '/pages/viewpage.action?pageId=7', 'un id numérico se convierte a texto')
+})
+
+test('SEGURIDAD: canonicalPagePath codifica el id, que viene del modelo o del índice', () => {
+  eq(canonicalPagePath({ cloud: true }, '12 3'), '/wiki/pages/viewpage.action?pageId=12%203')
+  // Un «id» con `&` no puede colar un segundo parámetro en la URL.
+  eq(canonicalPagePath({ cloud: false }, '1&spaceKey=X'), '/pages/viewpage.action?pageId=1%26spaceKey%3DX')
+  eq(canonicalPagePath({ cloud: false }, '1#frag'), '/pages/viewpage.action?pageId=1%23frag')
+  eq(canonicalPagePath({ cloud: false }, '../x'), '/pages/viewpage.action?pageId=..%2Fx')
+})
+
+test('canonicalSpacePath: /spaces/CLAVE con el prefijo del sitio y la clave codificada', () => {
+  eq(canonicalSpacePath({ cloud: true }, 'ENG'), '/wiki/spaces/ENG')
+  eq(canonicalSpacePath({ cloud: false }, 'ENG'), '/spaces/ENG')
+  eq(canonicalSpacePath({ cloud: true, wikiPrefix: '' }, 'ENG'), '/spaces/ENG')
+  eq(canonicalSpacePath(null, 'ENG'), '/spaces/ENG')
+  // Un espacio personal conserva la virgulilla (no es un carácter reservado).
+  eq(canonicalSpacePath({ cloud: false }, '~ana'), '/spaces/~ana')
+  // SEGURIDAD: una clave rara no puede añadir segmentos ni parámetros.
+  eq(canonicalSpacePath({ cloud: false }, 'A/B'), '/spaces/A%2FB')
+  eq(canonicalSpacePath({ cloud: false }, 'a b'), '/spaces/a%20b')
+  eq(canonicalSpacePath({ cloud: false }, 'X?y=1'), '/spaces/X%3Fy%3D1')
+})
+
+test('isRealSpaceKey: «~» y «_» a secas no son espacios; «~ana» sí', () => {
+  eq(isRealSpaceKey('ENG'), true)
+  eq(isRealSpaceKey('~ana'), true)
+  eq(isRealSpaceKey('~'), false, 'el prefijo de los espacios personales no es un espacio')
+  eq(isRealSpaceKey('_'), false)
+  // Se recorta antes de mirar: los espacios en blanco alrededor no lo salvan.
+  eq(isRealSpaceKey(' ~ '), false)
+  eq(isRealSpaceKey('  '), false)
+  eq(isRealSpaceKey(' ENG '), true)
+  // Vacío o sin valor: no.
+  eq(isRealSpaceKey(''), false)
+  eq(isRealSpaceKey(null), false)
+  eq(isRealSpaceKey(undefined), false)
+  eq(isRealSpaceKey(0), false, 'el 0 se convierte a cadena vacía')
+  eq(isRealSpaceKey(12), true, 'un número se convierte a texto')
+})

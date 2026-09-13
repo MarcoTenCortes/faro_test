@@ -1,7 +1,15 @@
-/** Validación del manifest: lo que Chrome rechazaría al cargar la extensión. */
+/**
+ * Validación del manifest: lo que Chrome rechazaría al cargar la extensión.
+ *
+ * El id se compara con el EXTENSION_ID de verdad (importado de config.js, que
+ * no toca el navegador al cargarse), no con una regex sobre su fuente: así el
+ * único importador de esa constante fuera de config.js es real y
+ * dead-exports.test.js no la toma por deuda.
+ */
 import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
+import { EXTENSION_ID } from '../src/shared/config.js'
 
 export function idFromKey(keyB64) {
   const der = Buffer.from(keyB64, 'base64')
@@ -66,11 +74,9 @@ export function checkManifest(root) {
 
   // El id calculado tiene que coincidir con el que usa el código.
   if (id) {
-    const cfg = readFileSync(join(root, 'src/shared/config.js'), 'utf8')
-    const match = cfg.match(/EXTENSION_ID = '([a-p]{32})'/)
-    if (!match) errors.push('no encuentro EXTENSION_ID en src/shared/config.js')
-    else if (match[1] !== id) {
-      errors.push(`EXTENSION_ID (${match[1]}) no coincide con el id derivado de la key (${id})`)
+    if (!/^[a-p]{32}$/.test(EXTENSION_ID)) errors.push('EXTENSION_ID de src/shared/config.js no tiene forma de id de extensión')
+    else if (EXTENSION_ID !== id) {
+      errors.push(`EXTENSION_ID (${EXTENSION_ID}) no coincide con el id derivado de la key (${id})`)
     }
   }
 
