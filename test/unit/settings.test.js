@@ -6,7 +6,13 @@
  * cambiarle a nadie lo que había elegido.
  */
 import { test, eq, assert } from '../harness.js'
-import { migrateSettings, DEFAULT_SETTINGS, NAV_MODES } from '../../src/shared/config.js'
+import { migrateSettings, DEFAULT_SETTINGS, NAV_MODES, SAFE_PERMISSIONS as DESDE_CONFIG } from '../../src/shared/config.js'
+import { SAFE_PERMISSIONS } from '../../src/shared/permissions.js'
+
+test('config.js reexporta SAFE_PERMISSIONS de permissions.js: quien lo importaba de aquí recibe la misma lista', () => {
+  assert(DESDE_CONFIG === SAFE_PERMISSIONS, 'la misma referencia, no una copia')
+  eq(DESDE_CONFIG[0], { permission: '*', pattern: '**', action: 'deny' })
+})
 
 test('por defecto se navega en modo guiado, y la casilla vieja ya no existe', () => {
   eq(DEFAULT_SETTINGS.navMode, 'guided')

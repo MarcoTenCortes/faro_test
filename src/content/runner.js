@@ -43,6 +43,7 @@ export class NavRunner {
     this.timing = options.timing || {}
     this.origin = location.origin
     this.cancelled = false
+    this.cancelReason = ''
     this.stillMotion = false
     this._resolveWait = null
   }
@@ -64,7 +65,12 @@ export class NavRunner {
 
   cancel(reason = 'user') {
     this.cancelled = true
+    this.cancelReason = reason
     this._settle({ status: STEP_RESULT.CANCELLED, reason })
+    // Limpiar el overlay es también soltar el manejador de Escape: es el
+    // overlay quien pone `onCancel = null` al limpiar (contrato de M2, abajo
+    // en `executeStep`). Aquí no se toca: dos sitios decidiendo lo mismo
+    // vuelven a desincronizarse.
     this.overlay.clearAll()
   }
 
@@ -97,7 +103,18 @@ export class NavRunner {
    */
   async executeStep({ step, index, total, isLast }) {
     this.cancelled = false
+    this.cancelReason = ''
     this.overlay.mount()
+    // Escape cancela ESTE paso mientras dura. El manejador se instala aquí, al
+    // empezar, y NUNCA se vuelve a instalar tras limpiar: soltarlo es cosa del
+    // overlay, que pone `onCancel = null` en clearAll() y clearNotes() (no en
+    // hideCard(): con el cartel escondido el barrido sigue con el foco puesto
+    // y tiene que poder cancelarse), y que sólo intercepta la tecla mientras
+    // tiene algo EN MARCHA —foco, cartel, barra de selección, seguimiento— o
+    // mientras el único subrayado es el de una llegada por cita; las marcas
+    // numeradas de un análisis no cuentan. Antes nadie lo soltaba y, desde la
+    // primera marca, ningún Escape llegaba ya a los diálogos de Jira ni de
+    // Confluence (auditoría del 2026-09-13, docs/PLAN.md §2 M2).
     this.overlay.onCancel = () => this.cancel('escape')
 
     if (isEditing()) {
@@ -125,6 +142,10 @@ export class NavRunner {
       if (desplegando) return { status: STEP_RESULT.SKIPPED, reason: 'esa rama no está en el árbol' }
 
       const expanded = await this._tryExpandTowards(step)
+      // Escape a mitad del barrido: el paso acaba cancelado. Sin esto se
+      // ofrecía «Llévame» justo después de que el usuario dijera que no, y a
+      // los 12 s de la tarjeta navegaba solo.
+      if (this.cancelled) return { status: STEP_RESULT.CANCELLED, reason: this.cancelReason || 'user' }
       if (expanded) {
         const retry = await waitFor(() => locateStep(step, document), { timeout: 1200 })
         if (retry) return this._presentAndClick(retry, { step, index, total, isLast })
@@ -142,6 +163,13 @@ export class NavRunner {
    * Es lo que de verdad significa «guiar por el árbol»: no abrir ocho páginas
    * seguidas, sino ir desplegando las ramas de la izquierda hasta dejar el
    * destino a la vista. Sólo el último paso navega.
+   *
+   * Cada espera de aquí puede acabar en un Escape, y entonces el paso tiene que
+   * volver CANCELLED: mientras se abría la rama o duraba el destello, Escape se
+   * tragaba (el overlay hace `stopPropagation`) pero el paso seguía devolviendo
+   * EXPANDED, así que el service worker lanzaba el siguiente y el recorrido
+   * continuaba después de que el usuario dijera que no (revisión adversaria de
+   * H2, 2026-09-14).
    */
   async _expandStep(found, { step, index, total, isLast }) {
     const fila = clickableAncestor(found.element)
@@ -150,6 +178,7 @@ export class NavRunner {
     // Sin control de desplegar no hay rama que abrir: se resalta y se sigue.
     if (!toggle) {
       await this._flash(fila, { step, index, total, texto: 'Esta rama ya está a la vista.' })
+      if (this.cancelled) return { status: STEP_RESULT.CANCELLED, reason: this.cancelReason || 'user' }
       return { status: STEP_RESULT.EXPANDED, note: 'sin control de desplegar' }
     }
 
@@ -157,6 +186,7 @@ export class NavRunner {
       // Corta a propósito: con siete niveles, siete carteles de un segundo son
       // medio minuto mirando cómo Faro confirma lo que ya estaba hecho.
       await this._flash(toggle.row || toggle.toggle, { step, index, total, breve: true })
+      if (this.cancelled) return { status: STEP_RESULT.CANCELLED, reason: this.cancelReason || 'user' }
       return { status: STEP_RESULT.EXPANDED, note: 'ya estaba abierta' }
     }
 
@@ -193,6 +223,9 @@ export class NavRunner {
 
     this.overlay.hideCard()
     const abierto = await this._abrirRama(toggle)
+    // Escape mientras se abría la rama: el paso acaba cancelado. Sin esto
+    // volvía EXPANDED y el service worker seguía con el paso siguiente.
+    if (this.cancelled) return { status: STEP_RESULT.CANCELLED, reason: this.cancelReason || 'user' }
     this.overlay.hideSpot()
 
     return abierto
@@ -272,10 +305,18 @@ export class NavRunner {
    *
    * En modo `breve` sólo destella, sin cartel: un recorrido de siete niveles ya
    * abiertos no puede costar siete segundos de carteles que no dicen nada.
+   *
+   * Tras un Escape no se pinta nada: cancelar apaga el overlay y suelta su
+   * manejador (`clearAll`), así que volver a encender aquí el foco y el cartel
+   * los dejaba puestos y ya sin forma de quitarlos (revisión adversaria de H2,
+   * 2026-09-14). Se mira antes de pintar y otra vez tras el desplazamiento, que
+   * es donde se va el tiempo.
    */
   async _flash(el, { step, index, total, texto, breve = false }) {
     if (!el) return
+    if (this.cancelled) return
     await this._traerALaVista(el)
+    if (this.cancelled) return
     const rect = el.getBoundingClientRect()
     this.overlay.spotlight(rect, { padding: 6, breathe: false })
 
@@ -333,6 +374,13 @@ export class NavRunner {
 
       let pulsadosEstaRonda = 0
       for (const btn of candidatos.slice(0, 8)) {
+        // Cancelar tiene que notarse DENTRO de la ronda: son hasta ocho clics,
+        // y el bucle de fuera sólo miraba entre ronda y ronda. Tras el Escape,
+        // `cancel()` ya apagó el overlay y soltó su manejador, así que seguir
+        // aquí volvía a encender el foco sin nada que pudiera apagarlo, y
+        // seguía desplegando ramas que el usuario ya no quería (revisión
+        // adversaria de H2, 2026-09-14).
+        if (this.cancelled) return false
         if (clicks >= maxClicks || Date.now() - t0 > budgetMs) break
         if (!isSafeToClick(btn, this.origin).ok) continue
 
@@ -488,9 +536,16 @@ export class NavRunner {
    */
   async applyAnchor({ anchor, explanation, title }) {
     this.overlay.mount()
-    this.overlay.onCancel = () => {
-      this.overlay.clearAll()
-    }
+    // Escape quita lo que deja una llegada, sea el foco (la página entera o el
+    // elemento al que se llega sin cita) o el subrayado de la cita, y el
+    // overlay suelta el manejador (clearAll pone `onCancel = null`). El
+    // subrayado de una llegada no lleva números y el panel no guarda estado de
+    // él —sólo registra «Fragmento resaltado»—, así que borrarlo con la tecla
+    // no desincroniza a nadie; es más, es el único control que hay, porque en
+    // el camino de la cita el foco se apaga antes de subrayar y sin esto el
+    // subrayado se quedaba hasta la siguiente orden (revisión adversaria de H2,
+    // 2026-09-14; lo decide `interceptsEscape()` del overlay).
+    this.overlay.onCancel = () => this.overlay.clearAll()
 
     if (isEditing()) {
       this.overlay.toast('Estás en el editor: no resalto nada para no interferir.')
@@ -565,7 +620,11 @@ export class NavRunner {
    */
   async applyNotes({ notes }) {
     this.overlay.mount()
-    this.overlay.onCancel = () => this.overlay.clearAll()
+    // Aquí NO se instala manejador de Escape: con la tecla, las marcas se
+    // borraban sin que el panel se enterase (seguía con `state.notes` y
+    // contestaba «esa marca ya no está» al pulsar cada una). Se quitan desde
+    // el panel, con «Quitar las marcas» (MSG.CLEAR_NOTES); y el clearNotes()
+    // de más abajo suelta el manejador que hubiera dejado un anclaje anterior.
 
     const todas = (notes || []).map((x) => x.n)
 
@@ -585,10 +644,7 @@ export class NavRunner {
     const detail = []
     for (const nota of notes || []) {
       const resolved = resolveNote(nota, digest)
-      // Un Range sin cajas no se ve: marcarlo sería decir que la observación
-      // está en la página cuando no hay nada que mirar. Pasa con el texto que
-      // AUI esconde para lectores y con las pestañas de campos ocultas.
-      if (!resolved?.ok || !resolved.ranges?.length || !rangeRect(resolved.ranges[0])) {
+      if (!visibleResolution(resolved)) {
         missed.push(nota.n)
         detail.push({ n: nota.n, strategy: 'none' })
         continue
@@ -621,7 +677,10 @@ export class NavRunner {
     // observación contra la página de ahora; si tampoco así, se dice.
     if (nota.anchor && !rangeAlive(nota.ranges[0])) {
       const resolved = resolveNote(nota, pageDigest())
-      if (!resolved?.ok || !resolved.ranges?.length) {
+      // La MISMA guardia que al poner las marcas: aceptar aquí cualquier Range
+      // contestaba `ok` con la cita caída en una pestaña oculta, sin marca ni
+      // desplazamiento, y el panel encendía la fila (M8).
+      if (!visibleResolution(resolved)) {
         return { ok: false, reason: 'esa marca ya no está en la página' }
       }
       nota.ranges = resolved.ranges
@@ -662,6 +721,22 @@ function resolveNote(nota, digest) {
     if (scope.chrome) return resolveScopedQuote(nota.anchor, { scope }) || { ok: false, strategy: 'none' }
   }
   return resolveAnchor(nota.anchor)
+}
+
+/**
+ * ¿Esta resolución se puede marcar? Tiene que haber salido bien, traer algún
+ * Range y que el primero tenga caja: un Range sin cajas no se ve (el texto que
+ * AUI esconde para lectores, una pestaña de campos oculta), y marcarlo sería
+ * decir que la observación está en la página cuando no hay nada que mirar.
+ *
+ * Es UNA guardia para los dos sitios que adoptan un Range: poner las marcas
+ * (`applyNotes`) y volver a una cuyo Range murió (`focusNote`). La segunda
+ * aceptaba cualquier Range y devolvía `ok` sin nada que enseñar (auditoría
+ * del 2026-09-13, docs/PLAN.md §2 M8). Pura salvo por `getClientRects()`, que
+ * un Range de mentira puede dar: se prueba en Node.
+ */
+export function visibleResolution(resolved) {
+  return !!resolved?.ok && !!resolved.ranges?.length && !!rangeRect(resolved.ranges[0])
 }
 
 /** ¿Este Range sigue apuntando a nodos del documento, y se ve? */
@@ -708,6 +783,14 @@ async function scrollToRange(range, { extra = 110, behavior = 'smooth' } = {}) {
  * que ya estás como texto en negrita, sin enlace. Si no reconocemos que ya
  * hemos llegado, el ejecutor busca un enlace que no existe y anuncia que «no
  * encuentra el paso» estando justo encima.
+ *
+ * Y el id casa con FRONTERA detrás: `/pages/1234` está dentro de
+ * `/pages/12345`, `/browse/ENG-7` dentro de `/browse/ENG-70` y `/projects/ENG`
+ * dentro de `/projects/ENGINE`, y darse por llegado ahí dejaba el último paso
+ * sin pulsar y el ancla buscándose en la página equivocada (auditoría del
+ * 2026-09-13, docs/PLAN.md §2 M3). Es la misma cautela que `hrefDescriptors`
+ * tiene con los enlaces. El id viene del plan ya validado, pero se escapa
+ * igual: aquí no se confía.
  */
 export function isAlreadyHere(step, loc = typeof location !== 'undefined' ? location : null) {
   if (!loc) return false
@@ -717,13 +800,22 @@ export function isAlreadyHere(step, loc = typeof location !== 'undefined' ? loca
 
   const id = String(step?.id ?? '')
   if (!id) return false
-  if (step.kind === 'confluence-page') {
-    return here.includes(`/pages/${id}`) || here.includes(`pageId=${id}`)
-  }
-  if (step.kind === 'jira-issue') return here.includes(`/browse/${id}`) || here.includes(`selectedIssue=${id}`)
-  if (step.kind === 'confluence-space') return here.includes(`/spaces/${id}/`) && !here.includes('/pages/')
-  if (step.kind === 'jira-project') return here.includes(`/projects/${id}`)
+  const ID = escapeRe(id)
+  // Un segmento de la ruta: detrás sólo puede venir «/», «?», «#» o el final.
+  const segment = (prefix) => new RegExp(prefix + ID + '(?=[/?#]|$)')
+  // Un parámetro de la query: detrás sólo «&», «#» o el final.
+  const param = (name) => new RegExp('[?&]' + name + '=' + ID + '(?=[&#]|$)')
+
+  if (step.kind === 'confluence-page') return segment('/pages/').test(here) || param('pageId').test(here)
+  if (step.kind === 'jira-issue') return segment('/browse/').test(here) || param('selectedIssue').test(here)
+  if (step.kind === 'confluence-space') return segment('/spaces/').test(here) && !here.includes('/pages/')
+  if (step.kind === 'jira-project') return segment('/projects/').test(here)
   return false
+}
+
+/** Escapa un texto para meterlo tal cual en una expresión regular. */
+function escapeRe(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 /**

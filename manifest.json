@@ -56,11 +56,14 @@
       "resources": [
         "src/content/*.js",
         "src/content/overlay/*.js",
-        "src/shared/*.js"
+        "src/shared/*.js",
+        "src/atlassian/*.js",
+        "src/nav/*.js"
       ],
       "matches": [
         "https://*/*"
-      ]
+      ],
+      "use_dynamic_url": true
     }
   ],
   "commands": {

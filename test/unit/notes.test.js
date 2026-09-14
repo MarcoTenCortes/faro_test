@@ -795,3 +795,94 @@ test('collectSegmentedNotes pide con SEGMENT_SCHEMA, sin herramientas, y devuelv
   assert(/TU RESPUESTA \(sin numerar\)/.test(segmentPrompt({ answer: 'x', digestText: 'y' })))
   assert(/No renumeres/.test(notesSystem()) && !/No renumeres/.test(segmentSystem()), 'la que trocea sí numera; la de siempre no')
 })
+
+// --- H2: lo que la auditoría del 2026-09-13 reprodujo (docs/PLAN.md §2: M5, M6, M7)
+
+test('una sola viñeta no es una observación: la respuesta corta que explica un fallo se queda como está', () => {
+  // M5. «No he podido leer la incidencia:\n- El MCP devolvió 401.» se
+  // convertía en «[1] El MCP devolvió 401.», pasaba por análisis nuevo,
+  // se saltaba «Marcas conservadas» y gastaba una segunda pasada.
+  const fallo = 'No he podido leer la incidencia:\n- El MCP devolvió 401.'
+  eq(normalizeNumbering(fallo), { prose: fallo, numbers: [], style: '' })
+  eq(normalizeNumbering('- a').style, '', 'una viñeta suelta, tampoco')
+  eq(normalizeNumbering('- a\n- b').style, 'bullets', 'dos viñetas siguen valiendo')
+  eq(normalizeNumbering('- a\n- b').prose, '[1] a\n\n[2] b')
+  // Con `shortAnswer`, una respuesta más corta que eso no adapta los estilos
+  // débiles (viñetas, «(1)», «#1», «1 —», letras)…
+  const dosVinetas = 'No he podido leer la incidencia:\n- El MCP devolvió 401.\n- Y el token caducó.'
+  const corta = { shortAnswer: NOTE_LIMITS.shortAnswer }
+  eq(normalizeNumbering(dosVinetas, corta), { prose: dosVinetas, numbers: [], style: '' })
+  eq(normalizeNumbering(dosVinetas).style, 'bullets', 'sin el tope, como antes')
+  eq(normalizeNumbering('(1) uno\n(2) dos', corta).style, '')
+  eq(normalizeNumbering('#1 uno\n#2: dos', corta).style, '')
+  eq(normalizeNumbering('1 — uno\n2 - dos', corta).style, '')
+  eq(normalizeNumbering('a) uno\nb) dos', corta).style, '')
+  // …los explícitos sí: el falso positivo asumido de los pasos «1. 2.» sigue igual.
+  eq(normalizeNumbering('Para reproducirlo:\n1. Abre la incidencia.\n2. Pulsa Editar.', corta).numbers, [1, 2])
+  eq(normalizeNumbering('1. La única cosa que decir.', corta).numbers, [1])
+  eq(normalizeNumbering('**1. Sin entorno**: nada.\n**2. Sin datos:** nada.', corta).style, 'bold-title')
+  eq(normalizeNumbering('### 1. Uno\n### 2. Dos', corta).style, 'heading')
+  eq(normalizeNumbering('**Observación 1**: a.\n**Observación 2:** b.', corta).style, 'labeled')
+  eq(normalizeNumbering('[1.] uno\n[ 2 ] dos', corta).style, 'bracket')
+  // …y una respuesta larga con viñetas, también.
+  const larga = 'Intro. ' + 'x'.repeat(NOTE_LIMITS.shortAnswer) + '\n- Falta el entorno.\n- Sin criterios.'
+  eq(normalizeNumbering(larga, corta).style, 'bullets')
+  // Si el JSON de anclas numera desde 1 y las viñetas cuentan lo mismo, el modelo ya dijo que son observaciones.
+  eq(normalizeNumbering(dosVinetas, { ...corta, expected: 2 }).style, 'bullets')
+  eq(normalizeNumbering(dosVinetas, { ...corta, expected: 3 }).style, '', 'y si no cuentan lo mismo, no')
+  // La prosa que ya lleva «[n]» no se toca en ningún caso.
+  eq(normalizeNumbering('[1] a', corta).style, 'brackets')
+})
+
+test('una entrada rara del JSON no tira el bloque de anclas ni deja el JSON en el chat', () => {
+  // M6. Un «n: 1.5» tiraba el bloque ENTERO: el JSON se veía en el chat como
+  // código y se lanzaba una segunda pasada aunque la otra entrada fuera perfecta.
+  const bloque = '{"notes":[{"n":1.5,"block":1,"quote":""},{"n":"2","block":2}]}'
+  const r = splitAnchorsBlock(PROSA + '\n\n```json\n' + bloque + '\n```')
+  assert(!r.prose.includes('```'), 'el JSON no se ve en el chat')
+  eq(r.prose, PROSA)
+  eq(numbersInAnchors(r.anchors), [2])
+  eq(validateNotes(r.anchors, { blocks: BLOQUES }).map((x) => x.n), [2], 'validateNotes descarta la rara y se queda con la buena')
+  eq(numbersInAnchors(splitAnchorsBlock(PROSA + '\n\n```json\n{"notes":[{"n":"1a","block":1},{"n":2,"block":2}]}\n```').anchors), [2])
+  eq(numbersInAnchors(splitAnchorsBlock(PROSA + '\n\n```json\n{"notes":[{"n":null,"block":1},{"n":1,"block":2}]}\n```').anchors), [1])
+  // Sin valla, igual.
+  eq(numbersInAnchors(splitAnchorsBlock(PROSA + '\n\n' + bloque).anchors), [2])
+  // Pero una lista «notes» donde NINGUNA entrada tiene número sigue siendo contenido.
+  eq(splitAnchorsBlock(PROSA + '\n```json\n{"notes": [{"n": 1.5, "block": 1}]}\n```').anchors, null)
+  eq(splitAnchorsBlock(PROSA + '\n```json\n{"notes": [{"id": 17, "text": "hola"}]}\n```').anchors, null)
+  eq(splitAnchorsBlock(PROSA + '\n```json\n{"notes": []}\n```').anchors.notes, [], 'vacío sigue siendo un bloque de anclas')
+})
+
+test('SEGURIDAD: n: true no es la observación 1', () => {
+  // M6. `Number(true)` es 1: un «n: true» pasaba la barrera y acababa anclado
+  // al bloque que dijera, aunque el [1] de la prosa hablara de otro sitio.
+  eq(validateNotes({ notes: [{ n: true, block: 1 }] }, { blocks: BLOQUES }), [])
+  eq(validateNotes({ notes: [{ n: [1], block: 1 }, { n: {}, block: 1 }, { n: '', block: 1 }, { n: ' 1', block: 1 }] }, { blocks: BLOQUES }), [])
+  eq(validateNotes({ notes: [{ n: '1', block: 1 }] }, { blocks: BLOQUES }).map((x) => x.n), [1], 'una cadena de dígitos sí')
+  eq(numbersInAnchors({ notes: [{ n: true }, { n: [1] }, { n: {} }, { n: '' }] }), [])
+  eq(surplusNumbers({ notes: [{ n: true }] }, [2]), [])
+  eq(expectedCount({ notes: [{ n: true }, { n: 2 }] }), 0, 'true no es el 1 que hace que el JSON empiece en 1')
+  // Con «n: true» y un 2 de verdad, el bloque vale y sólo cuenta el 2.
+  const r = splitAnchorsBlock('[1] A.\n\n[2] B.\n\n```json\n{"notes":[{"n":true,"block":1},{"n":2,"block":2}]}\n```')
+  eq(numbersInAnchors(r.anchors), [2])
+  eq(validateNotes(r.anchors, { blocks: BLOQUES }).map((x) => x.n), [2])
+  // La pasada que trocea tampoco se traga un «n: true».
+  eq(insertMarks('Primera cosa.', [{ n: true, opening: 'Primera cosa' }]).inserted, [])
+})
+
+test('titleFromProse ignora un [n] dentro de código en línea o de un enlace', () => {
+  // M7. La primera aparición de «[1]» podía ser un `arr[1]` o un enlace
+  // «[1](https://…)», y la fila de la tarjeta salía con la frase de esa línea.
+  eq(titleFromProse('Mira `arr[1]`.\n\n[1] La descripción exige un 404.', 1), 'La descripción exige un 404.')
+  const dos = 'Mira `items[1]` y `data[2]`.\n\n[1] La descripción exige un 404.\n\n[2] Otra cosa.'
+  eq(titleFromProse(dos, 1), 'La descripción exige un 404.')
+  eq(titleFromProse(dos, 2), 'Otra cosa.')
+  eq(titleFromProse('Ver [1](https://x.y/z) el doc.\n\n[1] Frase real.', 1), 'Frase real.')
+  eq(titleFromProse('```\nx = list[1]\n```\n\n[1] De verdad.', 1), 'De verdad.')
+  eq(titleFromProse('~~~\nx = list[1]\n~~~\n\n[1] De verdad.', 1), 'De verdad.')
+  eq(titleFromProse('Sólo `arr[1]` en código.', 1), 'Observación 1', 'si sólo está en código, no hay marca')
+  // El estilo cita sigue leyendo la frase del original, con su código en línea.
+  eq(titleFromProse('El campo `due_date` va vacío [1]. Otra cosa [2].', 1), 'El campo due_date va vacío')
+  // Y los offsets no se mueven: la marca de verdad se lee del original.
+  eq(titleFromProse('Ver `a[1]`, `b[1]` y [1](u) aquí.\n[1] **La caducidad** no se justifica.', 1), 'La caducidad no se justifica.')
+})

@@ -280,11 +280,11 @@ test('§10 de CLAUDE.md no contradice al código', () => {
   )
 })
 
-test('el selfcheck del banco numera 1..38 sin huecos', () => {
+test('el selfcheck del banco numera 1..40 sin huecos', () => {
   const tramos = tramosDelSelfcheck(leer('harness/harness.js'))
   const enteros = tramos.map((t) => t.n).filter((n) => /^\d+$/.test(n)).map(Number)
   const max = Math.max(0, ...enteros)
-  assert(max >= 38, `llega al menos al 38 (llega al ${max})`)
+  assert(max >= 40, `llega al menos al 40 (llega al ${max}; el 39 y el 40 son de H2: digest sin scroll interno y Escape)`)
   const huecos = []
   const repetidos = []
   for (let i = 1; i <= max; i++) {

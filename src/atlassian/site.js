@@ -27,6 +27,14 @@ export function parseAtlassianUrl(url) {
   // ---- Confluence -------------------------------------------------------
   // Cloud:  /wiki/spaces/ENG/pages/123456/Titulo
   // DC:     /display/ENG/Titulo   |   /spaces/ENG/pages/123456
+  //
+  // La clave del espacio entra en la segunda línea del prompt del sistema,
+  // antes de las reglas de seguridad, como palabra de Faro: sólo vale con la
+  // forma de una clave (`validSpaceKey`), igual que `issueKey`/`projectKey`.
+  // Y se decodifica con `safeDecode`: un «%» mal codificado —el modelo copia
+  // mal una URL, el usuario la pega, la pestaña la lleva— lanzaba `URIError`
+  // y tumbaba el turno entero (auditoría del 2026-09-13, docs/PLAN.md §2, S2
+  // y R2).
   const conf =
     path.match(/\/wiki\/spaces\/([^/]+)(?:\/pages\/(\d+))?/i) ||
     path.match(/^\/spaces\/([^/]+)(?:\/pages\/(\d+))?/i)
@@ -36,7 +44,8 @@ export function parseAtlassianUrl(url) {
     // propio (sin .atlassian.net) y Data Center en la raiz. Lo unico fiable es
     // la URL que el usuario tiene delante.
     out.wikiPrefix = /^\/wiki\//i.test(path) ? '/wiki' : ''
-    out.spaceKey = decodeURIComponent(conf[1])
+    const espacio = validSpaceKey(safeDecode(conf[1]))
+    if (espacio) out.spaceKey = espacio
     if (conf[2]) out.pageId = conf[2]
     return out
   }
@@ -44,7 +53,8 @@ export function parseAtlassianUrl(url) {
   if (display) {
     out.product = 'confluence'
     out.wikiPrefix = ''
-    out.spaceKey = decodeURIComponent(display[1])
+    const espacio = validSpaceKey(safeDecode(display[1]))
+    if (espacio) out.spaceKey = espacio
     return out
   }
   // `/wiki` a secas es demasiado genérico para reclamarlo en cualquier dominio:
@@ -60,7 +70,7 @@ export function parseAtlassianUrl(url) {
     // motivo claro. La rama de Data Center ya lo exigía.
     const qsPage = u.searchParams.get('pageId')
     if (qsPage && /^\d+$/.test(qsPage)) out.pageId = qsPage
-    const qsSpace = u.searchParams.get('spaceKey')
+    const qsSpace = validSpaceKey(u.searchParams.get('spaceKey'))
     if (qsSpace) out.spaceKey = qsSpace
     return out
   }
@@ -128,7 +138,7 @@ export function parseAtlassianUrl(url) {
     if (byPath) out.pageId = byPath[1]
     const qsPage = u.searchParams.get('pageId')
     if (qsPage && /^\d+$/.test(qsPage)) out.pageId = qsPage
-    const qsSpace = u.searchParams.get('spaceKey')
+    const qsSpace = validSpaceKey(u.searchParams.get('spaceKey'))
     if (qsSpace) out.spaceKey = qsSpace
     return out
   }
@@ -159,6 +169,23 @@ export function validProjectKey(value) {
   return /^[A-Z][A-Z0-9_]{0,19}$/.test(k) ? k : ''
 }
 
+/**
+ * Una clave de espacio con forma de clave («ENG», «~ana»), tal cual, o ''. Pura.
+ *
+ * Confluence sólo admite letras, cifras y unos pocos signos, y los espacios
+ * personales llevan «~» delante. Todo lo demás —un salto de línea, un espacio,
+ * un «%» suelto, trescientos caracteres— no es una clave: sale de la URL de la
+ * pestaña, que puede haber puesto un enlace de una página o de un correo, y
+ * acaba en la cabecera del prompt del sistema como palabra de Faro (auditoría
+ * del 2026-09-13, docs/PLAN.md §2, S2). Complementa a `isRealSpaceKey`, que
+ * sólo descarta «~» y «_» a secas: aquí se exige además la forma.
+ */
+export function validSpaceKey(value) {
+  const k = String(value || '').trim()
+  return /^~?[A-Za-z0-9_.@:-]{1,255}$/.test(k) && isRealSpaceKey(k) ? k : ''
+}
+
+/** Decodifica lo que puede: un «%» mal codificado devuelve el texto tal cual, nunca lanza. Pura. */
 function safeDecode(s) {
   try {
     return decodeURIComponent(s)

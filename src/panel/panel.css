@@ -65,6 +65,14 @@ body {
 
 .hidden { display: none !important; }
 .grow { flex: 1; }
+/* Cabecera + chat + redactor: la columna de siempre, envuelta para poder
+   dejarla inerte mientras una pantalla la tapa. */
+#app {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
 .sr-only {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
   overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
@@ -673,6 +681,18 @@ button.small { font-size: 11.5px; padding: 4px 9px; }
   color: var(--gold);
   background: var(--gold-bg);
   border-color: var(--gold-line);
+}
+
+/* Un enlace que el panel NO abriría (S5): se pinta como texto con su URL a la
+   vista, sin href ni manejador. Atenuado, para que se lea antes de copiarlo.
+   Revisión adversaria de H2 (2026-09-14): con href + target=_blank, el clic
+   central y «Abrir en una pestaña nueva» esquivaban openUrl. */
+.md-link-blocked {
+  color: var(--muted);
+  text-decoration: underline dotted var(--line-2);
+  text-underline-offset: 2px;
+  cursor: help;
+  overflow-wrap: anywhere;
 }
 
 /* ------------------------------- observaciones numeradas del modo Análisis */

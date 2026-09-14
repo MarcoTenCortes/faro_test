@@ -51,6 +51,10 @@ export class OpencodeClient {
     this._streamAbort = null
     this._connected = false
     this._reconnectDelay = 1000
+    // `disconnect()` es definitivo: un cliente cerrado no vuelve a abrir el stream.
+    this._closed = false
+    // Sesiones con un turno abandonado por la señal y sin abortar en el servidor (ver deleteSession).
+    this._abandoned = new Set()
   }
 
   setDirectory(dir) {
@@ -172,7 +176,19 @@ export class OpencodeClient {
     return this.request('POST', '/session', { body: { title, permission } })
   }
 
-  deleteSession(id) {
+  /**
+   * Borra una sesión. Si su último turno se abandonó por la señal (`runTurn`
+   * devolvió `aborted` sin abortar en el servidor), primero lo aborta.
+   *
+   * Comprobado en el binario de opencode 1.2.25: `DELETE /session/:id` →
+   * `Session.remove` sólo borra filas y publica `session.deleted`; no llama a
+   * `SessionPrompt.cancel`. El indexador, el planificador y las pasadas de
+   * notas cancelan por señal y cierran con `deleteSession`: sin este abort el
+   * modelo seguiría gastando en una sesión que ya no existe. Una sesión sin
+   * turno abandonado se borra con una sola petición.
+   */
+  async deleteSession(id) {
+    if (this._abandoned.delete(id)) await this.abort(id).catch(() => {})
     return this.request('DELETE', `/session/${id}`)
   }
 
@@ -184,8 +200,21 @@ export class OpencodeClient {
     return this.request('POST', `/session/${id}/abort`, { body: {} })
   }
 
-  summarize(id, model) {
-    return this.request('POST', `/session/${id}/summarize`, { body: model ? { model } : {} })
+  /**
+   * Pide a opencode que resuma (compacte) la sesión. El cuerpo es
+   * `{providerID, modelID}`: así lo exige el esquema de
+   * `POST /session/:id/summarize` en `/doc` de opencode 1.2.25 (`required:
+   * ["providerID","modelID"]`, más un `auto` opcional); el `{model}` de antes
+   * daba 400 seguro (R4, auditoría del 2026-09-13). Sin uso en el panel hoy.
+   * @param {{providerID: string, modelID: string}} model el modelo, tal como lo guarda el panel
+   */
+  async summarize(id, model = {}) {
+    const providerID = model?.providerID
+    const modelID = model?.modelID
+    if (typeof providerID !== 'string' || !providerID || typeof modelID !== 'string' || !modelID) {
+      throw new OpencodeError('summarize necesita providerID y modelID: el esquema de opencode los exige.')
+    }
+    return this.request('POST', `/session/${id}/summarize`, { body: { providerID, modelID } })
   }
 
   /**
@@ -236,10 +265,23 @@ export class OpencodeClient {
   async runTurn(id, prompt, control = {}) {
     const { stallMs = 90000, maxMs = 15 * 60 * 1000, onUpdate, signal } = control
 
+    // Un turno nuevo en esta sesión: lo que se abandonó antes ya no es asunto
+    // de nadie (abortarlo ahora se llevaría a ESTE turno).
+    this._abandoned.delete(id)
+
     // Esperar a que el stream este abierto ANTES de mandar nada. Si no, los
     // primeros eventos del turno se pierden y el mensaje del usuario acaba
     // contandose como si fuera del asistente.
-    await this.ready()
+    //
+    // Y el valor de `ready()` IMPORTA: un cliente cerrado (`disconnect()`, ver
+    // C3) no vuelve a abrir el stream nunca, así que mandar el turno sería
+    // lanzar al modelo a trabajar de verdad en el servidor sin que llegara ni
+    // un evento de vuelta: el turno moría al agotar `stallMs` —120 s en el
+    // indexador— y el usuario esperaba dos minutos a un fallo seguro
+    // (revisión adversaria de H2, 2026-09-14). No se aborta en el servidor
+    // porque no se ha mandado nada: no hay turno que abortar.
+    const listo = await this.ready()
+    if (!listo && this._closed) return { ok: false, aborted: true, closed: true, parts: [], text: '', tools: [] }
 
     let touch = Date.now()
     let tracker
@@ -280,21 +322,37 @@ export class OpencodeClient {
 
     const started = Date.now()
     let watchdog
+    let onAbort
     const guard = new Promise((resolve) => {
+      // La señal se ESCUCHA, no se sondea. Reproducido en la auditoría del
+      // 2026-09-13 (docs/PLAN.md §2, C6): con el sondeo de 1 s, Parar y mandar
+      // otra pregunta en menos de un segundo hacía que el vigilante del turno
+      // viejo despertara con la señal ya cancelada y abortara la sesión…
+      // llevándose el turno nuevo, que ya corría en ella.
+      onAbort = () => resolve({ ok: false, aborted: true })
+      if (signal?.aborted) return onAbort()
+      signal?.addEventListener('abort', onAbort, { once: true })
       watchdog = setInterval(() => {
-        if (signal?.aborted) return resolve({ ok: false, aborted: true })
         if (Date.now() - touch > stallMs) return resolve({ ok: false, stalled: true })
         if (Date.now() - started > maxMs) return resolve({ ok: false, stalled: true, expired: true })
       }, 1000)
     })
 
     try {
-      await this.promptAsync(id, prompt)
+      // Una señal ya cancelada no manda nada: el turno correría sin nadie que lo parara.
+      const enviado = !signal?.aborted
+      if (enviado) await this.promptAsync(id, prompt)
       const outcome = await Promise.race([finished, guard])
 
-      if (outcome.stalled || outcome.aborted) {
+      if (outcome.stalled) {
         // Que el servidor deje de gastar en un turno que ya hemos abandonado.
         await this.abort(id).catch(() => {})
+      } else if (outcome.aborted && enviado) {
+        // Quien abortó la señal ya abortó la sesión (el botón Parar del panel
+        // llama a `abort` él mismo) o va a borrarla (las desechables): abortar
+        // aquí otra vez era lo que se llevaba el turno siguiente. Se apunta
+        // para que `deleteSession` cierre lo que quede.
+        this._abandoned.add(id)
       }
 
       return {
@@ -309,6 +367,7 @@ export class OpencodeClient {
       }
     } finally {
       clearInterval(watchdog)
+      signal?.removeEventListener('abort', onAbort)
       off()
     }
   }
@@ -412,8 +471,9 @@ export class OpencodeClient {
     return this._connected
   }
 
-  /** Resuelve cuando el stream de eventos esta abierto (o al agotarse el plazo). */
+  /** Resuelve cuando el stream de eventos esta abierto (o al agotarse el plazo). Un cliente cerrado nunca está listo. */
   ready(timeoutMs = 8000) {
+    if (this._closed) return Promise.resolve(false)
     this.connect()
     if (this._connected) return Promise.resolve(true)
     return new Promise((resolve) => {
@@ -429,16 +489,26 @@ export class OpencodeClient {
 
   /**
    * Abre el stream de eventos y lo mantiene abierto, reconectando con espera
-   * creciente. Idempotente.
+   * creciente. Idempotente, y nada sobre un cliente cerrado.
    */
   connect() {
-    if (this._streamAbort) return
+    if (this._closed || this._streamAbort) return
     const ctrl = new AbortController()
     this._streamAbort = ctrl
     this._pump(ctrl)
   }
 
+  /**
+   * Cierra el stream para siempre. Definitivo a propósito: reproducido en la
+   * auditoría del 2026-09-13 (docs/PLAN.md §2, C3), dos arranques del panel
+   * solapados; el segundo desconectaba el cliente del primero y el primero,
+   * al despertar de `health()`, hacía `connect()` sobre él: como
+   * `_streamAbort` ya era null, abría un segundo stream que nadie cerraba
+   * jamás y que reconectaba cada 1-15 s. Quien quiera volver a conectar crea
+   * un cliente nuevo (`buildClient()` del panel ya lo hace).
+   */
   disconnect() {
+    this._closed = true
     this._streamAbort?.abort()
     this._streamAbort = null
     this._connected = false

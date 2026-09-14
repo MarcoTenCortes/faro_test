@@ -417,21 +417,17 @@ test('checkDocs sobre el repo: un número de pruebas que no es el del README es 
   eq(sinNumero.errors, [], 'sin `tests`, el número no se comprueba')
 })
 
-test('checkDocs sobre el repo: un mensaje con receptor y sin emisor es aviso, nunca error; hoy es CANCEL_PLAN', () => {
+test('checkDocs sobre el repo: un mensaje con receptor y sin emisor es aviso, nunca error; hoy ninguno', () => {
   const r = checkDocs(ROOT, {})
   for (const e of r.errors) assert(e.kind !== 'msgs', 'todo MSG tiene receptor y está en §5: ' + JSON.stringify(e))
   const avisos = r.warnings.filter((w) => w.kind === 'msgs')
-  eq(avisos.length, 1, 'un solo aviso de mensajes, con lista')
-  for (const item of avisos[0].items) assert(/^MSG\.[A-Z0-9_]+: lo atiende .+ y nadie lo manda/.test(item), item)
-  // CANCEL_PLAN lo atiende el service worker y lo ejercita service-worker.test.js
-  // (cancelar limpia el plan y manda CANCEL al content script), pero el panel
-  // no lo manda: no hay botón de parar la navegación. Si alguien lo cablea, o
-  // lo borra, cambia esta línea.
-  eq(
-    avisos[0].items.filter((i) => i.startsWith('MSG.CANCEL_PLAN:')).length,
-    1,
-    'CANCEL_PLAN sigue sin emisor: ' + JSON.stringify(avisos[0].items)
-  )
+  for (const w of avisos) for (const item of w.items) assert(/^MSG\.[A-Z0-9_]+: lo atiende .+ y nadie lo manda/.test(item), item)
+  // Hasta H2 el único aviso era CANCEL_PLAN: lo atendía el service worker
+  // (service-worker.test.js) y el panel no lo mandaba. Desde H2 el botón
+  // «Parar» de la tarjeta de navegación lo manda (`{ type: MSG.CANCEL_PLAN,
+  // tabId }` en runPlan), así que no queda ningún mensaje huérfano. Si aparece
+  // uno nuevo, esta línea lo dice con su nombre: cablea quien lo manda o bórralo.
+  eq(avisos, [], 'ningún mensaje con receptor y sin emisor')
 })
 
 test('checkDocs sobre el repo: el recuento por fichero de §10 se compara con `porFichero` y una discrepancia es error', () => {

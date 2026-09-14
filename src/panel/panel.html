@@ -8,6 +8,14 @@
 </head>
 <body>
 
+<!-- Lo que se anuncia al lector de pantalla: un resumen al final de cada turno
+     y los avisos. El chat no es región viva: en streaming la burbuja se
+     reconstruye con cada trozo y el lector reanunciaba la respuesta entera. -->
+<div id="announcer" class="sr-only" aria-live="polite" aria-atomic="false"></div>
+
+<!-- Cabecera, chat y redactor: queda inerte mientras hay una pantalla abierta,
+     para que Tab no recorra controles tapados. -->
+<div id="app">
 <header class="top">
   <div class="brand">
     <span class="beacon" aria-hidden="true"></span>
@@ -36,7 +44,7 @@
   </div>
 </header>
 
-<main class="chat" id="chat" aria-live="polite"></main>
+<main class="chat" id="chat" aria-busy="false"></main>
 
 <footer class="composer" id="composer">
   <div class="composer-meta">
@@ -86,6 +94,7 @@
     </button>
   </div>
 </footer>
+</div>
 
 <!-- ===================== pantallas a pantalla completa ===================== -->
 

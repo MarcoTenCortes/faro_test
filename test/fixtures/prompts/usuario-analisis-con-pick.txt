@@ -4,7 +4,7 @@ Apartado: Errores
 Tipo: un fragmento de texto que ha subrayado.
 Justo antes dice: …Errores
 
-Los errores se devuelven con el formato application/problem+json, con type, title, status y detail.
+> Los errores se devuelven con el formato application/problem+json, con type, title, status y detail.
 
 Justo después dice: 404 si el recurso no existe.…
 --- FIN DE LO SEÑALADO ---

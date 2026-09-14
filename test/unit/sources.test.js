@@ -441,6 +441,19 @@ test('consultedOutside: la página abierta vale por su URL y por el título de l
   eq(consultedOutside([tool(MCP + 'confluence_get_page', { page_id: abierta })], { ...opts, pageUrl: '' }), ['una página por enlace (' + abierta + ')'], 'sin saber cuál era la abierta, no se puede demostrar')
 })
 
+test('SEGURIDAD: una URL con «%» mal codificado no tumba el turno: consultedOutside la cuenta como enlace y pageRefFromUrl no lanza', () => {
+  // Auditoría del 2026-09-13 (docs/PLAN.md §2, R2): el modelo copia mal una URL
+  // en `page_id` → parseAtlassianUrl lanzaba URIError → send() caía al catch
+  // («Fallo enviando: URI malformed») y se saltaba growIndex, offerNavigation y
+  // offerNotes: la respuesta pintada, pero sin subrayar ni tarjeta ni aviso.
+  const rota = 'https://confluence.corp.com/display/SIM%PL/Guia'
+  eq(consultedOutside([tool(MCP + 'confluence_get_page', { page_id: rota })], { allowed: ['12'] }), ['una página por enlace (' + rota + ')'])
+  eq(consultedOutside([tool(MCP + 'confluence_get_page', { page_id: 'https://acme.atlassian.net/wiki/spaces/100%/pages/200/T' })], { allowed: ['200'] }), [], 'con id dentro, la permitida sigue dentro')
+  // Y pegada por el usuario en el campo de páginas base: el manejador de input no revienta.
+  eq(pageRefFromUrl('https://acme.atlassian.net/wiki/spaces/100%/pages/123456/T', SITE), { ok: true, id: '123456', path: '/wiki/spaces/100%/pages/123456/T' })
+  eq(pageRefFromUrl('https://confluence.simplprogramme.eu/display/SIM%PL/Guia', { host: 'confluence.simplprogramme.eu' }).reason, 'sin-id')
+})
+
 // --- Jira: la incidencia abierta y el Confluence enlazado ------------------
 
 test('EL CAMBIO: en Jira, leer la incidencia abierta es leer lo que el usuario tiene delante', () => {

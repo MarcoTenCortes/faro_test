@@ -59,6 +59,7 @@ import {
   consultedOutside,
   titlesFromTab,
   sourcesSearchTarget,
+  linkedSite,
 } from './sources.js'
 import { normalizeIssueFields } from './issue-profile.js'
 import { searchPages, fetchAncestors } from '../shared/confluence-rest.js'
@@ -81,6 +82,9 @@ import {
   NOTE_LIMITS,
 } from './notes.js'
 import { baseSystem, selectionBlock, stripSelectionBlock, pageUrlFromSystem, PAGE_OPEN } from './prompts.js'
+import { stuckToBottom } from './chat-scroll.js'
+import { ESCAPE_CLOSES, ESCAPE_DISMISSES } from './screens.js'
+import { allowedLinkOrigin } from './links.js'
 import * as memory from './memory.js'
 
 // ------------------------------------------------------------------ estado
@@ -88,6 +92,8 @@ import * as memory from './memory.js'
 const $ = (id) => document.getElementById(id)
 
 const el = {
+  app: $('app'),
+  announcer: $('announcer'),
   chat: $('chat'),
   input: $('input'),
   send: $('btn-send'),
@@ -115,6 +121,10 @@ const state = {
   settings: { ...DEFAULT_SETTINGS },
   client: null,
   site: null,
+  // El sitio del PANEL: el último host de Atlassian visto. `state.site` es el
+  // de la PESTAÑA y se queda en null en cuanto se mira el correo; el panel
+  // sigue siendo de este host hasta que se abra otro sitio de Atlassian.
+  lastHost: '',
   tabId: null,
   index: null,
   contextMd: '',
@@ -146,6 +156,20 @@ const state = {
   // Testigo del turno en curso: el `finally` de un turno cancelado no puede
   // apagar el estado del siguiente.
   turnToken: null,
+  // Testigo del arranque en curso: dos arranques solapados (dos cambios de
+  // pestaña seguidos) pintaban la conversación dos veces. Sólo el último manda.
+  bootToken: null,
+  // Mientras se restaura la conversación no se anuncia nada al lector de
+  // pantalla: es historia, no novedad.
+  restoring: false,
+  // ¿Está el chat pegado al fondo? Se mide en cada scroll, ANTES de que el
+  // siguiente trozo de respuesta mueva nada: si el usuario subió a leer, no
+  // se le arrastra abajo.
+  chatPinned: true,
+  // Quién tenía el foco antes de abrir una pantalla: se le devuelve al cerrar.
+  focusBefore: null,
+  // El recorrido paso a paso en marcha: su tarjeta y su botón «Parar».
+  navRun: null,
   defaults: {},
   streaming: false,
   lastQuestion: '',
@@ -153,9 +177,15 @@ const state = {
   tabTitle: '',
   turns: [],
   indexingAbort: null,
+  // Lo que cancela el botón del velo «Trabajando…», si hay algo que cancelar:
+  // sin esto, el Cancelar de «Guardando lo aprendido» no cancelaba nada.
+  busyAbort: null,
   pendingMcp: null,
   snippets: null,
   mcpWait: null,
+  // Un arranque que no se pudo hacer porque la pestaña estaba fuera de
+  // Atlassian: el host al que le toca, en cuanto se vuelva a él.
+  bootPending: '',
   logOnlyProblems: false,
   logUnsub: null,
   turnAbort: null,
@@ -189,6 +219,32 @@ async function init() {
 }
 
 function buildClient() {
+  // Un turno en vuelo se queda sin eventos al cerrar el stream: el vigilante
+  // lo daba por colgado a los 90 s, abortaba en el servidor una respuesta que
+  // quizá ya había terminado, y el panel del sitio nuevo se quedaba
+  // «pensando…» todo ese rato (reproducido en la auditoría del 2026-09-13,
+  // docs/PLAN.md §2 C1). Se cancela AQUÍ y no en refreshTab: aquí sólo se
+  // llega cuando el panel cambia de SITIO (o cuando se cierra Ajustes), y
+  // mirar el correo a mitad de respuesta no es cambiar de sitio.
+  if (state.streaming) {
+    state.turnAbort?.abort()
+    // Y en el servidor: `runTurn` ya no aborta al cancelarse la señal —apunta
+    // la sesión en el cliente para que la cierre quien la borre—, y ese
+    // cliente es justo el que estamos desechando, así que opencode seguía
+    // ejecutando el turno entero (revisión adversaria de H2, 2026-09-14).
+    // Como el botón Parar y como «Sesión nueva», sin esperar a que conteste.
+    if (state.sessionID) state.client?.abort(state.sessionID).catch(() => {})
+    log.info('Turno cancelado', 'has cambiado de sitio, o cerrado Ajustes, a mitad de respuesta')
+  }
+  // Un indexado en vuelo se queda igual de huérfano: dura minutos, moría solo
+  // a los 120 s y hasta entonces dejaba el velo puesto sobre el sitio NUEVO y
+  // acababa marcando el anterior como configurado sin haber indexado nada
+  // (revisión adversaria de H2, 2026-09-14).
+  if (state.indexingAbort) {
+    state.indexingAbort.abort()
+    hideBusy()
+    log.warn('Indexado cancelado', 'has cambiado de sitio a mitad del indexado')
+  }
   state.client?.disconnect()
   const client = new OpencodeClient({
     baseUrl: state.settings.serverUrl,
@@ -257,7 +313,17 @@ async function refreshTab() {
     }
   }
 
-  const changedHost = site?.host !== state.site?.host
+  // El sitio del PANEL es el último host de Atlassian visto, no el de la
+  // pestaña activa: al mirar el correo `site` queda null, y comparando con
+  // `state.site?.host` volver al MISMO host daba «cambio de sitio». Se vaciaban
+  // índice, contexto y páginas base, se rearrancaba —y el arranque mata el
+  // turno en vuelo— y se tiraba la espera del MCP, justo lo que los arreglos de
+  // H2 querían evitar (revisión adversaria de H2, 2026-09-14).
+  const changedHost = !!site && site.host !== state.lastHost
+  // ¿Veníamos de fuera de Atlassian? Entonces el chat quedó con el «Abre Jira
+  // o Confluence» y hay que repintarlo, porque sin cambio de sitio ya no hay
+  // arranque que lo restaure.
+  const volviaDeFuera = !!site && !state.site
   if (changedHost && state.picking) setPicking(false)
   // Lo que es del sitio no viaja al siguiente: las páginas base, el índice,
   // los caminos leídos y el contexto se vacían hasta que `bootForSite` cargue
@@ -266,6 +332,14 @@ async function refreshTab() {
   // y su índice acababa guardado como si fuera de éste. Y la pantalla, si
   // estaba abierta, se cierra: hablaba del otro sitio.
   if (changedHost) {
+    // La espera del MCP era de otro sitio de Atlassian: su pantalla se va con
+    // el arranque del nuevo, y al volver se vuelve a pedir (o el MCP ya
+    // conectado se reconoce solo). Aquí sólo se llega con un sitio distinto:
+    // mirar el correo mientras se reinicia opencode no la corta (C5).
+    if (state.mcpWait && !state.mcpWait.signal.aborted) {
+      state.mcpWait.abort()
+      log.warn('Espera del MCP cancelada', `has cambiado a ${site.host} antes de que opencode cargara el MCP de ${state.lastHost || '?'}`)
+    }
     if (!$('screen-sources').classList.contains('hidden')) closeSourcesScreen()
     state.sources = emptySources()
     state.index = null
@@ -275,24 +349,50 @@ async function refreshTab() {
     paintSourcesUi()
   }
   state.site = site
+  // Sólo con sitio: el panel sigue siendo del último host de Atlassian visto
+  // aunque la pestaña activa esté en el correo.
+  if (site) state.lastHost = site.host
   state.tabUrl = tab.url || ''
   state.tabTitle = tab.title || ''
 
   el.locationText.textContent = site ? describeLocation(site) : 'Fuera de Atlassian'
 
   if (!site) {
-    showEmpty({
-      title: 'Abre Jira o Confluence',
-      text: 'Faro trabaja dentro de un sitio de Atlassian. Ve a una página y vuelve.',
-    })
+    // Fuera de Atlassian el panel sólo dice dónde está: no se vacía nada, no
+    // se corta ninguna espera y no se rearranca. Mientras llega una respuesta,
+    // el chat se queda como está (se sigue viendo llegar); si no, se dice qué
+    // hace falta.
+    if (!state.streaming) {
+      showEmpty({
+        title: 'Abre Jira o Confluence',
+        text: 'Faro trabaja dentro de un sitio de Atlassian. Ve a una página y vuelve.',
+      })
+    }
     return
   }
 
   if (changedHost) await bootForSite()
+  // El MCP acabó de cargar mientras la pestaña estaba fuera: el arranque que
+  // `finishSetup` no pudo hacer se hace ahora (bootForSite lo da por hecho).
+  else if (state.bootPending === site.host) await bootForSite()
+  // Volver de fuera al MISMO sitio no rearranca nada —el cliente, el índice y
+  // la sesión siguen siendo suyos—, pero el chat se había quedado con el «Abre
+  // Jira o Confluence»: se vuelve a pintar y ya.
+  else if (volviaDeFuera && !state.streaming) await restoreConversation()
 }
 
 /** Arranque completo para un sitio: servidor, claves, contexto. */
 async function bootForSite() {
+  // Testigo de arranque: dos arranques solapados —dos cambios de pestaña
+  // seguidos, un botón pulsado dos veces— corrían a la vez sobre `state.site`
+  // en vivo y pintaban la conversación dos veces (reproducido en la auditoría
+  // del 2026-09-13, docs/PLAN.md §2 C3). Sólo el último manda: los demás se
+  // apagan tras cada await, como el testigo del turno.
+  const testigo = {}
+  state.bootToken = testigo
+  // Si había un arranque pendiente (el MCP cargó con la pestaña fuera de
+  // Atlassian), éste lo cumple: no puede volver a dispararse.
+  state.bootPending = ''
   const client = buildClient()
   setStatus('busy', 'comprobando…')
 
@@ -300,22 +400,29 @@ async function bootForSite() {
   try {
     await client.health()
   } catch (err) {
+    if (state.bootToken !== testigo) return
     setStatus('bad', 'sin opencode')
     showScreen('screen-connect', String(err?.message || err))
     return
   }
+  if (state.bootToken !== testigo) return
   client.connect()
 
   // 2. Modelos y modo de trabajo, tal y como los dejaste en este sitio.
-  setSkill((await getSite(state.site.host))?.skill || DEFAULT_SKILL)
+  const guardadoAntes = await getSite(state.site.host)
+  if (state.bootToken !== testigo) return
+  setSkill(guardadoAntes?.skill || DEFAULT_SKILL)
 
   try {
     const { models, defaults } = await client.models()
+    if (state.bootToken !== testigo) return
     state.models = models
     const stored = await getSite(state.site.host)
+    if (state.bootToken !== testigo) return
     state.defaults = defaults
     fillModels(models, stored?.model || pickDefaultModel(models, defaults))
   } catch (err) {
+    if (state.bootToken !== testigo) return
     showNotice('No he podido leer la lista de modelos: ' + err.message, true)
   }
 
@@ -327,7 +434,9 @@ async function bootForSite() {
   // configuración sólo se miran los hosts: las claves van ahí en claro y no
   // pueden acabar en el estado ni en el registro.
   const [mcp, config] = await Promise.all([client.listMcp().catch(() => ({})), client.config().catch(() => null)])
+  if (state.bootToken !== testigo) return
   let saved = await getSite(state.site.host)
+  if (state.bootToken !== testigo) return
   const found = mcpForHost(config, state.site.host, { status: mcp })
   // Se adopta sólo lo que está conectado: apuntar un MCP caído pisaba lo que
   // sí funcionaba. Y también cuando el MCP ya apuntado trae un host nuevo —el
@@ -347,6 +456,7 @@ async function bootForSite() {
     })
     for (const { host, patch } of registros) await saveSite(host, patch)
     saved = await getSite(state.site.host)
+    if (state.bootToken !== testigo) return
     log.ok('MCP reconocido', `${found.name} · ${found.products === 2 ? 'Jira y Confluence' : found.jiraHost ? 'sólo Jira' : 'sólo Confluence'}`)
   } else if (found && !found.connected) {
     log.warn('MCP sin conectar', `${found.name} lleva este dominio pero no está conectado`)
@@ -370,17 +480,24 @@ async function bootForSite() {
 
   // 4. Contexto y memoria. Desde Jira, también el contexto del Confluence
   // enlazado: sirve para saber qué páginas mirar.
+  // Un arranque más nuevo pone su testigo antes de su primer await: éste
+  // siempre va por delante, así que lo que escriba aquí antes de comprobarlo
+  // lo pisa el nuevo en su propio paso 4.
   state.contextMd = await memory.getContextMd(state.site.host)
+  if (state.bootToken !== testigo) return
   state.linkedContext = await loadLinkedContext(saved)
+  if (state.bootToken !== testigo) return
   state.memory = await memory.getMemory(state.site.host)
   const guardado = await getIndex(state.site.host)
+  if (state.bootToken !== testigo) return
   state.index = guardado.index
   if (guardado.stale) {
     log.warn('Índice descartado', 'era de una versión anterior de Faro; hay que reconstruir el contexto')
   }
   state.sessionID = await getSessionId(state.site.host)
-
   const site = await getSite(state.site.host)
+  if (state.bootToken !== testigo) return
+
   if (!site?.onboarded) {
     hideScreens()
     showContextScreen()
@@ -388,7 +505,8 @@ async function bootForSite() {
   }
 
   hideScreens()
-  await restoreConversation()
+  await restoreConversation(testigo)
+  if (state.bootToken !== testigo) return
 
   // Sin ruido: si falta el permiso, se avisa cuando de verdad hace falta
   // (al ofrecer navegación), no nada más abrir el panel.
@@ -539,6 +657,7 @@ function showPermissionNotice() {
 
   card.append(kicker, title, text, actions)
   el.chat.appendChild(card)
+  announce(`${kicker.textContent}: ${title.textContent}`)
   scrollChat()
 }
 
@@ -672,14 +791,31 @@ function fillModels(models, selected) {
 
 // ------------------------------------------------------------------- chat
 
-async function restoreConversation() {
-  el.chat.textContent = ''
-  state.turns = []
-
+/**
+ * @param {object} [testigo] el testigo del arranque que pide restaurar: si
+ *        otro arranque tomó el relevo mientras se leía la sesión, lo suyo lo
+ *        pinta él, y vaciar el chat aquí sería vaciar el suyo. Por defecto,
+ *        el arranque vigente (reindexar, «Omitir», subir un contexto).
+ */
+async function restoreConversation(testigo = state.bootToken) {
+  let messages = null
   if (state.sessionID) {
     try {
-      const messages = await state.client.listMessages(state.sessionID)
+      messages = await state.client.listMessages(state.sessionID)
+    } catch {
+      state.sessionID = null
+    }
+  }
+  // El chat se vacía DESPUÉS de leer la sesión y de comprobar el testigo:
+  // dos arranques solapados vaciaban y rellenaban por turnos (C3).
+  if (state.bootToken !== testigo) return
+  el.chat.textContent = ''
+  state.turns = []
+  // Lo restaurado es historia: no se anuncia al lector de pantalla.
+  state.restoring = true
 
+  if (messages) {
+    try {
       // opencode parte un turno en varios mensajes del asistente —uno por
       // cada vuelta de herramientas—. Se juntan por turno, como hace runTurn
       // en vivo: si no, la prosa numerada y su bloque de anclas podían quedar
@@ -704,7 +840,7 @@ async function restoreConversation() {
         // son observaciones) y no en un seguimiento que cita un punto sin
         // traer anclas (sus pasos no son observaciones). Lo encontró la revisión.
         const adaptar = !!cruda && (turno.analisis || !!anchors) && !(questionCitesPoint(turno.pregunta) && !anchors)
-        const prose = !cruda ? '' : adaptar ? normalizeNumbering(cruda, { expected: expectedCount(anchors) }).prose : cruda
+        const prose = !cruda ? '' : adaptar ? normalizeNumbering(cruda, { expected: expectedCount(anchors), shortAnswer: NOTE_LIMITS.shortAnswer }).prose : cruda
         if (prose) {
           const bubble = addAssistantMessage(prose)
           state.turns.push({ role: 'assistant', text: prose })
@@ -781,7 +917,7 @@ async function restoreConversation() {
         if (porOriginal) {
           const cuerpo = porOriginal.bubble
           cuerpo.textContent = ''
-          cuerpo.append(renderMarkdown(prose, { onLink: openUrl, onNote: focusNote }))
+          cuerpo.append(renderMarkdown(prose, { onLink: openUrl, onNote: focusNote, allowHref: linkAllowed }))
         }
         if (dueña) {
           state.noteRows = new Map()
@@ -790,13 +926,15 @@ async function restoreConversation() {
       } else if (ultimoAnalisis) {
         attachToBubble(ultimoAnalisis.bubble, staleNotesCard(ultimoAnalisis))
       }
-    } catch {
-      state.sessionID = null
+    } catch (err) {
+      console.error('[faro] restaurando la conversación', err)
     }
   }
 
   if (!el.chat.children.length) showWelcome()
-  scrollChat()
+  state.restoring = false
+  // Un chat recién pintado empieza por el final, esté donde esté el scroll.
+  scrollChat({ force: true })
 }
 
 function showWelcome() {
@@ -835,6 +973,7 @@ function showWelcome() {
   }
   wrap.appendChild(suggestions)
   el.chat.appendChild(wrap)
+  announce(h.textContent)
 }
 
 function suggestionsFor(site) {
@@ -873,6 +1012,8 @@ function addUserMessage(text, nota) {
   }
 
   el.chat.appendChild(d)
+  // La pregunta que acabas de mandar sí se ve, estés donde estés.
+  scrollChat({ force: true })
   return d
 }
 
@@ -880,7 +1021,7 @@ function addAssistantMessage(text) {
   clearEmpty()
   const d = document.createElement('div')
   d.className = 'msg assistant'
-  d.appendChild(renderMarkdown(text, { onLink: openUrl, onNote: focusNote }))
+  d.appendChild(renderMarkdown(text, { onLink: openUrl, onNote: focusNote, allowHref: linkAllowed }))
   el.chat.appendChild(d)
   return d
 }
@@ -899,19 +1040,70 @@ function showEmpty({ title, text }) {
   p.textContent = text
   wrap.append(h, p)
   el.chat.appendChild(wrap)
+  announce(title)
 }
 
-function showNotice(text, bad = false) {
+/**
+ * Un aviso en el hilo del chat.
+ *
+ * `force` es para los avisos que contestan a algo que el usuario acaba de
+ * hacer (pulsar un enlace que no se abre): sin él, tras A7, el aviso se pinta
+ * abajo y no se ve si el usuario había subido a leer, y su clic parece no
+ * hacer nada (revisión adversaria de H2, 2026-09-14). Lo que llega solo —un
+ * fallo del turno, una tarjeta— sigue sin arrastrar la vista.
+ */
+function showNotice(text, bad = false, { force = false } = {}) {
   clearEmpty()
   const d = document.createElement('div')
   d.className = 'notice' + (bad ? ' bad' : '')
   d.textContent = text
   el.chat.appendChild(d)
-  scrollChat()
+  announce(text)
+  scrollChat({ force })
   return d
 }
 
-function scrollChat() {
+/** Tope de lo que se anuncia de una vez al lector de pantalla. */
+const ANNOUNCE_MAX = 600
+
+/**
+ * Anuncia algo al lector de pantalla, por la región viva aparte.
+ *
+ * El chat entero era `aria-live` y en streaming la burbuja se reconstruye con
+ * cada trozo: el lector encolaba la respuesta acumulada decenas de veces, y al
+ * restaurar la conversación re-leía el historial (docs/PLAN.md §2.5 A2). Ahora
+ * se anuncia lo NUEVO, una vez: un resumen al final del turno, los avisos y
+ * lo que se cuelga de una respuesta. Cada anuncio es un nodo nuevo —una
+ * región viva anuncia las adiciones— para que dos seguidos no se pisen. Y
+ * mientras se restaura la conversación, nada: es historia, no novedad.
+ */
+function announce(text) {
+  const t = String(text || '').replace(/\s+/g, ' ').trim()
+  if (!t || state.restoring || !el.announcer) return
+  const p = document.createElement('p')
+  p.textContent = t.length > ANNOUNCE_MAX ? t.slice(0, ANNOUNCE_MAX) + '…' : t
+  el.announcer.appendChild(p)
+  while (el.announcer.children.length > 4) el.announcer.firstChild.remove()
+}
+
+/** Lo que se anuncia al terminar un turno: que hay respuesta, cuántas observaciones, y su arranque. */
+function answerAnnouncement(answer) {
+  const n = numberedIn(answer).length
+  const plano = String(answer || '')
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/[*_`#>]+/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return `Respuesta lista${n ? ` · ${n} observaciones` : ''}. ${plano}`
+}
+
+/**
+ * Baja el chat al final, pero sólo si el usuario ESTABA al final (o con
+ * `force`: la pregunta que acaba de mandar, un chat recién restaurado). Lo
+ * de «estaba» lo mide el oyente de scroll, antes de que nada mute el DOM.
+ */
+function scrollChat({ force = false } = {}) {
+  if (!force && !state.chatPinned) return
   requestAnimationFrame(() => {
     el.chat.scrollTop = el.chat.scrollHeight
   })
@@ -951,6 +1143,9 @@ async function send() {
   const tituloAlPedir = state.tabTitle
   const tabUrlAlPedir = state.tabUrl
   const mcpAlPedir = state.mcpConnected
+  // Y el host: si al terminar el panel está en OTRO sitio, la respuesta no
+  // entra en su chat ni en su índice (queda en la sesión de opencode de éste).
+  const hostAlPedir = state.site.host
 
   // Ocupado desde ya: leer la página en bloques tarda, y en ese hueco un
   // segundo clic abría otro turno y otra sesión. Con testigo, para que el
@@ -1001,8 +1196,11 @@ async function send() {
       await setSessionId(state.site.host, s.id)
     }
     if (abort.signal.aborted) return
+    // La sesión de ESTE turno: «Nueva sesión» a mitad la olvida, y entonces
+    // la respuesta tampoco entra en el chat (queda en la sesión de opencode).
+    const sesionAlPedir = state.sessionID
 
-    const bubble = document.createElement('div')
+    let bubble = document.createElement('div')
     bubble.className = 'msg assistant'
     const toolsBox = document.createElement('div')
     toolsBox.className = 'tools'
@@ -1065,30 +1263,50 @@ async function send() {
 
     const tracker = { ...turn, rawError: turn.rawError, model: turn.model }
 
+    // El chat ha podido repintarse entero a mitad de turno sin reconstruir el
+    // cliente —reindexar, «Omitir», subir un contexto: `restoreConversation`
+    // lo vacía—: entonces `body` está fuera del documento y el pintado final
+    // iría al vacío (auditoría del 2026-09-13, docs/PLAN.md §2 C7). La burbuja
+    // viva es la restaurada de este turno si es lo último del chat; si lo
+    // último es la pregunta (aún sin respuesta parcial), una burbuja nueva.
+    // Y si el panel ya está en OTRO sitio (o en otra sesión), nada de esto es
+    // suyo: se pinta en la burbuja muerta (no se ve) y se sale antes de tocar
+    // su chat.
+    // Contra el sitio del PANEL, no contra la pestaña: mirar el correo
+    // mientras se responde dejaba `state.site` en null y la respuesta se
+    // pintaba en una burbuja muerta (revisión adversaria de H2, 2026-09-14).
+    const mismoSitio = (state.site?.host ?? state.lastHost) === hostAlPedir && state.sessionID === sesionAlPedir
+    const cuerpo = !mismoSitio ? body : body.isConnected ? body : liveBubble(null) || addAssistantMessage('')
+    if (!bubble.isConnected) bubble = cuerpo
+
     if (turn.stalled) {
       log.error('Turno colgado', modelKey(state.model))
       toolsBox.remove()
-      body.textContent = ''
-      body.appendChild(errorNode(
-        'El modelo dejó de responder y no ha terminado nunca. No todos los de la lista son fiables.',
+      cuerpo.textContent = ''
+      const aviso = 'El modelo dejó de responder y no ha terminado nunca. No todos los de la lista son fiables.'
+      cuerpo.appendChild(errorNode(
+        aviso,
         { ...tracker, rawError: { name: 'APIError', data: { message: 'stalled' } } },
         text
       ))
+      if (mismoSitio) announce(aviso)
       return
     }
 
     if (turn.aborted) {
       toolsBox.remove()
-      body.textContent = ''
-      body.appendChild(noticeNode('Turno cancelado.'))
+      cuerpo.textContent = ''
+      cuerpo.appendChild(noticeNode('Turno cancelado.'))
+      if (mismoSitio) announce('Turno cancelado.')
       return
     }
 
     if (!turn.ok) {
       log.error('Turno fallido', turn.error)
       toolsBox.remove()
-      body.textContent = ''
-      body.appendChild(errorNode(turn.error, tracker, text))
+      cuerpo.textContent = ''
+      cuerpo.appendChild(errorNode(turn.error, tracker, text))
+      if (mismoSitio) announce('La respuesta falló: ' + turn.error)
       return
     }
 
@@ -1097,14 +1315,22 @@ async function send() {
     const { prose, anchors } = splitAnchorsBlock(turn.text)
     const answer = prose.trim()
     if (!answer) {
-      body.textContent = ''
-      body.appendChild(noticeNode('El modelo no devolvió texto.', true))
+      cuerpo.textContent = ''
+      cuerpo.appendChild(noticeNode('El modelo no devolvió texto.', true))
+      if (mismoSitio) announce('El modelo no devolvió texto.')
+      return
+    }
+
+    if (!mismoSitio) {
+      log.ok('Respuesta recibida', `${answer.length} caracteres · ${turn.tools.length} herramientas · el panel ya está en otro sitio: queda en la sesión de ${hostAlPedir}`)
       return
     }
 
     state.turns.push({ role: 'assistant', text: answer })
-    paintTurn(turn, toolsBox, body, true)
+    paintTurn(turn, toolsBox, cuerpo, true)
     log.ok('Respuesta recibida', `${answer.length} caracteres · ${turn.tools.length} herramientas`)
+    // Una vez, al final: mientras llegaba a trozos el chat estaba «ocupado».
+    announce(answerAnnouncement(answer))
 
     // Con páginas base: si no había quien las leyera, o si en alcance
     // exclusivo el modelo consultó fuera de la lista, se dice bajo la
@@ -1158,7 +1384,7 @@ async function send() {
         const destino = body.isConnected ? body : liveBubble(null)
         if (!destino) return
         destino.textContent = ''
-        destino.appendChild(renderMarkdown(prose, { onLink: openUrl, onNote: focusNote }))
+        destino.appendChild(renderMarkdown(prose, { onLink: openUrl, onNote: focusNote, allowHref: linkAllowed }))
       },
     })
   } catch (err) {
@@ -1215,8 +1441,11 @@ function paintTurn(tracker, toolsBox, body, final = false) {
   }
   if (prose) {
     body.textContent = ''
-    body.appendChild(renderMarkdown(prose, { onLink: openUrl, onNote: focusNote }))
+    body.appendChild(renderMarkdown(prose, { onLink: openUrl, onNote: focusNote, allowHref: linkAllowed }))
   }
+  // Mientras se reconstruye a trozos, la burbuja está «ocupada» para el
+  // lector de pantalla; lo que hay que decir se dice al final (A2).
+  body.setAttribute('aria-busy', final ? 'false' : 'true')
   scrollChat()
 }
 
@@ -1262,15 +1491,23 @@ async function readPageDigest() {
 function attachToBubble(bubble, node) {
   const destino = bubble?.isConnected ? bubble : el.chat
   destino.appendChild(node)
+  // Es lo nuevo que hay bajo la respuesta (una tarjeta, un aviso): se anuncia.
+  announce(node.textContent)
   scrollChat()
   return node
 }
 
-/** La burbuja del asistente viva: la dada si sigue en el documento; si no, la última que haya en el chat, o null. */
+/**
+ * La burbuja del asistente viva: la dada si sigue en el documento; si no, la
+ * última del chat SI es lo último que hay (la respuesta parcial restaurada de
+ * este turno). Si lo último es una pregunta, null: la última burbuja sería la
+ * respuesta de OTRO turno, y pintar encima la borraría.
+ */
 function liveBubble(bubble) {
   if (bubble?.isConnected) return bubble
-  const vivas = el.chat.querySelectorAll('.msg.assistant')
-  return vivas[vivas.length - 1] || null
+  const msgs = el.chat.querySelectorAll('.msg')
+  const ultima = msgs[msgs.length - 1]
+  return ultima?.classList.contains('assistant') ? ultima : null
 }
 
 function noticeNode(text, bad) {
@@ -1326,7 +1563,15 @@ function errorNode(message, tracker, question) {
 
 async function growIndex(parts) {
   if (!state.site) return
-  const { index, added } = harvestIndex(parts || [], { site: state.site, index: state.index })
+  // harvestIndex blanquea toda URL absoluta de otro host antes de mirar nada
+  // (S6, auditoría del 2026-09-13): el Confluence enlazado de un Jira DC es el
+  // único host ajeno que cuenta como propio (sus páginas siguen fuera por
+  // producto, pero una incidencia citada dentro de una URL suya sí entra).
+  const { index, added } = harvestIndex(parts || [], {
+    site: state.site,
+    index: state.index,
+    allowedHosts: linkedHost() ? [linkedHost()] : [],
+  })
   if (added > 0) {
     state.index = index
     await saveIndex(state.site.host, index)
@@ -1607,7 +1852,13 @@ async function offerNotes(
   const original = answer
   const sinNada = saysNothingToSay(original)
   const seguimientoCitado = state.notes.length > 0 && questionCitesPoint(question || state.lastQuestion)
-  const adaptada = normalizeNumbering(answer, { expected: expectedCount(anchors) })
+  // El freno de «respuesta corta» se mide sobre lo que LLEGÓ, antes de
+  // adaptar nada, y `normalizeNumbering` recibe el mismo tope para no
+  // convertir una viñeta suelta de una respuesta corta en «[1]» (docs/PLAN.md
+  // §2.3 M5: «No he podido leer la incidencia: - El MCP devolvió 401» se
+  // tomaba por un análisis nuevo y gastaba una pasada más contra el modelo).
+  const respuestaCorta = original.length < NOTE_LIMITS.shortAnswer
+  const adaptada = normalizeNumbering(answer, { expected: expectedCount(anchors), shortAnswer: NOTE_LIMITS.shortAnswer })
   if (!sinNada && !seguimientoCitado && adaptada.prose !== answer) {
     answer = adaptada.prose
     repaint?.(answer)
@@ -1663,7 +1914,7 @@ async function offerNotes(
   // abajo, cuando ya se sabe que se puede marcar.
   if (!numeros.length) {
     const herramientaRota = (parts || []).some((p) => p?.type === 'tool' && p.state?.status === 'error')
-    if (herramientaRota || answer.length < NOTE_LIMITS.shortAnswer) {
+    if (herramientaRota || respuestaCorta) {
       log.info('Sin marcas', herramientaRota ? 'una consulta falló y la respuesta no numera nada' : 'la respuesta es corta y no numera nada')
       attachToBubble(
         bubble,
@@ -2312,7 +2563,27 @@ async function runPlan(plan, mode, card) {
 
   card.querySelectorAll('button').forEach((b) => (b.disabled = true))
 
-  const res = await chrome.runtime.sendMessage({ type, tabId: state.tabId, plan }).catch((e) => ({
+  // Un recorrido paso a paso dura varios segundos por rama y se puede parar
+  // desde aquí: el service worker atendía CANCEL_PLAN y nadie lo mandaba. El
+  // botón vive mientras dura el recorrido y se va con PLAN_FINISHED.
+  const tabId = state.tabId
+  if (type === MSG.START_PLAN) {
+    const stop = document.createElement('button')
+    stop.className = 'ghost small'
+    stop.type = 'button'
+    stop.textContent = 'Parar'
+    stop.addEventListener('click', async () => {
+      stop.disabled = true
+      await chrome.runtime.sendMessage({ type: MSG.CANCEL_PLAN, tabId }).catch(() => null)
+      // El service worker avisa con PLAN_FINISHED si había un paso en curso;
+      // entre pasos (esperando la recarga) sólo borra el plan: se cierra aquí.
+      finishNavRun({ cancelled: true })
+    })
+    card.querySelector('.nav-actions')?.appendChild(stop)
+    state.navRun = { card, stop, tabId }
+  }
+
+  const res = await chrome.runtime.sendMessage({ type, tabId, plan }).catch((e) => ({
     ok: false,
     error: String(e?.message || e),
   }))
@@ -2321,7 +2592,29 @@ async function runPlan(plan, mode, card) {
     log.ok('Navegación lanzada', `${mode} · ${plan.destination.title} · ${plan.destination.url}`)
   } else {
     log.error('Navegación fallida', res?.error || 'sin respuesta')
-    card.appendChild(noticeNode('No he podido navegar: ' + (res?.error || 'sin respuesta'), true))
+    finishNavRun()
+    const aviso = 'No he podido navegar: ' + (res?.error || 'sin respuesta')
+    card.appendChild(noticeNode(aviso, true))
+    announce(aviso)
+  }
+}
+
+/**
+ * El recorrido en marcha ha terminado (o se ha parado): su botón «Parar» se
+ * va y la tarjeta vuelve a ofrecer el viaje. Idempotente: puede llegar por el
+ * botón y por PLAN_FINISHED.
+ */
+function finishNavRun({ cancelled = false } = {}) {
+  const run = state.navRun
+  if (!run) return
+  state.navRun = null
+  run.stop.remove()
+  // Parado a medias, la tarjeta vuelve a ofrecer el viaje; terminado, se
+  // queda como estaba (ya estás allí).
+  if (cancelled) {
+    run.card.querySelectorAll('button').forEach((b) => (b.disabled = false))
+    log.info('Navegación cancelada', 'desde la tarjeta')
+    setStatus(state.client?.connected ? 'ok' : 'bad', state.client?.connected ? 'conectado' : 'sin conexión')
   }
 }
 
@@ -2708,7 +3001,8 @@ function moveSuggestion(delta) {
 
 /**
  * Teclado del campo: ↑/↓ recorren, Intro elige la resaltada (o la primera),
- * Esc quita las sugerencias y, si no había, cierra como «Listo».
+ * Esc quita las sugerencias; sin ellas, cierra el Escape del documento, como
+ * en cualquier otra pantalla.
  */
 function onSourcesKeydown(ev) {
   const { suggestions, active } = state.sourcesSearch
@@ -2724,13 +3018,12 @@ function onSourcesKeydown(ev) {
     if (elegida) chooseSuggestion(elegida).catch(console.error)
     return
   }
-  if (ev.key === 'Escape') {
+  // Con sugerencias, Escape sólo las vacía (y no llega al documento, que
+  // cerraría la pantalla). Sin ellas, cierra el keydown del documento (A3).
+  if (ev.key === 'Escape' && suggestions.length) {
     ev.preventDefault()
-    if (suggestions.length) {
-      clearSourceSuggestions()
-      return
-    }
-    closeSourcesScreen()
+    ev.stopPropagation()
+    clearSourceSuggestions()
   }
 }
 
@@ -2924,6 +3217,10 @@ function onRuntimeMessage(msg) {
     setStatus('busy', `paso ${msg.index + 1}/${msg.total}`)
   } else if (msg?.type === MSG.PLAN_FINISHED) {
     setStatus('ok', 'conectado')
+    // La tarjeta del recorrido vuelve en sí (si se paró desde ella, ya lo hizo
+    // el botón y esto no repite el registro).
+    const parada = !!state.navRun && !!msg.result?.cancelled
+    finishNavRun()
     if (msg.result?.needsPermission) {
       log.error('Navegación detenida', 'sin permiso de host')
       showPermissionNotice()
@@ -2931,20 +3228,75 @@ function onRuntimeMessage(msg) {
       log.error('Navegación detenida', msg.result.error)
       showNotice(msg.result.error, true)
     } else if (msg.result?.anchored) log.ok('Fragmento resaltado', msg.result.strategy)
-    else if (msg.result?.cancelled) log.info('Navegación cancelada')
+    else if (msg.result?.cancelled) log.info('Navegación cancelada', parada ? 'desde la tarjeta' : 'desde la página')
     else if (msg.result?.message) log.warn('Sin resaltar', msg.result.message)
     if (msg.result?.anchored === false && msg.result?.message) showNotice(msg.result.message)
   }
 }
 
+/**
+ * Abre un enlace del chat en una pestaña nueva, si es de un origen conocido.
+ *
+ * Los enlaces los escribe el modelo, y el modelo repite lo que lee: un enlace
+ * a un dominio que imite el login de Atlassian, copiado de una página
+ * inyectada, se abría igual (docs/PLAN.md §2.1 S5). Sólo se abren el sitio de
+ * la pestaña, el Confluence enlazado a este Jira y la lista fija de la
+ * extensión (`links.js`); lo demás se dice, con su host, y no se abre.
+ */
 function openUrl(href) {
+  const { origin, linkedOrigin } = linkCtx()
+  if (!allowedLinkOrigin(href, { origin, linkedOrigin })) {
+    const host = hostOf(href) || String(href || '').slice(0, 80)
+    log.warn('Enlace fuera del sitio', host)
+    // El aviso es la ÚNICA respuesta al clic: hay que verlo. Tras A7 el chat
+    // sólo baja solo si el usuario estaba pegado al fondo, así que un aviso
+    // sin `force` se pintaba fuera de la vista de quien había subido a leer y
+    // el enlace parecía muerto (revisión adversaria de H2, 2026-09-14). Éste
+    // se fuerza porque lo ha pedido él, con un clic, ahora mismo.
+    showNotice(
+      `Enlace fuera del sitio: ${host}. No lo abro: sólo abro enlaces de este sitio${linkedOrigin ? ' y de su Confluence enlazado' : ''}. Si lo necesitas, cópialo a mano.`,
+      false,
+      { force: true }
+    )
+    return
+  }
   chrome.tabs.create({ url: href }).catch(() => {})
+}
+
+/** Los dos orígenes contra los que se mide un enlace: el sitio de la pestaña y el Confluence enlazado a este Jira. */
+function linkCtx() {
+  return { origin: state.site?.origin || '', linkedOrigin: linkedSite(state.linkedContext)?.origin || '' }
+}
+
+/**
+ * La misma regla que `openUrl`, un momento antes: al PINTAR.
+ *
+ * `renderMarkdown` ponía `href` + `target="_blank"` en todos los enlaces, y un
+ * `href` se abre sin pasar por el manejador: clic central, «Abrir en pestaña
+ * nueva» del menú contextual, arrastrarlo. La comprobación de `openUrl` se
+ * esquivaba entera (revisión adversaria de H2, 2026-09-14, sobre S5). Lo que
+ * no se abriría no se pinta como enlace: se ve su URL y se copia a mano.
+ */
+function linkAllowed(href) {
+  return allowedLinkOrigin(href, linkCtx())
 }
 
 // ------------------------------------------------------------- pantallas
 
+/**
+ * Abre una pantalla a pantalla completa.
+ *
+ * Lo de detrás —cabecera, chat, redactor— queda INERTE y el foco entra en la
+ * pantalla: sin esto, Tab recorría siete controles tapados (Intro en una
+ * sugerencia mandaba un turno con Ajustes abierto) y sólo al octavo llegaba a
+ * la pantalla (docs/PLAN.md §2.5 A1, reproducido en la auditoría del
+ * 2026-09-13). Quién tenía el foco se recuerda para devolvérselo al cerrar;
+ * si se abre una pantalla encima de otra, se recuerda el de ANTES de la
+ * primera, que es a donde hay que volver.
+ */
 function showScreen(id, extra) {
-  hideScreens()
+  const habia = document.querySelector('.screen:not(.hidden)')
+  document.querySelectorAll('.screen').forEach((s) => s.classList.add('hidden'))
   const screen = $(id)
   screen?.classList.remove('hidden')
 
@@ -2954,10 +3306,52 @@ function showScreen(id, extra) {
     $('server-pass').value = state.settings.password
     $('connect-error').textContent = extra ? String(extra).slice(0, 160) : ''
   }
+
+  if (!habia) state.focusBefore = document.activeElement
+  el.app.inert = true
+  // El título visible de la pantalla (el primero que no esté oculto: la de
+  // claves tiene dos partes), enfocable sólo por programa.
+  const titulo = [...(screen?.querySelectorAll('h1') || [])].find((h) => !h.closest('.hidden'))
+  if (titulo) {
+    titulo.tabIndex = -1
+    titulo.focus()
+  }
 }
 
+/** Cierra las pantallas; lo de detrás vuelve a estar vivo y el foco, a quien lo tenía (o al cuadro). */
 function hideScreens() {
+  const habia = document.querySelector('.screen:not(.hidden)')
   document.querySelectorAll('.screen').forEach((s) => s.classList.add('hidden'))
+  el.app.inert = false
+  if (!habia) return
+  devolverFoco()
+}
+
+/**
+ * El foco vuelve a quien lo tenía antes de que se tapara el panel, o al
+ * cuadro. Lo comparten las pantallas y el velo «Trabajando…»: los dos apagan
+ * lo de debajo, y los dos tienen que devolverlo al destaparlo.
+ */
+function devolverFoco() {
+  const antes = state.focusBefore
+  state.focusBefore = null
+  const vale = antes && antes !== document.body && antes.isConnected && !antes.closest('.screen') && !antes.closest('.hidden')
+  if (vale) antes.focus()
+  else el.input.focus()
+}
+
+/**
+ * Escape en Ajustes: cerrar sin guardar.
+ *
+ * Su «Listo» no cierra y ya está: GUARDA todos los campos —la contraseña y la
+ * URL del servidor incluidas— y rearranca el panel, lo que de paso cancela el
+ * turno en vuelo. Con Escape mapeado a ese botón, un Escape distraído aplicaba
+ * unos ajustes a medio escribir (revisión adversaria de H2, 2026-09-14).
+ * `showSettingsScreen` rellena todos los campos desde `state.settings` cada vez
+ * que se abre, así que lo tecleado y no guardado se pierde: eso es cerrar.
+ */
+function closeSettingsWithoutSaving() {
+  hideScreens()
 }
 
 function connectCommand() {
@@ -3211,17 +3605,50 @@ function setStreaming(on) {
   // El modo se decide al mandar: cambiarlo a mitad de turno dejaría lo que
   // viene después —marcar, ofrecer llevarte— hablando de otro modo.
   el.skill.disabled = on
+  // Ni sesión nueva encima de un turno en vuelo: primero Parar (C4).
+  $('btn-new-session').disabled = on
+  // El lector de pantalla: mientras llega la respuesta a trozos, el chat está
+  // «ocupado»; lo que hay que decir se dice una vez al final (A2).
+  el.chat.setAttribute('aria-busy', on ? 'true' : 'false')
   setStatus(on ? 'busy' : state.client?.connected ? 'ok' : 'bad', on ? 'pensando…' : state.client?.connected ? 'conectado' : 'sin conexión')
 }
 
-function showBusy(title, text) {
+/**
+ * El velo «Trabajando…».
+ *
+ * Tapa el panel, así que también lo apaga: `hideScreens()` acaba de meter el
+ * foco en el cuadro justo antes de que esto lo tape, y sin `inert` se seguía
+ * tabulando por lo de debajo —y mandando turnos a ciegas— con el velo puesto.
+ * Y sólo enseña su Cancelar si hay algo que cancelar: el de «Guardando lo
+ * aprendido» no cancelaba nada (revisión adversaria de H2, 2026-09-14).
+ *
+ * @param {{abort?: AbortController|null}} opts qué cancela el botón.
+ */
+function showBusy(title, text, { abort = null } = {}) {
   el.busyTitle.textContent = title
   el.busyText.textContent = text || ''
+  state.busyAbort = abort
+  const cancelar = $('btn-busy-cancel')
+  cancelar.hidden = !abort
   el.busy.classList.remove('hidden')
+  if (!state.focusBefore) state.focusBefore = document.activeElement
+  el.app.inert = true
+  if (abort) cancelar.focus()
 }
 
 function hideBusy() {
+  const estaba = !el.busy.classList.contains('hidden')
   el.busy.classList.add('hidden')
+  state.busyAbort = null
+  // Quitar un velo que no estaba puesto no devuelve ningún foco: a `hideBusy`
+  // se llama por si acaso desde varios sitios (buildClient, el catch del
+  // indexado) y no puede robarle el foco a nadie.
+  if (!estaba) return
+  // Si hay una pantalla abierta, su `inert` y su foco mandan: el velo se
+  // levantó encima de ella y no puede devolver nada.
+  if (document.querySelector('.screen:not(.hidden)')) return
+  el.app.inert = false
+  devolverFoco()
 }
 
 function autoGrow() {
@@ -3243,6 +3670,41 @@ function wireEvents() {
       ev.preventDefault()
       send()
     }
+  })
+
+  // ¿Está el usuario pegado al fondo del chat? Se mide en cada scroll —el
+  // suyo y el del propio panel—, ANTES de que el siguiente trozo de respuesta
+  // mueva nada: es lo que decide si se le sigue al final (A7).
+  el.chat.addEventListener('scroll', () => {
+    state.chatPinned = stuckToBottom(el.chat)
+  })
+
+  // Escape, desde cualquier sitio del panel: primero el velo «Trabajando…»
+  // (su Cancelar, si es que cancela algo), luego la pantalla abierta. Ajustes
+  // se cierra SIN pulsar su «Listo», que guarda y rearranca; las demás de
+  // consulta, por su botón. Las de conexión, claves y contexto no: cerrarlas
+  // es decidir algo (A3).
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key !== 'Escape') return
+    if (!el.busy.classList.contains('hidden')) {
+      // Un velo sin abortador (resumir la sesión) no se va con Escape: su
+      // botón está oculto justamente porque no hay nada que cancelar.
+      if ($('btn-busy-cancel').hidden) return
+      ev.preventDefault()
+      $('btn-busy-cancel').click()
+      return
+    }
+    const abierta = document.querySelector('.screen:not(.hidden)')
+    if (!abierta) return
+    if (ESCAPE_DISMISSES.includes(abierta.id)) {
+      ev.preventDefault()
+      closeSettingsWithoutSaving()
+      return
+    }
+    const btn = ESCAPE_CLOSES[abierta.id]
+    if (!btn) return
+    ev.preventDefault()
+    $(btn).click()
   })
   el.send.addEventListener('click', send)
   el.stop.addEventListener('click', async () => {
@@ -3449,7 +3911,10 @@ function wireEvents() {
   })
 
   $('btn-busy-cancel').addEventListener('click', () => {
-    state.indexingAbort?.abort()
+    // Lo que trajo el velo, sea lo que sea (hoy, el indexado). Sin esto, el
+    // Cancelar de «Guardando lo aprendido» quitaba el velo y dejaba el resumen
+    // corriendo por detrás.
+    state.busyAbort?.abort()
     hideBusy()
   })
 }
@@ -3491,8 +3956,11 @@ async function saveKeys() {
   // Los hosts de cada producto salen de la configuración que se acaba de
   // construir —ya normalizada—, no de lo que se escribió en el campo.
   const env = result.config.environment
+  // Con el sitio con el que se pidieron: el paso manual espera hasta 15 min y
+  // la pestaña activa entonces puede ser otra (C5).
   state.pendingMcp = {
     ...result,
+    site: state.site,
     products: {
       jira: jira ? hostOf(env.JIRA_URL) : '',
       confluence: confluence ? hostOf(env.CONFLUENCE_URL) : '',
@@ -3535,7 +4003,10 @@ async function showManualStep(result) {
   const controller = new AbortController()
   state.mcpWait = controller
 
-  const status = await waitForMcpReady(state.client, state.site.host, {
+  // El host con el que se pidieron las claves, no el de la pestaña de ahora:
+  // ya ha habido un await (paths) y la espera dura hasta 15 min.
+  const site = state.pendingMcp?.site || state.site
+  const status = await waitForMcpReady(state.client, site.host, {
     timeoutMs: 15 * 60 * 1000,
     signal: controller.signal,
     onTick: (s, left) => {
@@ -3545,6 +4016,7 @@ async function showManualStep(result) {
           : `Esperando a que opencode cargue el MCP… (${Math.round(left / 1000)} s)`
     },
   })
+  if (state.mcpWait === controller) state.mcpWait = null
 
   if (controller.signal.aborted) return
 
@@ -3565,12 +4037,21 @@ async function showManualStep(result) {
  * enlazado a éste y no volverá a pedir claves.
  */
 async function finishSetup() {
-  const { name, products } = state.pendingMcp || {}
+  // El sitio con el que se pidieron las claves (`saveKeys` lo guardó con la
+  // configuración pendiente): tras esperar al MCP, la pestaña activa puede
+  // ser otra, o ninguna de Atlassian (auditoría del 2026-09-13, docs/PLAN.md
+  // §2 C5: TypeError con una pestaña fuera, o los registros de A en B).
+  const { name, products, site } = state.pendingMcp || {}
   const status = $('setup-status')
   const waitingText = $('setup-waiting-text')
   const say = (t) => {
     status.textContent = t
     waitingText.textContent = t
+  }
+
+  if (!site?.host) {
+    say('He perdido de vista el sitio para el que se pidieron las claves. Vuelve a Ajustes → Cambiar las claves.')
+    return
   }
 
   say('Comprobando que las claves valen…')
@@ -3585,7 +4066,7 @@ async function finishSetup() {
       const check = await verifyCredentials(state.client, {
         sessionID: session.id,
         model: state.model,
-        host: state.site.host,
+        host: site.host,
         product,
       })
 
@@ -3604,17 +4085,23 @@ async function finishSetup() {
     log.ok('MCP verificado', detalles.join(' · '))
 
     const registros = siteRecords({
-      host: state.site.host,
-      product: state.site.product,
-      mcpName: name || mcpNameForHost(state.site.host),
+      host: site.host,
+      product: site.product,
+      mcpName: name || mcpNameForHost(site.host),
       jiraHost: products?.jira || '',
       confluenceHost: products?.confluence || '',
     })
     for (const { host, patch } of registros) await saveSite(host, patch)
     for (const { host } of registros.slice(1)) {
-      log.ok('Sitio enlazado', `${host} comparte el MCP de ${state.site.host}; no pedirá claves`)
+      log.ok('Sitio enlazado', `${host} comparte el MCP de ${site.host}; no pedirá claves`)
     }
-    setTimeout(() => bootForSite(), 800)
+    // Se rearranca sólo si la pestaña sigue en ese sitio: si está en otro, el
+    // registro ya está guardado y el arranque de aquél lo reconocerá al volver.
+    // Y si está fuera de Atlassian, el arranque queda PENDIENTE: volver al
+    // mismo host ya no rearranca por su cuenta (revisión adversaria de H2,
+    // 2026-09-14), y sin esto el MCP recién cargado no se reconocería.
+    if (state.site?.host === site.host) setTimeout(() => bootForSite(), 800)
+    else if (!state.site && state.lastHost === site.host) state.bootPending = site.host
   } catch (err) {
     say('No he podido comprobarlo: ' + (err?.message || err))
   } finally {
@@ -3635,19 +4122,30 @@ function paintSnippet() {
  *        trajo el usuario y se queda sólo con el índice de navegación.
  */
 async function generateContext({ keepContext = false } = {}) {
-  const scope = defaultScope(state.site)
+  // El sitio que se indexa se captura al empezar: el indexado dura minutos y
+  // `state.site` cambia con la pestaña. Todo lo que se escriba —también si
+  // falla— va bajo ESTE host; si al terminar el usuario está en otro sitio, se
+  // guarda en segundo plano y no se toca ni el estado ni el chat de aquél.
+  // Reproducido en la auditoría del 2026-09-13 (docs/PLAN.md §2 C2): el
+  // contexto de un Jira se guardaba como CONTEXT.md del Confluence abierto
+  // entonces, y ese Confluence quedaba «onboarded» sin haber elegido nada.
+  const sitio = state.site
+  if (!sitio) return
+  const host = state.site.host
+  const scope = defaultScope(sitio)
   const controller = new AbortController()
   state.indexingAbort = controller
   hideScreens()
   showBusy(
     keepContext ? 'Construyendo el índice' : 'Levantando el mapa',
-    `Recorriendo ${scope?.label || 'esta zona'}…`
+    `Recorriendo ${scope?.label || 'esta zona'}…`,
+    { abort: controller }
   )
 
   try {
     const { contextMd, index } = await buildContext(state.client, {
       scope,
-      site: state.site,
+      site: sitio,
       model: state.model,
       // Desde Jira, el indexador sabe qué Confluence hay enlazado y qué
       // cuenta su contexto: es donde buscar si los tickets están documentados.
@@ -3656,31 +4154,56 @@ async function generateContext({ keepContext = false } = {}) {
       onProgress: (t) => (el.busyText.textContent = t),
     })
 
+    // ¿Sigue el panel en el sitio que se indexó? Si no, el índice se funde con
+    // el GUARDADO de aquel host, no con el de la pestaña de ahora. Se pregunta
+    // EN CADA USO, no una vez: entre las escrituras de aquí abajo hay tres
+    // await de almacenamiento, y en ese hueco el usuario puede cambiar de
+    // sitio; con una sola foto, el índice de A acababa en el estado de B
+    // (revisión adversaria de H2, 2026-09-14). Y vale el sitio del PANEL: con
+    // la pestaña en el correo, `state.site` es null y esto sigue siendo suyo.
+    const sigueAqui = () => (state.site?.host ?? state.lastHost) === host
     if (!keepContext) {
-      state.contextMd = contextMd
-      await memory.saveContextMd(state.site.host, contextMd)
+      await memory.saveContextMd(host, contextMd)
+      if (sigueAqui()) state.contextMd = contextMd
     }
-    state.index = mergeIndex(state.index, index)
+    const base = sigueAqui() ? state.index : (await getIndex(host)).index
+    const fundido = mergeIndex(base, index)
+    await saveIndex(host, fundido)
+    await saveSite(host, { onboarded: true, indexedAt: Date.now() })
+
+    hideBusy()
+    if (!sigueAqui()) {
+      log.info('Contexto construido en segundo plano', `${host} · ${indexSize(fundido)} entradas · ${contextMd.length} caracteres · el panel ya está en otro sitio`)
+      return
+    }
+    state.index = fundido
     // Lo que el indexador diga de los padres puede venir de un modelo: el
     // camino de cada destino se vuelve a leer de la API la próxima vez.
     state.ancestryFetched = new Map()
-    await saveIndex(state.site.host, state.index)
-    await saveSite(state.site.host, { onboarded: true, indexedAt: Date.now() })
-
-    hideBusy()
     log.ok('Contexto construido', `${indexSize(state.index)} entradas · ${contextMd.length} caracteres`)
+    // El chat sólo se repinta si el panel está enseñando ese sitio: con la
+    // pestaña fuera de Atlassian, lo que se ve es el «Abre Jira o Confluence»,
+    // y al volver se repinta solo (refreshTab).
+    if (!state.site) return
     await restoreConversation()
     showNotice(`Contexto listo: ${indexSize(state.index)} entradas indexadas.`)
   } catch (err) {
     hideBusy()
-    if (err?.name === 'AbortError') {
-      showNotice('Indexado cancelado. Puedes retomarlo desde ajustes.')
-    } else {
-      log.error('Indexado fallido', err?.message || String(err))
-      showNotice('El indexado falló: ' + (err?.message || err), true)
+    const sigueAqui = () => (state.site?.host ?? state.lastHost) === host
+    // Cancelado (el botón del velo, o un cambio de sitio que se llevó el
+    // cliente) no es fallado: no se ha aprendido nada, así que el sitio NO
+    // queda por configurado —su pantalla de contexto volverá a salir— y el
+    // chat no se llena de un fallo que no lo es (revisión adversaria de H2,
+    // 2026-09-14). Fuera del `signal` no hay más marca que el nombre.
+    if (err?.name === 'AbortError' || controller.signal.aborted) {
+      log.info('Indexado cancelado', `${host} · sin índice: la pantalla de contexto volverá a salir`)
+      if (sigueAqui() && state.site) showNotice('Indexado cancelado. Puedes retomarlo desde ajustes.')
+      return
     }
-    await saveSite(state.site.host, { onboarded: true })
-    await restoreConversation()
+    log.error('Indexado fallido', `${host} · ${err?.message || String(err)}`)
+    if (sigueAqui() && state.site) showNotice('El indexado falló: ' + (err?.message || err), true)
+    await saveSite(host, { onboarded: true })
+    if (sigueAqui() && state.site) await restoreConversation()
   } finally {
     state.indexingAbort = null
   }
@@ -3705,6 +4228,17 @@ async function uploadContext(ev) {
 
 async function newSession() {
   if (!state.site) return
+
+  // Con un turno en vuelo, se cancela —su `finally` apaga el streaming— y se
+  // aborta en el servidor ANTES de resumir la sesión: si no, la respuesta
+  // caía en una burbuja desconectada, sus tarjetas bajo la bienvenida, y
+  // Parar ya no podía abortar nada (auditoría del 2026-09-13, docs/PLAN.md
+  // §2 C4). El botón además se desactiva mientras se responde (setStreaming).
+  if (state.streaming) {
+    state.turnAbort?.abort()
+    if (state.sessionID) await state.client?.abort(state.sessionID).catch(() => {})
+    log.info('Turno cancelado', 'has abierto una sesión nueva a mitad de respuesta')
+  }
 
   // Si la memoria entre sesiones está activa, se resume antes de cerrar.
   if (state.settings.crossSessionMemory && state.sessionID && memory.worthRemembering(state.turns)) {

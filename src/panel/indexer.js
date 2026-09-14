@@ -9,7 +9,7 @@
  */
 
 import { normalizeIndex, mergeIndex, mergeIndexKeepingTree, indexSize } from '../atlassian/index-store.js'
-import { canonicalPagePath, canonicalSpacePath, isRealSpaceKey } from '../atlassian/site.js'
+import { canonicalPagePath, canonicalSpacePath, isRealSpaceKey, validProjectKey } from '../atlassian/site.js'
 import {
   indexExploreSystem,
   indexExplorePrompt,
@@ -111,10 +111,15 @@ export async function buildContext(client, { scope, site, model, onProgress, sig
  * las herramientas MCP. Ahí ya vienen los identificadores reales.
  *
  * @param {Array} parts partes del mensaje del asistente
+ * @param {{site:object, index:object|null, allowedHosts?:string[]}} opts
+ *   `allowedHosts`: hosts ajenos cuyas URLs NO se blanquean (el Confluence
+ *   enlazado desde un Jira DC: sus páginas las tira después el filtro por
+ *   producto, pero una incidencia propia enlazada desde una de sus páginas
+ *   sigue contando). Todo lo demás con host distinto de `site.host` cae.
  * @returns {{index: object, added: number}}
  */
-export function harvestIndex(parts, { site, index }) {
-  const found = ownProductEntities(extractEntities(parts, site), site)
+export function harvestIndex(parts, { site, index, allowedHosts = [] }) {
+  const found = ownProductEntities(extractEntities(parts, site, { index, allowedHosts }), site)
   if (!found.pages.length && !found.issues.length && !found.spaces.length) {
     return { index, added: 0 }
   }
@@ -151,6 +156,23 @@ const SPACE_URL = /(?:\/wiki)?\/spaces\/([A-Za-z0-9._~-]+)(?![/\w])/g
 const DISPLAY_URL = /(?:\/wiki)?\/display\/([A-Za-z0-9._~-]+)(?![/\w])/g
 const VIEWPAGE_URL = /(?:\/wiki)?\/pages\/viewpage\.action\?pageId=(\d+)/g
 const ISSUE_KEY = /\b([A-Z][A-Z0-9_]{1,9}-\d+)\b/g
+/**
+ * Una clave dentro de una ruta `/browse/CLAVE`: la única forma en que una
+ * clave suelta de un proyecto desconocido entra en el índice (M4).
+ */
+const BROWSE_KEY = /\/browse\/([A-Z][A-Z0-9_]{1,9}-\d+)\b/g
+/**
+ * El proyecto de una clave que DEVUELVE Jira (`"key": "ENG-1"` en el JSON de
+ * `jira_search` o `jira_get_issue`). Sólo el campo `key` a secas: el
+ * `"issue_key"` de la entrada lo escribió el modelo y no prueba nada.
+ */
+const JSON_KEY_PROJECT = /"key"\s*:\s*"([A-Z][A-Z0-9_]{1,9})-\d+"/g
+/**
+ * Toda URL absoluta, con esquema o sólo con «//» delante. La misma clase de
+ * caracteres que usa PAGE_URL para el slug, para que una URL ajena caiga de
+ * una pieza y no deje ni la ruta ni la clave (S6).
+ */
+const ABSOLUTE_URL = /(?:https?:)?\/\/[^\s"'<>)\]]+/gi
 const JSON_PAGE = /"(?:id|page_?id)"\s*:\s*"?(\d+)"?[^}]{0,240}?"title"\s*:\s*"([^"]{1,200})"/g
 const JSON_TITLE_FIRST = /"title"\s*:\s*"([^"]{1,200})"[^}]{0,240}?"(?:id|page_?id)"\s*:\s*"?(\d+)"?/g
 /**
@@ -164,9 +186,26 @@ const JSON_SUMMARY_FIRST = /"summary"\s*:\s*"([^"]{1,200})"[^}]{0,400}?"key"\s*:
 /**
  * Saca entidades de Atlassian del texto que devolvieron las herramientas.
  * Pura y comprobable: es lo que mantiene vivo el índice con el uso.
+ *
+ * Dos barreras antes de las regex, las dos reproducidas en la auditoría del
+ * 2026-09-13 (docs/PLAN.md §2, S6 y M4):
+ *   - Toda URL absoluta cuyo host no sea el del sitio (ni uno de
+ *     `allowedHosts`) se sustituye por un espacio. Sin esto, una página de
+ *     `partner.atlassian.net` entraba con una ruta relativa a ESTE sitio,
+ *     `validatePlan` la aceptaba (la URL se reconstruye contra el origen
+ *     propio) y «Llévame» abría un 404. Una ruta relativa sigue valiendo.
+ *   - Una clave suelta («ABC-12») sólo es una incidencia si su proyecto es
+ *     conocido: el de la pestaña, los del índice (`projects`, o el de sus
+ *     `issues`) o los de las claves que devuelve Jira en JSON; o si viene en
+ *     una ruta `/browse/CLAVE`. Sin esto, «UTF-8», «ISO-8601» o «COVID-19»
+ *     eran incidencias y destino de «Llévame».
+ *
+ * @param {Array} parts
+ * @param {object} site el de `parseAtlassianUrl` (host, projectKey…)
+ * @param {{index?:object|null, allowedHosts?:string[]}} opts
  */
-export function extractEntities(parts, site) {
-  const blob = collectToolText(parts)
+export function extractEntities(parts, site, { index = null, allowedHosts = [] } = {}) {
+  const blob = dropForeignUrls(collectToolText(parts), [site?.host, ...asStrings(allowedHosts)])
   const pages = new Map()
   const spaces = new Map()
   const issues = new Map()
@@ -216,9 +255,14 @@ export function extractEntities(parts, site) {
   for (const m of blob.matchAll(SPACE_URL)) addSpace(m[1])
   for (const m of blob.matchAll(DISPLAY_URL)) addSpace(m[1])
 
+  const conocidos = knownProjects(site, index, blob)
+  const enRuta = new Set()
+  for (const m of blob.matchAll(BROWSE_KEY)) enRuta.add(m[1])
   for (const m of blob.matchAll(ISSUE_KEY)) {
     const key = m[1]
-    if (!issues.has(key)) issues.set(key, { key, summary: key, url: `/browse/${key}` })
+    if (issues.has(key)) continue
+    if (!conocidos.has(key.split('-')[0]) && !enRuta.has(key)) continue
+    issues.set(key, { key, summary: key, url: `/browse/${key}` })
   }
 
   // Los títulos de incidencia suelen venir como "KEY: resumen" o "KEY - resumen".
@@ -243,6 +287,47 @@ export function extractEntities(parts, site) {
     projects: [],
     host: known,
   }
+}
+
+/**
+ * Sustituye por un espacio toda URL absoluta cuyo host no esté en `hosts`
+ * (nombres de host, sin puerto; se comparan en minúsculas). Lo que no parsea
+ * como URL también cae. Pura; es la barrera de S6.
+ */
+export function dropForeignUrls(text, hosts) {
+  const propios = new Set(asStrings(hosts).map((h) => h.toLowerCase()))
+  return String(text || '').replace(ABSOLUTE_URL, (u) => (propios.has(hostOfUrl(u)) ? u : ' '))
+}
+
+function hostOfUrl(u) {
+  try {
+    return new URL(u.startsWith('//') ? 'https:' + u : u).hostname.toLowerCase()
+  } catch {
+    return ''
+  }
+}
+
+function asStrings(list) {
+  if (!Array.isArray(list)) return []
+  return list.filter((h) => typeof h === 'string' && h.trim()).map((h) => h.trim())
+}
+
+/**
+ * Los proyectos de Jira de los que se fía la cosecha de claves sueltas: el
+ * de la pestaña, los del índice (sus `projects` y el proyecto de cada una de
+ * sus `issues`) y los de las claves que devuelve Jira en JSON. Pura.
+ */
+function knownProjects(site, index, blob) {
+  const out = new Set()
+  const add = (k) => {
+    const p = validProjectKey(k)
+    if (p) out.add(p)
+  }
+  add(site?.projectKey)
+  for (const k of Object.keys(index?.projects || {})) add(k)
+  for (const is of Object.values(index?.issues || {})) add(is?.projectKey || String(is?.key || '').split('-')[0])
+  for (const m of blob.matchAll(JSON_KEY_PROJECT)) add(m[1])
+  return out
 }
 
 function collectToolText(parts) {

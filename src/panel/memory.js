@@ -5,6 +5,17 @@
  * es un hilo con historial. Lo que se construye aquí es el nivel de arriba —
  * el resumen de una sesión que sobrevive a la siguiente — y es opcional
  * porque un resumen puede arrastrar cosas que no quieres guardar.
+ *
+ * Lo que sale del almacén no se cree a ciegas. `memoryToPrompt` hacía
+ * `new Date(e.at).toISOString()` sin comprobar nada y, con una entrada sin
+ * fecha válida (un almacén editado a mano, una versión anterior del formato),
+ * reventaba con «Invalid time value» dentro del `runTurn` de send(): TODOS los
+ * turnos del host fallaban con un error genérico mientras la memoria entre
+ * sesiones estuviera activa, sin pista de que la culpa era una entrada
+ * (reproducido en la auditoría del 2026-09-13, docs/PLAN.md §2.4 R1). Desde
+ * entonces la fecha es opcional en el prompt y todo lo que se lee o se guarda
+ * pasa por `normalizeMemory`: claves blancas `{at, text}`, texto no vacío y un
+ * instante válido (o el de ahora).
  */
 
 import { STORAGE_KEYS } from '../shared/config.js'
@@ -12,6 +23,70 @@ import { memorySummaryPrompt } from './prompts.js'
 
 const MAX_ENTRIES = 40
 const MAX_CHARS = 12000
+
+/**
+ * ¿Es `at` un instante que Date sabe imprimir? Un número finito no basta:
+ * Date sólo cubre ±8,64e15 ms, y `new Date(1e20).toISOString()` lanza igual
+ * que con NaN. Una fecha como texto o `null` tampoco cuentan: `at` es la
+ * clave con la que `removeEntry` borra y se compara estricta. Puro.
+ */
+function validInstant(at) {
+  return typeof at === 'number' && Number.isFinite(new Date(at).getTime())
+}
+
+/** «AAAA-MM-DD» de un instante válido, o '' si no lo es (la línea sale sin fecha). Puro. */
+function isoDay(at) {
+  return validInstant(at) ? new Date(at).toISOString().slice(0, 10) : ''
+}
+
+/**
+ * El instante de `at`, o null si no hay ninguno que rescatar. Un número válido
+ * vale tal cual; una fecha en TEXTO se recupera con `Date.parse` y se guarda ya
+ * como número, que es lo que `removeEntry` compara estricta y lo que `isoDay`
+ * sabe imprimir. Antes toda `at` que no fuera número se daba por perdida y se
+ * sustituía por la de ahora, así que un almacén exportado a JSON y vuelto a
+ * importar (o editado a mano) con «2026-09-01T10:00:00Z» perdía la fecha de
+ * cada entrada: todas pasaban a ser de hoy (revisión adversaria de H2,
+ * 2026-09-14). Lo que `Date` no entiende no se rescata. Puro.
+ */
+function instantOf(at) {
+  if (validInstant(at)) return at
+  if (typeof at === 'string') {
+    const t = Date.parse(at)
+    if (validInstant(t)) return t
+  }
+  return null
+}
+
+/** Una entrada con claves blancas `{at, text}`, o null si no tiene texto. Pura. */
+function normalizeEntry(raw, now) {
+  if (!raw || typeof raw !== 'object') return null
+  const text = String(raw.text || '').trim()
+  if (!text) return null
+  const at = instantOf(raw.at)
+  return { at: at === null ? now : at, text }
+}
+
+/**
+ * Reconstruye una memoria con lo que valga de `raw`: `entries` lista, cada
+ * entrada `{at, text}` con texto no vacío y `at` instante válido, tope
+ * MAX_ENTRIES. Una fecha en texto que `Date` entienda se conserva (`instantOf`);
+ * a la que no trae fecha se le pone `now − posición` (`now` es
+ * Date.now() por defecto): distintas entre sí porque `removeEntry` borra por
+ * `at`, y dos reparadas con el mismo instante caerían juntas al borrar una
+ * (lo destapó su test). Lo que no tiene forma de memoria queda
+ * `{ entries: [] }`. Idempotente. Pura.
+ */
+export function normalizeMemory(raw, { now = Date.now() } = {}) {
+  const lista = Array.isArray(raw?.entries) ? raw.entries : []
+  const entries = []
+  for (const e of lista) {
+    const entry = normalizeEntry(e, now - entries.length)
+    if (entry) entries.push(entry)
+    if (entries.length >= MAX_ENTRIES) break
+  }
+  return { entries }
+}
 
 export async function getContextMd(host) {
   const key = STORAGE_KEYS.context(host)
@@ -23,23 +98,43 @@ export async function saveContextMd(host, md) {
   await chrome.storage.local.set({ [STORAGE_KEYS.context(host)]: String(md || '') })
 }
 
+/**
+ * La memoria del host, normalizada. Si lo guardado no lo estaba (de antes de
+ * R1, o editado a mano) se reescribe UNA vez: sin eso, una entrada sin fecha
+ * recibiría un `at` distinto en cada lectura y «Borrar» en la pantalla de
+ * memoria —que borra por `at`— no daría con ella. Sin nada guardado no se
+ * crea la clave, y si la reparación no se puede escribir se lee normalizada igual.
+ */
 export async function getMemory(host) {
   const key = STORAGE_KEYS.memory(host)
   const got = await chrome.storage.local.get(key)
-  return got[key] || { entries: [] }
+  if (!(key in got)) return { entries: [] }
+  const memory = normalizeMemory(got[key])
+  if (JSON.stringify(memory) !== JSON.stringify(got[key])) {
+    try {
+      await saveMemory(host, memory)
+    } catch {
+      /* se lee normalizada igual; sólo se pierde la reparación */
+    }
+  }
+  return memory
 }
 
+/** Nunca se persiste nada que no pase por `normalizeMemory`. */
 export async function saveMemory(host, memory) {
-  await chrome.storage.local.set({ [STORAGE_KEYS.memory(host)]: memory })
+  await chrome.storage.local.set({ [STORAGE_KEYS.memory(host)]: normalizeMemory(memory) })
 }
 
 export async function clearMemory(host) {
   await chrome.storage.local.remove(STORAGE_KEYS.memory(host))
 }
 
+/** Añade la entrada la primera; un texto vacío no se guarda (la memoria queda como estaba). */
 export async function addEntry(host, text) {
   const memory = await getMemory(host)
-  memory.entries.unshift({ at: Date.now(), text: String(text || '').trim() })
+  const limpio = String(text || '').trim()
+  if (!limpio) return memory
+  memory.entries.unshift({ at: Date.now(), text: limpio })
   memory.entries = memory.entries.slice(0, MAX_ENTRIES)
   await saveMemory(host, memory)
   return memory
@@ -52,13 +147,21 @@ export async function removeEntry(host, at) {
   return memory
 }
 
-/** Texto que se inyecta en el `system` de cada turno. Acotado a lo reciente. */
+/**
+ * Texto que se inyecta en el `system` de cada turno. Acotado a lo reciente.
+ * La fecha es opcional: sale «[AAAA-MM-DD] texto» si `at` es un instante
+ * válido y el texto a secas si no (nunca se inventa una, nunca se lanza).
+ * Lo que no es una entrada con texto se salta. Puro.
+ */
 export function memoryToPrompt(memory) {
-  if (!memory?.entries?.length) return ''
+  if (!Array.isArray(memory?.entries)) return ''
   const out = []
   let total = 0
   for (const e of memory.entries) {
-    const line = `[${new Date(e.at).toISOString().slice(0, 10)}] ${e.text}`
+    const text = String(e?.text || '').trim()
+    if (!text) continue
+    const fecha = isoDay(e.at)
+    const line = fecha ? `[${fecha}] ${text}` : text
     if (total + line.length > MAX_CHARS) break
     out.push(line)
     total += line.length

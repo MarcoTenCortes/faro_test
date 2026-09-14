@@ -101,6 +101,15 @@ test('siteBaseUrl: de lo que se pega al sitio, sin la incidencia ni la página',
   eq(siteBaseUrl('https://confluence.x.eu/pages/viewpage.action?pageId=5'), 'https://confluence.x.eu')
   eq(siteBaseUrl('https://x.eu/jira/browse/ENG-7'), 'https://x.eu/jira', 'una ruta de contexto se conserva')
   eq(siteBaseUrl('https://x.eu/wiki/display/ENG/T'), 'https://x.eu/wiki')
+  // R3 (auditoría del 2026-09-13): el enlace corto que da «Compartir» en un
+  // Confluence Data Center (/x/AbCd) se colaba como ruta de contexto y el MCP
+  // se configuraba contra una dirección que no existe.
+  eq(siteBaseUrl('https://confluence.x.eu/x/AbCdEf'), 'https://confluence.x.eu', 'el enlace corto de Compartir no es ruta de contexto')
+  eq(siteBaseUrl('https://x.eu/confluence/x/AbCd'), 'https://x.eu/confluence', 'y detrás de una ruta de contexto, ídem')
+  // Límite asumido: un contexto que se llame «/x» no se distingue del enlace
+  // corto (Confluence sirve sus enlaces cortos en /x/…, así que un contexto con
+  // ese nombre chocaría con ellos: no se da en la práctica).
+  eq(siteBaseUrl('https://x.eu/x/x/AbCd'), 'https://x.eu', 'límite asumido: un contexto llamado /x se recorta con el enlace corto')
   eq(siteBaseUrl(' https://jira.x.eu/ '), 'https://jira.x.eu', 'espacios y barra final fuera')
   eq(siteBaseUrl('jira.x.eu'), '', 'sin protocolo no es una dirección')
   eq(siteBaseUrl('javascript:alert(1)'), '')

@@ -1,5 +1,5 @@
 import { test, eq, assert } from '../harness.js'
-import { extractEntities, harvestIndex } from '../../src/panel/indexer.js'
+import { extractEntities, harvestIndex, dropForeignUrls } from '../../src/panel/indexer.js'
 import { normalizeIndex, indexSize } from '../../src/atlassian/index-store.js'
 import { shouldPlan } from '../../src/panel/planner.js'
 import { indexExploreSystem } from '../../src/panel/prompts.js'
@@ -39,8 +39,11 @@ test('extraer: el título real gana al marcador de posición', () => {
 })
 
 test('extraer: incidencias de Jira con su resumen', () => {
+  // El proyecto tiene que ser conocido (M4): aquí lo es porque la pestaña está
+  // en él. Lo que se prueba es que el resumen sale de «KEY: resumen» y de
+  // «KEY - resumen».
   const parts = [toolPart('ENG-4821: Rotar los tokens de servicio\nENG-4822 - Revisar permisos')]
-  const r = extractEntities(parts, SITE)
+  const r = extractEntities(parts, { ...SITE, projectKey: 'ENG' })
   const keys = r.issues.map((i) => i.key).sort()
   eq(keys, ['ENG-4821', 'ENG-4822'])
   eq(r.issues.find((i) => i.key === 'ENG-4821').summary, 'Rotar los tokens de servicio')
@@ -212,26 +215,122 @@ test('el indice normalizado de Cloud si lleva /wiki', () => {
 test('EL CAMBIO: en Data Center no se cosechan entidades del otro producto', () => {
   // Desde un Jira enlazado, el modelo lee páginas de Confluence por el MCP: si
   // sus ids entran en el índice del Jira, «Llévame» construye
-  // https://jira.x/pages/viewpage.action?pageId=N, que es un 404.
-  const salida =
-    'Ver https://acme.atlassian.net/wiki/spaces/ENG/pages/1234567/Rotacion y la incidencia ENG-7: Rotar tokens'
-  const parts = [toolPart(salida)]
+  // https://jira.x/pages/viewpage.action?pageId=N, que es un 404. Las URLs van
+  // con el host que toca en cada caso (las de otro host las blanquea S6 antes
+  // de llegar aquí) y la incidencia tal como la devuelve Jira (M4: el proyecto
+  // tiene que ser conocido).
+  const salida = (host) =>
+    `Ver https://${host}/wiki/spaces/ENG/pages/1234567/Rotacion y la incidencia {"key":"ENG-7","summary":"Rotar tokens"}`
 
   const jira = { host: 'jira.corp', origin: 'https://jira.corp', product: 'jira', cloud: false }
-  const desdeJira = harvestIndex(parts, { site: jira, index: null })
+  // Las páginas vienen del Confluence enlazado, que sí se deja pasar (`allowedHosts`):
+  // quien las tira es el filtro por producto, no el de host.
+  const desdeJira = harvestIndex([toolPart(salida('confluence.corp'))], { site: jira, index: null, allowedHosts: ['confluence.corp'] })
   eq(Object.keys(desdeJira.index?.pages || {}), [], 'ninguna página en el índice de Jira')
   eq(Object.keys(desdeJira.index?.spaces || {}), [])
   eq(Object.keys(desdeJira.index?.issues || {}), ['ENG-7'])
 
   const conf = { host: 'confluence.corp', origin: 'https://confluence.corp', product: 'confluence', cloud: false }
-  const desdeConfluence = harvestIndex(parts, { site: conf, index: null })
+  const desdeConfluence = harvestIndex([toolPart(salida('confluence.corp'))], { site: conf, index: null })
   eq(Object.keys(desdeConfluence.index?.issues || {}), [], 'ninguna incidencia en el índice de Confluence')
   assert(Object.keys(desdeConfluence.index?.pages || {}).length > 0)
 
   // En Cloud los dos productos comparten host: se cosecha todo, como siempre.
   const cloud = { host: 'acme.atlassian.net', origin: 'https://acme.atlassian.net', cloud: true, product: 'jira' }
-  const enCloud = harvestIndex(parts, { site: cloud, index: null })
+  const enCloud = harvestIndex([toolPart(salida('acme.atlassian.net'))], { site: cloud, index: null })
   assert(Object.keys(enCloud.index.pages).length > 0 && Object.keys(enCloud.index.issues).length > 0)
+})
+
+// --- S6: URLs de otros hosts ---------------------------------------------
+// Reproducido en la auditoría del 2026-09-13 (docs/PLAN.md §2 S6): una página
+// de partner.atlassian.net entraba en el índice con una ruta relativa a ESTE
+// sitio, «Destino: … (id 99887766)» la elegía, `validatePlan` la aceptaba (la
+// URL se reconstruye contra el origen propio) y «Llévame» abría un 404.
+
+const JIRA_DC = { host: 'jira.corp', origin: 'https://jira.corp', product: 'jira', cloud: false }
+
+test('SEGURIDAD: una URL de otro Confluence o de otro Jira en la salida de una herramienta no entra en el índice de este sitio', () => {
+  const ajena = 'ver https://partner.atlassian.net/wiki/spaces/PART/pages/99887766/Guia y https://jira.partner.com/browse/PART-42'
+  eq(harvestIndex([toolPart(ajena)], { site: DC, index: null }).added, 0)
+  eq(harvestIndex([toolPart(ajena)], { site: JIRA_DC, index: null }).added, 0)
+  const cloud = { host: 'acme.atlassian.net', origin: 'https://acme.atlassian.net', cloud: true, product: 'confluence' }
+  eq(harvestIndex([toolPart(ajena)], { site: cloud, index: null }).added, 0, 'tampoco en Cloud, donde el producto no filtra nada')
+  // Ni siquiera el espacio: la URL entera cae de una pieza.
+  eq(extractEntities([toolPart(ajena)], DC).spaces, [])
+
+  // La misma URL con el host propio sí entra.
+  const r = harvestIndex([toolPart('ver https://confluence.simplprogramme.eu/spaces/PART/pages/99887766/Guia')], { site: DC, index: null })
+  eq(r.added, 2, 'la página y su espacio')
+  eq(r.index.pages['99887766'].path, '/spaces/PART/pages/99887766/Guia')
+  const enJira = harvestIndex([toolPart('ver https://jira.corp/browse/PART-42')], { site: JIRA_DC, index: null })
+  eq(Object.keys(enJira.index.issues), ['PART-42'])
+})
+
+test('SEGURIDAD: el host se compara entero y en minúsculas: subdominio ajeno, usuario delante, URL dentro de otra o sin esquema no cuelan', () => {
+  const propios = ['confluence.simplprogramme.eu']
+  const pagina = '/spaces/SIMPL/pages/1/A'
+  eq(dropForeignUrls('x https://confluence.simplprogramme.eu.evil.com' + pagina + ' y', propios), 'x   y')
+  eq(dropForeignUrls('x https://confluence.simplprogramme.eu@evil.com' + pagina + ' y', propios), 'x   y')
+  eq(dropForeignUrls('x https://evil.com/?next=https://confluence.simplprogramme.eu' + pagina + ' y', propios), 'x   y')
+  eq(dropForeignUrls('x //partner.atlassian.net/wiki' + pagina + ' y', propios), 'x   y', 'sin esquema también es absoluta')
+  eq(dropForeignUrls('x https://[::1' + pagina + ' y', propios), 'x   y', 'lo que no parsea, fuera')
+  eq(dropForeignUrls('{"url":"https://evil.com/x","id":"5"}', propios), '{"url":" ","id":"5"}', 'dentro de un JSON acaba en la comilla')
+  // Lo propio queda tal cual: con mayúsculas, con puerto, o una ruta relativa
+  // (que no es de nadie: la resuelve el origen de la pestaña).
+  for (const s of [
+    'x HTTPS://CONFLUENCE.SIMPLPROGRAMME.EU' + pagina + ' y',
+    'x https://confluence.simplprogramme.eu:8443' + pagina + ' y',
+    'x ' + pagina + ' y',
+  ]) eq(dropForeignUrls(s, propios), s)
+  // Sin hosts propios, toda URL absoluta se va.
+  eq(dropForeignUrls('x https://confluence.simplprogramme.eu' + pagina + ' y', []), 'x   y')
+})
+
+test('el Confluence enlazado entra con allowedHosts, y el filtro por producto sigue detrás; sin la opción, se blanquea como cualquier otro', () => {
+  const parts = [toolPart('ver https://confluence.corp/spaces/ENG/pages/1234567/Rotacion y https://jira.corp/browse/ENG-7')]
+  const sin = extractEntities(parts, JIRA_DC)
+  eq(sin.pages.length, 0)
+  eq(sin.issues.map((i) => i.key), ['ENG-7'], 'la del host propio sí')
+  const con = extractEntities(parts, JIRA_DC, { allowedHosts: ['confluence.corp'] })
+  eq(con.pages.map((p) => p.id), ['1234567'], 'la URL del enlazado ya no se blanquea')
+  eq(con.issues.map((i) => i.key), ['ENG-7'])
+  const r = harvestIndex(parts, { site: JIRA_DC, index: null, allowedHosts: ['confluence.corp'] })
+  eq(Object.keys(r.index.pages), [], 'y en el índice del Jira sigue sin haber páginas')
+  eq(Object.keys(r.index.issues), ['ENG-7'])
+})
+
+// --- M4: siglas que parecen claves ---------------------------------------
+// Reproducido en la auditoría del 2026-09-13 (docs/PLAN.md §2 M4): «UTF-8» e
+// «ISO-8601» entraban como incidencias y, en Búsqueda, una respuesta que las
+// nombrase y ninguna otra recibía tarjeta «Llévame» a /browse/ISO-8601.
+
+test('SEGURIDAD: «UTF-8», «ISO-8601» o «COVID-19» en el texto de una herramienta no son incidencias', () => {
+  eq(Object.keys(harvestIndex([toolPart('exporta en UTF-8 con fechas ISO-8601; ver /browse/ENG-9')], { site: JIRA_DC, index: null }).index.issues), ['ENG-9'])
+  const siglas = harvestIndex([toolPart('Usa UTF-8 y ISO-8601, SHA-256; la pandemia COVID-19; error HTTP-404; puerto TCP-443')], { site: JIRA_DC, index: null })
+  eq(siglas.added, 0)
+  eq(Object.keys(siglas.index?.issues || {}), [])
+  // Ni aunque vengan como «CLAVE: resumen» o «CLAVE - resumen».
+  eq(extractEntities([toolPart('HTTP-404: Not Found\nUTF-8 - la codificación')], JIRA_DC).issues, [])
+})
+
+test('una clave suelta entra si su proyecto es conocido: el de la pestaña, los del índice o los del JSON que devuelve Jira', () => {
+  // Por el sitio (la pestaña está en el proyecto o en una de sus incidencias).
+  eq(extractEntities([toolPart('ver ENG-12 y UTF-8')], { ...JIRA_DC, projectKey: 'ENG' }).issues.map((i) => i.key), ['ENG-12'])
+  // Por los proyectos del índice.
+  const conProyecto = normalizeIndex({ projects: [{ key: 'ENG', name: 'Engineering' }] }, JIRA_DC.host)
+  eq(extractEntities([toolPart('ver ENG-12 y HTTP-404')], JIRA_DC, { index: conProyecto }).issues.map((i) => i.key), ['ENG-12'])
+  eq(Object.keys(harvestIndex([toolPart('ver ENG-12 y HTTP-404')], { site: JIRA_DC, index: conProyecto }).index.issues), ['ENG-12'])
+  // Por las incidencias que ya están en el índice: su proyecto existe.
+  const conIncidencia = normalizeIndex({ issues: [{ key: 'ENG-1', summary: 'Una' }] }, JIRA_DC.host)
+  eq(extractEntities([toolPart('relacionada con ENG-12')], JIRA_DC, { index: conIncidencia }).issues.map((i) => i.key), ['ENG-12'])
+  // Por el JSON de jira_search / jira_get_issue: «"key": "SIMPL-12"» hace conocido a SIMPL.
+  const json = '{"key":"SIMPL-12","summary":"Revisar"} y en el texto SIMPL-13 e ISO-8601'
+  eq(extractEntities([toolPart(json)], JIRA_DC).issues.map((i) => i.key).sort(), ['SIMPL-12', 'SIMPL-13'])
+  // Lo que el modelo PIDE no cuenta (`"issue_key"` en la entrada): sólo lo que Jira devuelve.
+  const fallida = { type: 'tool', tool: 'jira_get_issue', state: { status: 'error', output: 'Issue UTF-8 does not exist', input: { issue_key: 'UTF-8' } } }
+  eq(extractEntities([fallida], JIRA_DC).issues, [])
+  // Y una ruta /browse/CLAVE vale por sí sola, pero no hace conocido al proyecto.
+  eq(extractEntities([toolPart('ver /browse/OPS-3 y también OPS-4')], JIRA_DC).issues.map((i) => i.key), ['OPS-3'])
 })
 
 // --------------------------------------------------- el contexto de Jira

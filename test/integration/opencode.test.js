@@ -22,6 +22,10 @@ import { NAVIGATION_PLAN_SCHEMA, plannerSystemPrompt } from '../../src/nav/schem
 import { validatePlan } from '../../src/nav/validate.js'
 import { normalizeIndex } from '../../src/atlassian/index-store.js'
 import { CORS_ORIGIN } from '../../src/shared/config.js'
+import { SAFE_PERMISSIONS, MCP_TOOL_PATTERNS, permissionFor, wildcardMatch } from '../../src/shared/permissions.js'
+
+/** Ids de `GET /experimental/tool/ids` que no piden permiso o que Faro trata aparte. */
+const SIN_PERMISO = ['invalid', 'question', 'StructuredOutput']
 
 /** Un PNG de 1×1 transparente: lo mínimo para comprobar el formato. */
 const PNG_1PX =
@@ -170,6 +174,56 @@ async function main() {
       assert(s?.id?.startsWith('ses_'), 'id de sesión inesperado: ' + s?.id)
       await client.deleteSession(s.id)
       return s.id
+    })
+
+    // SEGURIDAD (docs/PLAN.md §2, S1): la lista de permisos se quedó atrás una vez
+    // (websearch, codesearch y skill nacieron permitidas). Ahora se compara con los
+    // ids que registra ESTE opencode: cualquier herramienta nueva tiene que nacer
+    // denegada por SAFE_PERMISSIONS tal como la evalúa opencode (última regla que casa).
+    await check('SEGURIDAD: toda herramienta propia de opencode queda denegada por SAFE_PERMISSIONS', async () => {
+      const ids = await client.request('GET', '/experimental/tool/ids')
+      assert(Array.isArray(ids) && ids.length > 0, 'GET /experimental/tool/ids no devolvió una lista')
+      const esMcp = (id) => MCP_TOOL_PATTERNS.some((p) => wildcardMatch(id, p))
+      const propias = ids.filter((id) => !SIN_PERMISO.includes(id) && !esMcp(id))
+      assert(propias.length > 0, 'sin herramientas propias: ' + ids.join(','))
+      const abiertas = propias.filter((id) => permissionFor(SAFE_PERMISSIONS, id) !== 'deny')
+      assert(!abiertas.length, 'sin denegar: ' + abiertas.join(', '))
+      for (const id of ['websearch', 'codesearch', 'skill', 'webfetch', 'bash']) {
+        assert(ids.includes(id) ? permissionFor(SAFE_PERMISSIONS, id) === 'deny' : true, id)
+      }
+      return propias.length + ' denegadas: ' + propias.join(', ')
+    })
+
+    await check('POST /session acepta SAFE_PERMISSIONS y GET /session/:id devuelve la lista tal cual', async () => {
+      const s = await client.createSession({ title: 'Faro · permisos' })
+      created.push(s.id)
+      const got = await client.request('GET', `/session/${s.id}`)
+      assert(
+        JSON.stringify(got?.permission) === JSON.stringify(SAFE_PERMISSIONS),
+        'la lista volvió distinta: ' + JSON.stringify(got?.permission)
+      )
+      assert(got.permission[0].action === 'deny' && got.permission[0].permission === '*', 'la primera regla deniega todo')
+      return got.permission.length + ' reglas, en el mismo orden'
+    })
+
+    // R4 (docs/PLAN.md §2): el cuerpo de summarize. Sólo se manda el cuerpo VIEJO
+    // (400 por esquema, sin llegar al modelo): el bueno arrancaría una compactación.
+    await check('summarize: /doc exige {providerID, modelID}; el cuerpo viejo {model} da 400 sin llegar al modelo', async () => {
+      const doc = await client.request('GET', '/doc')
+      const schema = doc?.paths?.['/session/{sessionID}/summarize']?.post?.requestBody?.content?.['application/json']?.schema
+      assert(schema, 'sin esquema de summarize en /doc')
+      const required = [...(schema.required || [])].sort()
+      assert(JSON.stringify(required) === JSON.stringify(['modelID', 'providerID']), 'required: ' + JSON.stringify(schema.required))
+      const s = await client.createSession({ title: 'Faro · summarize' })
+      created.push(s.id)
+      let status = 0
+      try {
+        await client.request('POST', `/session/${s.id}/summarize`, { body: { model: { providerID: 'p', modelID: 'm' } } })
+      } catch (err) {
+        status = err.status
+      }
+      assert(status === 400, 'el cuerpo viejo debería dar 400, dio ' + status)
+      return 'required ' + schema.required.join(', ') + ' · {model} → 400'
     })
 
     await check('stream de eventos por fetch (EventSource no vale: no lleva cabeceras)', async () => {

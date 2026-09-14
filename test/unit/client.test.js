@@ -8,15 +8,18 @@
  * desconecta el cliente al salir: un stream vivo con su reconexión (1 s, 2 s…)
  * dejaría el proceso colgado.
  *
- * El vigilante de `runTurn` mira cada 1000 ms fijos; las pruebas de «colgado»
- * y «cancelado» aceleran `setInterval` para no esperar un segundo (el
- * presupuesto de temporizadores reales es de milisegundos). `describeError`
- * y el parseo del stream ya están probados en turn.test.js.
+ * El vigilante de `runTurn` mira cada 1000 ms fijos; la prueba de «colgado»
+ * acelera `setInterval` para no esperar un segundo (el presupuesto de
+ * temporizadores reales es de milisegundos). La cancelación ya no pasa por el
+ * vigilante: la señal se escucha y el turno se resuelve en el mismo tick
+ * (docs/PLAN.md §2, C6). `describeError` y el parseo del stream ya están
+ * probados en turn.test.js.
  * (Plan 2026-09-13, D6: client.js sin test unitario.)
  */
 import { test, eq, assert } from '../harness.js'
 import { OpencodeClient, OpencodeError, messageParts } from '../../src/opencode/client.js'
 import { SAFE_PERMISSIONS } from '../../src/shared/config.js'
+import { MCP_TOOL_PATTERNS, permissionFor } from '../../src/shared/permissions.js'
 
 const BASE = 'http://127.0.0.1:4096'
 const SID = 'ses_1'
@@ -225,12 +228,16 @@ test('rutas: health, createSession con SAFE_PERMISSIONS, promptAsync, listMcp y 
       eq(await client.createSession({ title: 'Faro · confluence.x.eu' }), { id: SID })
       eq([s.calls[1].method, s.calls[1].path], ['POST', '/session'])
       eq(s.calls[1].body, { title: 'Faro · confluence.x.eu', permission: SAFE_PERMISSIONS })
-      // SEGURIDAD: la sesión nace sin shell ni ficheros (§8.13).
-      const negadas = s.calls[1].body.permission
-      assert(negadas.every((p) => p.action === 'deny' && p.pattern === '**'), 'todo denegado, en cualquier ruta')
-      for (const p of ['bash', 'read', 'write', 'edit', 'patch', 'glob', 'grep', 'list', 'webfetch', 'task']) {
-        assert(negadas.some((x) => x.permission === p), 'se deniega ' + p)
+      // SEGURIDAD: la sesión nace sin nada más que el MCP de Atlassian (§8.13): la primera
+      // regla deniega todo, en cualquier ruta, y las demás sólo permiten el MCP.
+      const reglas = s.calls[1].body.permission
+      eq(reglas[0], { permission: '*', pattern: '**', action: 'deny' })
+      assert(reglas.slice(1).every((p) => p.action === 'allow' && p.pattern === '**' && MCP_TOOL_PATTERNS.includes(p.permission)), 'sólo el MCP')
+      for (const p of ['bash', 'read', 'write', 'edit', 'apply_patch', 'glob', 'grep', 'webfetch', 'websearch', 'codesearch', 'skill', 'task', 'lsp', 'todowrite']) {
+        eq(permissionFor(reglas, p), 'deny', 'se deniega ' + p)
       }
+      eq(permissionFor(reglas, 'atlassian-x_jira_search'), 'allow')
+      eq(permissionFor(reglas, 'atlassian-x_confluence_get_page'), 'allow')
 
       eq(await client.promptAsync(SID, { text: 'hola' }), { id: 'msg_1' })
       eq([s.calls[2].method, s.calls[2].path], ['POST', '/session/ses_1/prompt_async'])
@@ -435,27 +442,183 @@ test('runTurn: sin contenido durante stallMs el vigilante lo da por colgado y ab
     )
   ))
 
-test('runTurn: la señal de cancelar resuelve aborted:true, conserva lo llegado y manda el abort al servidor', () =>
-  conIntervaloRapido(() =>
-    conServidor(
-      {
-        'POST /session/ses_1/prompt_async': (ll, s) => {
-          s.sse.push(ev('message.part.updated', { part: { id: 'prt_1', sessionID: SID, messageID: 'msg_a', type: 'text', text: 'Empiezo…' } }))
-          return { id: 'msg_1' }
-        },
-        'POST /session/ses_1/abort': {},
+// Reproducido en la auditoría del 2026-09-13 (docs/PLAN.md §2, C6): el vigilante
+// sondeaba la señal cada 1 s y al despertar mandaba POST abort; Parar + otra
+// pregunta en menos de un segundo, en la MISMA sesión, abortaba el turno nuevo.
+test('runTurn: un turno abortado por la señal se resuelve en el mismo tick y no aborta la sesión por su cuenta', () =>
+  conServidor(
+    {
+      'POST /session/ses_1/prompt_async': (ll, s) => {
+        s.sse.push(ev('message.part.updated', { part: { id: 'prt_1', sessionID: SID, messageID: 'msg_a', type: 'text', text: 'Empiezo…' } }))
+        return { id: 'msg_1' }
       },
-      async (client, s) => {
-        const ctrl = new AbortController()
-        const r = await client.runTurn(SID, { text: 'hola' }, { stallMs: 5000, signal: ctrl.signal, onUpdate: () => ctrl.abort() })
-        eq(r.ok, false)
-        eq(r.aborted, true)
-        eq(r.stalled, undefined)
-        eq(r.text, 'Empiezo…', 'lo que ya había llegado se conserva')
-        assert(s.calls.some((c) => c.path === '/session/ses_1/abort'))
-      }
-    )
+      'POST /session/ses_1/abort': {},
+    },
+    async (client, s) => {
+      const ctrl = new AbortController()
+      let t0 = 0
+      const r = await client.runTurn(
+        SID,
+        { text: 'hola' },
+        {
+          stallMs: 5000,
+          signal: ctrl.signal,
+          onUpdate: () => {
+            t0 = Date.now()
+            ctrl.abort()
+          },
+        }
+      )
+      assert(t0 > 0 && Date.now() - t0 < 50, 'sin esperar al vigilante de 1 s: ' + (Date.now() - t0) + ' ms')
+      eq(r.ok, false)
+      eq(r.aborted, true)
+      eq(r.stalled, undefined)
+      eq(r.text, 'Empiezo…', 'lo que ya había llegado se conserva')
+      eq(s.calls.filter((c) => c.path.endsWith('/abort')).length, 0, 'quien abortó la señal ya abortó la sesión (el botón Parar)')
+      eq(s.calls.map((c) => c.method + ' ' + c.path), ['GET /event', 'POST /session/ses_1/prompt_async'])
+    }
   ))
+
+test('runTurn: una señal ya cancelada no manda el prompt (correría sin nadie que lo parara)', () =>
+  conServidor({ 'POST /session/ses_1/prompt_async': { id: 'msg_1' } }, async (client, s) => {
+    const ctrl = new AbortController()
+    ctrl.abort()
+    const r = await client.runTurn(SID, { text: 'hola' }, { signal: ctrl.signal })
+    eq(r.ok, false)
+    eq(r.aborted, true)
+    eq(r.text, '')
+    eq(s.calls.map((c) => c.method + ' ' + c.path), ['GET /event'], 'ni prompt_async ni abort')
+  }))
+
+// Comprobado en el binario de opencode 1.2.25: `DELETE /session/:id` → `Session.remove`
+// sólo borra filas; no cancela el turno en marcha. El indexador, el planificador y las
+// pasadas de notas cancelan por señal y cierran con `deleteSession`: sin esto, el modelo
+// seguiría gastando en una sesión que ya no existe.
+test('deleteSession: tras un turno abandonado por la señal aborta antes de borrar; sin turno abandonado, sólo borra', () =>
+  conServidor(
+    {
+      'POST /session/ses_1/prompt_async': (ll, s) => {
+        s.sse.push(ev('message.part.updated', { part: { id: 'prt_1', sessionID: SID, messageID: 'msg_a', type: 'text', text: 'Empiezo…' } }))
+        return { id: 'msg_1' }
+      },
+      'POST /session/ses_1/abort': {},
+      'DELETE /session/ses_1': true,
+      'DELETE /session/ses_2': true,
+    },
+    async (client, s) => {
+      const rutas = () => s.calls.filter((c) => c.path !== '/event').map((c) => c.method + ' ' + c.path)
+      const ctrl = new AbortController()
+      await client.runTurn(SID, { text: 'hola' }, { signal: ctrl.signal, onUpdate: () => ctrl.abort() })
+      eq(rutas(), ['POST /session/ses_1/prompt_async'])
+      await client.deleteSession(SID)
+      eq(rutas(), ['POST /session/ses_1/prompt_async', 'POST /session/ses_1/abort', 'DELETE /session/ses_1'])
+      // Una segunda vez ya no hay nada abandonado.
+      await client.deleteSession(SID)
+      eq(rutas().slice(3), ['DELETE /session/ses_1'])
+      // Una sesión sin turno abandonado: sólo el DELETE.
+      await client.deleteSession('ses_2')
+      eq(rutas().slice(4), ['DELETE /session/ses_2'])
+    }
+  ))
+
+test('deleteSession: un turno nuevo en la misma sesión levanta la marca (Parar + otra pregunta no abortan el turno nuevo)', () =>
+  conServidor(
+    {
+      'POST /session/ses_1/prompt_async': (ll, s) => {
+        if (s.calls.filter((c) => c.path.endsWith('/prompt_async')).length === 1) {
+          s.sse.push(ev('message.part.updated', { part: { id: 'prt_1', sessionID: SID, messageID: 'msg_a', type: 'text', text: 'Primero…' } }))
+        } else {
+          for (const e of turnoNormal()) s.sse.push(e)
+        }
+        return { id: 'msg_1' }
+      },
+      'POST /session/ses_1/abort': {},
+      'DELETE /session/ses_1': true,
+    },
+    async (client, s) => {
+      const ctrl = new AbortController()
+      const r1 = await client.runTurn(SID, { text: 'hola' }, { signal: ctrl.signal, onUpdate: () => ctrl.abort() })
+      eq(r1.aborted, true)
+      const r2 = await client.runTurn(SID, { text: 'otra' })
+      eq(r2.ok, true)
+      eq(r2.text, 'Hola mundo')
+      await client.deleteSession(SID)
+      const rutas = s.calls.filter((c) => c.path !== '/event').map((c) => c.method + ' ' + c.path)
+      eq(rutas, ['POST /session/ses_1/prompt_async', 'POST /session/ses_1/prompt_async', 'DELETE /session/ses_1'], 'ningún abort en ningún momento')
+    }
+  ))
+
+// Reproducido en la auditoría del 2026-09-13 (docs/PLAN.md §2, C3): dos arranques
+// solapados; el primero hacía `connect()` sobre un cliente que el segundo acababa
+// de desconectar, y ese stream zombi reconectaba para siempre.
+test('SEGURIDAD: un cliente desconectado no vuelve a abrir el stream (disconnect es definitivo)', () =>
+  conServidor({}, async (client) => {
+    let bombas = 0
+    client._pump = async () => {
+      bombas++
+    }
+    client.connect()
+    eq(bombas, 1)
+    client.disconnect()
+    client.connect()
+    eq(bombas, 1, 'connect() tras disconnect() no abre nada')
+    eq(client._streamAbort, null)
+    eq(client.connected, false)
+    const t0 = Date.now()
+    eq(await client.ready(), false, 'un cliente cerrado no está listo')
+    assert(Date.now() - t0 < 100, 'y no espera los 8 s del plazo')
+    eq(bombas, 1)
+  }))
+
+// Revisión adversaria de H2 (2026-09-14): `runTurn` hacía `await this.ready()` y
+// TIRABA el valor. Con el cliente cerrado (C3) el stream no vuelve a abrirse nunca,
+// así que se mandaba un `prompt_async` del que no iba a llegar ni un evento: el
+// modelo trabajaba de verdad en el servidor y el turno sólo moría al agotar
+// `stallMs` (120 s en el indexador). Un cliente cerrado no manda nada.
+test('SEGURIDAD: un cliente cerrado no manda prompt_async (el turno correría sin que llegara ni un evento)', () =>
+  conServidor({ 'POST /session/ses_1/prompt_async': { id: 'msg_1' }, 'POST /session/ses_1/abort': {} }, async (client, s) => {
+    client.disconnect()
+    const t0 = Date.now()
+    const r = await client.runTurn(SID, { text: 'hola' }, { stallMs: 20 })
+    eq(r, { ok: false, aborted: true, closed: true, parts: [], text: '', tools: [] })
+    eq(s.calls.length, 0, 'ni /event, ni prompt_async, ni abort: no hay nada que abortar')
+    assert(Date.now() - t0 < 100, 'y no espera ni al plazo de ready() ni al vigilante')
+    // promptStructured pasa por runTurn: un turno `aborted` es «Cancelado.», que es
+    // como el panel trata cerrar los ajustes a mitad de indexado.
+    let err = null
+    try {
+      await client.promptStructured(SID, { text: 'plan', schema: {} })
+    } catch (e) {
+      err = e
+    }
+    assert(err instanceof OpencodeError && /Cancelado/.test(err.message), String(err))
+    eq(s.calls.length, 0)
+  }))
+
+// R4 (docs/PLAN.md §2): mandaba `{model}` y el esquema de POST /session/:id/summarize
+// en /doc de opencode 1.2.25 exige `providerID` y `modelID` (400 seguro). Sin uso en el panel hoy.
+test('summarize: el cuerpo es {providerID, modelID}, como exige el esquema de /doc; sin modelo no se manda nada', () =>
+  conServidor({ 'POST /session/ses_1/summarize': true }, async (client, s) => {
+    const modelo = { providerID: 'opencode', modelID: 'hy3-free', name: 'HY3', free: true }
+    eq(await client.summarize(SID, modelo), true)
+    eq([s.calls[0].method, s.calls[0].path], ['POST', '/session/ses_1/summarize'])
+    eq(s.calls[0].body, { providerID: 'opencode', modelID: 'hy3-free' }, 'sólo lo que pide el esquema: ni «model» ni el resto del objeto')
+    let err = null
+    try {
+      await client.summarize(SID, { providerID: 'opencode' })
+    } catch (e) {
+      err = e
+    }
+    assert(err instanceof OpencodeError && /providerID|modelID/.test(err.message), String(err))
+    err = null
+    try {
+      await client.summarize(SID)
+    } catch (e) {
+      err = e
+    }
+    assert(err instanceof OpencodeError, String(err))
+    eq(s.calls.length, 1, 'el servidor contestaría 400: no se le pregunta')
+  }))
 
 // ---- promptStructured -------------------------------------------------------
 

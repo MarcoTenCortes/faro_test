@@ -83,8 +83,16 @@ function productEnv(product, keys, dataCenter) {
  * página— y se queda en el sitio: en Cloud, el origen a secas (el /wiki lo
  * pone `buildMcpConfig`); en Data Center, el origen más la ruta de contexto si
  * la hay (/jira, /confluence, /wiki), quitando lo que sea claramente una ruta
- * de producto (/browse/…, /display/…, /pages/…). Cadena vacía si no es una
- * dirección http(s). Pura.
+ * de producto (/browse/…, /display/…, /pages/…, y el enlace corto /x/AbCd que
+ * da «Compartir» en Confluence). Cadena vacía si no es una dirección http(s).
+ * Pura.
+ *
+ * El enlace corto entró en la lista por R3 (reproducido en la auditoría del
+ * 2026-09-13): con él pegado, CONFLUENCE_URL salía con «/x/AbCdEf» detrás, el
+ * MCP arrancaba contra una dirección que no existe y la comprobación fallaba
+ * con un 404 que hacía revisar un token que estaba bien. Límite asumido: una
+ * ruta de contexto que se llame «/x» no se distingue del enlace corto (y no se
+ * da: Confluence sirve sus enlaces cortos justo en /x/…, chocarían).
  */
 export function siteBaseUrl(url) {
   let u
@@ -97,7 +105,7 @@ export function siteBaseUrl(url) {
   if (isCloudHost(u.hostname)) return u.origin
 
   const path = u.pathname
-    .replace(/\/(browse|secure|issues|projects|spaces|display|pages|label|rest|[a-z]+\.action)(\/.*)?$/i, '')
+    .replace(/\/(browse|secure|issues|projects|spaces|display|pages|label|rest|x|[a-z]+\.action)(\/.*)?$/i, '')
     .replace(/\/+$/, '')
   return u.origin + path
 }

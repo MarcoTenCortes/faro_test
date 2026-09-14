@@ -47,6 +47,36 @@ export function visible(el) {
 }
 
 /**
+ * ¿Este control abre un menú (o cualquier otro emergente) en vez de una rama?
+ *
+ * Un disparador de menú lleva el mismo `aria-expanded="false"` que el chevron
+ * de una rama: el «···» de acciones de cada fila, el menú del espacio, un
+ * desplegable AUI. Pulsarlo no despliega nada del árbol: abre «Mover»,
+ * «Archivar», «Eliminar» encima de la página mientras el barrido «busca la
+ * rama» (auditoría del 2026-09-13, docs/PLAN.md §2 M9). Se reconoce por
+ * `aria-haspopup` con cualquier valor que no sea «false» (true, menu, listbox,
+ * tree, grid, dialog) o por un `aria-controls` que apunte a un `role="menu"`.
+ * Un `aria-controls` hacia el `role="group"` de las hijas, que es lo que lleva
+ * el chevron de un árbol ARIA, no cuenta. Pura: sólo mira atributos y el
+ * documento del propio elemento.
+ */
+export function isMenuTrigger(el) {
+  if (!el?.getAttribute) return false
+  const popup = String(el.getAttribute('aria-haspopup') || '').trim().toLowerCase()
+  if (popup && popup !== 'false') return true
+
+  const controls = String(el.getAttribute('aria-controls') || '').trim()
+  if (!controls) return false
+  const doc = el.ownerDocument
+  if (!doc?.getElementById) return false
+  for (const id of controls.split(/\s+/)) {
+    const target = doc.getElementById(id)
+    if (String(target?.getAttribute?.('role') || '').toLowerCase() === 'menu') return true
+  }
+  return false
+}
+
+/**
  * El contenedor del árbol de páginas.
  *
  * No basta con el primer selector que case: en Confluence hay más de un `nav` y
@@ -124,6 +154,7 @@ function structuralRow(el, container) {
  */
 function ownToggle(row, link) {
   for (const t of row.querySelectorAll('[aria-expanded]')) {
+    if (isMenuTrigger(t)) continue // el «···» de la fila no es su chevron
     if (deUnaHija(row, t, link)) continue
     return t
   }
@@ -155,6 +186,9 @@ export function toggleFor(row) {
 
   for (const cand of row.querySelectorAll('[aria-expanded]')) {
     if (cand.matches(ROW_SELECTORS)) continue
+    // El «···» de acciones de la fila lleva aria-expanded y va, a veces, antes
+    // que el chevron en el DOM: no es el control de desplegar de nadie.
+    if (isMenuTrigger(cand)) continue
     if (!visible(cand)) continue
 
     const dueño = cand.closest(ROW_SELECTORS)
@@ -167,7 +201,7 @@ export function toggleFor(row) {
     return { toggle: cand, isRow: false }
   }
 
-  if (row.matches?.('[aria-expanded]') && visible(row)) return { toggle: row, isRow: true }
+  if (row.matches?.('[aria-expanded]') && !isMenuTrigger(row) && visible(row)) return { toggle: row, isRow: true }
   return null
 }
 
@@ -201,7 +235,9 @@ export function isRowExpanded(row) {
 
 /**
  * Todas las ramas plegadas del árbol, en orden de documento.
- * Se devuelve el control, que es lo que hay que pulsar.
+ * Se devuelve el control, que es lo que hay que pulsar. Los disparadores de
+ * menú se quedan fuera: llevan el mismo `aria-expanded="false"`, pero lo que
+ * abren no es una rama (`isMenuTrigger`).
  */
 export function expandersIn(container = treeContainer(), limit = 300) {
   if (!container) return []
@@ -209,6 +245,7 @@ export function expandersIn(container = treeContainer(), limit = 300) {
   let i = 0
   for (const btn of container.querySelectorAll('[aria-expanded="false"]')) {
     if (i++ > limit) break
+    if (isMenuTrigger(btn)) continue
     if (!visible(btn)) continue
     out.push(btn)
   }

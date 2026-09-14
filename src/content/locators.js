@@ -16,7 +16,7 @@
  * que dead-exports.test.js aprendió a distinguir importar de mencionar).
  */
 
-import { rowFor, toggleFor, isRowExpanded, visible } from './tree-dom.js'
+import { rowFor, toggleFor, isRowExpanded, visible, isMenuTrigger } from './tree-dom.js'
 
 /** Palabras que jamás se pulsan automáticamente. Navegar no es actuar. */
 export const FORBIDDEN_ACTIONS = [
@@ -287,6 +287,14 @@ export function isSafeToClick(el, origin) {
       return { ok: false, reason: `«${name}» parece una acción, no una navegación` }
     }
   }
+
+  // Un disparador de menú lleva el mismo `aria-expanded="false"` que un
+  // chevron, y en AUI es un <a href="#"> que pasaba como «ancla»: pulsarlo no
+  // despliega ninguna rama, abre «Mover», «Archivar», «Eliminar» encima de la
+  // página (auditoría del 2026-09-13, docs/PLAN.md §2 M9). Qué es un menú lo
+  // decide tree-dom.js, como todo lo que tiene que ver con la forma del árbol.
+  // Va ANTES del bloque de los enlaces por eso mismo.
+  if (isMenuTrigger(el)) return { ok: false, reason: 'abre un menú, no una rama' }
 
   const tag = el.tagName
   const role = el.getAttribute('role')

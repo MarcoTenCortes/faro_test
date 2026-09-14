@@ -36,6 +36,14 @@
  *      LITERALES de cada una, para poner el «[n]» delante— y las sitúa.
  *   4. Y si tampoco, el panel ofrece pedirlo numerado (`numberedReminder`).
  * Sólo «Sin observaciones.» (`NOTHING_TO_SAY`) es un resultado y no un fallo.
+ *
+ * Lo que la auditoría del 2026-09-13 reprodujo encima (docs/PLAN.md §2, H2):
+ * una viñeta suelta en una respuesta corta se volvía «[1]» y esquivaba los
+ * frenos de respuesta corta y seguimiento (`bullets` exige dos y
+ * `normalizeNumbering` admite `shortAnswer`); un «n: 1.5» en el JSON tiraba
+ * el bloque entero y un «n: true» contaba como la observación 1
+ * (`noteNumber`); y `titleFromProse` tomaba el «[1]» de un `arr[1]` o de un
+ * enlace por la marca (`blindCode`).
  */
 
 import { validateAnchor, clean } from '../nav/validate.js'
@@ -261,12 +269,29 @@ export function numberedIn(answer) {
   return [...vistos].sort((a, b) => a - b)
 }
 
+/**
+ * ¿Un «n» del JSON tiene forma de número de observación: un entero, o una
+ * cadena de uno o dos dígitos? Se mira el TIPO, no `Number(x)`: `Number(true)`
+ * es 1 y `Number('')` es 0, y un «n: true» pasaba por la observación 1
+ * (reproducido en la auditoría del 2026-09-13, docs/PLAN.md §2 M6). Puro.
+ */
+function looksLikeNoteNumber(x) {
+  return (typeof x === 'number' && Number.isInteger(x)) || (typeof x === 'string' && /^\d{1,2}$/.test(x))
+}
+
+/** El número de observación de una entrada del JSON (1..99), o null. Puro. */
+function noteNumber(x) {
+  if (!looksLikeNoteNumber(x)) return null
+  const n = Number(x)
+  return n >= 1 && n <= 99 ? n : null
+}
+
 /** Los números que trae el bloque JSON de anclas, en orden y sin repetir. Puro. */
 export function numbersInAnchors(anchors) {
   const vistos = new Set()
   for (const item of Array.isArray(anchors?.notes) ? anchors.notes : []) {
-    const n = Number(item?.n)
-    if (Number.isInteger(n) && n >= 1 && n <= 99) vistos.add(n)
+    const n = noteNumber(item?.n)
+    if (n !== null) vistos.add(n)
   }
   return [...vistos].sort((a, b) => a - b)
 }
@@ -333,7 +358,11 @@ const LABEL = '(?:observaci[oó]n|punto|nota|hallazgo|apartado|[ií]tem|obs\\.?)
  * para fiarse (`min`): un «(1) ver nota» suelto no es un análisis. El orden
  * importa: si las observaciones van en «### 1. Título» y dentro de una hay
  * pasos «1. 2. 3.», se cogen los encabezados y los pasos no se tocan. Las
- * viñetas «-» sólo cuentan cuando no hay ninguna numeración.
+ * viñetas «-» sólo cuentan cuando no hay ninguna numeración, y desde dos: una
+ * viñeta suelta bajo «No he podido leer la incidencia:» se volvía «[1]» y
+ * pasaba por análisis nuevo (auditoría del 2026-09-13, docs/PLAN.md §2 M5).
+ * Los estilos débiles son los que exigen dos (`min: 2`) o cuentan sin número
+ * (`counted`): `weakStyle`.
  */
 const NUMBERING_STYLES = [
   // «Observación 1: Título» · «**Observación 1**: Título» · «## Observación 1» · «- **Punto 1 —** texto»
@@ -358,9 +387,14 @@ const NUMBERING_STYLES = [
   { id: 'dash', re: /^()(\d{1,2})[ \t]+[—–-][ \t]+(.*)$/, min: 2 },
   // «a) texto» · «A. texto» · «**b)** texto»
   { id: 'letters', re: /^()(?:\*\*)?([a-lA-L])[.)](?:\*\*)?[ \t]+(.*)$/, min: 2, num: (t) => LETRAS.indexOf(t.toLowerCase()) + 1 },
-  // «- texto» · «* texto» · «• texto»: sólo si no hay ningún número
-  { id: 'bullets', re: /^()([-*+•])[ \t]+(.*)$/, min: 1, counted: true },
+  // «- texto» · «* texto» · «• texto»: sólo si no hay ningún número, y al menos dos
+  { id: 'bullets', re: /^()([-*+•])[ \t]+(.*)$/, min: 2, counted: true },
 ]
+
+/** ¿Es un estilo débil: exige dos elementos o cuenta sin número (viñetas)? Los explícitos («1.», «### 1.», «**1. Título**», «Observación 1», «[1.]») no lo son. */
+function weakStyle(style) {
+  return !!style.counted || style.min >= 2
+}
 
 /**
  * De la numeración que el modelo usó de verdad a «[n] ». Puro.
@@ -382,7 +416,18 @@ const NUMBERING_STYLES = [
  * - Exige que la secuencia del estilo elegido sea exactamente 1..N en orden
  *   de aparición, con 1 ≤ N ≤ `max`: una fecha («2026.»), un decimal («1.5
  *   segundos»), una lista que empieza en 3 o dos listas que reinician no se
- *   tocan. Los estilos débiles exigen N ≥ 2.
+ *   tocan. Los estilos débiles (`weakStyle`: «(1)», «#1», «1 —», letras y
+ *   viñetas) exigen N ≥ 2.
+ * - Con `shortAnswer` (el tope en caracteres, `NOTE_LIMITS.shortAnswer`), una
+ *   respuesta más corta que eso no adapta ningún estilo débil: un «- El MCP
+ *   devolvió 401.» bajo «No he podido leer la incidencia:» no es un análisis,
+ *   y adaptarlo esquivaba los frenos de respuesta corta y de seguimiento del
+ *   panel (auditoría del 2026-09-13, docs/PLAN.md §2 M5). Los explícitos
+ *   («1.», «### 1.», «**1. Título**», «Observación 1», «[1.]») se adaptan
+ *   igual, corta o no. Salvo que `expected` diga cuántas observaciones hay: si
+ *   el JSON numera desde 1 y el estilo cuenta lo mismo, el modelo ya dijo que
+ *   son observaciones. Sin `shortAnswer` (0) no hay freno; el panel lo pasa
+ *   sobre la respuesta original.
  * - Con `expected` (cuántas observaciones numera el bloque JSON desde 1), un
  *   estilo que cuente MENOS no es el de las observaciones —unas viñetas de
  *   «Qué pide», unos apartados «**1. Qué pide**», unos criterios «1. 2.»
@@ -403,21 +448,25 @@ const NUMBERING_STYLES = [
  *   las líneas seguidas, y «[1] a\n[2] b» se pintaba como un solo párrafo.
  *
  * @param {string} prose la respuesta ya sin el bloque de anclas
- * @param {{max?: number, expected?: number}} [opts]
+ * @param {{max?: number, expected?: number, shortAnswer?: number}} [opts]
  * @returns {{prose: string, numbers: number[], style: string}} `style` es ''
  *          si no se reconoció nada (prosa intacta, numbers []), 'brackets' si
  *          ya venía con «[n]» (numbers = los que hay), o el id del estilo
  *          reescrito.
  */
-export function normalizeNumbering(prose, { max = NOTE_LIMITS.max, expected = 0 } = {}) {
-  const src = foldBrackets(unwrapWholeFence(String(prose ?? '').replace(/\r\n/g, '\n')))
+export function normalizeNumbering(prose, { max = NOTE_LIMITS.max, expected = 0, shortAnswer = 0 } = {}) {
+  const cruda = String(prose ?? '')
+  const src = foldBrackets(unwrapWholeFence(cruda.replace(/\r\n/g, '\n')))
   const yaNumerada = numberedIn(src)
   if (yaNumerada.length) return { prose: src, numbers: yaNumerada, style: 'brackets' }
 
   const lines = src.split('\n')
   const candidatas = lineasDeNivelSuperior(lines)
+  // La respuesta corta se mide sobre lo que llegó, como el freno del panel.
+  const corta = shortAnswer > 0 && cruda.length < shortAnswer && !expected
 
   for (const style of NUMBERING_STYLES) {
+    if (corta && weakStyle(style)) continue
     const hits = []
     for (const i of candidatas) {
       const m = lines[i].match(style.re)
@@ -553,14 +602,21 @@ export function numberedReminder(question) {
  * que ser la de la respuesta, no la del JSON.
  *
  * Dos estilos: «[1] La frase…» al principio de línea, donde la observación es
- * lo que sigue; y «…la frase [1].», estilo cita, donde es lo que precede. Puro.
+ * lo que sigue; y «…la frase [1].», estilo cita, donde es lo que precede.
+ *
+ * La marca se busca sobre una copia «cegada» de la prosa (`blindCode`: vallas,
+ * código en línea y enlaces vueltos espacios, misma longitud) y la frase se
+ * lee del original en ese mismo offset: la primera aparición de «[1]» podía
+ * ser un `arr[1]` o un «[1](https://…)», y la fila de la tarjeta salía con la
+ * frase de esa línea (auditoría del 2026-09-13, docs/PLAN.md §2 M7). Es lo
+ * mismo que `numberedIn` no cuenta. Puro.
  */
 export function titleFromProse(prose, n) {
   const num = Number(n)
   if (!Number.isInteger(num) || num < 1 || num > 99) return 'Observación'
   const src = String(prose ?? '')
   const marca = '[' + num + ']'
-  const at = src.indexOf(marca)
+  const at = blindCode(src).indexOf(marca)
   if (at === -1) return `Observación ${num}`
 
   const lineaAntes = src.slice(0, at).split('\n').pop()
@@ -582,13 +638,26 @@ export function titleFromProse(prose, n) {
   return clean(frase, NOTE_LIMITS.titleMax) || `Observación ${num}`
 }
 
+/**
+ * La prosa con las vallas de código, el código en línea y los enlaces [t](u)
+ * vueltos espacios, con la MISMA longitud: un offset encontrado en la copia
+ * vale sobre el original. Los saltos de línea se conservan. Puro.
+ */
+function blindCode(src) {
+  const chars = src.split('')
+  for (const [a, b] of forbiddenSpans(src)) {
+    for (let i = a; i < b && i < chars.length; i++) if (chars[i] !== '\n') chars[i] = ' '
+  }
+  return chars.join('')
+}
+
 /** Los números que trae el bloque JSON y la respuesta no usa. Puro. */
 export function surplusNumbers(raw, allowed) {
   const permitidos = new Set(Array.isArray(allowed) ? allowed : [])
   const sobran = new Set()
   for (const item of Array.isArray(raw?.notes) ? raw.notes : []) {
-    const n = Number(item?.n)
-    if (Number.isInteger(n) && n >= 1 && n <= 99 && !permitidos.has(n)) sobran.add(n)
+    const n = noteNumber(item?.n)
+    if (n !== null && !permitidos.has(n)) sobran.add(n)
   }
   return [...sobran].sort((a, b) => a - b)
 }
@@ -695,9 +764,13 @@ function parseAnchors(body) {
   if (!obj || typeof obj !== 'object' || !Array.isArray(obj.notes)) return null
   // Un JSON que la página cita y que casualmente lleva una lista «notes» es
   // contenido, no el bloque de anclas: las anclas son objetos con su número.
-  const esAncla = (x) =>
-    x && typeof x === 'object' && !Array.isArray(x) && x.n !== null && Number.isInteger(Number(x.n))
-  if (!obj.notes.every(esAncla)) return null
+  // Basta con que ALGUNA entrada lo sea: exigirlo de todas hacía que un solo
+  // «n: 1.5» tirara el bloque entero —el JSON se veía en el chat y se
+  // lanzaba una segunda pasada aunque las demás entradas fueran perfectas
+  // (auditoría del 2026-09-13, docs/PLAN.md §2 M6)—; las raras las descarta
+  // `validateNotes`. Una lista vacía sigue siendo el bloque de anclas.
+  const esAncla = (x) => x && typeof x === 'object' && !Array.isArray(x) && looksLikeNoteNumber(x.n)
+  if (obj.notes.length && !obj.notes.some(esAncla)) return null
   return obj
 }
 
@@ -733,8 +806,9 @@ export function validateNotes(raw, { max = NOTE_LIMITS.max, allowed = null, bloc
     if (out.length >= max) break
     if (!item || typeof item !== 'object') continue
 
-    const n = Number(item.n)
-    if (!Number.isInteger(n) || n < 1 || n > 99) continue
+    // Por tipo, no por `Number(item.n)`: un «n: true» era la observación 1.
+    const n = noteNumber(item.n)
+    if (n === null) continue
     if (vistos.has(n)) continue
     if (permitidos && !permitidos.has(n)) continue
 
@@ -962,8 +1036,8 @@ export function insertMarks(prose, items) {
   const perdidas = []
   const vistos = new Set()
   for (const item of Array.isArray(items) ? items : []) {
-    const n = Number(item?.n)
-    if (!Number.isInteger(n) || n < 1 || n > 99 || vistos.has(n)) continue
+    const n = noteNumber(item?.n)
+    if (n === null || vistos.has(n)) continue
     vistos.add(n)
     // Los «#» de un encabezado no son parte del arranque: la marca va detrás de ellos.
     const ap = clean(String(item?.opening ?? '').replace(/^#{1,6}[ \t]+/, ''), NOTE_LIMITS.openingMax)
@@ -1028,7 +1102,7 @@ export async function collectSegmentedNotes(client, { sessionID, model, question
   if (!inserted.length) return { ...nada, reason: 'ningún arranque de observación estaba en la respuesta' }
   // Las notas se renumeran igual que la prosa; validateNotes tira `opening`
   // (claves blancas) y comprueba bloque y cita contra lo que se enseñó.
-  const renumeradas = items.map((it) => ({ ...it, n: renumber.get(Number(it?.n)) ?? null }))
+  const renumeradas = items.map((it) => ({ ...it, n: renumber.get(noteNumber(it?.n)) ?? null }))
   const notes = validateNotes({ notes: renumeradas }, { allowed: [...inserted, ...missing], blocks: digest.blocks })
   return { notes, prose, inserted, missing }
 }

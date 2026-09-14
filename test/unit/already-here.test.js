@@ -68,6 +68,49 @@ test('sin ubicacion no se inventa nada', () => {
   eq(isAlreadyHere(null, loc('/x')), false)
 })
 
+// --- M3 (auditoría del 2026-09-13): el id casa con frontera ----------------
+// `/pages/1234` está dentro de `/pages/12345`, `/browse/ENG-7` dentro de
+// `/browse/ENG-70` y `/projects/ENG` dentro de `/projects/ENGINE`: darse por
+// llegado ahí hacía que el último paso no pulsara nada y el ancla se buscara
+// en la página equivocada.
+
+test('SEGURIDAD DE PRECISIÓN: un id que es prefijo de otro no es «ya estoy aquí»', () => {
+  eq(isAlreadyHere({ kind: 'confluence-page', id: '1234' }, loc('/wiki/spaces/X/pages/12345/Otra')), false)
+  eq(
+    isAlreadyHere(
+      { kind: 'confluence-page', id: '1234', path: '/wiki/spaces/X/pages/1234/T' },
+      loc('/wiki/spaces/X/pages/12345/Otra')
+    ),
+    false,
+    'tampoco con ruta: ids distintos'
+  )
+  eq(isAlreadyHere({ kind: 'confluence-page', id: '1234' }, loc('/pages/viewpage.action', '?pageId=12345')), false)
+  eq(isAlreadyHere({ kind: 'jira-issue', id: 'ENG-7' }, loc('/browse/ENG-70')), false)
+  eq(isAlreadyHere({ kind: 'jira-issue', id: 'ENG-7' }, loc('/x', '?selectedIssue=ENG-70')), false)
+  eq(isAlreadyHere({ kind: 'jira-project', id: 'ENG' }, loc('/projects/ENGINE/issues')), false)
+  eq(isAlreadyHere({ kind: 'confluence-space', id: 'ENG' }, loc('/wiki/spaces/ENGINE/overview')), false)
+})
+
+test('los positivos de siempre siguen: barra, query o final de cadena detras del id', () => {
+  eq(isAlreadyHere({ kind: 'jira-issue', id: 'ENG-7' }, loc('/browse/ENG-7')), true)
+  eq(isAlreadyHere({ kind: 'jira-issue', id: 'ENG-7' }, loc('/browse/ENG-7', '?focusedCommentId=1')), true)
+  eq(isAlreadyHere({ kind: 'jira-issue', id: 'ENG-7' }, loc('/jira/x', '?filter=1&selectedIssue=ENG-7')), true)
+  eq(isAlreadyHere({ kind: 'jira-issue', id: 'ENG-7' }, loc('/jira/x', '?selectedIssue=ENG-7&modal=detail')), true)
+  eq(isAlreadyHere({ kind: 'confluence-page', id: '1234' }, loc('/wiki/spaces/X/pages/1234')), true)
+  eq(isAlreadyHere({ kind: 'confluence-page', id: '1234' }, loc('/wiki/spaces/X/pages/1234/Titulo')), true)
+  eq(isAlreadyHere({ kind: 'confluence-page', id: '1234' }, loc('/pages/viewpage.action', '?pageId=1234&src=nav')), true)
+  eq(isAlreadyHere({ kind: 'jira-project', id: 'ENG' }, loc('/projects/ENG')), true)
+  eq(isAlreadyHere({ kind: 'jira-project', id: 'ENG' }, loc('/projects/ENG/issues')), true)
+  eq(isAlreadyHere({ kind: 'confluence-space', id: 'ENG' }, loc('/wiki/spaces/ENG/overview')), true)
+})
+
+test('SEGURIDAD: un id con metacaracteres de regex no casa con cualquier cosa', () => {
+  // El id viene del plan ya validado, pero aquí no se confía: se escapa.
+  eq(isAlreadyHere({ kind: 'jira-issue', id: 'ENG-.' }, loc('/browse/ENG-7')), false)
+  eq(isAlreadyHere({ kind: 'confluence-page', id: '.*' }, loc('/wiki/spaces/X/pages/1234')), false)
+  eq(isAlreadyHere({ kind: 'jira-project', id: 'EN|G' }, loc('/projects/G')), false)
+})
+
 test('el localizador busca TAMBIEN por la ruta, no solo por el id', () => {
   const step = {
     kind: 'confluence-page',

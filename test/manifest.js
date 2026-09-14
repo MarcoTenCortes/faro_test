@@ -61,6 +61,27 @@ export function checkManifest(root) {
     errors.push('host_permissions debe incluir 127.0.0.1 para hablar con opencode')
   }
 
+  // SEGURIDAD (auditoría de 2026-09-13, docs/PLAN.md S7): con la `key` fija,
+  // un recurso accesible desde la web por su URL estable
+  // `chrome-extension://<id>/…` deja que cualquier página https compruebe si
+  // Faro está instalado (y con él un opencode local y el MCP de Atlassian).
+  // Con `use_dynamic_url` el content script sigue cargando sus módulos por
+  // `chrome.runtime.getURL()`, pero la URL con el id fijo deja de resolverse
+  // desde la página. Lo que cada patrón expone lo vigila web-accessible.test.js.
+  const war = m.web_accessible_resources
+  if (!Array.isArray(war) || !war.length) {
+    errors.push('falta web_accessible_resources: el content script carga sus módulos por import()')
+  } else {
+    war.forEach((w, i) => {
+      if (!Array.isArray(w?.resources) || !w.resources.length || !Array.isArray(w?.matches) || !w.matches.length) {
+        errors.push(`web_accessible_resources[${i}] necesita "resources" y "matches" no vacíos`)
+      }
+      if (w?.use_dynamic_url !== true) {
+        errors.push(`SEGURIDAD: web_accessible_resources[${i}] tiene que llevar "use_dynamic_url": true (sin él, con el id fijo cualquier web detecta Faro)`)
+      }
+    })
+  }
+
   let id = null
   if (!m.key) {
     errors.push('falta "key": sin ella el id cambia y --cors deja de valer')

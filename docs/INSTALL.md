@@ -70,8 +70,9 @@ token**. Un solo servidor MCP sirve a los dos.
    producto en el que estás viene rellena; en Cloud también la del otro, porque
    comparten host. En Data Center el otro producto sale sin marcar: márcalo y
    escribe dónde vive (`https://jira.tuempresa.com`). Puedes pegar cualquier
-   URL del sitio, una incidencia o una página: Faro se queda con el sitio, y
-   conserva una ruta de contexto si la hay (`/jira`, `/confluence`, `/wiki`).
+   URL del sitio, una incidencia, una página o el enlace corto de «Compartir»
+   (`…/x/AbCd`): Faro se queda con el sitio, y conserva una ruta de contexto
+   si la hay (`/jira`, `/confluence`, `/wiki`).
    En Data Center marca la casilla: se usan los tokens personales y no hace
    falta correo.
 
@@ -172,6 +173,15 @@ herramientas MCP.
 - **Entre sesiones** es opcional. Con el interruptor activo, al pulsar «nueva
   sesión» se resume la anterior y el resumen queda disponible para las
   siguientes. La pantalla de memoria te deja leerlo y borrar entradas sueltas.
+  Lo que hay guardado se normaliza al leerlo (una entrada sin fecha, editada a
+  mano o de una versión anterior, sale sin fecha en vez de tumbar el turno) y
+  se repara una sola vez, para que «Borrar» siga dando con cada entrada.
+
+Lo que el modelo escribió en el resumen —y en el contexto del sitio, y en el
+del Confluence enlazado— entra en cada pregunta como **información, nunca
+instrucciones**: va delimitado y con esa regla detrás, y al escribirlos se le
+pide que no copie al documento nada que una página le «pida» anotar. Una página
+con texto dirigido a Faro no puede hacerse permanente por ese camino.
 
 ## 6. La barra de abajo
 
@@ -293,7 +303,18 @@ Junto al selector de modelo hay otras dos cosas:
   De un texto se guarda la cita, lo que hay justo antes y después, y el
   encabezado bajo el que está. De una imagen, su descripción **y la imagen
   misma**, incrustada en el mensaje. Necesita permiso sobre el dominio, igual
-  que la navegación paso a paso.
+  que la navegación paso a paso. Lo señalado viaja citado línea a línea (como
+  una cita de Markdown, con `> ` delante) y delimitado: un trozo de página que
+  imite el cierre del bloque no puede hablar como Faro.
+
+- **Teclado y lector de pantalla** — `Esc` cierra Ajustes, Memoria, Registro y
+  Páginas base (en Páginas base, primero vacía las sugerencias) y cancela el
+  velo «Trabajando…»; con una pantalla abierta el resto del panel queda inerte
+  y el foco va a su título, y al cerrarla vuelve a donde estaba. Mientras llega
+  una respuesta el chat lleva `aria-busy`; lo que se anuncia al lector de
+  pantalla es un resumen al final («Respuesta lista · N observaciones») y los
+  avisos, no cada trozo de texto. El chat sólo se desplaza solo al fondo si ya
+  estabas pegado a él: si subiste a leer, se queda donde estás.
 
 ## 7. Guiada o rápida
 
@@ -417,6 +438,11 @@ corto y un detalle. Todos los títulos, por dónde salen:
   («Jira: … · Confluence: …»).
 - «Sitio enlazado» — el otro host (Jira o Confluence) comparte el MCP de
   éste y no pedirá claves.
+- «Espera del MCP cancelada» — estabas en el paso manual del MCP (pegar el
+  bloque y reiniciar opencode) y has cambiado a OTRO sitio de Atlassian antes
+  de que opencode lo cargara: la espera se corta; al volver se vuelve a pedir,
+  o el MCP ya conectado se reconoce solo. Pasar a una pestaña fuera de
+  Atlassian no la corta.
 - «Contexto de Confluence enlazado» — desde Jira, se cargó el contexto del
   Confluence enlazado: host, caracteres y si tiene índice.
 - «Content script inyectado» — con el permiso ya concedido, el content script
@@ -437,6 +463,11 @@ corto y un detalle. Todos los títulos, por dónde salen:
   es el mensaje.
 - «Turno cancelado por el usuario» — pulsaste Parar: se abortan el turno y la
   sesión.
+- «Turno cancelado» — el turno en vuelo se canceló desde el panel sin pulsar
+  Parar: al reconstruir el cliente (cambiaste a una pestaña de OTRO host, o
+  cerraste Ajustes) o al abrir una sesión nueva a mitad de respuesta. Antes se
+  quedaba 90 s «pensando…» hasta que el vigilante lo abortaba. Si el panel
+  vuelve al sitio, la respuesta que llegó a opencode sigue en esa sesión.
 - «Respuesta recibida» — el turno terminó: caracteres de la respuesta y
   número de herramientas que llamó.
 - «Skill» — cambió la Skill (desde el desplegable, o porque «Pedirlo
@@ -508,7 +539,10 @@ corto y un detalle. Todos los títulos, por dónde salen:
 **Navegación**
 
 - «Índice ampliado» — las salidas de las herramientas descubrieron páginas o
-  incidencias nuevas y el índice creció (+N · total).
+  incidencias nuevas y el índice creció (+N · total). Sólo entidades de este
+  sitio (y, desde un Jira, del Confluence enlazado): las URLs de otros hosts se
+  descartan antes de mirar nada, y una sigla con forma de clave («UTF-8»,
+  «ISO-8601») sólo cuenta si su proyecto es conocido o viene en `/browse/`.
 - «Árbol leído de la página» — tras la respuesta se leyó del DOM la parte
   desplegada del árbol lateral: relaciones nuevas y filas leídas.
 - «Destino leído de la respuesta» — en Búsqueda, la línea «Destino: …» dio el
@@ -528,7 +562,15 @@ corto y un detalle. Todos los títulos, por dónde salen:
 - «Navegación fallida» — el service worker no aceptó el plan, o no contestó.
 - «Navegación detenida» — el recorrido acabó mal: «sin permiso de host», o el
   error del paso.
-- «Navegación cancelada» — cancelaste el recorrido.
+- «Navegación cancelada» — cancelaste el recorrido: «desde la tarjeta» (el
+  botón **Parar** que la tarjeta enseña mientras dura un recorrido paso a
+  paso) o «desde la página» (Escape con el foco puesto).
+- «Enlace fuera del sitio» — un enlace del chat (lo escribió el modelo) no
+  era del sitio de la pestaña, ni del Confluence enlazado, ni de
+  `id.atlassian.com`, y no se ha abierto; el detalle es el host. Si lo
+  necesitas, cópialo a mano. Desde la revisión adversaria de H2 ese enlace ni
+  siquiera se pinta como enlace: se ve su texto con la URL entre paréntesis,
+  atenuada, para que la leas antes de copiarla.
 - «Fragmento resaltado» — al llegar, el fragmento se subrayó; el detalle es la
   estrategia con la que se encontró.
 - «Sin resaltar» — se llegó al destino pero el fragmento no se encontró, con
@@ -547,6 +589,14 @@ corto y un detalle. Todos los títulos, por dónde salen:
 
 - «Contexto construido» — el indexado terminó: entradas del índice y
   caracteres del documento de contexto.
+- «Contexto construido en segundo plano» — el indexado terminó cuando el panel
+  ya estaba en otro sitio: se guardó bajo el host que se indexó (fundido con
+  el índice guardado de ese host) sin tocar el estado ni el chat del sitio
+  abierto. Al volver a aquel sitio, está.
+- «Indexado cancelado» — el indexado se paró antes de acabar: lo paraste con
+  **Cancelar**, o cambiaste de sitio a mitad (el cliente se reconstruye y se
+  lo lleva). No se guarda nada: el sitio NO queda configurado y su pantalla de
+  contexto volverá a salir.
 - «Indexado fallido» — el indexado falló, con el mensaje (cancelarlo no es un
   fallo: se dice aparte).
 
@@ -566,6 +616,45 @@ fuera del mapa → CLAUDE.md §5 y §3; «nadie lo manda» es aviso, no error.
 **«opencode no responde»**
 El servidor no está arrancado, o el puerto de los ajustes no coincide. El panel
 te muestra el comando exacto, con el `--cors` ya relleno.
+
+**El panel dice que la página no contesta justo después de actualizar la extensión**
+Recarga la pestaña: el content script se inyecta al cargar la página, y el
+que tiene cargado es el anterior. Si sigue igual, mira en la consola de la
+página si hay errores al cargar `chrome-extension://…/src/…`: Faro sirve sus
+módulos con `use_dynamic_url` (desde Chrome 130 la URL cambia en cada sesión,
+para que ninguna web pueda detectar la extensión) y los pide siempre con
+`chrome.runtime.getURL()`, así que un módulo bloqueado significa que su carpeta
+no está en `web_accessible_resources` del manifest (lo vigila
+`web-accessible.test.js` en `npm run check`).
+
+**Cambié de pestaña a mitad de respuesta y el turno desapareció**
+Es lo previsto. Al pasar a una pestaña de OTRO host (o al cerrar Ajustes) el
+panel reconstruye su cliente y cancela el turno en vuelo («Turno cancelado» en
+el registro) en vez de dejarlo 90 s «pensando…». Pasar a una pestaña fuera de
+Atlassian no lo cancela. La respuesta, si llegó a opencode, sigue en la sesión
+de aquel sitio y aparece al volver. «Nueva sesión» a mitad de turno también lo
+cancela, y el botón está desactivado mientras se responde.
+
+**Un enlace del chat no se abre**
+Sólo se abren enlaces del sitio de la pestaña, del Confluence enlazado y de
+`id.atlassian.com`; cualquier otro —los escribe el modelo, y un texto
+escondido en una página podría dictárselo— se dice bajo la respuesta y en el
+registro («Enlace fuera del sitio», con el host) y no se abre. Cópialo a mano
+si lo necesitas.
+En el chat esos enlaces aparecen apagados y con la URL a la vista: no son
+pulsables ni con el botón central ni con «Abrir en una pestaña nueva», que era
+la forma de saltarse la comprobación.
+
+**Escape no borra las marcas del análisis (o «se lo queda» la página)**
+A propósito, desde H2: Escape es de Faro sólo mientras tiene algo en marcha
+—el foco de un recorrido, el cartel, la barra de señalar o el seguimiento— o
+mientras el único subrayado es el de una llegada por cita.
+Con las marcas de un análisis puestas, Escape llega a la página como siempre
+y no borra nada a espaldas del panel: las marcas se quitan con **Quitar las
+marcas** o con la siguiente orden. La cita subrayada al llegar a un destino sí
+se quita con Escape mientras no haya marcas numeradas: de ésa el panel no
+guarda estado, así que la tecla es el control para borrarla (entre H2 y la
+revisión del 2026-09-14 se quedaba puesta hasta la siguiente orden).
 
 **Responde 401**
 La contraseña del panel no coincide con `OPENCODE_SERVER_PASSWORD`. Se manda
@@ -667,7 +756,14 @@ quedan sólo fundidos.
 
 **Una rama del árbol no se despliega sola**
 Faro pulsa el control de desplegar y **comprueba** que la rama se abrió; si no
-reacciona, prueba con el teclado (flecha derecha, como manda ARIA). Si aun así
+reacciona, prueba con el teclado (flecha derecha, como manda ARIA). Lo que
+nunca pulsa es un disparador de menú (`aria-haspopup`, o `aria-controls` hacia
+un `role="menu"`): el «···» de una fila abre un menú, no una rama, y el
+barrido lo salta aunque lleve `aria-expanded="false"`. Y un Escape a mitad
+del paso —durante el barrido, mientras se abre la rama o mientras destella una
+que ya estaba abierta— acaba el paso como cancelado: no ofrece «Llévame», no
+navega solo y Faro no lanza el paso siguiente.
+Si aun así
 no se abre, ve a **Ajustes → Diagnóstico del árbol**: lee la barra lateral de
 esa pestaña y apunta en el registro qué contenedor, qué filas y qué controles ha
 encontrado, además de dejarlo copiado. Con eso se ajusta
@@ -762,7 +858,9 @@ tiene cargado es anterior a este cambio.
 
 **Pulso [2] y dice que esa marca ya no está**
 Las marcas viven en la página donde se hicieron. Si has navegado, recargado o
-empezado una sesión nueva, se van con ella. Al volver a abrir el panel, la
+empezado una sesión nueva, se van con ella (también si Jira repintó el bloque
+y el texto sólo queda en una pestaña oculta: ir a una marca exige que tenga
+una caja visible, igual que al ponerla). Al volver a abrir el panel, la
 tarjeta del último análisis sale atenuada con **Volver a marcar en esta
 página**: si sigues en la misma página, la vuelve a subrayar; si no, te lo
 dice y no toca nada. Si no, vuelve a pedir el análisis.

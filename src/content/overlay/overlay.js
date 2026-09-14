@@ -5,6 +5,15 @@
  * romper el maquetado de Atlassian ni ser rota por él. La única excepción es
  * la hoja de `::highlight()`, que por especificación tiene que ir en el
  * documento; se inyecta en <head> y nunca dentro del contenido.
+ *
+ * Escape es de Faro SÓLO mientras hay algo en marcha (el foco de un
+ * recorrido, el cartel, la barra de selección, el seguimiento de un elemento)
+ * o mientras el único subrayado en pantalla es el de una llegada por cita: lo
+ * decide `interceptsEscape()`. Las marcas numeradas de un análisis y los
+ * filetes de las imágenes no cuentan, y quien lo borra todo (`clearAll`,
+ * `clearNotes`) suelta el cancelador. Reproducido en la auditoría del
+ * 2026-09-13 (docs/PLAN.md §2.3 M2): desde la primera marca, ningún Escape
+ * llegaba ya a Jira/Confluence.
  */
 
 import { OVERLAY_CSS, HIGHLIGHT_CSS, PICK_CSS } from './styles.js'
@@ -100,6 +109,10 @@ export class Overlay {
     this.hidePickBar()
     this.hideToast()
     this.unfollow()
+    // Sin nada en marcha no hay nada que cancelar: quien lo borra todo suelta
+    // también el cancelador, o un overlay huérfano (extensión recargada sin
+    // recargar la pestaña) seguiría creyendo que tiene algo entre manos.
+    this.onCancel = null
   }
 
   setReducedMotion(on) {
@@ -134,11 +147,50 @@ export class Overlay {
     document.head?.appendChild(s)
   }
 
+  /**
+   * ¿Es de Faro el Escape ahora mismo? Mientras hay algo EN MARCHA: el foco de
+   * un recorrido, el cartel con sus botones, la barra de selección o el
+   * seguimiento de un elemento. Las marcas NUMERADAS de un análisis no cuentan:
+   * son del panel, que las da por puestas y las quita desde «Quitar las marcas»
+   * o con la siguiente orden; borrarlas con Escape a sus espaldas lo dejaba con
+   * `state.notes` viejo y contestando «esa marca ya no está» a cada pulsación.
+   * Los filetes de las imágenes tampoco.
+   *
+   * La excepción es el subrayado de una LLEGADA por cita (`applyAnchor`), que
+   * no lleva números: de ése el panel no guarda estado —sólo registra
+   * «Fragmento resaltado»—, así que quitarlo con Escape no desincroniza a
+   * nadie, y es el único control que tiene el usuario, porque en ese camino el
+   * foco se apaga ANTES de subrayar. Sin esta línea, el Escape que antes de H2
+   * lo borraba dejó de hacerlo y el subrayado se quedaba hasta la siguiente
+   * orden (revisión adversaria de H2, 2026-09-14).
+   *
+   * Con esta guarda no hace falta que `hideCard()` suelte el cancelador: tras
+   * esconder el cartel el ejecutor sigue desplegando la rama con el foco puesto
+   * y mira `this.cancelled` después de cada espera —al abrir la rama, al
+   * destellar y en cada vuelta del barrido, dentro y fuera de la ronda—, así
+   * que ahí Escape corta el paso de verdad; cuando el foco se apaga, la tecla
+   * vuelve a la página sola.
+   *
+   * Reproducido en la auditoría del 2026-09-13 (docs/PLAN.md §2.3 M2): sin
+   * esta guarda, desde la primera marca ningún Escape llegaba ya a la página
+   * (ni al diálogo de edición, ni a un desplegable de AUI), porque el
+   * cancelador se ponía en cada paso, llegada y análisis y nadie lo soltaba.
+   */
+  interceptsEscape() {
+    const encendido = (el) => !!el?.classList.contains('on')
+    return (
+      encendido(this.el.spot) ||
+      encendido(this.el.card) ||
+      encendido(this.el.pickBar) ||
+      !!this.followTarget ||
+      !!(this.quoteRanges.length && !this.notes.length)
+    )
+  }
+
   _onKey(ev) {
-    if (ev.key === 'Escape' && this.onCancel) {
-      ev.stopPropagation()
-      this.onCancel('escape')
-    }
+    if (ev.key !== 'Escape' || typeof this.onCancel !== 'function' || !this.interceptsEscape()) return
+    ev.stopPropagation()
+    this.onCancel('escape')
   }
 
   _onViewportChange() {
@@ -397,6 +449,9 @@ export class Overlay {
     this.activeNote = 0
     if (this.el.noteLayer) this.el.noteLayer.textContent = ''
     this.clearHighlight()
+    // El análisis que las puso dejó un cancelador que las borraba: sin marcas
+    // ya no borra nada, y con él puesto Escape seguía siendo de Faro.
+    this.onCancel = null
   }
 
   clearHighlight() {

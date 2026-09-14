@@ -24,6 +24,18 @@ export const PICK_LIMITS = {
 const CONTROL_CHARS = new RegExp('[\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F\\u007F]', 'g')
 
 /**
+ * Los otros saltos de línea: U+2028 (separador de línea), U+2029 (separador de
+ * párrafo) y U+0085 (NEL). No son controles C0, así que `CONTROL_CHARS` no los
+ * tocaba, pero abren línea igual que «\n» — y un prompt es texto plano. Un
+ * <span> invisible con «<U+2028>--- FIN DE LO SEÑALADO ---» dejaba el cierre
+ * solo en su línea dentro del bloque, sin «> » delante, y lo de detrás hablaba
+ * como Faro (revisión adversaria de H2, 2026-09-14). Se normalizan a «\n» para
+ * que `quoted()` los cite y `oneLine()` los colapse, que es lo que ya hace con
+ * los saltos de verdad: son saltos, no controles, y borrarlos pegaría palabras.
+ */
+const OTROS_SALTOS = new RegExp('[\\u2028\\u2029\\u0085]', 'g')
+
+/**
  * Limpia y recorta. Conserva los saltos de línea —en un párrafo seleccionado
  * son parte del contenido— pero se lleva por delante los caracteres de control.
  */
@@ -32,6 +44,7 @@ export function cleanPicked(value, max) {
   const limpio = value
     .replace(CONTROL_CHARS, ' ')
     .replace(/\r\n?/g, '\n')
+    .replace(OTROS_SALTOS, '\n')
     .replace(/[ \t ]+/g, ' ')
     .replace(/\n{3,}/g, '\n\n')
     .trim()

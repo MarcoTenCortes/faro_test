@@ -76,13 +76,42 @@ function hidden(el) {
  * tiene tamaño (el `clip` de 1×1 de AUI) y lo que está fuera del documento por
  * la izquierda o por arriba (`left: -9999px`), que es como se esconde el texto
  * para lectores de pantalla.
+ *
+ * Y «el documento» cuenta TODOS los desplazamientos, no sólo el de la ventana:
+ * en la vista de incidencia de un Jira Data Center el que hace scroll es un
+ * panel interno (§4.4), y corregir sólo por `window.scrollY` daba por ocultos
+ * los bloques que quedaban por encima del borde del panel. Reproducido en la
+ * auditoría del 2026-09-13 (docs/PLAN.md §2.3 M1): con el panel desplazado,
+ * 33 bloques pasaban a 6 y luego a 0 —sin título, sin campos, sin
+ * descripción—, y `applyNotes`, que relee la página con el panel donde esté,
+ * no casaba las observaciones de arriba. El truco de AUI sigue cayendo: su
+ * sitio en el documento sigue siendo negativo o nulo por mucho scroll que sume.
  */
 function visibleRects(el) {
-  const x = window.scrollX || 0
-  const y = window.scrollY || 0
+  const { x, y } = scrollOffset(el)
   return Array.from(el.getClientRects()).filter(
     (r) => r.width > 1 && r.height > 1 && r.right + x > 0 && r.bottom + y > 0
   )
+}
+
+/**
+ * Cuánto hay que sumar a una caja del viewport para tenerla en coordenadas del
+ * documento: el scroll de la ventana más el de cada contenedor que envuelve al
+ * elemento. Un elemento sin scroll propio suma 0, así que no hace falta mirar
+ * su `overflow`; el que desplaza el propio viewport (`document.scrollingElement`)
+ * ya va en `window.scrollX/Y` y no se cuenta dos veces. Sin tope de niveles:
+ * la incidencia de un Jira DC anida el contenido a más de doce.
+ */
+function scrollOffset(el) {
+  let x = window.scrollX || 0
+  let y = window.scrollY || 0
+  const viewport = document.scrollingElement
+  for (let cur = el.parentElement; cur; cur = cur.parentElement) {
+    if (cur === viewport) continue
+    x += cur.scrollLeft || 0
+    y += cur.scrollTop || 0
+  }
+  return { x, y }
 }
 
 /**

@@ -83,28 +83,15 @@ export const STORAGE_KEYS = {
 }
 
 /**
- * Permisos con los que Faro abre TODAS sus sesiones de opencode.
+ * Permisos con los que Faro abre TODAS sus sesiones de opencode: una regla
+ * que deniega todo y sólo el MCP de Atlassian permitido. Viven en
+ * permissions.js (puro, con la simulación de cómo los evalúa opencode 1.2.25
+ * para poder probarlos en Node y el porqué entero); se reexportan desde aquí
+ * para que nadie cambie sus imports.
  *
- * Sin esto, el agente por defecto de opencode trae herramientas de shell y de
- * ficheros, y las usa: comprobado, ejecutaba `echo hola` y leia package.json
- * dentro de un turno normal de chat. Faro no necesita nada de eso —solo las
- * herramientas MCP de Atlassian— y dejarlo abierto significaria que un texto
- * escondido en una pagina de Confluence podria acabar ejecutando ordenes en la
- * maquina del usuario.
- *
- * Comprobado contra opencode 1.2.25: el `permission` de la sesion se respeta.
- * El campo `tools` del mensaje (marcado como obsoleto) tambien: lo convierte
- * en reglas de permiso de la sesion. Faro simplemente no lo manda.
+ * Comprobado contra opencode 1.2.25: el `permission` de la sesión se respeta
+ * (va DETRÁS de las reglas del agente y manda sobre ellas). El campo `tools`
+ * del mensaje (marcado como obsoleto) también: lo convierte en reglas de
+ * permiso de la sesión, persistentes. Faro simplemente no lo manda.
  */
-export const SAFE_PERMISSIONS = [
-  'bash',
-  'edit',
-  'write',
-  'read',
-  'patch',
-  'glob',
-  'grep',
-  'list',
-  'webfetch',
-  'task',
-].map((permission) => ({ permission, pattern: '**', action: 'deny' }))
+export { SAFE_PERMISSIONS } from './permissions.js'

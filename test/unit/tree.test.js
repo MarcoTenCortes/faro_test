@@ -143,3 +143,88 @@ test('el plan completo marca las acciones', () => {
   eq(acciones[acciones.length - 1], 'open', 'el destino se abre')
   assert(acciones.slice(1, -1).every((a) => a === 'expand'), 'los intermedios se despliegan: ' + acciones.join(','))
 })
+
+// --- la forma del arbol: un menu no es una rama (M9, auditoria 2026-09-13) --
+// `expandersIn` recogia TODOS los `[aria-expanded="false"]` visibles de la
+// barra lateral, y el «···» de acciones de cada fila lleva justo eso. Aqui se
+// prueba con elementos de mentira: `visible()` necesita `getComputedStyle`,
+// que se instala DENTRO de cada prueba y se restaura al salir.
+
+import { isMenuTrigger, expandersIn, toggleFor } from '../../src/content/tree-dom.js'
+
+/** Un control de mentira: lo justo para `visible()`, `matches` y `closest`. */
+function control(attrs = {}, { fila = null } = {}) {
+  return {
+    isConnected: true,
+    getAttribute: (n) => (n in attrs ? attrs[n] : null),
+    getBoundingClientRect: () => ({ width: 20, height: 20 }),
+    matches: () => false,
+    closest: () => fila,
+    ownerDocument: null,
+    querySelectorAll: () => [],
+  }
+}
+
+function conEstilos(fn) {
+  const previo = globalThis.getComputedStyle
+  globalThis.getComputedStyle = () => ({ visibility: 'visible', display: 'block' })
+  try {
+    return fn()
+  } finally {
+    if (previo === undefined) delete globalThis.getComputedStyle
+    else globalThis.getComputedStyle = previo
+  }
+}
+
+test('isMenuTrigger: aria-haspopup que no sea «false», o aria-controls hacia un role=menu', () => {
+  eq(isMenuTrigger(control({ 'aria-haspopup': 'true' })), true)
+  eq(isMenuTrigger(control({ 'aria-haspopup': 'menu' })), true)
+  eq(isMenuTrigger(control({ 'aria-haspopup': ' Dialog ' })), true, 'sin distinguir mayusculas ni espacios')
+  eq(isMenuTrigger(control({ 'aria-haspopup': 'false' })), false)
+  eq(isMenuTrigger(control({ 'aria-haspopup': '' })), false)
+  eq(isMenuTrigger(control({ 'aria-expanded': 'false' })), false, 'un chevron normal')
+  const menu = { getAttribute: (n) => (n === 'role' ? 'menu' : null) }
+  const grupo = { getAttribute: (n) => (n === 'role' ? 'group' : null) }
+  const doc = { getElementById: (id) => ({ m1: menu, g1: grupo })[id] || null }
+  const haciaMenu = control({ 'aria-controls': 'm1' })
+  haciaMenu.ownerDocument = doc
+  eq(isMenuTrigger(haciaMenu), true)
+  const haciaGrupo = control({ 'aria-controls': 'g1' })
+  haciaGrupo.ownerDocument = doc
+  eq(isMenuTrigger(haciaGrupo), false, 'el grupo de hijas de un arbol ARIA no es un menu')
+  const variosIds = control({ 'aria-controls': 'g1 m1' })
+  variosIds.ownerDocument = doc
+  eq(isMenuTrigger(variosIds), true, 'basta con que uno de los ids sea un menu')
+  eq(isMenuTrigger(null), false)
+  eq(isMenuTrigger({}), false)
+})
+
+test('SEGURIDAD: expandersIn salta los disparadores de menu y se queda con los chevrones', () => {
+  conEstilos(() => {
+    const chevron = control({ 'aria-expanded': 'false' })
+    const menu = control({ 'aria-expanded': 'false', 'aria-haspopup': 'true' })
+    const oculto = control({ 'aria-expanded': 'false' })
+    oculto.getBoundingClientRect = () => ({ width: 0, height: 0 })
+    const container = { querySelectorAll: () => [menu, chevron, oculto] }
+    const out = expandersIn(container)
+    eq(out.length, 1)
+    assert(out[0] === chevron, 'solo el chevron')
+  })
+  eq(expandersIn(null), [])
+})
+
+test('toggleFor no toma el «···» de la fila por su control de desplegar', () => {
+  conEstilos(() => {
+    const fila = control({})
+    const menu = control({ 'aria-expanded': 'false', 'aria-haspopup': 'true' }, { fila })
+    const chevron = control({ 'aria-expanded': 'false' }, { fila })
+    fila.querySelectorAll = () => [menu, chevron]
+    const t = toggleFor(fila)
+    assert(t && t.toggle === chevron, 'el chevron, aunque el menu vaya antes en el DOM')
+    eq(t.isRow, false)
+
+    // Una fila que solo tiene el menu no tiene control de desplegar.
+    fila.querySelectorAll = () => [menu]
+    eq(toggleFor(fila), null)
+  })
+})

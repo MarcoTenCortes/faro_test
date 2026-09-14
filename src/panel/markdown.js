@@ -106,19 +106,39 @@ export function parseInline(src) {
   // Ojo con el orden: el enlace `[texto](url)` va ANTES que la marca `[3]`.
   // La alternancia se prueba de izquierda a derecha en cada posición, así que
   // un enlace markdown que empiece por un número sigue siendo un enlace.
+  //
+  // La negrita admite asteriscos SUELTOS dentro (`\*(?!\*)`: uno que no va
+  // seguido de otro), así que «**a *b* c**» es una sola negrita con la cursiva
+  // dentro, que se trocea al pintar. Reproducido en la auditoría del
+  // 2026-09-13 (docs/PLAN.md §2.5 D7): con `[^*]+` no casaba «**Sin
+  // *entorno***» —justo la forma que normalizeNumbering conserva en el estilo
+  // bold-title— y salía la cursiva de «Sin » con los asteriscos a la vista.
+  // Cada carácter sólo puede consumirlo una alternativa: sin cierre, el
+  // retroceso es lineal, no exponencial.
   const re =
-    /(`[^`]+`)|(\*\*[^*]+\*\*)|(__[^_]+__)|(\*[^*\n]+\*)|(\[[^\]]+\]\([^)\s]+\))|(\[\d{1,2}\])|(https?:\/\/[^\s<>()]+)/g
+    /(`[^`]+`)|(\*\*(?:[^*]|\*(?!\*))+\*\*)|(__(?:[^_]|_(?!_))+__)|(\*[^*\n]+\*)|(\[[^\]]+\]\([^)\s]+\))|(\[\d{1,2}\])|(https?:\/\/[^\s<>()]+)/g
 
   let last = 0
   let m
   while ((m = re.exec(text))) {
     if (m.index > last) out.push({ type: 'text', text: text.slice(last, m.index) })
-    const token = m[0]
+    let token = m[0]
 
     if (token.startsWith('`')) {
       out.push({ type: 'code', text: token.slice(1, -1) })
     } else if (token.startsWith('**') || token.startsWith('__')) {
-      out.push({ type: 'strong', text: token.slice(2, -2) })
+      let inner = token.slice(2, -2)
+      // «**Sin *entorno***»: la cursiva cierra pegada a la negrita y el regex
+      // se ha quedado con los dos primeros asteriscos del «***». El tercero es
+      // nuestro sólo si dentro queda una cursiva sin cerrar (un número impar
+      // de asteriscos); si no («**a***b**»), se queda fuera y abre lo que abra.
+      const marca = token[0]
+      if (text[m.index + token.length] === marca && cuenta(inner, marca) % 2 === 1) {
+        token += marca
+        inner += marca
+        re.lastIndex = m.index + token.length
+      }
+      out.push({ type: 'strong', text: inner })
     } else if (token.startsWith('*')) {
       out.push({ type: 'em', text: token.slice(1, -1) })
     } else if (/^\[\d{1,2}\]$/.test(token)) {
@@ -140,6 +160,12 @@ export function parseInline(src) {
   return out
 }
 
+function cuenta(s, marca) {
+  let n = 0
+  for (const c of s) if (c === marca) n++
+  return n
+}
+
 /** Sólo http(s). Nada de javascript:, data:, file: ni protocolos raros. */
 export function isSafeHref(href) {
   try {
@@ -154,18 +180,24 @@ export function isSafeHref(href) {
 
 /**
  * Construye el fragmento del DOM. Sólo usable en navegador.
- * @param {{onLink?:Function, onNote?:Function}} opts `onNote` recibe el número
- *        de una marca del análisis cuando se pulsa; sin él, `[3]` es texto.
+ *
+ * @param {{onLink?:Function, onNote?:Function, allowHref?:Function}} opts
+ *        `onNote` recibe el número de una marca del análisis cuando se pulsa;
+ *        sin él, `[3]` es texto. `allowHref(href)` decide si el enlace se
+ *        puede abrir: el que diga que no NO se pinta como enlace (ver
+ *        `blockedLink`); sin `allowHref`, todos se pintan (el banco y la
+ *        vista previa del panel, que no tienen sitio contra el que mirar).
  */
-export function renderMarkdown(src, { onLink, onNote } = {}) {
+export function renderMarkdown(src, { onLink, onNote, allowHref } = {}) {
   const frag = document.createDocumentFragment()
+  const opts = { onLink, onNote, allowHref }
 
   for (const block of parseBlocks(src)) {
     switch (block.type) {
       case 'heading': {
         const h = document.createElement('h' + Math.min(4, block.level + 2))
         h.className = 'md-h'
-        appendInline(h, block.text, onLink, onNote)
+        appendInline(h, block.text, opts)
         frag.appendChild(h)
         break
       }
@@ -182,7 +214,7 @@ export function renderMarkdown(src, { onLink, onNote } = {}) {
       case 'quote': {
         const q = document.createElement('blockquote')
         q.className = 'md-quote'
-        appendInline(q, block.text, onLink, onNote)
+        appendInline(q, block.text, opts)
         frag.appendChild(q)
         break
       }
@@ -191,7 +223,7 @@ export function renderMarkdown(src, { onLink, onNote } = {}) {
         list.className = 'md-list'
         for (const item of block.items) {
           const li = document.createElement('li')
-          appendInline(li, item, onLink, onNote)
+          appendInline(li, item, opts)
           list.appendChild(li)
         }
         frag.appendChild(list)
@@ -203,7 +235,7 @@ export function renderMarkdown(src, { onLink, onNote } = {}) {
       default: {
         const p = document.createElement('p')
         p.className = 'md-p'
-        appendInline(p, block.text, onLink, onNote)
+        appendInline(p, block.text, opts)
         frag.appendChild(p)
       }
     }
@@ -212,7 +244,32 @@ export function renderMarkdown(src, { onLink, onNote } = {}) {
   return frag
 }
 
-function appendInline(parent, text, onLink, onNote) {
+/**
+ * Cómo se ve un enlace que el panel no abriría: texto, con la URL delante de
+ * los ojos.
+ *
+ * Revisión adversaria de H2 (2026-09-14): H2 puso la regla de orígenes en
+ * `openUrl` (`allowedLinkOrigin`), pero aquí se seguía escribiendo
+ * `a.href` + `target="_blank"` en TODOS los enlaces, y un `href` no necesita
+ * el manejador para abrirse: el clic central, «Abrir en pestaña nueva» del
+ * menú contextual o arrastrarlo a la barra de direcciones se saltaban la
+ * comprobación entera. Un enlace que no se puede abrir tampoco es un enlace:
+ * se pinta como texto con su URL a la vista (si el texto YA es la URL, una
+ * sola vez), para que se lea antes de copiarla a mano.
+ *
+ * Puro salvo el `createElement`.
+ */
+function blockedLink(tok) {
+  const span = document.createElement('span')
+  span.className = 'md-link-blocked'
+  span.title = 'Enlace fuera del sitio'
+  const etiqueta = String(tok.text || '').trim()
+  span.textContent = etiqueta && etiqueta !== tok.href ? `${tok.text} (${tok.href})` : tok.href
+  return span
+}
+
+function appendInline(parent, text, { onLink, onNote, allowHref } = {}) {
+  const opts = { onLink, onNote, allowHref }
   for (const tok of parseInline(text)) {
     if (tok.type === 'text') {
       parent.appendChild(document.createTextNode(tok.text))
@@ -230,6 +287,11 @@ function appendInline(parent, text, onLink, onNote) {
       b.addEventListener('click', () => onNote(tok.n))
       parent.appendChild(b)
     } else if (tok.type === 'link') {
+      // Lo que no se abriría ni siquiera se pinta como enlace (S5).
+      if (allowHref && !allowHref(tok.href)) {
+        parent.appendChild(blockedLink(tok))
+        continue
+      }
       const a = document.createElement('a')
       a.textContent = tok.text
       a.href = tok.href
@@ -244,11 +306,14 @@ function appendInline(parent, text, onLink, onNote) {
       parent.appendChild(a)
     } else {
       const el = document.createElement(tok.type === 'strong' ? 'strong' : tok.type === 'em' ? 'em' : 'code')
-      // Una marca «[1]» dentro de una negrita («**[1] Título**») también es
-      // una pastilla: los modelos la ponen ahí a menudo, y numberedIn la
-      // cuenta. En código, nada: `arr[1]` es código.
-      if (tok.type === 'code' || !onNote) el.textContent = tok.text
-      else appendInline(el, tok.text, onLink, onNote)
+      // El interior de una negrita o una cursiva se vuelve a trocear SIEMPRE:
+      // una marca «[1]» dentro de una negrita («**[1] Título**») también es
+      // una pastilla (los modelos la ponen ahí a menudo, y numberedIn la
+      // cuenta; sin onNote se queda en texto, como fuera), y una cursiva
+      // dentro de una negrita («**Sin *entorno***», D7) se anida en vez de
+      // verse con los asteriscos. En código, nada: `arr[1]` es código.
+      if (tok.type === 'code') el.textContent = tok.text
+      else appendInline(el, tok.text, opts)
       parent.appendChild(el)
     }
   }

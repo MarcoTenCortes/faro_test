@@ -105,6 +105,39 @@ test('desplegar una rama del árbol sí es seguro', () => {
   eq(isSafeToClick(fake('button', { 'aria-expanded': 'true' }, 'Arquitectura'), ORIGIN).ok, false)
 })
 
+// M9 (auditoría del 2026-09-13): un disparador de menú lleva el mismo
+// `aria-expanded="false"` que un chevron del árbol, y el barrido lo pulsaba:
+// abría «Mover», «Archivar», «Eliminar» encima de la página buscando la rama.
+test('SEGURIDAD: un disparador de menú con aria-expanded=false no se pulsa', () => {
+  const r = isSafeToClick(fake('button', { 'aria-expanded': 'false', 'aria-haspopup': 'true' }, 'Más acciones'), ORIGIN)
+  eq(r.ok, false)
+  assert(r.reason.includes('abre un menú'), r.reason)
+  for (const popup of ['menu', 'listbox', 'dialog', 'grid', 'tree', 'TRUE']) {
+    eq(isSafeToClick(fake('button', { 'aria-expanded': 'false', 'aria-haspopup': popup }, '···'), ORIGIN).ok, false, popup)
+  }
+  // AUI (Jira DC) hace sus disparadores con un <a href="#">: antes pasaba como «ancla».
+  eq(isSafeToClick(fake('a', { href: '#', 'aria-haspopup': 'true', 'aria-expanded': 'false' }, 'Más'), ORIGIN).ok, false)
+  // Sin aria-haspopup pero con aria-controls hacia un role=menu.
+  const menu = { getAttribute: (n) => (n === 'role' ? 'menu' : null) }
+  const conControls = fake('button', { 'aria-expanded': 'false', 'aria-controls': 'menu-1' }, 'Más')
+  conControls.ownerDocument = { getElementById: (id) => (id === 'menu-1' ? menu : null) }
+  eq(isSafeToClick(conControls, ORIGIN).ok, false)
+})
+
+test('un chevron del árbol sigue siendo «desplegar», con aria-haspopup=false o aria-controls a su grupo', () => {
+  eq(isSafeToClick(fake('button', { 'aria-expanded': 'false' }, 'Arquitectura'), ORIGIN), { ok: true, kind: 'desplegar' })
+  eq(isSafeToClick(fake('button', { 'aria-expanded': 'false', 'aria-haspopup': 'false' }, 'Arquitectura'), ORIGIN).kind, 'desplegar')
+  // En un árbol ARIA el chevron apunta con aria-controls al grupo de hijas.
+  const grupo = { getAttribute: (n) => (n === 'role' ? 'group' : null) }
+  const chevron = fake('button', { 'aria-expanded': 'false', 'aria-controls': 'hijas-1' }, 'Arquitectura')
+  chevron.ownerDocument = { getElementById: (id) => (id === 'hijas-1' ? grupo : null) }
+  eq(isSafeToClick(chevron, ORIGIN).kind, 'desplegar')
+  // Un aria-controls que no apunta a nada tampoco asusta.
+  const suelto = fake('button', { 'aria-expanded': 'false', 'aria-controls': 'no-existe' }, 'Arquitectura')
+  suelto.ownerDocument = { getElementById: () => null }
+  eq(isSafeToClick(suelto, ORIGIN).kind, 'desplegar')
+})
+
 test('un div cualquiera no se pulsa', () => {
   eq(isSafeToClick(fake('div', {}, 'algo'), ORIGIN).ok, false)
 })

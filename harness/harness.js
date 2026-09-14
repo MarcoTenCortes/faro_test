@@ -1809,6 +1809,122 @@ const actions = {
     renderPage('page:200')
     await wait(320)
 
+    // 39. La incidencia en bloques no depende de por dónde esté el scroll del
+    //     PANEL interno (el 30 sólo mueve la ventana; el 38 pone el panel
+    //     arriba antes de leer). Reproducido en la auditoría del 2026-09-13
+    //     (docs/PLAN.md M1): `visibleRects` corregía sólo por el scroll de la
+    //     ventana, con el panel abajo los bloques de arriba se daban por
+    //     ocultos (33 → 6 → 0) y `applyNotes`, que relee la página con el panel
+    //     donde esté, no casaba las observaciones de arriba.
+    runner.clear()
+    renderPage('issue:ENG-7')
+    await wait(320)
+    const panel39 = document.getElementById('page-content')
+    const estilo39 = panel39.getAttribute('style') || ''
+    panel39.setAttribute('style', 'height: 260px; overflow: auto')
+    panel39.scrollTop = 0
+    const conPanelArriba = pageDigest()
+    panel39.scrollTop = panel39.scrollHeight
+    await wait(60)
+    const conPanelAbajo = pageDigest()
+    ok(
+      'jira: la incidencia en bloques no depende del scroll del panel interno',
+      panel39.scrollTop > 0 &&
+        conPanelArriba.blocks.length > 10 &&
+        formatDigest(conPanelAbajo.blocks) === formatDigest(conPanelArriba.blocks),
+      `${conPanelArriba.blocks.length} bloques arriba · ${conPanelAbajo.blocks.length} abajo · scrollTop ${Math.round(panel39.scrollTop)}`
+    )
+    // Y las marcas se ponen igual con el panel abajo que arriba: las mismas
+    // observaciones, los mismos números puestos y por la misma estrategia.
+    const notas39 = observacionesDeIncidencia(conPanelArriba)
+    const estrategias39 = (r) => (r.detail || []).map((x) => `${x.n}:${x.strategy}`).join(' ')
+    panel39.scrollTop = 0
+    await wait(60)
+    const marcasArriba = await runner.applyNotes({ notes: notas39 })
+    await wait(300)
+    runner.clearNotes()
+    panel39.scrollTop = panel39.scrollHeight
+    await wait(60)
+    const marcasAbajo = await runner.applyNotes({ notes: notas39 })
+    await wait(300)
+    ok(
+      'jira: las marcas se ponen igual con el panel interno abajo que arriba',
+      marcasArriba.placed.join(',') === '1,2,3' &&
+        marcasAbajo.placed.join(',') === '1,2,3' &&
+        estrategias39(marcasAbajo) === estrategias39(marcasArriba),
+      `arriba [${marcasArriba.placed}] ${estrategias39(marcasArriba)} · abajo [${marcasAbajo.placed}] ${estrategias39(marcasAbajo)}`
+    )
+    runner.clearNotes()
+    panel39.setAttribute('style', estilo39)
+    if (!estilo39) panel39.removeAttribute('style')
+    renderPage('page:200')
+    await wait(320)
+
+    // 40. Escape vuelve a la página cuando Faro no tiene nada en marcha: con
+    //     las marcas de un análisis puestas (son del panel: Escape no las borra
+    //     a sus espaldas) y tras «Quitar las marcas». Sólo con algo en marcha
+    //     —el foco de un recorrido, o el subrayado de una llegada por cita, que
+    //     no es de nadie más— Escape es de Faro: lo quita y no llega a la
+    //     página. Reproducido en la auditoría del 2026-09-13 (docs/PLAN.md M2):
+    //     desde la primera marca, ningún Escape llegaba ya a Jira/Confluence.
+    runner.clear()
+    const parrafo40 = document.querySelector('#page-content p')
+    const escapeLlega = () => {
+      let llego = false
+      const oyente = (ev) => {
+        if (ev.key === 'Escape') llego = true
+      }
+      document.body.addEventListener('keydown', oyente)
+      parrafo40.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+      document.body.removeEventListener('keydown', oyente)
+      return llego
+    }
+    const res40 = await runner.applyNotes({ notes: observacionesPorBloques(pageDigest()) })
+    await wait(300)
+    const conMarcas = escapeLlega()
+    const marcasSiguen = res40.placed.length > 0 && runner.overlay.notes.length === res40.placed.length
+    runner.clearNotes()
+    const sinMarcas = escapeLlega()
+    const sueltoTrasQuitar = runner.overlay.onCancel === null
+    ok(
+      'escape: vuelve a la pagina con las marcas de un analisis puestas y tras quitarlas, sin borrar nada',
+      conMarcas && marcasSiguen && sinMarcas && sueltoTrasQuitar,
+      `con marcas ${conMarcas} (siguen ${marcasSiguen}) · sin marcas ${sinMarcas} (onCancel ${sueltoTrasQuitar ? 'null' : typeof runner.overlay.onCancel})`
+    )
+
+    //     El subrayado de una llegada por cita sí es de Faro mientras no haya
+    //     marcas numeradas: el panel no guarda estado de él (sólo registra
+    //     «Fragmento resaltado»), así que quitarlo con Escape no lo
+    //     desincroniza, y es el único control que tiene el usuario porque en
+    //     ese camino el foco se apaga antes de subrayar (revisión adversaria de
+    //     H2, 2026-09-14: tras H2 esa tecla dejó de borrarlo).
+    await runner.applyAnchor({ anchor: ANCHOR_QUOTE })
+    await wait(200)
+    runner.overlay.hideSpot()
+    const citaPuesta = runner.overlay.quoteRanges.length > 0
+    const conCita = escapeLlega()
+    const citaQuitada = runner.overlay.quoteRanges.length === 0 && runner.overlay.onCancel === null
+    ok(
+      'escape: con la cita de una llegada y sin marcas numeradas, la quita y no llega a la pagina',
+      citaPuesta && !conCita && citaQuitada,
+      `cita puesta ${citaPuesta} · llego ${conCita} · quitada ${citaQuitada} (onCancel ${runner.overlay.onCancel === null ? 'null' : typeof runner.overlay.onCancel})`
+    )
+    runner.clear()
+    runner.overlay.spotlight(parrafo40.getBoundingClientRect())
+    let cancelado40 = ''
+    runner.overlay.onCancel = (motivo) => {
+      cancelado40 = motivo
+      runner.overlay.clearAll()
+    }
+    const conFoco = escapeLlega()
+    ok(
+      'escape: con algo de Faro en marcha lo cancela y no llega a la pagina',
+      !conFoco && cancelado40 === 'escape' && !runner.overlay.el.spot.classList.contains('on') && runner.overlay.onCancel === null,
+      `llego ${conFoco} · cancelado «${cancelado40}» · foco ${runner.overlay.el.spot.classList.contains('on') ? 'encendido' : 'apagado'}`
+    )
+    renderPage('page:200')
+    await wait(320)
+
     runner.clear()
     const passed = results.filter((x) => x.pass).length
     say(`—— ${passed}/${results.length} comprobaciones ——`, passed === results.length ? 'ok' : 'bad')

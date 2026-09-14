@@ -427,7 +427,7 @@ test('EL CAMBIO: un análisis sin «[n]» ya no acaba en «no ha numerado»: se 
   // Pasó de verdad (gpt-5.6-luna): ocho observaciones como lista «1.» y el
   // JSON perfecto, y la extensión lo tiraba todo. Ahora, antes de rendirse:
   const cuerpo = JS.slice(JS.indexOf('async function offerNotes'), JS.indexOf('function notesCard'))
-  assert(/const adaptada = normalizeNumbering\(answer, \{ expected: expectedCount\(anchors\) \}\)/.test(cuerpo), 'la numeración «a su manera» se reescribe en local, sin pisar la cuenta del JSON')
+  assert(/const adaptada = normalizeNumbering\(answer, \{ expected: expectedCount\(anchors\), shortAnswer: NOTE_LIMITS\.shortAnswer \}\)/.test(cuerpo), 'la numeración «a su manera» se reescribe en local, sin pisar la cuenta del JSON ni adaptar una respuesta corta')
   assert(/adaptada\.prose !== answer/.test(cuerpo) && /repaint\?\.\(answer\)/.test(cuerpo), 'y la burbuja se repinta cuando la prosa cambia (también plegada o desenvuelta)')
   assert(/const sinNada = saysNothingToSay\(original\)/.test(cuerpo), '«Sin observaciones.» se mira en la respuesta original')
   assert(/const seguimientoCitado = state\.notes\.length > 0 && questionCitesPoint\(/.test(cuerpo), 'un seguimiento que cita un punto no se adapta')
@@ -446,7 +446,7 @@ test('EL CAMBIO: un análisis sin «[n]» ya no acaba en «no ha numerado»: se 
 
   const envio = JS.slice(JS.indexOf('async function send('), JS.indexOf('function paintTurn('))
   assert(/question: text,\s*\n\s*parts: turn\.parts,/.test(envio), 'la pregunta y las partes del turno llegan a las marcas')
-  assert(/repaint: \(prose\) => \{/.test(envio) && /renderMarkdown\(prose, \{ onLink: openUrl, onNote: focusNote \}\)/.test(envio))
+  assert(/repaint: \(prose\) => \{/.test(envio) && /renderMarkdown\(prose, \{ onLink: openUrl, onNote: focusNote, allowHref: linkAllowed \}\)/.test(envio))
   assert(/body\.isConnected \? body : liveBubble\(null\)/.test(envio), 'si el chat se repintó a mitad de turno, la prosa va a la burbuja viva')
   assert(/function liveBubble\(bubble\)/.test(JS))
 
@@ -466,7 +466,7 @@ test('EL CAMBIO: un análisis sin «[n]» ya no acaba en «no ha numerado»: se 
   // Análisis, no en un seguimiento que cita un punto, y los números del JSON valen.
   const restaurar = JS.slice(JS.indexOf('async function restoreConversation'), JS.indexOf('function showWelcome'))
   assert(/const adaptar = !!cruda && \(turno\.analisis \|\| !!anchors\) && !\(questionCitesPoint\(turno\.pregunta\) && !anchors\)/.test(restaurar))
-  assert(/normalizeNumbering\(cruda, \{ expected: expectedCount\(anchors\) \}\)\.prose/.test(restaurar))
+  assert(/normalizeNumbering\(cruda, \{ expected: expectedCount\(anchors\), shortAnswer: NOTE_LIMITS\.shortAnswer \}\)\.prose/.test(restaurar))
   assert(/includes\('MODO ANÁLISIS\.'\)/.test(restaurar), 'un turno fue un Análisis si su sistema llevó la cabecera del modo')
   assert(/observationNumbers\(prose, anchors\)\.numeros\.length/.test(restaurar))
   assert(/prosaOriginal/.test(restaurar), 'la tarjeta viva reconoce su burbuja también por la prosa original')
@@ -479,4 +479,358 @@ test('la navegación no se cae en silencio cuando falta el índice', () => {
   assert(/sinMapaCard/.test(JS), 'debe existir la tarjeta de «me falta el mapa»')
   assert(/Sin navegación/.test(JS), 'y el motivo debe quedar en el registro')
   assert(!/console\.debug\('\[faro\] sin navegación/.test(JS), 'ya no basta con un console.debug')
+})
+
+// ------------------------------------------------------------------- H2
+// Concurrencia y ciclo de vida (docs/PLAN.md §2.2, reproducido en la
+// auditoría del 2026-09-13). Cada pin es un trozo literal del código.
+
+test('H2 C1: reconstruir el cliente a mitad de turno cancela el turno en vez de dejarlo colgar 90 s', () => {
+  // Cambiar a una pestaña de OTRO host (o cerrar Ajustes) reconstruye el
+  // cliente y cierra el stream: el turno en vuelo se quedaba sin eventos, el
+  // vigilante lo daba por colgado a los 90 s y abortaba en el servidor una
+  // respuesta que quizá ya había terminado. Se cancela aquí y no en
+  // refreshTab: quien decide que ha habido cambio de SITIO es `changedHost`,
+  // y una pestaña fuera de Atlassian no lo es.
+  const cliente = JS.slice(JS.indexOf('function buildClient'), JS.indexOf('async function refreshTab'))
+  assert(/state\.turnAbort\?\.abort\(\)/.test(cliente), 'un turno en vuelo se cancela al reconstruir el cliente')
+  assert(/'Turno cancelado'/.test(cliente), 'y queda en el registro')
+  assert(cliente.indexOf('state.turnAbort?.abort()') < cliente.indexOf('disconnect()'), 'ANTES de cerrar el stream')
+  const refresco = JS.slice(JS.indexOf('async function refreshTab'), JS.indexOf('async function bootForSite'))
+  assert(!/turnAbort/.test(refresco), 'refreshTab no cancela ningún turno por su cuenta: sólo lo hace buildClient, al cambiar de sitio')
+})
+
+test('H2 C2: el contexto y el índice se guardan bajo el host que se indexó, no bajo la pestaña de ahora', () => {
+  const contexto = JS.slice(JS.indexOf('async function generateContext'), JS.indexOf('async function uploadContext'))
+  assert(/const host = state\.site\.host/.test(contexto), 'el host se captura al empezar')
+  assert(contexto.indexOf('const host') < contexto.indexOf('await buildContext('), 'antes del indexado, que dura minutos')
+  assert(!/state\.site\.host/.test(contexto.slice(contexto.indexOf('await buildContext('))), 'SEGURIDAD: tras el indexado nada se guarda bajo el host de la pestaña de ahora')
+  assert(/saveContextMd\(host,/.test(contexto) && /saveIndex\(host,/.test(contexto) && /saveSite\(host, \{ onboarded: true \}\)/.test(contexto), 'todas las escrituras, también la del catch, van al host capturado')
+  // Si el usuario ya está en otro sitio, se funde con el índice GUARDADO de
+  // aquel host y no se toca ni el estado ni el chat de éste.
+  assert(/getIndex\(host\)/.test(contexto), 'con el índice guardado de aquel host, no con el de la pestaña')
+  assert(/'Contexto construido en segundo plano'/.test(contexto), 'y se dice en el registro')
+})
+
+test('H2 C3: dos arranques solapados no pintan la conversación dos veces', () => {
+  // Testigo de arranque, como el del turno y el de la búsqueda de páginas
+  // base: sólo el último arranque manda, y los demás se apagan tras cada await.
+  const arranque = JS.slice(JS.indexOf('async function bootForSite'), JS.indexOf('async function loadLinkedContext'))
+  assert(/const testigo = \{\}/.test(arranque) && /state\.bootToken = testigo/.test(arranque), 'cada arranque lleva su testigo')
+  assert((arranque.match(/state\.bootToken !== testigo/g) || []).length >= 3, 'y se comprueba tras los await')
+  assert(/restoreConversation\(testigo\)/.test(arranque), 'restaurar la conversación recibe el testigo')
+  const restaurar = JS.slice(JS.indexOf('async function restoreConversation'), JS.indexOf('function showWelcome'))
+  assert(/async function restoreConversation\(testigo = state\.bootToken\)/.test(restaurar))
+  const vacia = restaurar.indexOf("el.chat.textContent = ''")
+  assert(vacia > 0, 'restaurar vacía el chat')
+  assert(restaurar.indexOf('listMessages(') < vacia, 'pero DESPUÉS de leer la sesión')
+  assert(restaurar.indexOf('state.bootToken !== testigo') < vacia, 'y de comprobar que el arranque sigue siendo el suyo')
+})
+
+test('H2 C4: «Nueva sesión» a mitad de turno cancela el turno, y el botón no está mientras se responde', () => {
+  const nueva = JS.slice(JS.indexOf('async function newSession'))
+  assert(/if \(state\.streaming\)/.test(nueva), 'una sesión nueva no se abre encima de un turno en vuelo')
+  assert(/state\.turnAbort\?\.abort\(\)/.test(nueva) && /abort\(state\.sessionID\)/.test(nueva), 'se cancela aquí y en el servidor')
+  assert(nueva.indexOf('if (state.streaming)') < nueva.indexOf('summarizeSession('), 'antes de resumir la sesión')
+  const streaming = JS.slice(JS.indexOf('function setStreaming'), JS.indexOf('function showBusy'))
+  assert(/btn-new-session/.test(streaming), 'y el botón se desactiva mientras se responde')
+})
+
+test('H2 C5: tras esperar al MCP se usa el sitio con el que se pidieron las claves, no la pestaña de ahora', () => {
+  const claves = JS.slice(JS.indexOf('async function saveKeys'), JS.indexOf('async function showManualStep'))
+  assert(/site: state\.site/.test(claves), 'el sitio viaja con la configuración pendiente')
+  const fin = JS.slice(JS.indexOf('async function finishSetup'), JS.indexOf('function paintSnippet'))
+  assert(!/state\.site\.host/.test(fin), 'tras esperar al MCP se usa el sitio con el que se pidieron las claves, no la pestaña de ahora')
+  assert(/state\.pendingMcp/.test(fin) && /site\.host/.test(fin))
+  assert(/state\.site\?\.host === site\.host/.test(fin), 'y sólo se rearranca si el usuario sigue en ese sitio')
+  const manual = JS.slice(JS.indexOf('async function showManualStep'), JS.indexOf('async function finishSetup'))
+  assert(!/state\.site\.host/.test(manual), 'la espera tampoco lee la pestaña en vivo')
+  const refresco = JS.slice(JS.indexOf('async function refreshTab'), JS.indexOf('async function bootForSite'))
+  assert(/state\.mcpWait/.test(refresco) && /'Espera del MCP cancelada'/.test(refresco), 'cambiar a otro sitio de Atlassian corta la espera, y se dice')
+})
+
+test('H2 C7: el pintado final de un turno busca la burbuja viva si el chat se repintó a mitad', () => {
+  // Reindexar, «Omitir» o subir un contexto repintan el chat sin reconstruir
+  // el cliente: el turno sobrevive, pero su burbuja queda fuera del documento.
+  const envio = JS.slice(JS.indexOf('async function send('), JS.indexOf('function paintTurn('))
+  const antes = envio.slice(0, envio.indexOf('warnAboutSources('))
+  assert(/const cuerpo = !mismoSitio \? body : body\.isConnected \? body : liveBubble\(null\) \|\| addAssistantMessage\(''\)/.test(antes), 'el pintado final busca la burbuja viva si el chat se repintó a mitad de turno, y sólo en el mismo sitio')
+  assert(/paintTurn\(turn, toolsBox, cuerpo, true\)/.test(antes), 'y pinta ahí')
+  assert(/if \(!bubble\.isConnected\) bubble = cuerpo/.test(antes), 'y lo que cuelga de la respuesta va a esa misma burbuja')
+  assert(/cuerpo\.appendChild\(errorNode\(/.test(antes) && /cuerpo\.appendChild\(noticeNode\('Turno cancelado\.'\)\)/.test(antes), 'también los errores y la cancelación')
+  assert(!/body\.appendChild\(errorNode\(/.test(antes) && !/body\.appendChild\(noticeNode\(/.test(antes), 'nunca en la burbuja de antes del repintado')
+  // Y si el panel ya está en OTRO sitio, la respuesta no entra en su chat ni
+  // en su índice: queda en la sesión de opencode del sitio que la pidió.
+  assert(/const hostAlPedir = state\.site\.host/.test(envio) && envio.indexOf('const hostAlPedir') < envio.indexOf('runTurn('), 'el host se captura al mandar')
+  // Contra el sitio del PANEL (el último host de Atlassian visto), no contra
+  // la pestaña: mirar el correo a mitad de respuesta no deja el turno sin chat.
+  assert(/const mismoSitio = \(state\.site\?\.host \?\? state\.lastHost\) === hostAlPedir && state\.sessionID === sesionAlPedir/.test(antes), 'y se comprueba al terminar, con la sesión (una «Nueva sesión» a mitad también deja el turno sin chat)')
+  assert(/const sesionAlPedir = state\.sessionID/.test(envio) && envio.indexOf('const sesionAlPedir') < envio.indexOf('runTurn('), 'la sesión se captura al mandar')
+  assert(antes.indexOf('if (!mismoSitio)') < antes.indexOf("state.turns.push({ role: 'assistant'"), 'antes de tocar los turnos de otro sitio')
+})
+
+// Accesibilidad y UX (docs/PLAN.md §2.5 A1, A2, A3, A7).
+
+test('H2 A1: abrir una pantalla deja inerte el resto y mueve el foco; cerrarla lo devuelve', () => {
+  // Reproducido en la auditoría del 2026-09-13: con Ajustes abierto, Tab
+  // recorría siete controles tapados (Intro en una sugerencia mandaba un
+  // turno) y «Listo» tiraba el foco al body.
+  const app = HTML.indexOf('id="app"')
+  assert(app >= 0, 'la cabecera, el chat y el redactor van dentro de #app')
+  assert(app < HTML.indexOf('id="chat"') && HTML.indexOf('id="chat"') < HTML.indexOf('id="composer"'), '#app envuelve #chat y #composer')
+  assert(HTML.indexOf('id="composer"') < HTML.indexOf('<section class="screen'), 'y las pantallas quedan fuera de #app')
+  assert(/<\/footer>\s*<\/div>/.test(HTML), '#app se cierra tras el redactor')
+  assert(/#app\s*\{/.test(CSS), '#app tiene su sitio en el CSS (el cuerpo es una columna flex)')
+
+  const abrir = JS.slice(JS.indexOf('function showScreen'), JS.indexOf('function hideScreens'))
+  assert(/\.inert = true/.test(abrir), 'lo de detrás queda inerte')
+  assert(/state\.focusBefore = document\.activeElement/.test(abrir), 'se recuerda quién tenía el foco')
+  assert(/\.focus\(\)/.test(abrir), 'y el foco entra en la pantalla')
+  const cerrar = JS.slice(JS.indexOf('function hideScreens'), JS.indexOf('function connectCommand'))
+  assert(/\.inert = false/.test(cerrar), 'al cerrar, lo de detrás vuelve a estar vivo')
+  assert(/focusBefore/.test(cerrar) && /el\.input\.focus\(\)/.test(cerrar), 'y el foco vuelve a quien lo tenía, o al cuadro')
+})
+
+test('H2 A2: el chat no es una región viva que se reanuncie con cada trozo; hay un anunciador aparte', () => {
+  assert(!/id="chat"[^>]*aria-live/.test(HTML), 'SEGURIDAD de lectura: #chat sin aria-live (cada delta reanunciaba la respuesta entera)')
+  assert(/id="announcer"[^>]*aria-live="polite"/.test(HTML), 'el anunciador es una región viva aparte')
+  assert(/id="announcer"[^>]*class="sr-only"/.test(HTML) && /\.sr-only\s*\{/.test(CSS), 'sólo para el lector de pantalla')
+  const streaming = JS.slice(JS.indexOf('function setStreaming'), JS.indexOf('function showBusy'))
+  assert(/aria-busy/.test(streaming), 'mientras llega la respuesta el chat está ocupado')
+  const pintar = JS.slice(JS.indexOf('function paintTurn('), JS.indexOf('async function readPageDigest('))
+  assert(/aria-busy/.test(pintar), 'y la burbuja también, hasta el pintado final')
+  assert(/function announce\(text\)/.test(JS), 'hay un anunciador')
+  const envio = JS.slice(JS.indexOf('async function send('), JS.indexOf('function paintTurn('))
+  assert(envio.indexOf('announce(answerAnnouncement(answer))') > envio.indexOf('splitAnchorsBlock(turn.text)'), 'que se llama al final del turno, con un resumen corto de la respuesta')
+  eq((envio.match(/announce\(answerAnnouncement/g) || []).length, 1, 'y UNA sola vez')
+  assert(!/announce\(/.test(JS.slice(JS.indexOf('function paintTurn('), JS.indexOf('async function readPageDigest('))), 'nunca por cada trozo')
+  // El recorte cierra ANTES de la declaración de `announce`: incluirla hacía
+  // pasar la comprobación aunque showNotice dejara de anunciar nada.
+  const aviso = JS.slice(JS.indexOf('function showNotice'), JS.indexOf('const ANNOUNCE_MAX'))
+  assert(!/function announce/.test(aviso), 'el recorte no llega a la declaración del anunciador')
+  assert(/announce\(text\)/.test(aviso), 'y desde los avisos')
+  const colgar = JS.slice(JS.indexOf('function attachToBubble'), JS.indexOf('function liveBubble'))
+  assert(/announce\(/.test(colgar), 'y desde lo que se cuelga de una respuesta (tarjetas, avisos)')
+  // Restaurar la conversación es historia, no novedad: no se anuncia.
+  const restaurar = JS.slice(JS.indexOf('async function restoreConversation'), JS.indexOf('function showWelcome'))
+  assert(!/announce\(/.test(restaurar) && /state\.restoring = true/.test(restaurar) && /state\.restoring = false/.test(restaurar))
+  const anunciar = JS.slice(JS.indexOf('function announce(text)'), JS.indexOf('function answerAnnouncement'))
+  assert(/state\.restoring/.test(anunciar), 'el anunciador calla mientras se restaura')
+})
+
+test('H2 A3: Escape cierra las pantallas de consulta y el velo, desde cualquier sitio del panel', () => {
+  const eventos = JS.slice(JS.indexOf('function wireEvents'), JS.indexOf('async function saveKeys'))
+  assert(/document\.addEventListener\('keydown'/.test(eventos), 'un keydown a nivel de documento')
+  const esc = eventos.slice(eventos.indexOf("document.addEventListener('keydown'"))
+  assert(/'Escape'/.test(esc) && /btn-busy-cancel/.test(esc) && /ESCAPE_CLOSES\[/.test(esc), 'Escape: primero el velo, luego la pantalla abierta, por el mapa puro')
+  assert(esc.indexOf('btn-busy-cancel') < esc.indexOf('ESCAPE_CLOSES['), 'el velo manda sobre la pantalla')
+  assert(/import \{ ESCAPE_CLOSES, ESCAPE_DISMISSES \} from '\.\/screens\.js'/.test(JS), 'los mapas viven en screens.js')
+  // El campo de páginas base sólo vacía las sugerencias; cerrar es cosa del documento.
+  const teclado = JS.slice(JS.indexOf('function onSourcesKeydown'), JS.indexOf('async function chooseSuggestion'))
+  assert(!/closeSourcesScreen\(\)/.test(teclado), 'el campo ya no cierra la pantalla por su cuenta')
+  assert(/ev\.stopPropagation\(\)/.test(teclado), 'y con sugerencias, Escape sólo las vacía')
+})
+
+test('H2 A7: el chat sólo se desplaza al fondo si el usuario estaba pegado a él', () => {
+  // Reproducido en la auditoría del 2026-09-13: cada delta hacía
+  // scrollTop = scrollHeight aunque el usuario hubiera subido a leer.
+  assert(/import \{ stuckToBottom \} from '\.\/chat-scroll\.js'/.test(JS), 'la medida es pura y vive aparte')
+  const eventos = JS.slice(JS.indexOf('function wireEvents'), JS.indexOf('async function saveKeys'))
+  assert(/el\.chat\.addEventListener\('scroll'/.test(eventos), 'se mide en cada scroll, ANTES de que nada mute el DOM')
+  assert(/state\.chatPinned = stuckToBottom\(el\.chat\)/.test(eventos))
+  const desplazar = JS.slice(JS.indexOf('function scrollChat'), JS.indexOf('// ------------------------------------------------------------------ enviar'))
+  assert(/function scrollChat\(\{ force = false \} = \{\}\)/.test(desplazar) && /if \(!force && !state\.chatPinned\) return/.test(desplazar), 'sin estar pegado, no se mueve nada')
+  const pintar = JS.slice(JS.indexOf('function paintTurn('), JS.indexOf('async function readPageDigest('))
+  assert(!/scrollChat\(\{ force/.test(pintar), 'pintar un trozo nunca fuerza')
+  const colgar = JS.slice(JS.indexOf('function attachToBubble'), JS.indexOf('function liveBubble'))
+  assert(!/scrollChat\(\{ force/.test(colgar), 'ni colgar una tarjeta segundos después')
+  const pregunta = JS.slice(JS.indexOf('function addUserMessage'), JS.indexOf('function addAssistantMessage'))
+  assert(/scrollChat\(\{ force: true \}\)/.test(pregunta), 'la pregunta que acabas de mandar sí se ve')
+})
+
+// Seguridad (docs/PLAN.md §2.1 S5), el botón «Parar» del recorrido y el freno de M5.
+
+test('SEGURIDAD H2 S5: openUrl sólo abre orígenes conocidos; lo demás se dice y no se abre', () => {
+  // Reproducido en la auditoría del 2026-09-13: un enlace escrito por el
+  // modelo —copiado de una página inyectada— se abría en una pestaña nueva.
+  assert(/import \{ allowedLinkOrigin \} from '\.\/links\.js'/.test(JS), 'la regla es pura y vive en links.js')
+  const abrir = JS.slice(JS.indexOf('function openUrl'), JS.indexOf('// ------------------------------------------------------------- pantallas'))
+  assert(/allowedLinkOrigin\(/.test(abrir), 'se comprueba el origen')
+  assert(abrir.indexOf('allowedLinkOrigin(') < abrir.indexOf('chrome.tabs.create('), 'ANTES de abrir nada')
+  assert(/linkedSite\(state\.linkedContext\)\?\.origin/.test(abrir), 'el Confluence enlazado también vale')
+  assert(/state\.site\?\.origin/.test(abrir), 'y el sitio de la pestaña')
+  assert(/'Enlace fuera del sitio'/.test(abrir) && /showNotice\(/.test(abrir), 'lo que no se abre se dice, en el chat y en el registro')
+  assert(/\breturn\b/.test(abrir.slice(abrir.indexOf('allowedLinkOrigin('), abrir.indexOf('chrome.tabs.create('))), 'y se sale sin abrir')
+})
+
+test('SEGURIDAD S5b: lo que openUrl no abriría tampoco se pinta como enlace, y el aviso del clic se ve', () => {
+  // Revisión adversaria de H2 (2026-09-14): la regla vivía sólo en openUrl,
+  // pero markdown.js ponía href + target=_blank en todo enlace y el clic
+  // central o «Abrir en pestaña nueva» la esquivaban. Y el aviso iba por
+  // showNotice sin force: tras A7 no se veía si habías subido a leer.
+  eq((JS.match(/renderMarkdown\([^)]*allowHref: linkAllowed \}\)/g) || []).length, 4, 'las cuatro llamadas pasan la regla')
+  assert(!/renderMarkdown\(\w+, \{ onLink: openUrl, onNote: focusNote \}\)/.test(JS), 'ninguna se queda sin ella')
+  assert(/function linkAllowed\(href\)/.test(JS) && /allowedLinkOrigin\(href, linkCtx\(\)\)/.test(JS), 'la misma regla que openUrl, en una función pequeña')
+  assert(/function linkCtx\(\)/.test(JS) && /linkedSite\(state\.linkedContext\)\?\.origin/.test(JS), 'con el sitio de la pestaña y el Confluence enlazado')
+  const abrir = JS.slice(JS.indexOf('function openUrl'), JS.indexOf('function linkCtx'))
+  assert(/force: true/.test(abrir), 'el aviso del enlace bloqueado se fuerza: contesta a un clic')
+  const aviso = JS.slice(JS.indexOf('function showNotice'), JS.indexOf('function scrollChat'))
+  assert(/function showNotice\(text, bad = false, \{ force = false \} = \{\}\)/.test(aviso) && /scrollChat\(\{ force \}\)/.test(aviso), 'y showNotice sabe forzar, sin cambiar a los demás avisos')
+})
+
+test('H2: el recorrido paso a paso se puede parar desde su tarjeta (CANCEL_PLAN por fin tiene emisor)', () => {
+  // El service worker atendía MSG.CANCEL_PLAN y nadie lo mandaba: era el único
+  // aviso del paso «docs» de npm run check.
+  assert(/type: MSG\.CANCEL_PLAN/.test(JS), 'el panel manda CANCEL_PLAN')
+  const correr = JS.slice(JS.indexOf('async function runPlan'), JS.indexOf('async function togglePick'))
+  assert(/'Parar'/.test(correr) && /ghost small/.test(correr), 'un botón «Parar», discreto, en la tarjeta mientras dura el recorrido')
+  assert(/state\.navRun = /.test(correr), 'el recorrido en marcha se recuerda con su tarjeta')
+  assert(/const tabId = state\.tabId/.test(correr) && /\{ type: MSG\.CANCEL_PLAN, tabId \}/.test(correr), 'y para la pestaña del recorrido, capturada al lanzarlo: el usuario puede haber cambiado de pestaña')
+  const mensajes = JS.slice(JS.indexOf('function onRuntimeMessage'), JS.indexOf('function openUrl'))
+  assert(/finishNavRun\(/.test(mensajes) && /'Navegación cancelada'/.test(mensajes), 'al terminar o cancelarse, la tarjeta vuelve en sí y el registro lo dice')
+  assert(/function finishNavRun\(/.test(JS))
+})
+
+test('SEGURIDAD H2 S6: el índice sólo cosecha URLs de este sitio, y desde Jira también las del Confluence enlazado', () => {
+  // harvestIndex blanquea toda URL absoluta de otro host antes de las regex
+  // (S6, indexer.js); el panel tiene que decirle que el Confluence enlazado
+  // es «propio», porque desde un Jira DC sus páginas y las incidencias citadas
+  // dentro de sus URLs son lo que más se consulta. Sin esta línea, S6 dejaba
+  // el enlazado fuera del índice.
+  const cuerpo = JS.slice(JS.indexOf('async function growIndex'), JS.indexOf('async function growTreeFromPage'))
+  assert(/harvestIndex\(parts \|\| \[\], \{[\s\S]*?allowedHosts: linkedHost\(\) \? \[linkedHost\(\)\] : \[\],?[\s\S]*?\}\)/.test(cuerpo), 'growIndex pasa el Confluence enlazado como host permitido')
+  assert(!/allowedHosts: \[state\./.test(cuerpo), 'nunca una lista escrita a mano desde el estado: linkedHost() ya decide')
+})
+
+test('H2 M5: el freno de respuesta corta se mira sobre la respuesta ORIGINAL, antes de adaptar la numeración', () => {
+  // Una viñeta suelta en «No he podido leer la incidencia: - El MCP devolvió
+  // 401» se convertía en «[1]» y esquivaba los frenos de respuesta corta y de
+  // seguimiento: un turno más contra el modelo y «no he sabido situar…».
+  const cuerpo = JS.slice(JS.indexOf('async function offerNotes'), JS.indexOf('function notesCard'))
+  assert(/const respuestaCorta = original\.length < NOTE_LIMITS\.shortAnswer/.test(cuerpo), 'se mide sobre la respuesta original')
+  assert(cuerpo.indexOf('const respuestaCorta') < cuerpo.indexOf('const adaptada = normalizeNumbering('), 'antes de adaptar nada')
+  assert(/if \(herramientaRota \|\| respuestaCorta\)/.test(cuerpo), 'y es lo que frena')
+  assert(!/answer\.length < NOTE_LIMITS\.shortAnswer/.test(cuerpo), 'nunca sobre la prosa ya adaptada')
+  // Y normalizeNumbering recibe el tope, para no adaptar estilos débiles en
+  // una respuesta corta (es notes.js quien decide qué estilo es débil).
+  assert(/const adaptada = normalizeNumbering\(answer, \{ expected: expectedCount\(anchors\), shortAnswer: NOTE_LIMITS\.shortAnswer \}\)/.test(cuerpo))
+  const restaurar = JS.slice(JS.indexOf('async function restoreConversation'), JS.indexOf('function showWelcome'))
+  assert(/normalizeNumbering\(cruda, \{ expected: expectedCount\(anchors\), shortAnswer: NOTE_LIMITS\.shortAnswer \}\)\.prose/.test(restaurar), 'también al restaurar')
+})
+
+// ------------------------------------ revisión adversaria de H2 (2026-09-14)
+// Lo que los arreglos de H2 dejaron a medias: cada pin es un trozo literal.
+
+test('H2 C1+C6: reconstruir el cliente aborta el turno TAMBIÉN en el servidor', () => {
+  // Desde C6, `runTurn` ya no manda POST /session/:id/abort al cancelarse la
+  // señal: apunta la sesión en el cliente para que la cierre quien la borre. Y
+  // ese cliente es justo el que buildClient está desechando, así que opencode
+  // seguía ejecutando el turno entero (revisión adversaria de H2, 2026-09-14).
+  const cliente = JS.slice(JS.indexOf('function buildClient'), JS.indexOf('async function refreshTab'))
+  assert(/abort\(state\.sessionID\)/.test(cliente), 'se aborta en el servidor, como en Parar y en «Sesión nueva»')
+  assert(/if \(state\.sessionID\)/.test(cliente), 'sólo si hay sesión que abortar')
+  assert(cliente.indexOf('abort(state.sessionID)') < cliente.indexOf('disconnect()'), 'ANTES de tirar el cliente que tendría que hacerlo')
+  assert(/\.catch\(\(\) => \{\}\)/.test(cliente), 'y sin romper el arranque del sitio nuevo si falla')
+})
+
+test('H2 C1+C2: un indexado en vuelo se cancela al cambiar de sitio, y el velo se va con él', () => {
+  // «Levantar el mapa» dura minutos. Al cambiar de sitio se quedaba sin
+  // cliente: moría a los 120 s, dejaba el velo puesto sobre el sitio NUEVO
+  // todo ese rato y marcaba el anterior como configurado sin haber indexado
+  // nada (revisión adversaria de H2, 2026-09-14).
+  const cliente = JS.slice(JS.indexOf('function buildClient'), JS.indexOf('async function refreshTab'))
+  assert(/state\.indexingAbort/.test(cliente), 'el indexado también se cancela al reconstruir el cliente')
+  assert(/hideBusy\(\)/.test(cliente), 'y el velo se quita: era del sitio anterior')
+  assert(/'Indexado cancelado'/.test(cliente), 'y se dice en el registro')
+})
+
+test('H2 C2: un indexado cancelado no deja el sitio por configurado ni pinta un fallo', () => {
+  const contexto = JS.slice(JS.indexOf('async function generateContext'), JS.indexOf('async function uploadContext'))
+  const captura = contexto.slice(contexto.indexOf('} catch (err) {'))
+  assert(/AbortError/.test(captura), 'el catch distingue cancelado de fallido')
+  assert(captura.indexOf('AbortError') < captura.indexOf('saveSite(host, { onboarded: true })'), 'y decide ANTES de dar el sitio por configurado')
+  assert(/log\.info\('Indexado cancelado'/.test(captura), 'cancelar no es fallar: queda como info')
+  const cancelado = captura.slice(captura.indexOf('AbortError'), captura.indexOf("log.error('Indexado fallido'"))
+  assert(/\breturn\b/.test(cancelado), 'y se sale: la pantalla de contexto volverá a salir')
+  assert(!/El indexado falló/.test(cancelado), 'sin pintar sobre el chat un fallo que no lo es')
+  assert(!/saveSite\(/.test(cancelado), 'ni escribir nada del sitio')
+})
+
+test('H2 C2: «¿sigue el panel en ese sitio?» se pregunta en cada uso, no una vez', () => {
+  // Se evaluaba UNA vez y después de tres await de storage se tocaban
+  // state.index, state.contextMd y el chat: en ese hueco el índice de A podía
+  // entrar en el estado de B (revisión adversaria de H2, 2026-09-14).
+  const contexto = JS.slice(JS.indexOf('async function generateContext'), JS.indexOf('async function uploadContext'))
+  assert(/const sigueAqui = \(\) =>/.test(contexto), 'es una función, no una foto')
+  assert(!/const sigueAqui = state\./.test(contexto), 'nunca un booleano tomado una vez')
+  assert((contexto.match(/sigueAqui\(\)/g) || []).length >= 5, 'y se llama en cada uso, también en el catch')
+  const tras = contexto.slice(contexto.indexOf('const fundido'))
+  assert(tras.indexOf('sigueAqui()') < tras.indexOf('state.index = fundido'), 'antes de meter el índice de un sitio en el estado de otro')
+  assert(tras.indexOf('sigueAqui()') < tras.indexOf('restoreConversation()'), 'y antes de repintar el chat de otro')
+})
+
+test('H2 C7: una pestaña fuera de Atlassian no es un cambio de sitio', () => {
+  // Al salir al correo `state.site` queda null, y al VOLVER al MISMO host
+  // 'a' !== undefined daba «cambio de sitio»: se vaciaban índice, contexto y
+  // páginas base, se rearrancaba —y eso mataba el turno— y se tiraba la espera
+  // del MCP (revisión adversaria de H2, 2026-09-14). El sitio del panel es el
+  // último host de Atlassian visto, no el de la pestaña de ahora.
+  assert(/lastHost: ''/.test(JS), 'el último host visto vive en el estado')
+  const refresco = JS.slice(JS.indexOf('async function refreshTab'), JS.indexOf('async function bootForSite'))
+  assert(/const changedHost = !!site &&/.test(refresco), 'sin sitio no hay cambio de sitio')
+  assert(/site\.host !== state\.lastHost/.test(refresco), 'el cambio se mide contra el último host de Atlassian visto')
+  assert(/state\.lastHost = site\.host/.test(refresco), 'que sólo se fija cuando hay sitio')
+  const fuera = refresco.slice(refresco.lastIndexOf('if (!site) {'), refresco.indexOf('if (changedHost) await bootForSite()'))
+  assert(/showEmpty\(/.test(fuera) && /\breturn\b/.test(fuera), 'sin sitio, el panel sólo dice dónde está')
+  assert(!/emptySources\(\)/.test(fuera) && !/state\.index = null/.test(fuera) && !/state\.linkedContext = null/.test(fuera), 'no se vacía nada: al volver todo sigue siendo suyo')
+  assert(!/mcpWait/.test(fuera) && !/bootForSite\(/.test(fuera), 'ni se corta la espera del MCP ni se rearranca')
+  // Y el chat, que showEmpty vacía, se vuelve a pintar al volver: sin cambio
+  // de sitio ya no hay arranque que lo restaure.
+  assert(/restoreConversation\(\)/.test(refresco), 'al volver de fuera, el chat se repinta')
+  assert(/state\.streaming/.test(refresco), 'salvo con una respuesta llegando: ésa no se tira')
+})
+
+test('H2 A1: el velo «Trabajando…» apaga el panel de debajo y se queda con el foco', () => {
+  // `hideScreens()` mete el foco en el cuadro justo antes de que showBusy lo
+  // tape: con el velo puesto se seguía tabulando por lo de debajo y se podía
+  // mandar un turno a ciegas (revisión adversaria de H2, 2026-09-14).
+  const velo = JS.slice(JS.indexOf('function showBusy'), JS.indexOf('function autoGrow'))
+  assert(/el\.app\.inert = true/.test(velo), 'lo de debajo queda inerte, como con una pantalla abierta')
+  assert(/btn-busy-cancel/.test(velo) && /\.focus\(\)/.test(velo), 'y el foco entra en Cancelar')
+  // Y el velo sabe qué cancela: un Cancelar que no cancela nada no se enseña.
+  assert(/function showBusy\(title, text, \{ abort = null \} = \{\}\)/.test(velo), 'el velo recibe su abortador')
+  assert(/state\.busyAbort = abort/.test(velo), 'que se guarda para el botón')
+  assert(/\.hidden = !abort/.test(velo), 'y sin abortador el botón no está')
+  const quitar = velo.slice(velo.indexOf('function hideBusy'))
+  assert(/document\.querySelector\('\.screen:not\(\.hidden\)'\)/.test(quitar), 'al quitarlo no se pisa el inert de una pantalla abierta')
+  assert(/el\.app\.inert = false/.test(quitar) && /devolverFoco\(\)/.test(quitar), 'y el foco vuelve a quien lo tenía')
+  const eventos = JS.slice(JS.indexOf('function wireEvents'), JS.indexOf('async function saveKeys'))
+  assert(/state\.busyAbort\?\.abort\(\)/.test(eventos), 'Cancelar aborta lo que trajo el velo')
+  const esc = eventos.slice(eventos.indexOf("document.addEventListener('keydown'"), eventos.indexOf('el.send.addEventListener'))
+  assert(/\.hidden/.test(esc), 'y Escape no toca un velo sin nada que cancelar')
+  const contexto = JS.slice(JS.indexOf('async function generateContext'), JS.indexOf('async function uploadContext'))
+  assert(/abort: controller/.test(contexto), 'el indexado pasa su abortador')
+  const nueva = JS.slice(JS.indexOf('async function newSession'))
+  assert(/showBusy\('Guardando lo aprendido'/.test(nueva) && !/abort:/.test(nueva), 'resumir la sesión no ofrece un Cancelar que no cancela nada')
+})
+
+test('H2 A3: Escape en Ajustes cierra sin guardar', () => {
+  // Su «Listo» GUARDA todo —la contraseña y la URL del servidor incluidas— y
+  // rearranca el panel, lo que además cancela el turno en vuelo: un Escape
+  // distraído aplicaba unos ajustes a medio escribir (revisión adversaria de
+  // H2, 2026-09-14).
+  const eventos = JS.slice(JS.indexOf('function wireEvents'), JS.indexOf('async function saveKeys'))
+  const esc = eventos.slice(eventos.indexOf("document.addEventListener('keydown'"), eventos.indexOf('el.send.addEventListener'))
+  assert(/ESCAPE_DISMISSES\.includes\(/.test(esc), 'las pantallas que se cierran sin pulsar su botón salen del mapa puro')
+  assert(/closeSettingsWithoutSaving\(\)/.test(esc), 'y se cierran sin pasar por «Listo»')
+  assert(esc.indexOf('ESCAPE_DISMISSES') < esc.indexOf('ESCAPE_CLOSES['), 'antes de mirar el mapa de los botones')
+  const cerrar = JS.slice(JS.indexOf('function closeSettingsWithoutSaving'), JS.indexOf('function connectCommand'))
+  assert(/hideScreens\(\)/.test(cerrar), 'sólo cierra')
+  assert(!/saveSettings\(/.test(cerrar) && !/bootForSite\(/.test(cerrar), 'ni guarda ni rearranca')
+  // Y al volver a abrirla, los campos se rellenan otra vez de state.settings:
+  // lo tecleado y no guardado se pierde, que es lo que se pide.
+  const ajustes = JS.slice(JS.indexOf('async function showSettingsScreen'), JS.indexOf('function setStatus'))
+  for (const id of ['set-url', 'set-pass', 'set-delay', 'set-motion', 'set-nav-quick', 'set-hl-marker']) {
+    assert(ajustes.includes(`$('${id}')`) && ajustes.includes('state.settings'), `al abrir, ${id} vuelve a salir de state.settings`)
+  }
 })

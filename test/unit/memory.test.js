@@ -6,10 +6,11 @@
  * eso el `chrome` se instala en cada prueba y se retira al salir, para no
  * dejarle nada raro a la siguiente. Lo que se guarda se clona (como hace
  * chrome.storage de verdad), para que ninguna prueba pase por compartir una
- * referencia. (Plan 2026-09-13, D6: puras sin test; el fallo R1 queda
- * documentado como comportamiento de hoy.)
+ * referencia. (Plan 2026-09-13, D6: puras sin test. H2, R1: una entrada sin
+ * fecha válida ya no tira el prompt —la fecha es opcional— y lo que sale del
+ * almacén pasa por `normalizeMemory` con claves blancas.)
  */
-import { test, eq, assert, throws } from '../harness.js'
+import { test, eq, assert } from '../harness.js'
 import { STORAGE_KEYS } from '../../src/shared/config.js'
 import { memorySummaryPrompt } from '../../src/panel/prompts.js'
 import {
@@ -20,6 +21,7 @@ import {
   clearMemory,
   addEntry,
   removeEntry,
+  normalizeMemory,
   memoryToPrompt,
   summarizeSession,
   worthRemembering,
@@ -103,11 +105,13 @@ test('memoria: addEntry pone la entrada nueva la primera, con fecha de ahora y e
     const m2 = await addEntry(HOST, 'Segunda sesión.')
     eq(m2.entries.map((e) => e.text), ['Segunda sesión.', 'Buscaba el ADR de rotación.'])
     eq((await getMemory(HOST)).entries.map((e) => e.text), ['Segunda sesión.', 'Buscaba el ADR de rotación.'])
-    // Lo que no es texto no revienta: se guarda como texto (vacío si no hay nada).
-    // Hoy una entrada vacía se guarda igual; H2 (R1) normaliza lo que se guarda y lo que se lee.
+    // Lo que no es texto no revienta, y un texto vacío no se guarda: la memoria
+    // queda como estaba (H2, R1: antes se guardaba una entrada con text '').
     const m3 = await addEntry(HOST, null)
-    eq(m3.entries[0].text, '')
-    eq(m3.entries.length, 3)
+    eq(m3.entries.map((e) => e.text), ['Segunda sesión.', 'Buscaba el ADR de rotación.'])
+    const m4 = await addEntry(HOST, '   \n ')
+    eq(m4.entries.length, 2)
+    eq((await getMemory(HOST)).entries.length, 2, 'y en el almacén tampoco entra')
   }))
 
 test('memoria: addEntry no guarda más de 40 entradas: la que estaba al final se cae', () =>
@@ -165,24 +169,198 @@ test('memoryToPrompt: se acota a 12 000 caracteres: la primera entrada que no ca
   eq(memoryToPrompt({ entries: [{ at, text: justa + 'z' }] }), '', 'una sola entrada que no cabe deja el prompt vacío')
 })
 
-test('R1 (pendiente para H2): memoryToPrompt lanza con una entrada sin fecha', async () => {
-  // Hoy `new Date(e.at).toISOString()` revienta con «Invalid time value» si
-  // `at` falta o no es una fecha, y como memoryToPrompt corre dentro del
-  // runTurn de send(), tumba TODOS los turnos del host mientras la memoria
-  // entre sesiones esté activa (plan 2026-09-13, R1; getMemory devuelve lo que
-  // haya en el almacén sin normalizar). Esto documenta el comportamiento de
-  // hoy. H2 lo invierte: la fecha pasa a ser opcional (la línea sale sin
-  // «[fecha]») y getMemory normaliza lo que lee; entonces estos `throws` se
-  // cambian por `eq(memoryToPrompt({ entries: [{ text: 'sin fecha' }] }), 'sin fecha')`.
-  await throws(() => memoryToPrompt({ entries: [{ text: 'sin fecha' }] }), 'sin `at`')
-  await throws(() => memoryToPrompt({ entries: [{ at: 'ayer', text: 'x' }] }), '`at` que no es una fecha')
-  await throws(
-    () => memoryToPrompt({ entries: [{ at: Date.UTC(2026, 0, 1), text: 'bien' }, { at: NaN, text: 'mal' }] }),
-    'una sola entrada mala tira el prompt entero, con las buenas dentro'
+test('R1: memoryToPrompt no se cae con una entrada sin fecha: la línea sale sin «[fecha] »', () => {
+  // Antes `new Date(e.at).toISOString()` reventaba con «Invalid time value» si
+  // `at` faltaba o no era una fecha, y como memoryToPrompt corre dentro del
+  // runTurn de send(), tumbaba TODOS los turnos del host mientras la memoria
+  // entre sesiones estuviera activa (reproducido en la auditoría del
+  // 2026-09-13, docs/PLAN.md §2.4 R1). La fecha es opcional: se imprime sólo
+  // si `at` es un instante válido; si no, la línea es el texto a secas.
+  eq(memoryToPrompt({ entries: [{ text: 'sin fecha' }] }), 'sin fecha', 'sin `at`')
+  eq(memoryToPrompt({ entries: [{ at: 'ayer', text: 'x' }] }), 'x', '`at` que no es una fecha')
+  eq(
+    memoryToPrompt({ entries: [{ at: Date.UTC(2026, 0, 1), text: 'bien' }, { at: NaN, text: 'mal' }] }),
+    '[2026-01-01] bien\n\nmal',
+    'una entrada mala no tira las buenas'
   )
-  // Ojo: `at: null` NO lanza (new Date(null) es el 1 de enero de 1970): sale con esa fecha.
-  eq(memoryToPrompt({ entries: [{ at: null, text: 'nula' }] }), '[1970-01-01] nula')
+  // `at: null` tampoco es una fecha (new Date(null) daría el 1 de enero de 1970: eso era inventarla).
+  eq(memoryToPrompt({ entries: [{ at: null, text: 'nula' }] }), 'nula')
+  // Un número finito fuera del rango de Date (±8,64e15 ms) tampoco: Number.isFinite no basta.
+  eq(memoryToPrompt({ entries: [{ at: 1e20, text: 'lejos' }] }), 'lejos')
+  eq(memoryToPrompt({ entries: [{ at: '1700000000000', text: 'cadena' }] }), 'cadena', 'una fecha como texto no vale: `at` es un número')
+  eq(memoryToPrompt({ entries: [{ at: true, text: 'bool' }] }), 'bool')
 })
+
+test('R1: memoryToPrompt salta lo que no es una entrada con texto, y la fecha sólo cuenta en el tope si se imprime', () => {
+  const at = Date.UTC(2026, 0, 2)
+  eq(
+    memoryToPrompt({ entries: [null, 'cadena', 7, { at }, { at, text: '' }, { at, text: '   ' }, { at, text: 'ok' }] }),
+    '[2026-01-02] ok'
+  )
+  eq(memoryToPrompt({ entries: [{ at, text: '  con espacios  ' }] }), '[2026-01-02] con espacios', 'el texto sale recortado')
+  eq(memoryToPrompt({ entries: 'abc' }), '', 'entries que no es una lista')
+  eq(memoryToPrompt({ entries: { length: 2 } }), '')
+  // Sin fecha, la línea mide sólo el texto: una de 12 000 justos cabe (con fecha mediría 12 013 y se quedaría fuera).
+  const justa = 'y'.repeat(12000)
+  eq(memoryToPrompt({ entries: [{ text: justa }] }).length, 12000)
+  eq(memoryToPrompt({ entries: [{ at, text: justa }] }), '')
+})
+
+// ---- lo que sale del almacén pasa por normalizeMemory (R1) ------------------
+
+test('SEGURIDAD: normalizeMemory reconstruye la memoria con claves blancas: entries lista, text no vacío, at instante válido o `now`', () => {
+  const now = Date.UTC(2026, 8, 14)
+  const raw = {
+    version: 9,
+    entries: [
+      { at: Date.UTC(2026, 0, 1), text: '  bien  ', extra: 'fuera', onclick: 'x' },
+      { text: 'sin fecha' },
+      { at: 'ayer', text: 'texto' },
+      { at: null, text: 'nula' },
+      { at: NaN, text: 'nan' },
+      { at: 1e20, text: 'lejos' },
+      { at: '1700000000000', text: 'cadena' },
+      { at: 5, text: '' },
+      { at: 6, text: '   ' },
+      { at: 7 },
+      { at: 8, text: null },
+      { at: 9, text: 0 },
+      'cadena',
+      null,
+      42,
+      [],
+    ],
+  }
+  // La fecha inventada es `now − posición`: distintas entre sí, porque removeEntry
+  // borra por `at` y dos reparadas con el mismo instante caerían juntas.
+  eq(normalizeMemory(raw, { now }), {
+    entries: [
+      { at: Date.UTC(2026, 0, 1), text: 'bien' },
+      { at: now - 1, text: 'sin fecha' },
+      { at: now - 2, text: 'texto' },
+      { at: now - 3, text: 'nula' },
+      { at: now - 4, text: 'nan' },
+      { at: now - 5, text: 'lejos' },
+      { at: now - 6, text: 'cadena' },
+    ],
+  })
+  for (const e of normalizeMemory(raw, { now }).entries) eq(Object.keys(e), ['at', 'text'])
+  eq(new Set(normalizeMemory(raw, { now }).entries.map((e) => e.at)).size, 7, 'ningún `at` repetido')
+  // `at: 0` es un instante válido (1970): se conserva, no se sustituye.
+  eq(normalizeMemory({ entries: [{ at: 0, text: 'cero' }] }, { now }), { entries: [{ at: 0, text: 'cero' }] })
+  // Sin `now`, la fecha inventada es Date.now().
+  const antes = Date.now()
+  const at = normalizeMemory({ entries: [{ text: 'hoy' }] }).entries[0].at
+  assert(Number.isFinite(at) && at >= antes && at <= Date.now(), 'sin `now` se pone Date.now()')
+  // Lo que no tiene forma de memoria queda vacío, nunca lanza.
+  for (const sinForma of [null, undefined, {}, [], 'abc', 7, { entries: null }, { entries: 'abc' }, { entries: {} }, { entries: { length: 3 } }]) {
+    eq(normalizeMemory(sinForma, { now }), { entries: [] }, JSON.stringify(sinForma))
+  }
+  // Tope de 40 entradas, como addEntry: las de más se caen por el final.
+  const muchas = { entries: Array.from({ length: 45 }, (_, i) => ({ at: 1000 + i, text: 'e' + i })) }
+  eq(normalizeMemory(muchas, { now }).entries.length, 40)
+  eq(normalizeMemory(muchas, { now }).entries[39], { at: 1039, text: 'e39' })
+  // Idempotente: normalizar lo normalizado no cambia nada.
+  const una = normalizeMemory(raw, { now })
+  eq(normalizeMemory(una, { now: 1 }), una)
+})
+
+// Revisión adversaria de H2 (2026-09-14): `normalizeEntry` daba por perdida toda
+// `at` que no fuera un número y le ponía `now`, así que una fecha en TEXTO —lo que
+// deja un almacén exportado a JSON y vuelto a importar, o editado a mano— se
+// DESTRUÍA: la entrada pasaba a ser «de hoy» para siempre, y con ella el orden y
+// la fecha que sale en el prompt. Si `Date` la entiende, se conserva.
+test('R1: una fecha en texto que Date entiende se conserva como instante (y sigue siendo un número)', () => {
+  const now = Date.UTC(2026, 8, 14)
+  eq(normalizeMemory({ entries: [{ at: '2026-09-01T10:00:00Z', text: 'ISO' }] }, { now }), {
+    entries: [{ at: Date.UTC(2026, 8, 1, 10, 0, 0), text: 'ISO' }],
+  })
+  eq(normalizeMemory({ entries: [{ at: '2026-09-01', text: 'día' }] }, { now }), {
+    entries: [{ at: Date.UTC(2026, 8, 1), text: 'día' }],
+  })
+  eq(normalizeMemory({ entries: [{ at: 'Tue, 01 Sep 2026 10:00:00 GMT', text: 'http' }] }, { now }), {
+    entries: [{ at: Date.UTC(2026, 8, 1, 10, 0, 0), text: 'http' }],
+  })
+  // Se rescata como NÚMERO: `at` es la clave con la que «Borrar» compara estricta
+  // y la que `memoryToPrompt` imprime (una cadena no pasaría ninguna de las dos).
+  const rescatada = normalizeMemory({ entries: [{ at: '2026-09-01T10:00:00Z', text: 'ISO' }] }, { now })
+  eq(typeof rescatada.entries[0].at, 'number')
+  eq(memoryToPrompt(rescatada), '[2026-09-01] ISO')
+  eq(Object.keys(rescatada.entries[0]), ['at', 'text'])
+  // Y la posición no la toca: la rescatada conserva la suya y sólo las de verdad
+  // sin fecha gastan `now − posición`.
+  eq(normalizeMemory({ entries: [{ text: 'sin' }, { at: '2026-09-01T10:00:00Z', text: 'ISO' }] }, { now }), {
+    entries: [{ at: now, text: 'sin' }, { at: Date.UTC(2026, 8, 1, 10, 0, 0), text: 'ISO' }],
+  })
+  // Idempotente: normalizar lo rescatado no vuelve a moverlo.
+  eq(normalizeMemory(rescatada, { now: 1 }), rescatada)
+})
+
+test('R1: una `at` en texto que no es una fecha sigue cayendo a `now − posición`', () => {
+  const now = Date.UTC(2026, 8, 14)
+  eq(
+    normalizeMemory(
+      { entries: [{ at: 'ayer', text: 'a' }, { at: '1700000000000', text: 'b' }, { at: '', text: 'c' }, { at: '   ', text: 'd' }, { at: '2026-13-45', text: 'e' }] },
+      { now }
+    ),
+    {
+      entries: [
+        { at: now, text: 'a' },
+        { at: now - 1, text: 'b' },
+        { at: now - 2, text: 'c' },
+        { at: now - 3, text: 'd' },
+        { at: now - 4, text: 'e' },
+      ],
+    },
+    'un número dentro de una cadena no es una fecha para Date, y una fecha imposible tampoco'
+  )
+  // Lo que no es ni número ni texto no se rescata; un número válido sigue mandando tal cual.
+  eq(
+    normalizeMemory({ entries: [{ at: 5, text: 'n' }, { at: true, text: 'b' }, { at: {}, text: 'o' }, { at: [1700000000000], text: 'l' }] }, { now }).entries.map((e) => e.at),
+    [5, now - 1, now - 2, now - 3]
+  )
+})
+
+test('R1: getMemory devuelve lo guardado normalizado y lo repara una sola vez: `at` estable entre lecturas y «Borrar» da con la entrada', () =>
+  conChrome(async (local) => {
+    const key = STORAGE_KEYS.memory(HOST)
+    // Un almacén de antes del arreglo (o editado a mano): sin fecha, con claves de más y basura.
+    local[key] = { entries: [{ text: 'sin fecha', extra: 1 }, 'basura', { at: 'ayer', text: 'x' }, { at: 3, text: 'c' }] }
+    const antes = Date.now()
+    const m1 = await getMemory(HOST)
+    eq(m1.entries.map((e) => e.text), ['sin fecha', 'x', 'c'])
+    for (const e of m1.entries) eq(Object.keys(e), ['at', 'text'])
+    assert(m1.entries[0].at >= antes && m1.entries[0].at <= Date.now(), 'la fecha que falta es la de ahora')
+    eq(m1.entries[1].at, m1.entries[0].at - 1, 'y la segunda sin fecha, una distinta')
+    eq(m1.entries[2].at, 3, 'la válida se conserva')
+    // La reparación se persiste: la segunda lectura da EXACTAMENTE lo mismo (mismo `at`) y no reescribe.
+    eq(local[key], m1, 'lo guardado ya es lo normalizado')
+    const guardado = JSON.stringify(local[key])
+    eq(await getMemory(HOST), m1)
+    eq(JSON.stringify(local[key]), guardado)
+    // Por eso «Borrar» en la pantalla de memoria (borra por `at`) da con una entrada que no tenía fecha.
+    eq((await removeEntry(HOST, m1.entries[0].at)).entries.map((e) => e.text), ['x', 'c'])
+    // Lo que no tiene forma de memoria se lee vacío y se repara igual.
+    local[key] = 'abc'
+    eq(await getMemory(HOST), { entries: [] })
+    eq(local[key], { entries: [] })
+    // Sin nada guardado no se crea la clave (el almacén no gana claves por leer).
+    delete local[key]
+    eq(await getMemory(HOST), { entries: [] })
+    eq(Object.keys(local), [])
+  }))
+
+test('R1: saveMemory nunca persiste nada que no pase por normalizeMemory', () =>
+  conChrome(async (local) => {
+    const key = STORAGE_KEYS.memory(HOST)
+    await saveMemory(HOST, { version: 2, entries: [{ text: '  a  ', extra: 1 }, { at: 5, text: '' }, { at: 6, text: 'b' }] })
+    eq(local[key].entries.map((e) => e.text), ['a', 'b'])
+    for (const e of local[key].entries) eq(Object.keys(e), ['at', 'text'])
+    eq(Object.keys(local[key]), ['entries'])
+    assert(Number.isFinite(local[key].entries[0].at), 'la entrada sin fecha la gana al guardarse')
+    await saveMemory(HOST, null)
+    eq(local[key], { entries: [] })
+  }))
 
 test('worthRemembering: sólo si el usuario preguntó algo', () => {
   eq(worthRemembering([{ role: 'user', text: 'hola' }]), true)
