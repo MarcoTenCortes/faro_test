@@ -361,6 +361,55 @@ test('runTurn: un turno normal — abre el stream, manda prompt_async, reconstru
     }
   ))
 
+// H3 (medir): el tracker ya sumaba lo que costó el turno, pero `runTurn` no lo
+// sacaba en su resultado y «Respuesta recibida» se quedaba sin ese trozo.
+test('runTurn: saca en el resultado lo que costó el turno, y null cuando nadie lo informó', () =>
+  conServidor(
+    {
+      'POST /session/ses_1/prompt_async': (ll, s) => {
+        for (const e of turnoNormal()) {
+          // La foto del mensaje del asistente llega otra vez con el gasto: es
+          // la última la que manda, no la suma de todas.
+          if (e.properties?.info?.role === 'assistant') {
+            s.sse.push(e)
+            s.sse.push(
+              ev('message.updated', {
+                info: {
+                  id: 'msg_a',
+                  sessionID: SID,
+                  role: 'assistant',
+                  tokens: { total: 21841, input: 780, output: 806, reasoning: 0, cache: { read: 21035, write: 0 } },
+                  cost: 0,
+                },
+              })
+            )
+          } else s.sse.push(e)
+        }
+        return { id: 'msg_1' }
+      },
+    },
+    async (client) => {
+      const r = await client.runTurn(SID, { text: 'hola' })
+      eq(r.tokens, { total: 21841, input: 780, output: 806, reasoning: 0, cache: { read: 21035, write: 0 } })
+      eq(r.cost, 0, 'un coste de 0 es un dato: github-copilot y los -free lo dan a cero')
+    }
+  ))
+
+test('runTurn: sin tokens ni coste en los mensajes, los dos vienen a null (no a cero)', () =>
+  conServidor(
+    {
+      'POST /session/ses_1/prompt_async': (ll, s) => {
+        for (const e of turnoNormal()) s.sse.push(e)
+        return { id: 'msg_1' }
+      },
+    },
+    async (client) => {
+      const r = await client.runTurn(SID, { text: 'hola' })
+      eq(r.tokens, null, 'sin dato es null, para que el panel no pinte un cero inventado')
+      eq(r.cost, null)
+    }
+  ))
+
 test('runTurn: una pregunta o un permiso del agente se rechazan solos (nadie va a contestarlos)', () =>
   conServidor(
     {

@@ -362,6 +362,11 @@ export class OpencodeClient {
         tools: tracker.tools,
         model: tracker.model,
         rawError: tracker.rawError,
+        // Lo que costó el turno, sumado por mensaje del asistente (H3, medir):
+        // `null` los dos cuando opencode no informó de nada, para que el panel
+        // no pinte un cero inventado.
+        tokens: tracker.tokens,
+        cost: tracker.cost,
         // Si el turno pidió `format`, el objeto ya validado por el servidor.
         structured: tracker.structured ?? structuredOutputOf(tracker.allParts),
       }

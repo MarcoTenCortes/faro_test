@@ -616,9 +616,17 @@ export class NavRunner {
    * que sería peor que no marcarlas.
    *
    * @param {{notes: Array<{n:number, title?:string, anchor:object}>}} msg
-   * @returns {{ok:boolean, placed:number[], missed:number[]}}
+   * @returns {{ok:boolean, placed:number[], missed:number[], detail?:Array<{n:number, strategy:string, approximate?:boolean}>, reason?:string, ms:number}}
    */
   async applyNotes({ notes }) {
+    // Lo que tarda en marcar, de la primera línea a la respuesta: es el número
+    // con el que se compara una página corta con una larga, y el mismo trabajo
+    // antes y después de tocarlo. Reloj monótono, sin fechas ni nada del
+    // contenido: sólo un número que el panel apunta detrás de «Análisis
+    // marcado». Aquí no cambia nada más que eso.
+    const t0 = performance.now()
+    const transcurrido = () => Math.round(performance.now() - t0)
+
     this.overlay.mount()
     // Aquí NO se instala manejador de Escape: con la tecla, las marcas se
     // borraban sin que el panel se enterase (seguía con `state.notes` y
@@ -630,7 +638,7 @@ export class NavRunner {
 
     if (isEditing()) {
       this.overlay.toast('Estás en el editor: no marco nada para no interferir.')
-      return { ok: false, placed: [], missed: todas, reason: 'editando' }
+      return { ok: false, placed: [], missed: todas, reason: 'editando', ms: transcurrido() }
     }
 
     await waitFor(() => contentRoot()?.textContent?.trim()?.length > 40, { timeout: 2000 })
@@ -654,7 +662,7 @@ export class NavRunner {
     }
 
     this.overlay.clearNotes()
-    if (!items.length) return { ok: true, placed: [], missed, detail }
+    if (!items.length) return { ok: true, placed: [], missed, detail, ms: transcurrido() }
 
     this.overlay.annotate(items)
 
@@ -664,7 +672,7 @@ export class NavRunner {
       this.overlay.refreshMarks()
     }
 
-    return { ok: true, placed: items.map((x) => x.n), missed, detail }
+    return { ok: true, placed: items.map((x) => x.n), missed, detail, ms: transcurrido() }
   }
 
   /** Lleva a una observación concreta y la destaca sobre las demás. */

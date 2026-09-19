@@ -9,6 +9,7 @@
     "check:syntax": "node test/syntax.js",
     "check:docs": "node tools/check-docs.mjs",
     "turn": "node tools/last-turn.mjs",
+    "bench": "node tools/bench.mjs",
     "snapshots": "node tools/prompt-snapshots.mjs --update",
     "test": "node test/run.js",
     "test:integration": "node test/integration/opencode.test.js",

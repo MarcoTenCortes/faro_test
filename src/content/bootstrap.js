@@ -143,13 +143,20 @@
               return
             }
             await waitFor(() => contentRoot()?.textContent?.trim()?.length > 40, { timeout: 2000 })
+            // Cuánto cuesta LEER la página: recorrerla en bloques, serializarla
+            // y mirar los campos de la incidencia. Nadie veía ese precio, y sin
+            // verlo no se puede decir si un cambio lo mejora o lo empeora; el
+            // panel lo apunta detrás de «Página leída en bloques». La espera de
+            // arriba queda FUERA a propósito: es la página tardando en
+            // pintarse, no lo que cuesta leerla. Medir es lo único que cambia
+            // aquí: la respuesta gana `ms` y nada más.
+            const t0 = performance.now()
             const digest = pageDigest()
             if (!digest.blocks.length) {
               sendResponse({ ok: false, reason: 'sin-texto' })
               return
             }
-            sendResponse({
-              ok: true,
+            const cuerpo = {
               text: formatDigest(digest.blocks),
               ...serializeDigest(digest),
               title: document.title,
@@ -157,7 +164,8 @@
               // En una incidencia de Jira, sus campos: el tipo y el estado
               // deciden cómo se analiza. null en cualquier otra página.
               issue: jiraIssueFields(),
-            })
+            }
+            sendResponse({ ok: true, ...cuerpo, ms: Math.round(performance.now() - t0) })
             return
           }
 

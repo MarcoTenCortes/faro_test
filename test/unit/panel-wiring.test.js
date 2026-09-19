@@ -834,3 +834,96 @@ test('H2 A3: Escape en Ajustes cierra sin guardar', () => {
     assert(ajustes.includes(`$('${id}')`) && ajustes.includes('state.settings'), `al abrir, ${id} vuelve a salir de state.settings`)
   }
 })
+
+test('H3: el arranque dice cuánto tardó cada fase, y la del MCP es la que se viene a leer', () => {
+  // El `GET /mcp` tarda entre 2,8 y 13,8 s la PRIMERA vez tras arrancar
+  // opencode (auditoría del 2026-09-13 contra un servidor desechable) y
+  // `bootForSite` lo espera antes de enseñar el chat. Nadie lo veía: sin el
+  // número en el registro, sacarlo del camino (H6) sería a ciegas.
+  const arranque = JS.slice(JS.indexOf('async function bootForSite'), JS.indexOf('async function loadLinkedContext'))
+  assert(/const cron = startTiming\(\)/.test(arranque), 'el arranque se cronometra desde el principio')
+  assert(/'Arranque del panel'/.test(arranque), 'y se registra al acabar')
+  assert(/state\.timing\.boot = timingLine\(cron\.done\(\)\)/.test(arranque), 'con la línea que también enseña el Registro')
+  for (const fase of ['health', 'modelos', 'MCP', 'almacenamiento', 'restaurar']) {
+    assert(arranque.includes(`cron.mark('${fase}')`), `falta la fase ${fase}`)
+  }
+  // La fase «MCP» son las DOS peticiones y nada más: si se marcara después de
+  // adoptar el MCP y guardar los sitios, el número dejaría de ser el del GET.
+  const mcp = arranque.indexOf("cron.mark('MCP')")
+  assert(arranque.lastIndexOf('client.listMcp()', mcp) > -1, 'la marca va después de pedir /mcp y /config')
+  assert(mcp < arranque.indexOf('siteRecords({'), 'y antes de adoptar el MCP y escribir en storage')
+  // El arranque tiene cuatro salidas y las cortas son justo las que enseñan lo
+  // que cuesta el MCP: la pantalla de claves y la de contexto también miden.
+  eq(arranque.split('medir()').length - 1, 4, 'medir() se define y se llama en las tres salidas que llegan a medir algo')
+  const claves = arranque.slice(arranque.indexOf('if (!status.connected && !saved?.skippedKeys) {'))
+  assert(claves.indexOf('medir()') < claves.indexOf('return'), 'la salida por la pantalla de claves mide antes de volver')
+  // SEGURIDAD: de la configuración de opencode no sale nada al registro; una
+  // línea de tiempos son etiquetas de Faro y números.
+  assert(!/log\.\w+\([^)]*\bconfig\b/.test(arranque), 'la configuración no se registra')
+})
+
+test('H3: «Respuesta recibida» dice lo que costó el turno, y el Registro guarda sus tiempos', () => {
+  // Qué se decide con esto: si las salidas de herramientas que la sesión
+  // arrastra justifican «YA LEÍDAS» (H12) y si el sistema de un Análisis de
+  // Jira —23-27 000 caracteres— merece tocarse. Medir, no cambiar nada.
+  const envio = JS.slice(JS.indexOf('async function send('), JS.indexOf('function paintTurn('))
+  assert(/const cron = startTiming\(\)/.test(envio), 'el turno se cronometra')
+  for (const fase of ['página', 'sesión', 'primer texto', 'fin', 'índice', 'marcas']) {
+    assert(envio.includes(`cron.mark('${fase}')`), `falta la fase ${fase}`)
+  }
+  // La primera palabra se marca UNA vez y sin tocar lo que se pinta.
+  assert(/if \(!primerTexto && t\.text\) \{/.test(envio), 'la primera palabra del modelo se detecta en el primer onUpdate con texto')
+  assert(/paintTurn\(t, toolsBox, body\)/.test(envio), 'y el pintado sigue siendo el de antes')
+  assert(/toolOutputSize\(turn\.parts\)/.test(envio), 'se mide cuánto texto devolvieron las herramientas')
+  assert(/timingLine\(cron\.done\(\), \{/.test(envio), 'y el reloj entra en la línea del registro')
+  assert(/sistema \$\{peticion\.system\.length\} caracteres/.test(envio), 'con el peso del sistema, que es lo que viaja en cada turno')
+  assert(/turnCostText\(turn\)/.test(envio), 'y los tokens y el coste si el cliente los trae')
+  // El sistema se mide por su longitud: al registro no va su texto (lleva el
+  // contexto del sitio y la página en bloques).
+  eq(envio.match(/peticion\.system(?!\.length)/g), null, 'del sistema sólo se registra cuánto mide')
+  // El reloj del turno entero lo apunta el `finally`, y sólo el turno que sigue
+  // siendo el del panel: el de un turno abandonado hablaría de otra cosa.
+  const fin = envio.slice(envio.indexOf('} finally {'))
+  assert(/state\.timing\.turn = timingLine\(cron\.done\(\)\)/.test(fin), 'el turno deja su línea de tiempos')
+  assert(fin.indexOf('state.timing.turn') > fin.indexOf('if (state.turnToken === testigo)'), 'sólo el turno vigente')
+  assert(/timing: \{ boot: '', turn: '' \}/.test(JS), 'los dos tiempos viven en el estado, no en disco')
+
+  // Y el Registro los enseña, con lo que ocupa el almacenamiento: un «va lento»
+  // o un «no guarda» deja de ser una impresión.
+  const estado = JS.slice(JS.indexOf('async function paintState'), JS.indexOf('async function treeDebug'))
+  assert(/add\('tiempos \(arranque\)'/.test(estado) && /add\('tiempos \(último turno\)'/.test(estado), 'las dos filas de tiempos')
+  assert(/getBytesInUse/.test(estado), 'y cuánto se lleva gastado de la cuota')
+  assert(/bytes > 8 \* 1024 \* 1024 \? 'bad' : ''/.test(estado), 'con aviso antes de que storage.set empiece a fallar')
+})
+
+test('H3: lo que tardó leer la página y marcarla lo dice la propia página', () => {
+  // El panel mide con sus mensajes de ida y vuelta; el content script mide el
+  // trabajo de verdad. Los dos números son distintos y el que sirve para
+  // comparar una página corta con una larga es el de dentro.
+  const lectura = JS.slice(JS.indexOf('async function readPageDigest'), JS.indexOf('function attachToBubble'))
+  assert(/Number\.isFinite\(r\.ms\) \? ` · \$\{r\.ms\} ms` : ''/.test(lectura), '«Página leída en bloques» apunta los ms de la página')
+  const notas = JS.slice(JS.indexOf('async function offerNotes'), JS.indexOf('function notesCard'))
+  assert(/Number\.isFinite\(res\?\.ms\) \? ` · \$\{res\.ms\} ms en la página` : ''/.test(notas), '«Análisis marcado» también')
+  // Los DOS sitios que mandan ANNOTATE reciben los ms, y volver a marcar al
+  // restaurar es justo uno de los caminos que interesa medir.
+  const remarcar = JS.slice(JS.indexOf('async function remarkFromAnchors'), JS.indexOf('async function focusNote'))
+  assert(/Number\.isFinite\(res\?\.ms\)/.test(remarcar), '«Análisis marcado de nuevo» también los apunta')
+  eq(JS.match(/MSG\.ANNOTATE/g)?.length, 2, 'y no hay un tercer sitio que marque sin medir')
+
+  // Se pregunta con `Number.isFinite` y no por verdad: un `0` es una medida
+  // legítima (una página corta se lee en menos de medio milisegundo) y es justo
+  // la que sirve para comparar antes y después; y un content script viejo, que
+  // no manda `ms`, no deja un «undefined ms» en el registro.
+  assert(!/r\.ms \?/.test(lectura) && !/res\?\.ms \?/.test(notas) && !/res\?\.ms \?/.test(remarcar), 'nunca por verdad: 0 ms es un dato')
+
+  // Y quien lo manda es el content script, en las dos respuestas.
+  const bootstrap = readFileSync(join(ROOT, 'src/content/bootstrap.js'), 'utf8')
+  assert(
+    bootstrap.includes('sendResponse({ ok: true, ...cuerpo, ms: Math.round(performance.now() - t0) })'),
+    'PAGE_DIGEST devuelve ms'
+  )
+  const runner = readFileSync(join(ROOT, 'src/content/runner.js'), 'utf8')
+  const marcas = runner.slice(runner.indexOf('  async applyNotes('), runner.indexOf('  async focusNote('))
+  assert(marcas.includes('const transcurrido = () => Math.round(performance.now() - t0)'), 'un solo reloj en applyNotes')
+  eq(marcas.split('ms: transcurrido()').length - 1, 3, 'las tres salidas de applyNotes llevan ms')
+})

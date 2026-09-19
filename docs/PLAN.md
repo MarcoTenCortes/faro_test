@@ -120,7 +120,7 @@ CLAUDE.md §12, bloque «H2 hecho»).
 | R1 | `memoryToPrompt` lanza «Invalid time value» con una entrada sin fecha y tumba TODOS los turnos del host mientras la memoria esté activa. `memory.js` no tiene tests. | `memory.js:61` | N | Fecha opcional; `getMemory` normaliza; `test/unit/memory.test.js`. | H2 ✓ hecho (2026-09-14); la revisión adversaria del 2026-09-14 añadió `instantOf`: una fecha en TEXTO que `Date.parse` entienda se rescata como número en vez de perderse |
 | R2 | `parseAtlassianUrl` lanza `URIError` con un `%` mal codificado en la clave del espacio; llega desde `consultedOutside` (el modelo), `pageRefFromUrl` (el usuario) y `samePage`/`refreshTab` (la pestaña): `send()` cae al `catch` y no se subraya. | `site.js:50,58` | N | `safeDecode` (ya existe, :173) en las dos ramas de Confluence. | H2 ✓ hecho (2026-09-14) |
 | R3 | `siteBaseUrl` conserva un enlace corto `/x/AbCd` como ruta de contexto: el MCP se configura con una dirección que no existe. | `setup.js:100` | N | Añadir `x` a las rutas de producto que se recortan. | H2 ✓ hecho (2026-09-14) |
-| R4 | `client.summarize()` manda `{model}` y el esquema exige `{providerID, modelID}` (400 seguro). Sin uso hoy. | `client.js:191` | (síntesis E, comprobado en `/doc`) | Corregir el cuerpo; comprobar en integración. | H3 → ✓ hecho en H2 (2026-09-14; el cuerpo bueno no se manda en integración, sólo se comprueba el `required` de `/doc` y que `{model}` da 400) |
+| R4 | `client.summarize()` manda `{model}` y el esquema exige `{providerID, modelID}` (400 seguro). Sin uso hoy. | `client.js:191` | (síntesis E, comprobado en `/doc`) | Corregir el cuerpo; comprobar en integración. | H3 → ✓ hecho en H2 (2026-09-14) y CERRADO en H3 (2026-09-19): el cuerpo bueno ya se ejercita en integración, `summarize(id, {providerID, modelID})` devolvió 200 y compactó en 2,2 s; sigue sin uso en el panel |
 
 ### 2.5 Accesibilidad y UX
 
@@ -439,8 +439,13 @@ banco; directorio `design/`.
   del `system`, `ms` numérico en `PAGE_DIGEST`/`ANNOTATE`, filas «tiempos» y
   «almacenamiento» (`getBytesInUse`) en el Registro, `tools/bench.mjs`. Los
   tokens y el coste reales del turno vienen en `message.updated`
-  (`info.tokens`, `info.cost`, confirmados en el esquema del binario): se
-  capturan en `TurnTracker` y sustituyen cualquier estimación.
+  (`info.tokens`, `info.cost`): se capturan en `TurnTracker` y sustituyen
+  cualquier estimación. Hecho en H3, con una corrección de procedencia: la
+  forma se confirmó contra `opencode.db` de esta máquina (3 598 mensajes de
+  asistente), **no** contra el esquema del binario como decía esta línea, y se
+  suma POR MENSAJE del asistente porque `message.updated` del mismo mensaje
+  llega muchas veces (CLAUDE.md §7). `cost` es 0 en los 4 605 mensajes de esta
+  base: «sin dato» es `null`, no 0.
 - **Arranque**: `getSiteBundle(host)` (una lectura multi-clave que incluye las
   claves nuevas del plan: perfil, referencias, historial, actividad),
   `Promise.all([models(), getSessionId()])`, y el MCP en segundo plano
@@ -451,8 +456,10 @@ banco; directorio `design/`.
   `MSG.SETTINGS` a la pestaña activa al cambiar `faro:settings`
   (`chrome.storage.onChanged`, ampliando el mock del test del SW).
 - **Restauración**: `listMessages(id, RESTORE_LIMITS.messages = 60)` +
-  `sortMessages` por `info.time.created` (el orden de salida de `limit` no se
-  pudo leer del binario con certeza) + `dropOrphans` + fila «Conversación
+  `sortMessages` por `info.time.created` (H3 midió el orden en integración:
+  `?limit=N` devuelve los últimos N en orden ASCENDENTE, igual que sin `limit`,
+  así que `sortMessages` queda como red y no como parche; `sortMessages` y
+  `dropOrphans` ya están escritos y probados, sin uso) + `dropOrphans` + fila «Conversación
   larga… Ver toda la conversación» (la contraparte visible, y el camino de
   vuelta a una tarjeta atenuada anterior al corte).
 - **Turno**: `paintTurnSoon` (un rAF, final síncrono), `TurnTracker` no
@@ -476,7 +483,9 @@ dentro y el SSE antes de `health`; digest recortado en seguimientos (rompe
 `system` pasaría a depender de la pregunta); páginas base embebidas por REST
 (§8.15, §12); `summarize` (se corrige el cuerpo, sin uso); paginar el chat;
 `chrome.alarms`; tocar `DIGEST_LIMITS`/`CONTEXT_BUDGET`; optimizar módulos
-puros (< 3 ms).
+puros (H3 los midió con `npm run bench`: ninguno pasa de 5 ms ni en sus peores
+casos fabricados —400 bloques, índice de 2 000 páginas—, así que el tiempo está
+en la red y en el DOM, no aquí).
 
 ---
 
@@ -494,7 +503,7 @@ L 3-5 días.
 | **H0 Preparación** | Fusionar la PR #5. **PASO 0 manual** (Marco, en su Jira y su Confluence DC con la sesión del navegador): las seis URL de la sección 7. Fijar en §8 la numeración 19/20 y en §12 el bloque «Jira Cloud: sin REST». Sólo docs. | — | S |
 | **H1 Herramientas de desarrollo y deriva docs↔código** | `tools/check-docs.mjs` paso 5 (número de pruebas estricto; títulos/MSG/ficheros en aviso → estricto tras sembrar los ~35 títulos); `AGENTS.md` como puntero; `NAV_TIMING` importado; exportaciones muertas fuera + `dead-exports.test.js`; correcciones de §10 y numeración 21/36 del banco + `docs.test.js`; `tools/last-turn.mjs` (`npm run turn`); **`prompt-snapshots.test.js`** con las instantáneas de los ~12 escenarios actuales (antes de tocar ningún prompt); tests de las puras sin test (D6). | H0 | M |
 | **H2 Seguridad, concurrencia y bugs** | Todo 2.1, 2.2, 2.3, 2.4 (R1-R3) y de 2.5 A1, A2, A3, A7, y D7. Orden: S1-S7 → C1-C7 → M1-M9 → R1-R3 → A1/A2/A3/A7 → D7. Cada arreglo empieza por el test que falla (para los puros, los scripts de reproducción de esta auditoría son el punto de partida; para M1, M2 y A1 el selfcheck). Selfcheck nuevos: digest sin depender del scroll interno, Escape vuelve a la página, foco/inert. **Hecho el 2026-09-14, con su revisión adversaria aplicada encima** (7 lentes, 19 hallazgos, todos verificados y aplicados: ver CLAUDE.md §12); las filas de 2.1-2.5 llevan anotado lo que cerró la revisión. | H1 | L |
-| **H3 Medir** | E paso 1: `timing.js`, «Arranque del panel», «Respuesta recibida» con tokens reales, `ms` en PAGE_DIGEST/ANNOTATE, filas de tiempos, `bench.mjs`, `summarize` corregido, `listMessages(id, 2)` y `time.compacted` en `test:integration`. **Leer en el opencode de Marco**: «Arranque del panel · MCP N ms» (decide H6-P5) y «Respuesta recibida · N herramientas» en un Análisis con páginas base y su seguimiento (decide H12). | H1 | S |
+| **H3 Medir** | E paso 1: `timing.js`, «Arranque del panel», «Respuesta recibida» con tokens reales, `ms` en PAGE_DIGEST/ANNOTATE, filas de tiempos, `bench.mjs`, `summarize` corregido, `listMessages(id, 2)` y `time.compacted` en `test:integration`. **Hecho el 2026-09-19** (rama `plan/h3-medir`, 850 pruebas, integración 18/18; el detalle, los desvíos y los límites en CLAUDE.md §12, bloque «H3 hecho»): cerró tres «sin verificar» del anexo E (`?limit=N` es ASCENDENTE, `summarize` da 200, `time.compacted` no se ve sin herramientas) y descubrió que el nivel gratuito de opencode ya no vale desde `opencode serve`. **Queda por LEER en el opencode de Marco**, que es lo que estas medidas venían a habilitar: «Arranque del panel · MCP N ms» en frío y en caliente (decide H6-P5) y «Respuesta recibida · N herramientas» en un Análisis con páginas base y su seguimiento (decide H12). | H1 | S |
 | **H4 Rediseño, base** | D pasos 1-3: `test/contrast.js` + `contrast-report.mjs` + `npm run contrast`; bloque de tokens (claro/oscuro/`[data-theme]`, `--mark`), hover del overlay a #1B1405, `panel-css.test.js`; reescritura de componentes sobre la escala (incluye A4, A5, A8, A9, `.perm-card`, `button.ghost.on`, `html.faro-still`). Selfcheck 1-38 igual. | H2 | L |
 | **H5 Rediseño, composición** | D pasos 4-8 + E `paintTurnSoon` en el MISMO commit que el `<details>` de `paintTurn`: cabecera (faro, chip clave+título con el estado visible durante el turno, hueco para `#btn-today`), `.screen-head`, redactor sin pastilla Memoria, `notesCard` con `.note-kind` + «Copiar observaciones», `suggestions.js`, espejo con `data-theme`/anchuras/`faroPreview.check()`, capturas 2×2, anchura mínima real anotada. Decide aquí el tope del estado vacío y el hueco del estado textual. | H4 | L |
 | **H6 Eficiencia sin REST** | E pasos 2-8 y 10 (menos lo ya hecho en H5): `getSiteBundle` (con las claves nuevas previstas), `Promise.all`, `state.mcpCheck` si H3 lo justifica, Ajustes sin rearranque + `storage.onChanged`, ventana de 60 + `sortMessages` + «Ver toda la conversación», `persistIndex()`, «Conversación pesada», overlay `_syncNodes` (selfcheck «40 scrolls»), `applyNotes` con `scope` único + `stickyOffset` (fixture `page:largo`), `paintLog` incremental. P1-P8. | H3, H5 | L |

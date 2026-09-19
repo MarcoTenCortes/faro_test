@@ -11,7 +11,7 @@
  */
 
 import { OpencodeClient, OpencodeError } from '../opencode/client.js'
-import { suggestsAnotherModel } from '../opencode/turn.js'
+import { suggestsAnotherModel, toolOutputSize } from '../opencode/turn.js'
 import { pickDefaultModel, pickAlternativeModel, pickPlannerModel, modelKey, parseModelKey } from '../shared/models.js'
 import { parseAtlassianUrl, describeLocation, defaultScope, samePage, wikiPrefix as wikiPrefixOf } from '../atlassian/site.js'
 import { mergeIndex, mergeIndexKeepingTree, indexSize, normalizeIndex, ancestryOf } from '../atlassian/index-store.js'
@@ -26,6 +26,7 @@ import { renderMarkdown } from './markdown.js'
 import { SKILLS, DEFAULT_SKILL, skillById } from './skills.js'
 import { pickLabel } from '../content/pick-payload.js'
 import { prettyTool, clockTime } from '../shared/format.js'
+import { startTiming, timingLine } from '../shared/timing.js'
 import { log } from '../shared/log.js'
 import {
   configureMcp,
@@ -189,6 +190,13 @@ const state = {
   logOnlyProblems: false,
   logUnsub: null,
   turnAbort: null,
+  // Lo que tardó lo último que hizo el panel, ya en una línea: el arranque por
+  // fases y el último turno. Sólo se enseña en el Registro y se registra al
+  // ocurrir; no se guarda en disco ni entra en ningún prompt. Es el
+  // instrumento con el que se decide qué merece la pena tocar: el `GET /mcp`
+  // que tarda segundos en frío llevaba ahí desde el principio y nadie lo veía
+  // (medido en la auditoría del 2026-09-13 contra un opencode desechable).
+  timing: { boot: '', turn: '' },
   // host:id -> { largo } del camino leído de la API en esta sesión, o { fallo }
   // con la hora del último intento que no contestó. Sirve para no volver a
   // pedirlo mientras el índice lo conserve entero, ni esperar en cada
@@ -393,6 +401,22 @@ async function bootForSite() {
   // Si había un arranque pendiente (el MCP cargó con la pestaña fuera de
   // Atlassian), éste lo cumple: no puede volver a dispararse.
   state.bootPending = ''
+
+  // Cuánto cuesta abrir el panel, fase por fase. Hasta H3 nadie lo veía: el
+  // `GET /mcp` del paso 3 tarda entre 2,8 y 13,8 s la primera vez tras
+  // arrancar opencode (medido en la auditoría del 2026-09-13 contra un
+  // servidor desechable) y el chat lo espera entero. Sin el número no se puede
+  // decidir si vale la pena sacarlo del camino, así que primero se mide.
+  // El arranque tiene cuatro salidas —sin opencode, pantalla de claves,
+  // pantalla de contexto y el chat— y justo las cortas son las que enseñan lo
+  // que cuesta el MCP: la medida se cierra en cada una con `medir()`, nunca en
+  // una salida de un arranque que ya no manda.
+  const cron = startTiming()
+  const medir = () => {
+    state.timing.boot = timingLine(cron.done())
+    log.ok('Arranque del panel', state.timing.boot)
+  }
+
   const client = buildClient()
   setStatus('busy', 'comprobando…')
 
@@ -406,6 +430,7 @@ async function bootForSite() {
     return
   }
   if (state.bootToken !== testigo) return
+  cron.mark('health')
   client.connect()
 
   // 2. Modelos y modo de trabajo, tal y como los dejaste en este sitio.
@@ -425,6 +450,7 @@ async function bootForSite() {
     if (state.bootToken !== testigo) return
     showNotice('No he podido leer la lista de modelos: ' + err.message, true)
   }
+  cron.mark('modelos')
 
   // 3. ¿Tiene claves este sitio, y están de verdad conectadas? Se mira lo que
   // opencode tiene de verdad: el MCP que lleve este dominio en JIRA_URL o
@@ -435,6 +461,9 @@ async function bootForSite() {
   // pueden acabar en el estado ni en el registro.
   const [mcp, config] = await Promise.all([client.listMcp().catch(() => ({})), client.config().catch(() => null)])
   if (state.bootToken !== testigo) return
+  // La fase que se viene a leer: son las DOS peticiones, sin lo que se guarde
+  // después. `GET /mcp` en frío es lo que hace que el panel tarde en abrirse.
+  cron.mark('MCP')
   let saved = await getSite(state.site.host)
   if (state.bootToken !== testigo) return
   const found = mcpForHost(config, state.site.host, { status: mcp })
@@ -475,6 +504,7 @@ async function bootForSite() {
     if (status.present) {
       $('setup-status').textContent = `El MCP «${status.name}» está registrado pero en «${status.status}». Revisa ese bloque y reinicia opencode, o quítalo si sobra.`
     }
+    medir()
     return
   }
 
@@ -497,16 +527,23 @@ async function bootForSite() {
   state.sessionID = await getSessionId(state.site.host)
   const site = await getSite(state.site.host)
   if (state.bootToken !== testigo) return
+  // Todo lo que se lee y se escribe en chrome.storage durante el arranque:
+  // el sitio, el contexto, el del Confluence enlazado, la memoria, el índice y
+  // la sesión.
+  cron.mark('almacenamiento')
 
   if (!site?.onboarded) {
     hideScreens()
     showContextScreen()
+    medir()
     return
   }
 
   hideScreens()
   await restoreConversation(testigo)
   if (state.bootToken !== testigo) return
+  cron.mark('restaurar')
+  medir()
 
   // Sin ruido: si falta el permiso, se avisa cuando de verdad hace falta
   // (al ofrecer navegación), no nada más abrir el panel.
@@ -1158,6 +1195,16 @@ async function send() {
   state.turnAbort = abort
   setStreaming(true)
 
+  // Cuánto tarda cada fase del turno (H3): leer la página, abrir la sesión, la
+  // primera palabra del modelo, el final, el índice y las marcas. Sólo mide;
+  // ninguna decisión cuelga de esto. `done()` es una lectura, no un freno: se
+  // pregunta al llegar la respuesta —para la línea del registro— y otra vez al
+  // acabar, cuando ya están las fases de después.
+  const cron = startTiming()
+  // La primera palabra es el número que se nota: hasta que llega, el usuario
+  // sólo ve los tres puntos.
+  let primerTexto = false
+
   try {
     // En el modo Análisis la página viaja en el prompt, troceada en bloques
     // numerados: es lo que el modelo señala y contra lo que después se
@@ -1166,6 +1213,8 @@ async function send() {
     // pregunta.
     const lectura = skill === 'analisis' ? await readPageDigest() : { digest: null, reason: '' }
     const digest = lectura.digest
+    // Sólo en Análisis se lee la página: en los demás modos no hay fase que medir.
+    if (skill === 'analisis') cron.mark('página')
 
     // Parar mientras se leía la página: no se manda nada, y la pregunta
     // vuelve al cuadro.
@@ -1199,6 +1248,7 @@ async function send() {
     // La sesión de ESTE turno: «Nueva sesión» a mitad la olvida, y entonces
     // la respuesta tampoco entra en el chat (queda en la sesión de opencode).
     const sesionAlPedir = state.sessionID
+    cron.mark('sesión')
 
     let bubble = document.createElement('div')
     bubble.className = 'msg assistant'
@@ -1234,32 +1284,43 @@ async function send() {
         .join(' · ')
     )
 
+    // La petición va en una variable para poder decir cuánto pesa su `system`
+    // (H3): en un Análisis de Jira son 23-27 000 caracteres que viajan en CADA
+    // turno y hasta ahora no se veían en ninguna parte. El objeto es el mismo
+    // que antes; nada más cambia.
+    const peticion = {
+      text: prompt,
+      files,
+      model: state.model,
+      system: baseSystem({
+        site: state.site,
+        contextMd: state.contextMd,
+        memoryMd: state.settings.crossSessionMemory ? memory.memoryToPrompt(state.memory) : '',
+        page: { url: state.tabUrl, title: state.tabTitle },
+        skill,
+        digest,
+        // Desde Jira, el contexto del Confluence enlazado; null si no lo hay.
+        linkedContext: state.linkedContext,
+        sources,
+      }),
+    }
+
     // Por runTurn y no a mano: trae el vigilante de turnos colgados y junta las
     // partes de TODOS los mensajes del turno, no solo del ultimo.
-    const turn = await state.client.runTurn(
-      state.sessionID,
-      {
-        text: prompt,
-        files,
-        model: state.model,
-        system: baseSystem({
-          site: state.site,
-          contextMd: state.contextMd,
-          memoryMd: state.settings.crossSessionMemory ? memory.memoryToPrompt(state.memory) : '',
-          page: { url: state.tabUrl, title: state.tabTitle },
-          skill,
-          digest,
-          // Desde Jira, el contexto del Confluence enlazado; null si no lo hay.
-          linkedContext: state.linkedContext,
-          sources,
-        }),
+    const turn = await state.client.runTurn(state.sessionID, peticion, {
+      signal: abort.signal,
+      stallMs: 90000,
+      onUpdate: (t) => {
+        // La primera palabra del modelo, una sola vez: hasta que llega, el
+        // usuario sólo ve los tres puntos. Medir aquí no cambia lo que se pinta.
+        if (!primerTexto && t.text) {
+          primerTexto = true
+          cron.mark('primer texto')
+        }
+        paintTurn(t, toolsBox, body)
       },
-      {
-        signal: abort.signal,
-        stallMs: 90000,
-        onUpdate: (t) => paintTurn(t, toolsBox, body),
-      }
-    )
+    })
+    cron.mark('fin')
 
     const tracker = { ...turn, rawError: turn.rawError, model: turn.model }
 
@@ -1328,7 +1389,20 @@ async function send() {
 
     state.turns.push({ role: 'assistant', text: answer })
     paintTurn(turn, toolsBox, cuerpo, true)
-    log.ok('Respuesta recibida', `${answer.length} caracteres · ${turn.tools.length} herramientas`)
+    // Lo que costó este turno, en una línea comparable con la del siguiente: la
+    // respuesta, cuántas herramientas y cuánto texto devolvieron —eso es lo que
+    // la sesión arrastra al turno de después—, el reloj por fases y lo que pesa
+    // el sistema (en un Análisis de Jira, 23-27 000 caracteres). Los KB van
+    // redondeados: aquí interesa el orden de magnitud, no el byte.
+    const salidaTools = toolOutputSize(turn.parts)
+    const kbTools = salidaTools ? Math.max(1, Math.round(salidaTools / 1024)) : 0
+    log.ok(
+      'Respuesta recibida',
+      `${answer.length} caracteres · ${turn.tools.length} herramientas${kbTools ? ` (${kbTools} KB)` : ''} · ` +
+        timingLine(cron.done(), {
+          extra: [`sistema ${peticion.system.length} caracteres`, turnCostText(turn)],
+        })
+    )
     // Una vez, al final: mientras llegaba a trozos el chat estaba «ocupado».
     announce(answerAnnouncement(answer))
 
@@ -1355,6 +1429,7 @@ async function send() {
     // Y con la estructura del árbol que se ve en la barra lateral: es exacta,
     // es gratis, y es justo por donde va a ir la navegación asistida.
     await growTreeFromPage()
+    cron.mark('índice')
 
     // Y, si procede, ofrecer llevar al usuario allí.
     await offerNavigation(answer, bubble, skill, turn.parts)
@@ -1387,6 +1462,11 @@ async function send() {
         destino.appendChild(renderMarkdown(prose, { onLink: openUrl, onNote: focusNote, allowHref: linkAllowed }))
       },
     })
+    // Sólo en Análisis: en los demás modos lo que pasa entre el índice y aquí es
+    // la tarjeta de navegación —con su turno del planificador—, que no es esta
+    // fase. Se queda en el total y sin etiqueta, antes que debajo de una
+    // etiqueta que no es la suya.
+    if (skill === 'analisis') cron.mark('marcas')
   } catch (err) {
     if (err?.name !== 'AbortError') {
       showNotice(err instanceof OpencodeError ? err.message : 'Fallo enviando: ' + err.message, true)
@@ -1395,6 +1475,11 @@ async function send() {
     if (state.turnToken === testigo) {
       state.turnToken = null
       setStreaming(false)
+      // El reloj del turno entero, ya con las fases de después de la respuesta,
+      // para la fila «tiempos (último turno)» del Registro. Sólo lo apunta el
+      // turno que sigue siendo el del panel: el de un turno abandonado hablaría
+      // de otra cosa.
+      state.timing.turn = timingLine(cron.done())
     }
     scrollChat()
   }
@@ -1474,7 +1559,11 @@ async function readPageDigest() {
   log.ok(
     'Página leída en bloques',
     `${r.count} bloques · ${r.chars} caracteres${r.truncated ? ' · recortada' : ''}` +
-      (issue ? ` · tipo ${issue.type || '?'} · estado ${issue.status || '?'}` : '')
+      (issue ? ` · tipo ${issue.type || '?'} · estado ${issue.status || '?'}` : '') +
+      // Lo que costó leerla en la página, si el content script lo dice (desde
+      // H3): sirve para comparar una página corta con una larga sin cronómetro.
+      // Un content script viejo no lo manda y entonces no se imprime.
+      (Number.isFinite(r.ms) ? ` · ${r.ms} ms` : '')
   )
   return { digest, reason: '' }
 }
@@ -1495,6 +1584,40 @@ function attachToBubble(bubble, node) {
   announce(node.textContent)
   scrollChat()
   return node
+}
+
+/**
+ * Tokens y coste de un turno, si el turno los trae.
+ *
+ * `TurnTracker` los suma por mensaje del asistente (`tokens` con la forma de
+ * opencode —`{total, input, output, reasoning, cache:{read, write}}`— y `cost`
+ * ya redondeado) y `runTurn` los saca en su resultado. Si opencode no informó de
+ * ninguno vienen a `null` y esto devuelve '': la línea del registro se queda sin
+ * ese trozo, antes que inventar un número.
+ *
+ * `total` se lee tal cual, NO se suma a mano: el total de opencode ya incluye la
+ * caché, y sumar los campos lo contaría dos veces. La lectura de caché va aparte
+ * cuando la hay porque en las sesiones reales es el grueso del turno, y es el
+ * número que dice si merece la pena tocar el `system`.
+ *
+ * Un coste de 0 es un dato, no «sin dato» (los modelos de `github-copilot` y los
+ * `-free` lo dan a cero): sólo se calla si no viene. Se imprime tal cual, con
+ * coma decimal, sin redondear nada aquí: el número que se enseña es el que se
+ * midió.
+ */
+function turnCostText(turn) {
+  const tk = turn?.tokens || null
+  const total = Number(tk?.total) || 0
+  const salida = Number(tk?.output) || 0
+  const cache = Number(tk?.cache?.read) || 0
+  const coste = turn?.cost
+  const detalle = [salida ? `salida ${salida}` : '', cache ? `caché ${cache}` : ''].filter(Boolean).join(', ')
+  return [
+    total ? `tokens ${total}${detalle ? ` (${detalle})` : ''}` : '',
+    Number.isFinite(coste) ? `coste ${String(coste).replace('.', ',')}` : '',
+  ]
+    .filter(Boolean)
+    .join(' · ')
 }
 
 /**
@@ -2067,7 +2190,11 @@ async function offerNotes(
   log.ok(
     'Análisis marcado',
     `${placed.length} de ${filasNumeros.length} marcadas` +
-      (detail.length ? ' · ' + detail.map((d) => `${d.n}:${d.strategy}`).join(' ') : '')
+      (detail.length ? ' · ' + detail.map((d) => `${d.n}:${d.strategy}`).join(' ') : '') +
+      // Lo que costó resolver y pintar las marcas DENTRO de la página, medido
+      // allí (desde H3); el reloj del panel incluye además ir y venir por
+      // mensajes. Si el content script no lo manda, no se imprime.
+      (Number.isFinite(res?.ms) ? ` · ${res.ms} ms en la página` : '')
   )
   if (missed.length) log.warn('Sin anclar', 'observaciones ' + missed.join(', '))
 }
@@ -2415,7 +2542,13 @@ async function remarkFromAnchors({ prose, anchors, bubble, card, url = '', conBa
   state.notesResult = { prose, filas, placed, missed: res?.missed || [], detail: res?.detail || [], conBase, product }
   card.remove()
   state.notesCard = attachToBubble(bubble, notesCard(filas, placed, res?.missed || [], res?.detail || [], { conBase, product }))
-  log.ok('Análisis marcado de nuevo', `${placed.length} de ${anclables.length} marcadas`)
+  log.ok(
+    'Análisis marcado de nuevo',
+    `${placed.length} de ${anclables.length} marcadas` +
+      // Volver a marcar al restaurar es uno de los caminos que interesa medir, y
+      // la respuesta trae los ms igual que la primera vez (H3).
+      (Number.isFinite(res?.ms) ? ` · ${res.ms} ms en la página` : '')
+  )
 }
 
 /** Lleva a una observación concreta y la destaca, en la página y en el chat. */
@@ -3531,6 +3664,27 @@ async function paintState() {
   add('contexto', state.contextMd ? `${state.contextMd.length} caracteres` : '(sin contexto)')
   if (state.linkedContext) add('Confluence enlazado', `${state.linkedContext.host} · ${state.linkedContext.contextMd.length} caracteres`)
   add('memoria', state.settings.crossSessionMemory ? `activa · ${state.memory?.entries?.length || 0} entradas` : 'desactivada')
+
+  // Lo que tardó lo último que hizo el panel (H3): pegado aquí, un «va lento»
+  // deja de ser una impresión. Se miden en `bootForSite` y en `send()`.
+  add('tiempos (arranque)', state.timing.boot || '(sin medir)')
+  add('tiempos (último turno)', state.timing.turn || '(sin medir)')
+
+  // Y cuánto de la cuota de chrome.storage.local llevamos gastada: el índice de
+  // un sitio grande, su contexto y su memoria caben de sobra, pero nadie lo veía
+  // hasta que `storage.set` empezara a fallar. Se avisa a partir de 8 MB, con
+  // margen para que quepa un índice más.
+  try {
+    const bytes = await chrome.storage.local.getBytesInUse(null)
+    const cuota = chrome.storage.local.QUOTA_BYTES || 10 * 1024 * 1024
+    add(
+      'almacenamiento',
+      `${Math.round(bytes / 1024)} KB de ${Math.round(cuota / (1024 * 1024))} MB`,
+      bytes > 8 * 1024 * 1024 ? 'bad' : ''
+    )
+  } catch (err) {
+    add('almacenamiento', 'no se pudo medir: ' + err.message)
+  }
 
   if (state.client && state.site) {
     try {

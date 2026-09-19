@@ -420,6 +420,14 @@ corto y un detalle. Todos los títulos, por dónde salen:
 
 **Arranque y conexión**
 
+- «Arranque del panel» — cuánto tardó abrir el panel, fase por fase: el total
+  primero y detrás «health» (¿está opencode?), «modelos», «MCP» (las dos
+  consultas a opencode: `GET /mcp` y `GET /config`), «almacenamiento» (sitio,
+  contexto, memoria, índice y sesión) y «restaurar» (repintar la conversación).
+  Sale también cuando el arranque acaba en la pantalla de claves o en la de
+  contexto, sin las fases que no llegó a hacer. Si «MCP» dice segundos, es
+  normal la primera vez tras arrancar opencode: carga sus servidores MCP en la
+  primera consulta.
 - «Stream de eventos abierto» — el panel abrió el stream de eventos (`/event`)
   de opencode; el estado pasa a «conectado».
 - «Stream de eventos cerrado» — el stream se cortó; el cliente reintenta solo
@@ -468,8 +476,12 @@ corto y un detalle. Todos los títulos, por dónde salen:
   cerraste Ajustes) o al abrir una sesión nueva a mitad de respuesta. Antes se
   quedaba 90 s «pensando…» hasta que el vigilante lo abortaba. Si el panel
   vuelve al sitio, la respuesta que llegó a opencode sigue en esa sesión.
-- «Respuesta recibida» — el turno terminó: caracteres de la respuesta y
-  número de herramientas que llamó.
+- «Respuesta recibida» — el turno terminó: caracteres de la respuesta,
+  herramientas que llamó y cuántos KB de texto devolvieron (eso es lo que la
+  conversación arrastra al turno siguiente), el reloj del turno por fases
+  —«primer texto» es lo que tardó en aparecer la primera palabra—, cuántos
+  caracteres pesaba el sistema que se mandó y, si opencode los da, los tokens
+  (con la salida y la lectura de caché) y el coste.
 - «Skill» — cambió la Skill (desde el desplegable, o porque «Pedirlo
   numerado» la fija en Análisis).
 - «Modelo cambiado» — elegiste otro modelo; se recuerda para el sitio.
@@ -481,7 +493,9 @@ corto y un detalle. Todos los títulos, por dónde salen:
 
 - «Página leída en bloques» — antes de un Análisis, la página o la incidencia
   se leyó en bloques ¶: cuántos, cuántos caracteres, «recortada» si llegó al
-  tope y, en Jira, el tipo y el estado leídos de los campos.
+  tope, en Jira el tipo y el estado leídos de los campos, y cuántos
+  milisegundos costó leerla, medidos en la propia página (sin contar lo que
+  tardó en pintarse).
 - «Página sin bloques» — no se pudo leer en bloques: estás en el editor, o la
   pestaña no contesta (recárgala).
 - «Anclas en la respuesta» — el bloque JSON de anclas señala un bloque válido
@@ -512,9 +526,11 @@ corto y un detalle. Todos los títulos, por dónde salen:
   cambió de página mientras se preparaban.
 - «Sin anclar» — las observaciones que no se pudieron situar en la página.
 - «Análisis marcado» — de cada número, cómo se resolvió: `block+quote`,
-  `block+whole`, `block-moved`, `global`.
+  `block+whole`, `block-moved`, `global`, y «N ms en la página»: lo que costó
+  resolver y pintar las marcas dentro de la página.
 - «Análisis marcado de nuevo» — pulsaste «Volver a marcar en esta página» y
-  las marcas se volvieron a poner (cuántas de cuántas).
+  las marcas se volvieron a poner (cuántas de cuántas), con los mismos «N ms en
+  la página».
 
 **Páginas base**
 
@@ -718,6 +734,26 @@ llamada a opencode con su resultado y su duración, más el estado actual
 (servidor, sitio, página, modelo, sesión, índice, MCP). El botón *Copiar* lo
 deja en el portapapeles. Los cuerpos de las peticiones no se guardan nunca:
 por ahí pasan tus claves.
+
+El estado actual trae además tres filas de medidas: **«tiempos (arranque)»** y
+**«tiempos (último turno)»** repiten las líneas de «Arranque del panel» y
+«Respuesta recibida», para poder pegarlas sin buscar en la lista («(sin medir)»
+mientras no haya turno), y **«almacenamiento»** dice cuánto de los 10 MB de
+`chrome.storage.local` llevan gastados el índice, el contexto y la memoria de
+todos tus sitios; se pone en rojo a partir de 8 MB, y a partir de ahí conviene
+«Descartar índice» en un sitio que ya no uses.
+
+**El panel tarda en abrirse la primera vez tras arrancar opencode**
+Es `GET /mcp`: opencode arranca sus servidores MCP en la primera consulta, y el
+panel la espera. Mira «Arranque del panel» en el registro: si «MCP» dice
+segundos y el resto milisegundos, es eso. La segunda vez baja a milisegundos.
+
+**«El modelo no contesta nunca» o «Turno colgado» con un modelo de la lista**
+El nivel gratuito de opencode (`opencode/*-free`, y también `big-pickle`) sólo
+funciona desde la TUI de opencode: desde `opencode serve` —que es con quien
+habla Faro— contesta «OpenCode's free tier can only be used from within
+OpenCode» o no contesta nada. Usa un modelo de tu proveedor (por ejemplo
+`github-copilot/gpt-5.6-luna`). Comprobado el 2026-09-19.
 
 **Sólo me ofrece «Llévame», nunca «Paso a paso»**
 Lo primero: **Ajustes → Cómo te lleva Faro** tiene que estar en *Guiada*. En

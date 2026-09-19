@@ -359,6 +359,11 @@ frame.addEventListener('load', async () => {
     ['modelo', 'github-copilot/claude-sonnet-4.6', ''],
     ['índice', '215 entradas', ''],
     ['MCP', 'atlassian-confluence-simplprogramme-eu · connected', 'ok'],
+    // H3 (medir): las tres filas de medidas. La de almacenamiento va a
+    // propósito por encima de los 8 MB para ver el aviso en los dos temas.
+    ['tiempos (arranque)', '14,3 s · health 1 ms · modelos 61 ms · MCP 13,8 s · almacenamiento 60 ms · restaurar 420 ms', ''],
+    ['tiempos (último turno)', '41,2 s · página 61 ms · sesión 3 ms · primer texto 3,1 s · fin 38,1 s · índice 90 ms · marcas 210 ms', ''],
+    ['almacenamiento', '8,4 MB de 10 MB', 'bad'],
   ]) {
     const row = doc.createElement('div')
     row.className = 'state-row'

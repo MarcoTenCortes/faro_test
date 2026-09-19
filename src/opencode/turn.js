@@ -25,6 +25,13 @@ export class TurnTracker {
     this.parts = new Map() // partID -> {type, text, tool, status, title}
     this.order = []
     this.roles = new Map() // messageID -> role
+    // Lo que costó el turno, POR MENSAJE del asistente (messageID -> {tokens,
+    // cost}): un turno se parte en varios mensajes —uno por vuelta de
+    // herramientas— y `message.updated` del MISMO mensaje llega muchas veces
+    // mientras llega la respuesta. Guardar la última foto de cada mensaje y
+    // sumar por mensaje es la única forma de no contar cuatro veces los mismos
+    // tokens.
+    this.usage = new Map()
     this.assistantMessageID = null
     this.model = null
     // La salida estructurada del turno, si se pidió con `format`: opencode la
@@ -84,6 +91,53 @@ export class TurnTracker {
       .join('')
   }
 
+  /**
+   * Tokens del turno entero, sumando los mensajes del asistente que lo
+   * componen, o `null` si opencode no informó de ninguno.
+   *
+   * Forma: `{total, input, output, reasoning, cache:{read, write}}`, la misma
+   * que trae opencode (el orden de claves importa: los tests comparan con
+   * `eq`, que es JSON). Sirve para que «Respuesta recibida» diga lo que de
+   * verdad se le mandó al modelo: en las sesiones reales de esta máquina el
+   * grueso son lecturas de caché (21 035 de 21 841 en un turno), que es
+   * justo el número que dice si merece la pena tocar el `system` o no.
+   */
+  get tokens() {
+    let hay = false
+    const acc = { total: 0, input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
+    for (const u of this.usage.values()) {
+      if (!u.tokens) continue
+      hay = true
+      acc.total += u.tokens.total
+      acc.input += u.tokens.input
+      acc.output += u.tokens.output
+      acc.reasoning += u.tokens.reasoning
+      acc.cache.read += u.tokens.cache.read
+      acc.cache.write += u.tokens.cache.write
+    }
+    return hay ? acc : null
+  }
+
+  /**
+   * Coste del turno en la moneda del proveedor, sumado igual, o `null` si
+   * ninguno lo informó. Un 0 es un 0 de verdad (los modelos de `github-copilot`
+   * y los `-free` lo dan a cero: 4 605 mensajes de asistente en la base de esta
+   * máquina, todos a 0), y por eso «sin dato» es `null` y no 0.
+   *
+   * La suma se redondea a la millonésima: sumando dos costes en coma flotante,
+   * 0,2 + 0,3 sale 0,5000000000000001 y eso acabaría tal cual en el Registro.
+   */
+  get cost() {
+    let hay = false
+    let total = 0
+    for (const u of this.usage.values()) {
+      if (u.cost === null) continue
+      hay = true
+      total += u.cost
+    }
+    return hay ? Math.round(total * 1e6) / 1e6 : null
+  }
+
   _isAssistant(part) {
     if (!part.messageID) return true
     const role = this.roles.get(part.messageID)
@@ -118,7 +172,12 @@ export class TurnTracker {
         const info = p.info
         if (!info) return false
         this.roles.set(info.id, info.role)
-        if (info.role === 'assistant') this.assistantMessageID = info.id
+        if (info.role === 'assistant') {
+          this.assistantMessageID = info.id
+          // Lo que costó: la última foto de ESTE mensaje manda (llegan varias).
+          const uso = usageOf(info)
+          if (uso) this.usage.set(info.id, uso)
+        }
         // El modelo del turno hace falta para poder nombrar al proveedor si
         // falla su autenticación: el evento de error no lo trae.
         if (info.model) this.model = info.model
@@ -183,6 +242,105 @@ export class TurnTracker {
         return false
     }
   }
+}
+
+/** Un número no negativo, o 0. */
+function num(v) {
+  const n = Number(v)
+  return Number.isFinite(n) && n > 0 ? n : 0
+}
+
+/**
+ * Lo que costó un mensaje del asistente: `{tokens, cost}`, o null si no informó
+ * de ninguno de los dos.
+ *
+ * FORMA COMPROBADA (opencode 1.2.25, base de datos de esta máquina el
+ * 2026-09-19, 3 598 mensajes de asistente con tokens): `info.tokens` es
+ * `{total, input, output, reasoning, cache:{read, write}}` y `info.cost` un
+ * número. En 60 de esos mensajes —de una versión anterior— no viene `total`:
+ * para ésos se deduce como `input + output + cache.read`, que es lo que
+ * opencode informa en 4 518 de los 4 521 mensajes que SÍ lo traen (los tres
+ * restantes son rarezas del proveedor; el razonamiento va dentro de `output`,
+ * no aparte). Se reconstruye con claves blancas, como todo lo que llega de
+ * fuera: un `tokens` con formas raras da ceros, nunca NaN en el Registro.
+ */
+function usageOf(info) {
+  const t = info?.tokens
+  let tokens = null
+  if (t && typeof t === 'object') {
+    const input = num(t.input)
+    const output = num(t.output)
+    const reasoning = num(t.reasoning)
+    const cache = { read: num(t.cache?.read), write: num(t.cache?.write) }
+    const total = num(t.total) || input + output + cache.read
+    tokens = { total, input, output, reasoning, cache }
+  }
+  const cost = typeof info?.cost === 'number' && Number.isFinite(info.cost) ? info.cost : null
+  return tokens || cost !== null ? { tokens, cost } : null
+}
+
+/**
+ * Cuánto texto de herramientas arrastra un turno, en caracteres.
+ *
+ * Las salidas de herramientas se quedan en el historial de la sesión y se
+ * reenvían en los turnos siguientes (§7), acotadas por la poda de opencode:
+ * este número es lo que hace visible ese arrastre en «Respuesta recibida · N
+ * herramientas (310 KB)». Sólo cuenta lo que de verdad ocupa: partes `tool`
+ * completadas con `state.output` de texto. Pura.
+ *
+ * @param {Array<{type?:string, state?:object}>} parts
+ * @returns {number}
+ */
+export function toolOutputSize(parts) {
+  let total = 0
+  for (const p of Array.isArray(parts) ? parts : []) {
+    if (!p || p.type !== 'tool' || p.state?.status !== 'completed') continue
+    if (typeof p.state.output === 'string') total += p.state.output.length
+  }
+  return total
+}
+
+/**
+ * Los mensajes de una sesión en orden de creación, ascendente y estable.
+ *
+ * `GET /session/:id/message?limit=N` devuelve los ÚLTIMOS N, pero su ORDEN no
+ * se pudo confirmar en las cadenas del binario de opencode 1.2.25 (un juez de
+ * la auditoría encontró un `reverse()` y el otro no), así que el panel ordena y
+ * el orden real deja de importar. Un mensaje sin `info.time.created` conserva
+ * su sitio: hereda la clave del anterior en vez de irse al principio, porque
+ * sin dato lo menos destructivo es no moverlo. Pura.
+ *
+ * @param {Array<{info?:{time?:{created?:number}}}>} messages
+ * @returns {Array<object>}
+ */
+export function sortMessages(messages) {
+  const lista = (Array.isArray(messages) ? messages : []).filter((m) => m && typeof m === 'object')
+  let ultima = 0
+  const conClave = lista.map((m, i) => {
+    const t = Number(m.info?.time?.created)
+    if (Number.isFinite(t)) ultima = t
+    return { m, i, clave: Number.isFinite(t) ? t : ultima }
+  })
+  conClave.sort((a, b) => a.clave - b.clave || a.i - b.i)
+  return conClave.map((x) => x.m)
+}
+
+/**
+ * Quita los mensajes del asistente que quedan colgando al principio.
+ *
+ * Al pedir sólo los últimos N mensajes, el corte puede caer a mitad de un turno
+ * y dejar arriba respuestas sin su pregunta: `restoreConversation` agrupa por
+ * turno (un usuario + sus asistentes), así que un asistente huérfano pintaría
+ * una burbuja sin pregunta. Sin ningún mensaje de usuario no hay nada que
+ * agrupar y devuelve []. Pura.
+ *
+ * @param {Array<{info?:{role?:string}}>} messages
+ * @returns {Array<object>}
+ */
+export function dropOrphans(messages) {
+  const lista = Array.isArray(messages) ? messages : []
+  const desde = lista.findIndex((m) => m?.info?.role === 'user')
+  return desde < 0 ? [] : lista.slice(desde)
 }
 
 /**

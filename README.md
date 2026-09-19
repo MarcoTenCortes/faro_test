@@ -387,11 +387,12 @@ Trece decisiones que sostienen el diseño:
 ## Comprobaciones
 
 ```bash
-npm run check              # sintaxis + orden + manifest + 821 pruebas unitarias + docs
+npm run check              # sintaxis + orden + manifest + 850 pruebas unitarias + docs
 npm run check:docs         # sólo el paso docs: número de pruebas, títulos del registro, mensajes y ficheros del mapa
 npm run test:integration   # contra un opencode real que arranca la propia prueba
 npm run harness            # banco de pruebas visual en http://127.0.0.1:5175
 npm run turn -- --n 1      # el último turno real (pregunta, sistema, herramientas, respuesta) desde una copia de opencode.db
+npm run bench              # el metro: cuánto pesa el system de cada escenario y cuánto tardan los módulos puros
 npm run snapshots          # regenera las instantáneas de los prompts (test/fixtures/prompts) cuando un cambio de prompt es intencionado
 ```
 
@@ -523,6 +524,16 @@ Con el banco levantado hay dos páginas:
   observaciones…). Es lo primero que hay que mirar cuando el panel dice algo
   raro: qué se le pidió y qué contestó, no lo que el panel pintó después.
 
+- **`npm run bench`** es el metro: cuánto pesa el `system` de cada escenario (en
+  caracteres, líneas y tokens estimados a caracteres ÷ 4) y cuánto tardan los
+  módulos puros más pesados, como mediana de 20 repeticiones. Mide los mismos
+  escenarios que las instantáneas de los prompts, así que lo medido es
+  exactamente lo que se compara byte a byte. No tiene umbrales, no falla nunca y
+  no entra en `npm run check`: los tiempos de una máquina no son un contrato,
+  sirven para comparar dos ejecuciones de la MISMA máquina antes y después de un
+  cambio. Hoy el `system` va de 2 767 a 29 159 caracteres (mediana 8 127) y
+  ningún módulo puro pasa de 5 ms.
+
 - **`npm run snapshots`** reescribe `test/fixtures/prompts/*.txt` con los
   prompts que el código produce hoy para 33 escenarios fijos (Confluence y Jira
   Data Center × cada Skill × con y sin página en bloques, páginas base,
@@ -650,18 +661,23 @@ Si el permiso falta, el aviso lo dice. Antes esto fallaba en silencio: pulsabas
 
 ## Elegir modelo
 
-No todos los modelos de la lista sirven, y el fallo no es de Faro. Medido
-contra un opencode real:
+No todos los modelos de la lista sirven, y el fallo no es de Faro. Remedido
+contra un opencode real el 2026-09-19, con un turno de dos palabras por modelo:
 
 | Modelo | Resultado |
 |---|---|
-| `github-copilot/claude-sonnet-4.6` | usa las herramientas y responde bien |
-| `opencode/hy3-free` | funciona |
-| `opencode/nemotron-3.5-lightning-free` | funciona |
-| `opencode/big-pickle` | **se cuelga**: no termina ni da error |
-| `opencode/mimo-v2.5-free` | **se cuelga** |
-| `opencode/muse-spark-1.2-contributor-free` | `APIError: Bad Request` del proveedor |
-| `opencode/nemotron-3-ultra-free` | 502 de la nube de turno |
+| `github-copilot/gpt-5.6-luna` | **funciona** (es el que se usa hoy) |
+| `opencode/ling-3.0-flash-fin-free` | «OpenCode's free tier can only be used from within OpenCode» |
+| `opencode/big-pickle` | el mismo error del nivel gratuito |
+| `opencode/jev-1.13-free` | acepta el turno y **no contesta nunca** |
+| `github-copilot/claude-sonnet-4.6` | `APIError: not available for integrator "opencode"` |
+| `openai/gpt-5.4` | no soportado con una cuenta de ChatGPT |
+
+Lo importante de esa tabla: **el nivel gratuito de opencode (`opencode/*-free`,
+y también `big-pickle`) ya no se puede usar desde `opencode serve`**, sólo desde
+la propia TUI de opencode. Como Faro habla con el servidor, hay que elegir un
+modelo del proveedor propio. `opencode/hy3-free`, que antes funcionaba, ya no
+está en la lista.
 
 Por eso Faro trae un vigilante: si un turno deja de producir contenido durante
 90 segundos, se rinde, lo dice, y ofrece reintentar con otro proveedor. El
@@ -748,11 +764,13 @@ src/
     digest.js               cómo se enseñan los bloques y cómo se reconoce uno después (puro)
     config.js               ajustes por defecto y su migración; NAV_TIMING, el único sitio con los tiempos de la navegación
     permissions.js          los permisos de cada sesión de opencode: todo denegado salvo el MCP, y una copia de cómo los evalúa opencode para probarlo (puro)
+    timing.js               el cronómetro por fases que el registro enseña: sólo etiquetas y números, nunca cuerpos ni claves (puro)
 harness/                    Confluence de mentira para pruebas visuales
 test/                       arnés propio, sin dependencias; test/fixtures/prompts/ son las instantáneas de los prompts
 tools/                      generación de iconos, clave del manifest, servidor del banco
   check-docs.mjs            el paso «docs» de npm run check (npm run check:docs suelto)
   last-turn.mjs             el último turno real desde una copia de opencode.db (npm run turn)
+  bench.mjs                 el metro: tamaño del system por escenario y tiempos de los módulos puros (npm run bench)
   prompt-snapshots.mjs      comprobar o regenerar (--update) las instantáneas de los prompts (npm run snapshots)
 AGENTS.md                   puntero a CLAUDE.md, que es el mapa del proyecto para una sesión nueva
 ```

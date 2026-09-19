@@ -35,6 +35,12 @@ const PORT = Number(process.env.FARO_TEST_PORT || 4123)
 const PASSWORD = 'faro-test-' + PORT
 const PREFERRED = process.env.FARO_TEST_MODEL || ''
 
+/** Cuánto se le da a un modelo para decir «ok» antes de descartarlo (ver `responde`). */
+const PROBE_MS = 15000
+
+/** El modelo de §7 con el que se trabaja de verdad: respaldo cuando los gratuitos no contestan. */
+const RESPALDO = 'github-copilot/gpt-5.6-luna'
+
 const GREEN = '\x1b[32m'
 const RED = '\x1b[31m'
 const DIM = '\x1b[2m'
@@ -113,6 +119,8 @@ async function main() {
   const client = new OpencodeClient({ baseUrl: `http://127.0.0.1:${PORT}`, password: PASSWORD })
   let model = null
   const created = []
+  /** La sesión con turnos de verdad: la crea la prueba de streaming y la reutilizan las de H3. */
+  let sesionTurnos = null
 
   try {
     await check('la contraseña es obligatoria', async () => {
@@ -161,12 +169,23 @@ async function main() {
       return 'sin cabecera para orígenes ajenos'
     })
 
-    await check('lista de modelos', async () => {
+    await check('lista de modelos, y el primero que de verdad contesta', async () => {
       const { models, defaults } = await client.models()
       assert(models.length > 0, 'no hay modelos configurados en opencode')
-      model = pickModel(models, defaults)
-      assert(model, 'no encuentro un modelo utilizable')
-      return `${models.length} modelos · usando ${model.providerID}/${model.modelID}`
+      const candidatos = modelCandidates(models, defaults)
+      assert(candidatos.length, 'no encuentro un modelo utilizable')
+
+      // Se prueban a la vez: cada prueba es un turno de dos palabras y así el
+      // coste en tiempo es el del más lento, no la suma.
+      const motivos = candidatos.length > 1 ? await Promise.all(candidatos.map((m) => responde(client, m))) : ['']
+      const descartados = []
+      candidatos.forEach((m, i) => {
+        if (!motivos[i]) model ||= m
+        else descartados.push(`${m.providerID}/${m.modelID}: ${motivos[i]}`)
+      })
+      assert(model, 'ningún modelo contestó · ' + descartados.join(' · '))
+      const cola = descartados.length ? ` · descartados: ${descartados.join(' · ')}` : ''
+      return `${models.length} modelos · usando ${model.providerID}/${model.modelID}${cola}`
     })
 
     await check('crear y borrar sesión', async () => {
@@ -240,6 +259,10 @@ async function main() {
     await check('respuesta en streaming reconstruida por TurnTracker', async () => {
       const s = await client.createSession({ title: 'Faro · streaming' })
       created.push(s.id)
+      // Esta sesión se reutiliza más abajo (ventana de `limit` y `summarize`):
+      // así el turno que ya se paga aquí cuenta como el primero de los tres y no
+      // se gasta el modelo de más.
+      sesionTurnos = s.id
 
       let tracker
       const done = new Promise((resolve, reject) => {
@@ -260,6 +283,106 @@ async function main() {
       assert(result !== 'timeout', 'el turno no terminó en 180 s')
       assert(/faro/i.test(tracker.text), 'texto inesperado: ' + JSON.stringify(tracker.text.slice(0, 120)))
       return JSON.stringify(tracker.text.trim().slice(0, 40))
+    })
+
+    // H3 (docs/PLAN.md §4 fila H3; anexo E, paso 1 y «APIs externas»): la ventana de
+    // mensajes con la que H6 quiere restaurar se apoya en `?limit=N`. Que devuelve los
+    // ÚLTIMOS N se leyó del binario; el ORDEN de salida NO se pudo confirmar (un juez de
+    // la auditoría del 2026-09-13 encontró un `reverse()` y el otro no), y de ahí sale
+    // `sortMessages` en el panel. Esto lo mira contra el servidor de verdad: falla si
+    // `limit` no acota o si los que vuelven no son los últimos, y el orden lo APUNTA sin
+    // fallar, porque el panel no va a depender de él.
+    await check('listMessages(id, 2) devuelve los DOS últimos mensajes (y apunta en qué orden llegan)', async () => {
+      assert(sesionTurnos, 'la prueba de streaming no dejó una sesión con turnos')
+
+      // Dos turnos más sobre la sesión que ya hizo uno: tres en total, sin gastar
+      // un modelo de más.
+      for (const palabra of ['dos', 'tres']) {
+        const t = await client.runTurn(
+          sesionTurnos,
+          { text: `Responde exactamente con esta palabra y nada más: ${palabra}`, model },
+          { stallMs: 60000 }
+        )
+        assert(t.ok, `el turno «${palabra}» no terminó: ${t.error || (t.stalled ? 'colgado' : 'sin ok')}`)
+      }
+
+      const todos = await client.listMessages(sesionTurnos)
+      assert(Array.isArray(todos), 'listMessages sin limit no devolvió una lista')
+      const usuarios = todos.filter((m) => m.info?.role === 'user').length
+      assert(usuarios >= 3, `esperaba 3 mensajes de usuario, hay ${usuarios}`)
+      assert(todos.length > 2, `la sesión tiene ${todos.length} mensajes: la ventana no se puede comprobar`)
+
+      const dos = await client.listMessages(sesionTurnos, 2)
+      assert(Array.isArray(dos) && dos.length === 2, `limit=2 devolvió ${dos?.length} mensajes`)
+
+      const creado = (m) => m.info?.time?.created ?? 0
+      const ultimos = [...todos]
+        .sort((a, b) => creado(a) - creado(b))
+        .slice(-2)
+        .map((m) => m.info.id)
+      const vuelven = dos.map((m) => m.info.id)
+      assert(
+        [...vuelven].sort().join(',') === [...ultimos].sort().join(','),
+        `limit=2 no devolvió los dos últimos: ${vuelven.join(',')} en vez de ${ultimos.join(',')}`
+      )
+
+      const orden = creado(dos[0]) <= creado(dos[1]) ? 'ASCENDENTE (el viejo primero)' : 'DESCENDENTE (el nuevo primero)'
+      const sinLimit = creado(todos[0]) <= creado(todos[todos.length - 1]) ? 'ascendente' : 'descendente'
+      return `${todos.length} mensajes en ${usuarios} turnos · limit=2 → los dos últimos, orden ${orden} · sin limit, ${sinLimit}`
+    })
+
+    // H3: `state.time.compacted` es la marca con la que opencode dice «esta salida de
+    // herramienta ya la he podado» (`PRUNE_PROTECT` 40 000 / `PRUNE_MINIMUM` 20 000,
+    // leídos del binario en la auditoría del 2026-09-13). H12 quiere no hacer releer
+    // páginas base cuyo texto siga en el historial, así que hace falta saber si la marca
+    // llega por `listMessages`. Aquí sólo se APUNTA lo que haya: tres turnos de una
+    // palabra no tienen ni salidas de herramientas ni poda que hacer, así que lo
+    // esperado es «ninguna» —y ese es el dato: la marca hay que verla en una sesión
+    // real de Análisis, no aquí—.
+    await check('se apunta si alguna parte trae state.time.compacted (la marca de poda)', async () => {
+      assert(sesionTurnos, 'la prueba de streaming no dejó una sesión con turnos')
+      const mensajes = await client.listMessages(sesionTurnos)
+      let partes = 0
+      let herramientas = 0
+      let podadas = 0
+      for (const m of mensajes) {
+        for (const p of m.parts || []) {
+          partes++
+          if (p.type === 'tool') herramientas++
+          if (p.state?.time?.compacted) podadas++
+        }
+      }
+      return `${partes} partes (${herramientas} de herramienta) · ${podadas} con state.time.compacted${
+        podadas ? '' : ' (esperado: sin herramientas no hay nada que podar)'
+      }`
+    })
+
+    // R4 (docs/PLAN.md §2): hasta H2 `client.summarize()` mandaba `{model}` y el esquema
+    // exige `{providerID, modelID}`. La prueba de más arriba comprueba que el cuerpo
+    // VIEJO da 400; ésta manda el BUENO y sólo exige que el esquema NO lo rechace. Va
+    // la última porque deja una compactación en la sesión, y no espera a que el modelo
+    // termine: en cuanto el servidor la acepta, la pregunta está contestada.
+    await check('summarize con {providerID, modelID} lo acepta el esquema (no es 400)', async () => {
+      assert(sesionTurnos, 'la prueba de streaming no dejó una sesión con turnos')
+      const TOPE_MS = 45000
+      const r = await Promise.race([
+        client
+          .summarize(sesionTurnos, { providerID: model.providerID, modelID: model.modelID })
+          .then(() => ({ status: 200 }))
+          .catch((err) => ({
+            status: err?.status || 0,
+            detalle: String(err?.message || err).split('\n')[0].slice(0, 140),
+          })),
+        delay(TOPE_MS).then(() => ({ enVuelo: true })),
+      ])
+      if (r.enVuelo) {
+        // Aceptada y compactando: se corta para no dejar al modelo trabajando.
+        await client.abort(sesionTurnos).catch(() => {})
+        return `aceptada y compactando a los ${TOPE_MS / 1000} s (ningún 400 de esquema)`
+      }
+      assert(r.status !== 400, 'el esquema rechazó {providerID, modelID}: ' + (r.detalle || ''))
+      if (r.status === 200) return 'aceptada (200)'
+      return `sin 400 de esquema: el proveedor falló con ${r.status} · ${r.detalle}`
     })
 
     await check('salida estructurada con el esquema real de NavigationPlan', async () => {
@@ -371,21 +494,67 @@ async function main() {
   }
 }
 
-function pickModel(models, defaults) {
+/**
+ * Candidatos a modelo, en orden de preferencia. Gratis primero (la prueba no
+ * debería costarle dinero a nadie) y detrás el modelo con el que se trabaja de
+ * verdad, que va con la suscripción de Copilot ya pagada (CLAUDE.md §7).
+ *
+ * Son POCOS a propósito: cada uno se prueba con un turno de dos palabras
+ * (`responde`), y probar los siete gratuitos sería pura espera.
+ */
+function modelCandidates(models, defaults) {
   if (PREFERRED) {
     const [providerID, ...rest] = PREFERRED.split('/')
     const modelID = rest.join('/')
     const hit = models.find((m) => m.providerID === providerID && m.modelID === modelID)
-    if (hit) return hit
+    // Elegido a mano: se usa tal cual, sin probarlo ni buscar respaldo.
+    if (hit) return [hit]
   }
-  // Preferir gratis: la prueba no debería costarle dinero a nadie.
-  const free = models.find((m) => m.free)
-  if (free) return free
-  for (const [providerID, modelID] of Object.entries(defaults || {})) {
-    const hit = models.find((m) => m.providerID === providerID && m.modelID === modelID)
-    if (hit) return hit
+  const nombre = (m) => `${m.providerID}/${m.modelID}`
+  const elegidos = models.filter((m) => m.free).slice(0, 2)
+  for (const preferido of [RESPALDO, ...Object.entries(defaults || {}).map(([p, m]) => `${p}/${m}`)]) {
+    const hit = models.find((m) => nombre(m) === preferido)
+    if (hit && !elegidos.some((e) => nombre(e) === preferido)) elegidos.push(hit)
   }
-  return models[0]
+  return elegidos.length ? elegidos : models.slice(0, 1)
+}
+
+/**
+ * ¿Contesta este modelo? Un turno bloqueante de dos palabras con tope corto:
+ * devuelve '' si contestó y el motivo si no.
+ *
+ * Hace falta porque «gratis» no es «vivo» y un modelo mudo tira la suite
+ * entera: el 2026-09-19, en este mismo opencode, los siete `opencode/*-free`
+ * aceptaban el turno y no contestaban NUNCA (los 180 s del turno de streaming),
+ * y `github-copilot/claude-sonnet-4.6` —el default de su proveedor— contesta al
+ * instante con APIError «The requested model is not available for integrator
+ * "opencode"». Con «el primer gratuito» a secas se caían tres pruebas por el
+ * modelo, sin que nada estuviera roto en Faro.
+ */
+async function responde(client, m) {
+  const s = await client.createSession({ title: 'Faro · probando modelo' })
+  try {
+    const r = await Promise.race([
+      client.prompt(s.id, { text: 'Di solo: ok', model: m }),
+      delay(PROBE_MS).then(() => null),
+    ])
+    if (!r) return `no contesta en ${PROBE_MS / 1000} s`
+    if (r.info?.error) {
+      const e = r.info.error
+      return String(e?.data?.message || e?.name || 'error del proveedor').split('\n')[0].slice(0, 90)
+    }
+    const texto = (r.parts || []).filter((p) => p.type === 'text').map((p) => p.text).join('')
+    return texto.trim() ? '' : 'contestó sin texto'
+  } catch (err) {
+    return String(err?.message || err).split('\n')[0].slice(0, 90)
+  } finally {
+    // Abortar ANTES de borrar: `DELETE /session/:id` no cancela el turno en
+    // marcha (§7), así que un modelo mudo seguiría gastando hasta que muera el
+    // servidor. `deleteSession` sólo aborta solo si el turno se abandonó por
+    // señal, y aquí se abandona por un `Promise.race`.
+    await client.abort(s.id).catch(() => {})
+    await client.deleteSession(s.id).catch(() => {})
+  }
 }
 
 main().catch((err) => {
