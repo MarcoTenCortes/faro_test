@@ -141,7 +141,7 @@ function asArray(v) {
 
 /** Une un índice nuevo sobre otro existente. Lo nuevo gana; nada se borra. */
 export function mergeIndex(base, incoming) {
-  const out = base && base.version === INDEX_VERSION ? structuredCloneish(base) : emptyIndex(incoming?.host, incoming?.scope)
+  const out = base && base.version === INDEX_VERSION ? conCubosPropios(base) : emptyIndex(incoming?.host, incoming?.scope)
   out.host = incoming?.host || out.host
   out.scope = incoming?.scope || out.scope
   out.updated = Math.max(out.updated || 0, incoming?.updated || Date.now())
@@ -193,8 +193,26 @@ function isCanonicalPath(path) {
   return /\/pages\/viewpage\.action(\?|$)/i.test(String(path || ''))
 }
 
-function structuredCloneish(v) {
-  return JSON.parse(JSON.stringify(v))
+/**
+ * El mismo índice con los cuatro cubos propios y las entradas COMPARTIDAS.
+ *
+ * Fundir clonaba el índice entero por JSON (`JSON.parse(JSON.stringify(base))`),
+ * y desde H6 el índice se funde varias veces por turno —lo que devolvieron las
+ * herramientas, el árbol de la barra lateral, el camino del planificador— para
+ * guardarse una sola vez al final: con 2 000 páginas eso era reconstruir 2 000
+ * objetos para cambiar tres. Basta copiar los cubos, porque una entrada nunca se
+ * modifica en su sitio: quien la cambia construye otra (`normalizeIndex`,
+ * `mergeIndexKeepingTree`) y la deja en el cubo del resultado. Así escribir en el
+ * índice fundido no toca el que el panel sigue teniendo en memoria.
+ */
+function conCubosPropios(index) {
+  return {
+    ...index,
+    spaces: { ...(index.spaces || {}) },
+    pages: { ...(index.pages || {}) },
+    projects: { ...(index.projects || {}) },
+    issues: { ...(index.issues || {}) },
+  }
 }
 
 export function indexSize(index) {

@@ -332,7 +332,12 @@ test('EL CAMBIO: claves por producto, host enlazado y contexto de Confluence des
   // El nombre guardado cuenta por detrás de lo que opencode tiene de verdad
   // (`chosenMcpName`: opencode → lo apuntado → el nombre por host).
   assert(/mcpStatusFor\(mcp, state\.site\.host, chosenMcpName\(config, saved, state\.site\.host, \{ status: mcp \}\)\)/.test(arranque), 'el nombre guardado cuenta')
-  assert(arranque.indexOf('let saved = await getSite') < arranque.indexOf('mcpStatusFor(mcp'), 'y se lee antes')
+  // Y se lee ANTES. Desde H6 sale del paquete del sitio (`bundle.site`), no de
+  // un `getSite` propio; el pin exige que la línea exista, porque escrito como
+  // `indexOf(...) < indexOf(...)` un nombre que ya no está da -1 y pasa siempre.
+  const leeSitio = arranque.indexOf('let saved = bundle.site')
+  assert(leeSitio > 0, 'el sitio guardado sale del paquete de una lectura')
+  assert(leeSitio < arranque.indexOf('mcpStatusFor(mcp'), 'y se lee antes')
   assert(/state\.linkedContext = await loadLinkedContext\(saved\)/.test(arranque))
   const enlazado = JS.slice(JS.indexOf('async function loadLinkedContext'), JS.indexOf('async function ensureContentAccess'))
   assert(/product !== 'jira'/.test(enlazado) && /saved\?\.confluenceHost/.test(enlazado), 'sólo desde Jira y sólo si hay pareja')
@@ -560,7 +565,9 @@ test('H2 C3: dos arranques solapados no pintan la conversación dos veces', () =
   assert((arranque.match(/state\.bootToken !== testigo/g) || []).length >= 3, 'y se comprueba tras los await')
   assert(/restoreConversation\(testigo\)/.test(arranque), 'restaurar la conversación recibe el testigo')
   const restaurar = JS.slice(JS.indexOf('async function restoreConversation'), JS.indexOf('function showWelcome'))
-  assert(/async function restoreConversation\(testigo = state\.bootToken\)/.test(restaurar))
+  // Desde H6 hay un segundo parámetro («ver toda la conversación»), pero el
+  // testigo sigue siendo el PRIMERO y con el mismo valor por defecto.
+  assert(/async function restoreConversation\(testigo = state\.bootToken, \{ all = false \} = \{\}\)/.test(restaurar))
   const vacia = restaurar.indexOf("el.chat.textContent = ''")
   assert(vacia > 0, 'restaurar vacía el chat')
   assert(restaurar.indexOf('listMessages(') < vacia, 'pero DESPUÉS de leer la sesión')
@@ -892,9 +899,15 @@ test('H3: el arranque dice cuánto tardó cada fase, y la del MCP es la que se v
   assert(/const cron = startTiming\(\(\) => performance\.now\(\)\)/.test(arranque), 'el arranque se cronometra desde el principio, con reloj monótono')
   assert(/'Arranque del panel'/.test(arranque), 'y se registra al acabar')
   assert(/state\.timing\.boot = timingLine\(cron\.done\(\)\)/.test(arranque), 'con la línea que también enseña el Registro')
-  for (const fase of ['health', 'modelos', 'MCP', 'almacenamiento', 'restaurar']) {
+  // Las fases dicen lo que miden. Desde H6 el almacenamiento va EN PARALELO con
+  // la petición de modelos (una sola lectura para todo el sitio), así que las
+  // dos fases de antes son una con su nombre, y lo que queda por leer después
+  // del MCP —el contexto del Confluence enlazado, que es de otro host— tiene la
+  // suya: sin eso, esos milisegundos se contaban como «restaurar».
+  for (const fase of ['health', 'modelos y almacenamiento', 'MCP', 'enlazado', 'restaurar']) {
     assert(arranque.includes(`cron.mark('${fase}')`), `falta la fase ${fase}`)
   }
+  assert(!/cron\.mark\('modelos'\)/.test(arranque) && !/cron\.mark\('almacenamiento'\)/.test(arranque), 'y las dos de antes ya no están: una fase no puede llamarse como otra que medía otra cosa')
   // La fase «MCP» son las DOS peticiones y nada más: si se marcara después de
   // adoptar el MCP y guardar los sitios, el número dejaría de ser el del GET.
   const mcp = arranque.indexOf("cron.mark('MCP')")
@@ -917,6 +930,74 @@ test('H3: el arranque dice cuánto tardó cada fase, y la del MCP es la que se v
   // SEGURIDAD: de la configuración de opencode no sale nada al registro; una
   // línea de tiempos son etiquetas de Faro y números.
   assert(!/log\.\w+\([^)]*\bconfig\b/.test(arranque), 'la configuración no se registra')
+})
+
+test('H6 P4: el arranque lee el sitio de UNA vez y no espera en fila lo que puede ir a la vez', () => {
+  // El arranque encadenaba ~13 lecturas de storage detrás de las peticiones a
+  // opencode, cinco de ellas el mismo `getSite` del mismo host —y cada una
+  // relee el mapa entero de `faro:sites`— (docs/PLAN.md §2.6 P4). Ahora: una
+  // lectura multi-clave, y en paralelo con la de modelos y la de la sesión.
+  const arranque = JS.slice(JS.indexOf('async function bootForSite'), JS.indexOf('async function loadLinkedContext'))
+  const codigo = sinComentarios(arranque)
+  assert(/const \[bundle, sessionID, modelos\] = await Promise\.all\(\[/.test(codigo), 'las tres cosas se piden juntas')
+  assert(/getSiteBundle\(state\.site\.host\)/.test(codigo), 'lo guardado del sitio, en un solo paquete')
+  assert(/getSessionId\(state\.site\.host\)/.test(codigo), 'la sesión abierta, a la vez')
+  assert(/client\.models\(\)\.catch\(\(err\) => \(\{ error: err \}\)\)/.test(codigo), 'y los modelos, sin poder tumbar a las otras dos si fallan')
+  assert(
+    /if \(Array\.isArray\(modelos\?\.models\)\) \{/.test(codigo) && /showNotice\('No he podido leer la lista de modelos: /.test(codigo),
+    'un fallo de modelos avisa y el arranque sigue, como antes: se pregunta por la lista, no por el error'
+  )
+  // Lo que antes se leía suelto sale del paquete.
+  assert(/state\.contextMd = bundle\.contextMd/.test(codigo), 'el contexto sale del paquete')
+  assert(/state\.index = bundle\.index/.test(codigo) && /if \(bundle\.stale\)/.test(codigo), 'el índice también, con su aviso de versión vieja')
+  assert(/'Índice descartado'/.test(arranque), 'que sigue siendo el mismo')
+  assert(/state\.sessionID = sessionID/.test(codigo), 'y la sesión ya no se pide otra vez más abajo')
+  // La memoria se reconstruye con claves blancas al leerla (§9), aunque venga
+  // del paquete: `getSiteBundle` la entrega tal cual está guardada.
+  assert(/state\.memory = memory\.normalizeMemory\(bundle\.memoryRaw\)/.test(codigo), 'la memoria del paquete se normaliza aquí')
+  // Y las lecturas sueltas se han ido de verdad: queda UN `getSite`, el de
+  // releer el sitio después de adoptar un MCP y reescribirlo.
+  eq(codigo.split('await getSite(').length - 1, 1, 'un solo getSite en el arranque')
+  assert(codigo.indexOf('await getSite(') > codigo.indexOf('siteRecords({'), 'y es la relectura de después de adoptar el MCP')
+  eq(codigo.split('getSessionId(').length - 1, 1, 'una sola lectura de la sesión')
+  assert(!/memory\.getContextMd\(/.test(codigo) && !/memory\.getMemory\(/.test(codigo) && !/await getIndex\(/.test(codigo), 'ni contexto, ni memoria, ni índice por su cuenta')
+  // El testigo sigue comprobándose tras CADA await, también tras el nuevo
+  // Promise.all: dos arranques solapados no pueden pisarse (C3, §8.22).
+  const entre = codigo.slice(
+    codigo.indexOf('])', codigo.indexOf('const [bundle, sessionID, modelos]')),
+    codigo.indexOf("cron.mark('modelos y almacenamiento')")
+  )
+  assert(/if \(state\.bootToken !== testigo\) return/.test(entre), 'el testigo se comprueba nada más volver del Promise.all')
+  // `onboarded` sale del mismo paquete (o de la relectura), no de otra lectura.
+  assert(/if \(!saved\?\.onboarded\) \{/.test(codigo), 'la pantalla de contexto se decide con lo ya leído')
+})
+
+test('H6 P6a: cerrar Ajustes sólo rearranca si cambió el servidor o la contraseña', () => {
+  // Rearrancar reconstruye el cliente, y eso CANCELA el turno en vuelo (C1) y
+  // vuelve a descargar la conversación: cambiar «Reducir animaciones» a mitad
+  // de una respuesta te la mataba (pendiente de §4.4 hasta H6).
+  const eventos = JS.slice(JS.indexOf('function wireEvents'), JS.indexOf('async function saveKeys'))
+  const cerrar = eventos.slice(eventos.indexOf("$('btn-settings-close')"), eventos.indexOf("$('btn-reindex')"))
+  const codigo = sinComentarios(cerrar)
+  assert(/const antes = state\.settings/.test(codigo), 'se guarda lo que había antes de escribir')
+  assert(codigo.indexOf('const antes = state.settings') < codigo.indexOf('await saveSettings('), 'antes de guardar, o se compararía consigo mismo')
+  assert(
+    /const clientChanged = state\.settings\.serverUrl !== antes\.serverUrl \|\| state\.settings\.password !== antes\.password/.test(codigo),
+    'y se compara sólo lo que obliga a reconstruir el cliente'
+  )
+  assert(/applySettingsToUi\(\)/.test(codigo) && /hideScreens\(\)/.test(codigo), 'lo demás se aplica en caliente')
+  assert(/if \(clientChanged\) \{\s*\n\s*await bootForSite\(\)/.test(codigo), 'y sólo entonces se rearranca')
+  eq(codigo.split('bootForSite()').length - 1, 1, 'el rearranque vive dentro del if y en ningún otro sitio del manejador')
+  assert(/'Ajustes aplicados'/.test(codigo), 'y el que no rearranca lo dice en el registro')
+  // La página se entera por el service worker, que ve la escritura de
+  // `faro:settings`: el panel no le manda nada por su cuenta.
+  const sw = readFileSync(join(ROOT, 'src/background/service-worker.js'), 'utf8')
+  assert(/chrome\.storage\.onChanged\.addListener\(\(changes, area\) => \{/.test(sw), 'el worker mira los cambios del almacén')
+  assert(/STORAGE_KEYS\.settings in changes/.test(sw) && /area !== 'local'/.test(sw), 'sólo los ajustes, y sólo en local')
+  assert(/chrome\.tabs\.query\(\{ active: true, lastFocusedWindow: true \}\)/.test(sw) && /pushSettings\(tab\.id\)/.test(sw), 'y empuja los ajustes a la pestaña activa')
+  // Escape sigue cerrando SIN guardar: lo tecleado se pierde, que es lo que A3
+  // decidió; este cambio es del botón que SÍ guarda.
+  assert(/closeSettingsWithoutSaving\(\)/.test(eventos), 'Escape sigue teniendo su camino propio')
 })
 
 test('H3: «Respuesta recibida» dice lo que costó el turno, y el Registro guarda sus tiempos', () => {
@@ -995,6 +1076,14 @@ test('H3: «Respuesta recibida» dice lo que costó el turno, y el Registro guar
   for (const fase of ['página', 'sesión', 'primer texto', 'fin', 'pintar', 'índice', 'marcas']) {
     assert(filaTurno.includes(fase + ' '), `la línea de ejemplo del espejo no enseña la fase ${fase}`)
   }
+  // Y lo mismo por el otro lado: el arranque cambió de fases en H6 («modelos y
+  // almacenamiento» en vez de dos, «enlazado» nueva) y su línea de ejemplo se
+  // quedó con las de antes. Sin este pin nadie lo habría notado.
+  const filaArranque = espejo.slice(espejo.indexOf("['tiempos (arranque)'"), espejo.indexOf("['tiempos (último turno)'"))
+  for (const fase of ['health', 'modelos y almacenamiento', 'MCP', 'enlazado', 'restaurar']) {
+    assert(filaArranque.includes(fase + ' '), `la línea de ejemplo del espejo no enseña la fase ${fase}`)
+  }
+  assert(!/almacenamiento 60 ms|modelos 61 ms/.test(filaArranque), 'ni las fases que el arranque ya no mide')
 })
 
 test('H3: lo que tardó leer la página y marcarla lo dice la propia página', () => {
@@ -1384,4 +1473,255 @@ test('H5: el espejo del panel no copia la paleta, fuerza el tema con data-theme 
   assert(espejo.includes("b.dataset.hueco = '1'"), 'el hueco del quinto botón se marca con data-hueco')
   assert(!/['"]btn-today['"]/.test(espejo), 'y el espejo no se adelanta al id del botón de H11')
   assert(!htmlIds.has('btn-today'), 'que tampoco está en panel.html')
+})
+
+// Restauración por ventana y peso de la sesión (pasos 4 y 6 del anexo E, P6b).
+
+test('H6 P6b: la conversación se restaura por ventana, y el chat dice cuándo la ha recortado', () => {
+  // `listMessages` sin `limit` bajaba la sesión ENTERA cada vez que se abre el
+  // panel, se vuelve al sitio o se sube un contexto: 7 mensajes eran 4 890 KB
+  // contra un servidor desechable, y de todo eso el chat pinta sólo el texto
+  // (docs/PLAN.md §2.6 P6b).
+  const restaurar = JS.slice(JS.indexOf('async function restoreConversation'), JS.indexOf('function showWelcome'))
+  const codigo = sinComentarios(restaurar)
+  assert(
+    /async function restoreConversation\(testigo = state\.bootToken, \{ all = false \} = \{\}\)/.test(codigo),
+    'el testigo sigue siendo el PRIMER parámetro: «ver toda la conversación» no puede colarse en su sitio'
+  )
+  assert(/listMessages\(state\.sessionID, all \? undefined : RESTORE_LIMITS\.messages\)/.test(codigo), 'se piden los últimos N, salvo que se pidan todos')
+  // El orden de salida de `?limit=N` se comprobó en integración (ascendente),
+  // pero se asegura aquí igual: el panel no puede depender de eso.
+  assert(/sortMessages\(/.test(codigo), 'y se ordenan por su hora de creación')
+  assert(/dropOrphans\(/.test(codigo), 'y se tiran las respuestas huérfanas del corte')
+  assert(/dropOrphans\(sortMessages\(/.test(codigo), 'ordenar primero: cuál es el primer `user` sólo se sabe con la lista en orden')
+  assert(
+    /import \{ suggestsAnotherModel, sortMessages, dropOrphans, toolOutputSize \} from '\.\.\/opencode\/turn\.js'/.test(JS),
+    'las dos puras salen de turn.js, donde tienen su test'
+  )
+
+  // La fila de arriba: se pinta DESPUÉS de vaciar el chat y ANTES de los
+  // mensajes, o quedaría en medio de la conversación.
+  assert(/'Conversación recortada'/.test(codigo), 'y queda en el registro')
+  assert(/el\.chat\.appendChild\(olderTurnsRow\(\)\)/.test(codigo), 'la fila va al chat')
+  assert(
+    codigo.indexOf("el.chat.textContent = ''") < codigo.indexOf('olderTurnsRow()') &&
+      codigo.indexOf('olderTurnsRow()') < codigo.indexOf('for (const m of messages'),
+    'entre vaciar el chat y pintar los mensajes'
+  )
+  const fila = JS.slice(JS.indexOf('function olderTurnsRow('), JS.indexOf('async function restoreConversation'))
+  // La regla, no el nombre suelto: `.older-turns-loquesea {` también contiene
+  // «.older-turns» y dejaría la fila sin estilo con el pin en verde.
+  assert(/'older-turns'/.test(fila) && /\.older-turns\s*\{/.test(CSS_LIMPIO), 'con su clase y su estilo')
+  assert(/'btn-older-turns'/.test(fila) && /'Ver toda la conversación'/.test(fila), 'y su botón')
+  assert(/'ghost small'/.test(fila), 'que es secundario: la conversación ya está ahí')
+  assert(/restoreConversation\(state\.bootToken, \{ all: true \}\)/.test(fila), 'que vuelve a pedirla entera')
+  assert(/RESTORE_LIMITS\.messages/.test(fila), 'y dice cuántos mensajes se están enseñando, sin escribir el número a mano')
+  // El botón se crea con el chat, que se vacía en cada restauración: no puede
+  // estar además en el HTML, o habría dos con el mismo id.
+  assert(!htmlIds.has('btn-older-turns'), 'la fila es del chat, no del marco: su id no se declara en panel.html')
+  assert(!/\$\('btn-older-turns'\)/.test(JS), 'ni se busca por id: el manejador se ata al crearlo')
+
+  // Y lo restaurado entra sin animarse: hasta 60 burbujas de golpe, ninguna
+  // nueva. Se marca por mensaje y no con una clase en el chat, porque entre
+  // ponerla y quitarla no hay ningún await y el navegador no la vería.
+  assert(/function markIfRestored\(d\)/.test(JS) && /if \(state\.restoring\) d\.classList\.add\('restored'\)/.test(JS), 'el mensaje restaurado se marca al crearlo')
+  for (const fn of ['function addUserMessage(', 'function addAssistantMessage(']) {
+    const cuerpoFn = JS.slice(JS.indexOf(fn), JS.indexOf('\n}', JS.indexOf(fn)))
+    assert(/markIfRestored\(d\)/.test(cuerpoFn), fn + ' marca la burbuja que crea')
+  }
+  assert(/\.msg\.restored\s*\{[^}]*animation: none/.test(CSS_LIMPIO), 'y el CSS la deja quieta')
+  assert(!/\.chat\.restoring\b/.test(CSS_LIMPIO), 'no por una clase en el chat, que nunca llegaría a verse')
+
+  // Y el espejo la enseña, con el mismo texto y en el mismo sitio: arriba del
+  // todo de la conversación larga, antes de la primera pregunta.
+  const espejo = readFileSync(join(ROOT, 'harness/panel-preview.html'), 'utf8')
+  assert(/'older-turns'/.test(espejo) && /'Ver toda la conversación'/.test(espejo), 'el espejo enseña la fila')
+  assert(/se enseñan los últimos 60 mensajes\./.test(espejo), 'con el número que hoy dice RESTORE_LIMITS')
+  const jira = espejo.slice(espejo.indexOf('function conversacionJira()'), espejo.indexOf('function estadoVacio()'))
+  assert(
+    jira.indexOf('filaConversacionLarga()') > -1 && jira.indexOf('filaConversacionLarga()') < jira.indexOf('burbujaUsuario('),
+    'y va antes de la primera pregunta, no en medio de la conversación'
+  )
+})
+
+test('H6 P6b: el panel sabe lo que arrastra la conversación y lo dice una vez', () => {
+  // Las salidas de las herramientas se quedan en la sesión y viajan en CADA
+  // turno siguiente. opencode poda las viejas, pero los últimos 40 000 tokens
+  // no se tocan: pasado el umbral, lo barato es empezar una sesión nueva.
+  assert(/sessionToolChars: 0/.test(JS) && /heavyWarned: false/.test(JS), 'el contador y el aviso viven en el estado, no en disco')
+
+  const envio = JS.slice(JS.indexOf('async function send('), JS.indexOf('function paintTurn('))
+  const codigo = sinComentarios(envio)
+  assert(/await trackSessionWeight\(salidaTools, bubble\)/.test(codigo), 'se acumula lo que devolvieron las herramientas de ESTE turno')
+  assert(
+    codigo.indexOf('trackSessionWeight(') > codigo.indexOf('warnAboutSources(') &&
+      codigo.indexOf('trackSessionWeight(') < codigo.indexOf("cron.mark('pintar')"),
+    'con lo demás que cuelga de la respuesta, antes de cerrar la fase que lo mide'
+  )
+  assert(
+    codigo.indexOf('const salidaTools = toolOutputSize(turn.parts)') < codigo.indexOf('trackSessionWeight('),
+    'el mismo número que registra «Respuesta recibida»'
+  )
+
+  const peso = JS.slice(JS.indexOf('async function trackSessionWeight('), JS.indexOf('function heavySessionNotice('))
+  const pesoCodigo = sinComentarios(peso)
+  assert(/setSessionWeight\(host, state\.sessionToolChars\)/.test(pesoCodigo), 'y se guarda en storage.session, para que sobreviva a cerrar el panel')
+  assert(/state\.sessionToolChars < SESSION_LIMITS\.heavyToolChars/.test(pesoCodigo), 'el umbral sale de config.js')
+  assert(/if \(state\.heavyWarned \|\|/.test(pesoCodigo), 'y el aviso es uno por sesión, no uno por turno')
+  assert(/state\.heavyWarned = true/.test(pesoCodigo))
+  assert(/'Conversación pesada'/.test(pesoCodigo) && /log\.warn\(/.test(pesoCodigo), 'queda en el registro')
+  assert(/attachToBubble\(bubble, heavySessionNotice\(\)\)/.test(pesoCodigo), 'y cuelga de la respuesta, con el salvavidas de siempre')
+  // El peso es de ESTE host: si el panel ya está en otro, no se escribe el suyo.
+  assert(/const host = state\.site\?\.host \?\? state\.lastHost/.test(pesoCodigo) && /if \(!host\) return/.test(pesoCodigo))
+
+  const aviso = JS.slice(JS.indexOf('function heavySessionNotice('), JS.indexOf('async function growIndex'))
+  assert(/noticeNode\(/.test(aviso) && /formatBytes\(state\.sessionToolChars\)/.test(aviso), 'dice cuánto arrastra, en la misma unidad que el Registro')
+  assert(/opencode recorta las más antiguas/.test(aviso), 'y que el servidor ya poda: el aviso no puede sonar a fallo')
+  assert(/'nav-actions'/.test(aviso) && /'Sesión nueva'/.test(aviso), 'con la salida a mano')
+  assert(/newSession\(\)/.test(aviso), 'que es la misma de la cabecera')
+  assert(/state\.settings\.crossSessionMemory/.test(aviso), 'y sólo promete el resumen si la memoria está activa')
+
+  // Cerrar la sesión pone el contador a cero: la siguiente empieza limpia.
+  const nueva = JS.slice(JS.indexOf('async function newSession('))
+  assert(/clearSessionWeight\(state\.site\.host\)/.test(nueva), 'se borra también del almacén')
+  assert(/state\.sessionToolChars = 0/.test(nueva) && /state\.heavyWarned = false/.test(nueva))
+
+  // Y al cambiar de sitio, como los tiempos: el peso es de la sesión de ESE host.
+  const refresco = JS.slice(JS.indexOf('async function refreshTab'), JS.indexOf('async function bootForSite'))
+  const cambio = refresco.slice(refresco.indexOf('if (changedHost) {'), refresco.indexOf('state.site = site'))
+  assert(/state\.sessionToolChars = 0/.test(cambio) && /state\.heavyWarned = false/.test(cambio), 'al cambiar de sitio el contador se vacía')
+
+  // Al restaurar se recupera: lo guardado de la sesión y lo que se ve en la
+  // ventana, lo que sea mayor (una sesión anterior a H6 no tiene nada guardado).
+  const restaurar = sinComentarios(JS.slice(JS.indexOf('async function restoreConversation'), JS.indexOf('function showWelcome')))
+  assert(/getSessionWeight\(host\)/.test(restaurar), 'el peso guardado vuelve con la conversación')
+  assert(/toolOutputSize\(m\.parts\)/.test(restaurar), 'y se recuenta lo que trae la ventana')
+  assert(/state\.sessionToolChars = Math\.max\(pesoGuardado, deLaVentana\)/.test(restaurar), 'el contador nunca baja por haber pedido menos mensajes')
+  assert(/state\.heavyWarned = false/.test(restaurar), 'y el aviso vuelve a quedar por dar: el que hubiera se fue con el chat repintado')
+
+  // El espejo lo enseña con el mismo texto, colgando de la respuesta como lo
+  // cuelga `attachToBubble`: es donde se mira si se lee o si se ignora.
+  const espejo = readFileSync(join(ROOT, 'harness/panel-preview.html'), 'utf8')
+  assert(/opencode recorta las más antiguas/.test(espejo) && /'Sesión nueva'/.test(espejo), 'el espejo enseña el aviso y su botón')
+  const jira = espejo.slice(espejo.indexOf('function conversacionJira()'), espejo.indexOf('function estadoVacio()'))
+  assert(/b1\.appendChild\(avisoConversacionPesada\(\)\)/.test(jira), 'dentro de la última respuesta, no suelto en el chat')
+})
+
+// Turno y registro (resto del paso 5 y paso 10 del anexo E: P2, P3 y P8).
+
+test('H6 P2: el turno dice cuándo el modelo lleva callado, y lo retira en cuanto vuelve a llegar algo', () => {
+  // 45 s de silencio y 45 s leyendo tres páginas con el MCP se veían igual
+  // («pensando…»), y el usuario no tenía con qué decidir si esperar o parar. El
+  // plazo no cambia: a los 90 s pasa lo de siempre.
+  const envio = sinComentarios(JS.slice(JS.indexOf('async function send('), JS.indexOf('function paintTurn(')))
+  assert(/onWarn: \(ms\) => \{/.test(envio), 'send le pasa un onWarn a runTurn')
+  assert(
+    /setStatus\('busy', `pensando… \$\{Math\.round\(ms \/ 1000\)\} s sin señales del modelo`\)/.test(envio),
+    'que lo dice donde el estado ya dice «pensando…», con los segundos que lleva callado'
+  )
+  assert(/let silencioso = false/.test(envio), 'y se apunta que el estado está hablando del silencio')
+  // En cuanto llega cualquier señal visible, el aviso se retira: dejarlo puesto
+  // sería decir «sin señales» mientras se escribe la respuesta.
+  const trozo = envio.slice(envio.indexOf('onUpdate: (t) => {'), envio.indexOf('paintTurnSoon(t, toolsBox, body)'))
+  assert(/if \(silencioso\) \{\s*silencioso = false\s*setStatus\('busy', 'pensando…'\)/.test(trozo), 'lo primero que hace el trozo siguiente es quitarlo')
+  // El aviso no toca el chat ni el registro: lo que pasa a los 90 s ya se
+  // registra («Turno colgado»), y un aviso por turno en el registro sería ruido.
+  assert(!/sin señales[\s\S]*?(noticeNode|announce)\(/.test(envio.slice(envio.indexOf('onWarn:'), envio.indexOf('onUpdate:'))), 'sin aviso en el chat')
+  assert(!/log\.\w+\([^)]*sin señales/.test(envio), 'ni en el registro')
+})
+
+test('H6 P3: el índice se escribe UNA vez por turno y bajo el host que lo aprendió', () => {
+  // Tres escrituras del índice entero por turno (las herramientas, el árbol de
+  // la barra lateral, el camino del planificador) para dejar lo mismo en disco:
+  // hasta 43 KB serializados tres veces (docs/PLAN.md §2.6, P3).
+  const envio = sinComentarios(JS.slice(JS.indexOf('async function send('), JS.indexOf('function paintTurn(')))
+  eq(envio.match(/persistIndex\(\)/g).length, 1, 'una sola escritura, y en un solo sitio del turno')
+  assert(!/saveIndex\(/.test(envio), 'el turno no escribe el índice por su cuenta')
+  assert(envio.indexOf('await growTreeFromPage()') < envio.indexOf('await persistIndex()'), 'después de todo lo que lo hace crecer')
+  assert(envio.indexOf('await offerNavigation(') < envio.indexOf('await persistIndex()'), 'incluido el camino que el planificador lee de la API')
+
+  // Y en Análisis las marcas van ANTES del índice: la tarjeta de observaciones es
+  // lo que el usuario está esperando. `offerNotes` no hace nada en los demás
+  // modos, así que la tarjeta de navegación sigue yendo detrás del índice, que es
+  // lo único que necesita que esté crecido.
+  assert(envio.indexOf('await offerNotes(') < envio.indexOf('await growIndex(turn.parts)'), 'las marcas, antes del índice')
+  assert(envio.indexOf('await growIndex(turn.parts)') < envio.indexOf('await offerNavigation('), 'la navegación, detrás')
+  // Y las fases siguen midiendo lo que dicen: «marcas» es offerNotes y «índice»
+  // lo que crece, cada una cerrada donde acaba su trabajo (H3).
+  assert(envio.indexOf("cron.mark('marcas')") < envio.indexOf('await growIndex(turn.parts)'), '«marcas» cierra en offerNotes')
+  assert(envio.indexOf("cron.mark('pintar')") < envio.indexOf('await offerNotes('), 'y «pintar» sigue cerrando antes')
+
+  // Los tres sitios que hacen crecer el índice sólo lo APUNTAN.
+  const cosecha = sinComentarios(JS.slice(JS.indexOf('async function growIndex'), JS.indexOf('async function growTreeFromPage')))
+  assert(/markIndexDirty\(index\)/.test(cosecha) && !/saveIndex\(/.test(cosecha), 'lo que devolvieron las herramientas se apunta, no se escribe')
+  const arbol = sinComentarios(JS.slice(JS.indexOf('async function growTreeFromPage'), JS.indexOf('function markIndexDirty')))
+  assert(/markIndexDirty\(merged\)/.test(arbol) && !/saveIndex\(/.test(arbol), 'el árbol de la barra lateral, igual')
+  const nav = sinComentarios(JS.slice(JS.indexOf('async function offerNavigation'), JS.indexOf('async function learnAncestry')))
+  assert(/onIndex: \(enriquecido\) => \{\s*state\.index = enriquecido\s*markIndexDirty\(enriquecido\)/.test(nav), 'y el camino del planificador')
+  assert(!/saveIndex\(/.test(nav), 'que tampoco escribe a mitad de turno')
+
+  // Lo apuntado va con SU host: entre aprender y guardar hay un turno del
+  // planificador y una segunda pasada de notas, y en ese hueco el panel puede
+  // haberse ido a otro sitio (C2 de H2).
+  const apuntar = sinComentarios(JS.slice(JS.indexOf('function markIndexDirty'), JS.indexOf('async function persistIndex')))
+  assert(/const host = state\.site\?\.host \?\? state\.lastHost/.test(apuntar), 'el host se captura al apuntar')
+  assert(/state\.indexDirty = \{ host, index \}/.test(apuntar), 'junto al índice que se aprendió')
+  const escribir = sinComentarios(JS.slice(JS.indexOf('async function persistIndex'), JS.indexOf('function warnAboutSources')))
+  assert(/const pendiente = state\.indexDirty/.test(escribir) && /state\.indexDirty = null/.test(escribir), 'y se consume al escribir')
+  assert(/await saveIndex\(host, index\)/.test(escribir), 'se guarda bajo el host apuntado')
+  assert(!/state\.site/.test(escribir), 'nunca bajo el de ahora: es lo único que impide escribir el índice de un sitio en la clave de otro')
+  assert(/'Índice guardado'/.test(escribir), 'y queda en el registro, una vez por turno')
+  assert(/'Índice sin guardar'/.test(escribir) && /state\.indexDirty = state\.indexDirty \|\| pendiente/.test(escribir), 'un fallo de cuota se dice y se vuelve a apuntar, no tapa la respuesta')
+  assert(/indexDirty: null/.test(JS), 'el apunte vive en el estado, no en disco')
+
+  // Y olvidar el sitio olvida también lo apuntado: si no, el turno siguiente
+  // volvería a escribir el índice que el usuario acaba de tirar.
+  const olvidar = sinComentarios(JS.slice(JS.indexOf("$('btn-forget')"), JS.indexOf('// --- memoria')))
+  assert(/state\.index = null/.test(olvidar) && /state\.indexDirty = null/.test(olvidar), 'olvidar el sitio tira el índice y su apunte')
+})
+
+test('H6: un turno que acaba mal conserva sus consultas, y copiar dos veces no deja el botón en «Copiado»', () => {
+  // Las dos son límites que anotó la revisión de H5 y que son de este trozo.
+  const envio = sinComentarios(JS.slice(JS.indexOf('async function send('), JS.indexOf('function paintTurn(')))
+  eq(envio.match(/keepToolsFolded\(turn, toolsBox\)/g).length, 3, 'las tres salidas: colgado, cancelado y fallido')
+  assert(!/toolsBox\.remove\(\)/.test(envio), 'ninguna tira las filas con la caja: eran la única forma de ver QUÉ consulta falló (§8.14)')
+
+  const guardar = sinComentarios(JS.slice(JS.indexOf('function keepToolsFolded('), JS.indexOf('async function readPageDigest(')))
+  assert(/if \(!turn\.tools\?\.length\) return toolsBox\.remove\(\)/.test(guardar), 'sin consultas la caja se va: un hueco vacío no dice nada')
+  assert(/toolsBox\.appendChild\(toolsFold\(turn\.tools\)\)/.test(guardar), 'y con consultas, el mismo plegado del final feliz')
+  const pintar = sinComentarios(JS.slice(JS.indexOf('function paintTurn('), JS.indexOf('function toolRow(')))
+  assert(/toolsBox\.appendChild\(toolsFold\(tools\)\)/.test(pintar), 'que sale de la misma fábrica')
+  assert(/for \(const t of tools\) toolsBox\.appendChild\(toolRow\(t\)\)/.test(pintar), 'y las filas en vuelo, de la misma fábrica de filas')
+
+  // Dos clics en «Copiar observaciones» en menos de 1400 ms dejaban el botón
+  // diciendo «Copiado» para siempre: el segundo leía «Copiado» como su texto de
+  // siempre y lo restauraba.
+  const portapapeles = sinComentarios(JS.slice(JS.indexOf('const textoDeCopiar = new WeakMap()'), JS.indexOf('function showContextScreen')))
+  assert(
+    /if \(btn && !textoDeCopiar\.has\(btn\)\) textoDeCopiar\.set\(btn, \{ original: btn\.textContent, timer: 0 \}\)/.test(portapapeles),
+    'el texto propio del botón se guarda UNA vez'
+  )
+  assert(!/const original = btn\?\.textContent/.test(portapapeles), 'y no se vuelve a leer en el segundo clic')
+  assert(/if \(marca\?\.timer\) clearTimeout\(marca\.timer\)/.test(portapapeles), 'el temporizador pendiente se cancela')
+  assert(/btn\.textContent = marca\.original/.test(portapapeles) && /textoDeCopiar\.delete\(btn\)/.test(portapapeles), 'y al restaurar se olvida el botón')
+  assert(/setTimeout\([\s\S]*?, COPY_FEEDBACK_MS\)/.test(portapapeles), 'con el plazo en una constante, no repetido')
+})
+
+test('H6 P8: el Registro mete la línea nueva arriba en vez de repintar las doscientas', () => {
+  const abrir = sinComentarios(JS.slice(JS.indexOf('function showLogScreen'), JS.indexOf('const LOG_ROWS')))
+  assert(/log\.subscribe\(\(entry\) => \{/.test(abrir), 'la suscripción recibe la entrada nueva')
+  assert(/if \(\$\('screen-log'\)\.classList\.contains\('hidden'\)\) return/.test(abrir), 'con la pantalla cerrada no se pinta nada')
+  assert(/if \(entry\) appendLogRow\(entry\)\s*else paintLog\(\)/.test(abrir), 'una entrada se inserta; un log.clear() —que avisa SIN entrada— repinta')
+
+  const nueva = sinComentarios(JS.slice(JS.indexOf('function appendLogRow('), JS.indexOf('function logRow(')))
+  assert(/box\.prepend\(logRow\(e\)\)/.test(nueva), 'la fila va arriba, que es donde está la más nueva')
+  assert(!/textContent = ''/.test(nueva), 'sin vaciar la lista: eso era el repintado que se quita')
+  assert(/LEVELS\[e\.level\] \?\? 0\) < LEVELS\.warn/.test(nueva), 'el filtro «sólo problemas» se aplica con la misma tabla de niveles que paintLog')
+  assert(/import \{ LEVELS, log \} from '\.\.\/shared\/log\.js'/.test(JS), 'que viene de log.js, donde vive')
+  assert(/while \(box\.childElementCount > LOG_ROWS\) box\.lastElementChild\.remove\(\)/.test(nueva), 'y la lista no crece sin fin con el panel abierto horas')
+
+  const entero = sinComentarios(JS.slice(JS.indexOf('function paintLog('), JS.indexOf('function appendLogRow(')))
+  assert(/box\.textContent = ''/.test(entero) && /entries\.slice\(-LOG_ROWS\)\.reverse\(\)/.test(entero), 'el repintado entero se queda para abrir la pantalla y cambiar el filtro')
+  assert(/box\.appendChild\(logRow\(e\)\)/.test(entero), 'con la misma fábrica de filas que la inserción')
+  assert(/state\.logOnlyProblems = false; paintLog\(\)/.test(JS) && /state\.logOnlyProblems = true; paintLog\(\)/.test(JS), 'y los dos botones del filtro repintan entero: son dos listas distintas')
 })

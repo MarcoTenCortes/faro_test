@@ -365,6 +365,10 @@ body {
 }
 
 .msg { animation: rise var(--dur-2) var(--ease) both; }
+/* Lo restaurado ya estaba ahí: entra sin animarse. Con la conversación entera
+   repintada —hasta RESTORE_LIMITS.messages burbujas— sesenta «rise» a la vez
+   son confeti, y ninguno es una novedad. */
+.msg.restored { animation: none; }
 @keyframes rise { from { opacity: 0; transform: translateY(4px); } }
 
 .msg.user {
@@ -481,6 +485,21 @@ hr { border: 0; border-top: 1px solid var(--hairline); margin: 1em 0; }
 .nav-steps span { background: var(--surface-2); border: 1px solid var(--hairline); border-radius: var(--r-sm); padding: 1px var(--s1); }
 .nav-steps b { color: var(--gold); font-weight: 700; }
 .nav-actions { display: flex; gap: var(--s2); }
+
+/* El principio de una conversación que no se ha pedido entera: se enseñan los
+   últimos RESTORE_LIMITS.messages mensajes y desde aquí se trae el resto. Va
+   dentro del chat, así que se desplaza con la conversación en vez de ocupar
+   sitio fijo arriba; centrada y en el gris de apoyo, porque no es un mensaje. */
+.older-turns {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s2);
+  font-size: var(--text-xs);
+  color: var(--muted);
+  text-align: center;
+}
 
 .notice {
   font-size: var(--text-sm);

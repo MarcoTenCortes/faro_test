@@ -280,7 +280,7 @@ test('§10 de CLAUDE.md no contradice al código', () => {
   )
 })
 
-test('el selfcheck del banco numera 1..40 sin huecos', () => {
+test('el selfcheck del banco numera 1..N sin huecos', () => {
   const tramos = tramosDelSelfcheck(leer('harness/harness.js'))
   const enteros = tramos.map((t) => t.n).filter((n) => /^\d+$/.test(n)).map(Number)
   const max = Math.max(0, ...enteros)

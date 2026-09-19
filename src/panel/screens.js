@@ -26,8 +26,9 @@ export const ESCAPE_CLOSES = Object.freeze({
  *
  * El botón de Ajustes («Guardar y volver» desde H5; antes «Listo») no cierra
  * sin más: guarda todos los campos —la contraseña y la
- * URL del servidor incluidas— y rearranca el panel, lo que de paso cancela el
- * turno en vuelo. Con Escape mapeado a ese botón, un Escape distraído aplicaba
+ * URL del servidor incluidas— y, si una de esas dos cambió, rearranca el panel,
+ * lo que de paso cancela el turno en vuelo (desde H6 sólo entonces: lo demás se
+ * aplica en caliente). Con Escape mapeado a ese botón, un Escape distraído aplicaba
  * unos ajustes a medio escribir (revisión adversaria de H2, 2026-09-14). Aquí
  * Escape es «cerrar y olvidar»: la pantalla se rellena de `state.settings` cada
  * vez que se abre, así que lo tecleado y no guardado se pierde, que es justo lo

@@ -475,15 +475,30 @@ corto y un detalle. Todos los títulos, por dónde salen:
 **Arranque y conexión**
 
 - «Arranque del panel» — cuánto tardó abrir el panel, fase por fase: el total
-  primero y detrás «health» (¿está opencode?), «modelos», «MCP» (las dos
-  consultas a opencode: `GET /mcp` y `GET /config`), «almacenamiento» (sitio,
-  contexto, memoria, índice y sesión) y «restaurar» (repintar la conversación).
+  primero y detrás «health» (¿está opencode?), «modelos y almacenamiento» (la
+  lista de modelos, todo lo que este sitio tiene guardado —sitio, índice,
+  contexto y memoria, en una sola lectura— y la sesión abierta, las tres cosas
+  pedidas a la vez, así que la fase mide lo que tarde la más lenta), «MCP» (las
+  dos consultas a opencode: `GET /mcp` y `GET /config`), «enlazado» (adoptar el
+  MCP si hacía falta y, desde Jira, leer el contexto del Confluence enlazado,
+  que es de otro host) y «restaurar» (repintar la conversación).
   Sale también cuando el arranque acaba en la pantalla de claves o en la de
   contexto, sin las fases que no llegó a hacer. Si opencode no contesta NO sale
   nada (sería un arranque verde que no hubo) y la fila «tiempos (arranque)» del
   estado vuelve a «(sin medir)», en vez de quedarse con la línea del arranque
   anterior. Si «MCP» dice segundos, es normal la primera vez tras arrancar
   opencode: carga sus servidores MCP en la primera consulta.
+- «Ajustes aplicados» — cerraste Ajustes con **Guardar y volver** y no hacía
+  falta rearrancar el panel, porque ni la dirección del servidor ni la
+  contraseña cambiaron. Lo demás (el modo de navegación, la pausa entre pasos,
+  el estilo del subrayado, «Reducir animaciones») se aplicó en caliente, y la
+  respuesta que estuviera llegando siguió viva: hasta esta versión, cerrar
+  Ajustes reconstruía el cliente y mataba el turno en vuelo.
+- «Conversación recortada» — la sesión de opencode tiene más mensajes de los
+  que el panel pide al abrirse: se enseñan los últimos (60) y arriba del chat
+  sale la fila **Ver toda la conversación**, que trae el resto. Nada se ha
+  perdido: la conversación entera sigue en opencode. El detalle dice cuántos se
+  piden y cuántos KB de salidas de herramientas venían en esa ventana.
 - «Stream de eventos abierto» — el panel abrió el stream de eventos (`/event`)
   de opencode; el estado pasa a «conectado».
 - «Stream de eventos cerrado» — el stream se cortó; el cliente reintenta solo
@@ -529,7 +544,8 @@ corto y un detalle. Todos los títulos, por dónde salen:
   sesión.
 - «Turno cancelado» — el turno en vuelo se canceló desde el panel sin pulsar
   Parar: al reconstruir el cliente (cambiaste a una pestaña de OTRO host, o
-  cerraste Ajustes) o al abrir una sesión nueva a mitad de respuesta. Antes se
+  cerraste Ajustes **habiendo cambiado la dirección del servidor o la
+  contraseña**) o al abrir una sesión nueva a mitad de respuesta. Antes se
   quedaba 90 s «pensando…» hasta que el vigilante lo abortaba. Si el panel
   vuelve al sitio, la respuesta que llegó a opencode sigue en esa sesión.
 - «Respuesta recibida» — el turno terminó: caracteres de la respuesta,
@@ -540,6 +556,13 @@ corto y un detalle. Todos los títulos, por dónde salen:
   «índice»—, cuántos
   caracteres pesaba el sistema que se mandó y, si opencode los da, los tokens
   (con la salida y la lectura de caché) y el coste.
+- «Conversación pesada» — lo que esta conversación arrastra en salidas de
+  herramientas ha pasado de 200 000 caracteres, y eso se reenvía al modelo en
+  cada pregunta siguiente (el sistema no se acumula; las salidas sí). No es una
+  avería: opencode recorta las más antiguas y protege las últimas, pero lo
+  barato a partir de ahí es empezar una sesión nueva, y el aviso de la respuesta
+  trae el botón. Sale una vez por sesión (y otra vez si el chat se repinta
+  entero, porque el aviso se va con él).
 - «Skill» — cambió la Skill (desde el desplegable, o porque «Pedirlo
   numerado» la fija en Análisis).
 - «Modelo cambiado» — elegiste otro modelo; se recuerda para el sitio.
@@ -627,6 +650,16 @@ corto y un detalle. Todos los títulos, por dónde salen:
   «ISO-8601») sólo cuenta si su proyecto es conocido o viene en `/browse/`.
 - «Árbol leído de la página» — tras la respuesta se leyó del DOM la parte
   desplegada del árbol lateral: relaciones nuevas y filas leídas.
+- «Índice guardado» — la ÚNICA escritura del índice de este turno, con cuántas
+  páginas e incidencias tiene y bajo qué sitio se guardó. Todo lo que hace
+  crecer el índice durante un turno (las salidas de las herramientas, el árbol
+  de la barra lateral, el camino que lee el planificador) se apunta y se escribe
+  una sola vez al final; antes se escribía hasta tres veces y no se decía
+  ninguna.
+- «Índice sin guardar» — esa escritura falló (normalmente por la cuota de
+  `chrome.storage`): lo aprendido se queda apuntado y el turno siguiente lo
+  intenta otra vez. La respuesta no se toca. Antes un fallo de cuota salía como
+  «Fallo enviando: …», que era mentira: el turno ya había respondido.
 - «Destino leído de la respuesta» — en Búsqueda, la línea «Destino: …» dio el
   destino sin preguntar al modelo.
 - «Búsqueda de Jira como destino» — la tarjeta abre la búsqueda JQL real que
@@ -710,12 +743,52 @@ no está en `web_accessible_resources` del manifest (lo vigila
 `web-accessible.test.js` en `npm run check`).
 
 **Cambié de pestaña a mitad de respuesta y el turno desapareció**
-Es lo previsto. Al pasar a una pestaña de OTRO host (o al cerrar Ajustes) el
-panel reconstruye su cliente y cancela el turno en vuelo («Turno cancelado» en
-el registro) en vez de dejarlo 90 s «pensando…». Pasar a una pestaña fuera de
-Atlassian no lo cancela. La respuesta, si llegó a opencode, sigue en la sesión
-de aquel sitio y aparece al volver. «Nueva sesión» a mitad de turno también lo
-cancela, y el botón está desactivado mientras se responde.
+Es lo previsto. Al pasar a una pestaña de OTRO host el panel reconstruye su
+cliente y cancela el turno en vuelo («Turno cancelado» en el registro) en vez de
+dejarlo 90 s «pensando…». Pasar a una pestaña fuera de Atlassian no lo cancela.
+La respuesta, si llegó a opencode, sigue en la sesión de aquel sitio y aparece
+al volver. «Nueva sesión» a mitad de turno también lo cancela, y el botón está
+desactivado mientras se responde.
+Cerrar **Ajustes** ya no lo cancela, salvo que hayas cambiado la dirección del
+servidor o la contraseña: eso es lo único que obliga a reconstruir el cliente.
+Cambiar «Reducir animaciones», el modo de navegación, la pausa entre pasos o el
+estilo del subrayado se aplica en caliente («Ajustes aplicados» en el registro)
+y la respuesta sigue llegando; la página se entera al momento, sin esperar a que
+navegues.
+
+**El panel dice «pensando… 45 s sin señales del modelo»**
+Es el vigilante avisando a mitad de su plazo: el turno sigue vivo y sigue
+esperando hasta los 90 segundos. Un modelo que está leyendo tres páginas con el
+MCP y uno que se ha quedado colgado se veían igual, y no había con qué decidir
+si esperar o pulsar Parar. En cuanto llega la primera palabra (o una consulta),
+el texto vuelve a «pensando…». Si el turno muere de verdad, sale «Turno colgado»
+y el mensaje ofrece reintentar con otro modelo.
+
+**El panel enseña sólo los últimos 60 mensajes de la conversación**
+A propósito. Pedir la sesión entera bajaba también las salidas de las
+herramientas —megabytes— cada vez que se abre el panel, se vuelve al sitio o se
+sube un contexto, para pintar sólo el texto. Cuando recorta, el chat lo dice
+arriba («Conversación larga: se enseñan los últimos 60 mensajes») y el botón
+**Ver toda la conversación** trae el resto; en el registro queda «Conversación
+recortada». Con 1-4 turnos, que es lo normal, no recorta nunca.
+
+**Faro me avisa de que la conversación es pesada**
+El número son los caracteres de todo lo que las herramientas han devuelto en
+esta sesión, y eso viaja otra vez al modelo en cada pregunta (el sistema no se
+acumula; las salidas sí). opencode ya recorta las más antiguas y protege las
+últimas, así que no es una avería: es el punto en el que sale más barato empezar
+de nuevo. El botón **Sesión nueva** del aviso lo hace, y si tienes la memoria
+entre sesiones activa, la sesión que cierras queda resumida. El aviso sale una
+vez por sesión.
+
+**Las marcas del análisis parpadeaban al hacer scroll**
+Arreglado. El overlay recreaba cada rectángulo en cada evento de scroll, y un
+rectángulo nace transparente y aparece con una transición de 0,4 s: desplazarse
+lo hacía aparecer desde cero una y otra vez (se veía sobre todo en la vista de
+incidencia de un Jira Data Center, donde el que se desplaza es un panel
+interno). Ahora una ráfaga de scroll se junta en un solo fotograma y los nodos
+se reutilizan en vez de recrearse. Lo comprueba la comprobación 41 del banco
+(botón «Marcas + 40 scrolls (parpadeo)»).
 
 **Un enlace del chat no se abre**
 Sólo se abren enlaces del sitio de la pestaña, del Confluence enlazado y de

@@ -236,6 +236,28 @@ function blockBoundary(scope = digestScope()) {
 }
 
 /**
+ * El índice de texto de una raíz del ámbito, memorizado EN EL ÁMBITO.
+ *
+ * `buildTextIndex` recorre la raíz entera nodo a nodo. Una incidencia de Jira
+ * con doce observaciones que caen al peldaño global la recorría doce veces, y
+ * el peldaño global es justo el de las observaciones cuyo bloque ya no está:
+ * las que más cuestan. El ámbito lo crea `digestScope()` y vive lo que dura
+ * una pasada de marcado (`applyNotes` lo calcula una vez y lo pasa a cada
+ * observación), así que memorizar aquí es seguro: la pasada siguiente trae un
+ * ámbito nuevo y vuelve a leer la página de ahora. Quien guarde un ámbito más
+ * allá de su pasada se quedaría con un índice viejo; nadie lo hace.
+ */
+function rootIndex(scope, root) {
+  if (!scope._indices) scope._indices = new Map()
+  let index = scope._indices.get(root)
+  if (!index) {
+    index = buildTextIndex(root, { boundary: scope.chrome ? (el) => el.matches(scope.chrome) : null })
+    scope._indices.set(root, index)
+  }
+  return index
+}
+
+/**
  * Una cita literal buscada en el ÁMBITO de lectura, raíz por raíz: lo mismo
  * que se le enseñó al modelo, y nada más. Es el último peldaño de la escalera
  * y el que resuelve un ancla `text-quote` de una observación.
@@ -251,7 +273,7 @@ export function resolveScopedQuote(anchor, { scope = digestScope() } = {}) {
   if (!busca.exact) return null
   for (const r of scope.roots || []) {
     if (!r?.el) continue
-    const index = buildTextIndex(r.el, { boundary: scope.chrome ? (el) => el.matches(scope.chrome) : null })
+    const index = rootIndex(scope, r.el)
     if (!index.text) continue
     const hit = findQuote(index.text, busca)
     if (!hit) continue
@@ -284,13 +306,23 @@ function wholeBlockRange(index) {
  * o es una coincidencia aproximada, o es el bloque entero porque la cita no
  * estaba tal cual.
  *
+ * El ÁMBITO —qué es contenido y qué interfaz— hacía falta en tres sitios de
+ * esta función: al leer la página, al leer el texto propio del bloque y en el
+ * peldaño global. Cada uno lo calculaba por su cuenta, o sea hasta tres
+ * `digestScope()` por observación. Ahora `applyNotes` lo calcula UNA vez para
+ * toda la pasada y lo pasa; quien no lo pase (el banco, una llamada suelta)
+ * sigue funcionando igual, y como mucho se calcula una vez aquí.
+ *
  * @param {{block:number, hint:string, exact?:string}} anchor
- * @param {{digest?: object}} [opts] los bloques ya leídos, para no recorrer la
- *        página una vez por observación
+ * @param {{digest?: object, scope?: object}} [opts] los bloques ya leídos y el
+ *        ámbito con el que se leyeron, para no recorrer la página —ni decidir
+ *        qué es interfaz— una vez por observación
  * @returns {{ok:boolean, strategy:string, ranges?:Range[], element?:Element, approximate?:boolean, message?:string}}
  */
-export function resolveBlockQuote(anchor, { digest = null } = {}) {
-  const D = digest || pageDigest()
+export function resolveBlockQuote(anchor, { digest = null, scope = null } = {}) {
+  let ambito = scope
+  const elAmbito = () => ambito || (ambito = digestScope())
+  const D = digest || pageDigest({ scope: elAmbito() })
   const exact = String(anchor?.exact || '')
 
   const hit = matchBlock(D.blocks, anchor)
@@ -298,7 +330,7 @@ export function resolveBlockQuote(anchor, { digest = null } = {}) {
     const el = D.blocks[hit.index].el
     // El mismo texto que vio el modelo: con la misma frontera (bloques e
     // interfaz) con la que se leyó, o la cita no se encuentra donde estaba.
-    const index = buildTextIndex(el, { boundary: blockBoundary() })
+    const index = buildTextIndex(el, { boundary: blockBoundary(elAmbito()) })
 
     if (exact) {
       const q = findQuote(index.text, { exact })
@@ -328,7 +360,7 @@ export function resolveBlockQuote(anchor, { digest = null } = {}) {
   // página» incluye la barra de acciones y las pestañas de campos ocultas: una
   // cita podía resolverse ahí y contarse como marcada sin que se viera nada.
   if (exact.length >= DIGEST_LIMITS.quoteMinGlobal) {
-    const r = resolveScopedQuote(exact)
+    const r = resolveScopedQuote(exact, { scope: elAmbito() })
     if (r?.ok) return { ...r, strategy: 'global+' + r.strategy }
   }
 

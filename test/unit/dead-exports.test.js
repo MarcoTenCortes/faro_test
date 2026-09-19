@@ -91,7 +91,7 @@ const EXPORTADAS_SIN_IMPORTAR = {
   'src/panel/setup.js': ['isCloudHost'],
   'src/panel/sources.js': ['DEFAULT_SOURCE_MODE'],
   'src/shared/config.js': ['DEFAULT_SERVER'],
-  'src/shared/log.js': ['LEVELS', 'Logger'],
+  'src/shared/log.js': ['Logger'],
   'src/shared/storage.js': ['getSites'],
 }
 

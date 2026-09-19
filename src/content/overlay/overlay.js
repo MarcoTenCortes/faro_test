@@ -14,6 +14,17 @@
  * `clearNotes`) suelta el cancelador. Reproducido en la auditoría del
  * 2026-09-13 (docs/PLAN.md §2.3 M2): desde la primera marca, ningún Escape
  * llegaba ya a Jira/Confluence.
+ *
+ * Cómo se repinta, desde H6 (P1, docs/plan/anexo-E-eficiencia.md): una ráfaga
+ * de scroll se junta en UN frame (`_scheduleRefresh`), la geometría de cada
+ * observación se mide una sola vez para las dos capas (`_measureGroups`) y los
+ * nodos se reutilizan (`_syncNodes`) en vez de recrearse. Antes cada evento de
+ * scroll —y llegan decenas por gesto, uno por cada contenedor que se
+ * desplaza— vaciaba la capa y volvía a crear cada rectángulo, que nace con
+ * `opacity: 0` y una transición de .4 s (styles.js): las marcas PARPADEABAN al
+ * desplazarse, que es lo que se veía en el Jira del usuario. Y la caja de
+ * recorte, que cuesta un `getComputedStyle` por cada antepasado, se buscaba
+ * dos veces por observación y por frame.
  */
 
 import { OVERLAY_CSS, HIGHLIGHT_CSS, PICK_CSS } from './styles.js'
@@ -38,8 +49,21 @@ export class Overlay {
     this.onNote = null
     this.stillMotion = false
     this.style = 'spotlight'
+    // Lo que se va a pintar, con lo caro de cada observación ya buscado una
+    // vez: la caja que la recorta y si cae dentro de un bloque de código.
+    this._groups = []
+    // Un repintado por frame como mucho, aunque lleguen cuarenta scrolls.
+    this._refreshRaf = 0
+    // Cuántos nodos se crean, se reutilizan y se quitan: es lo que mide la
+    // comprobación 41 del banco para saber que las marcas no se recrean.
+    this.stats = nuevasStats()
     this._onKey = this._onKey.bind(this)
     this._onViewportChange = this._onViewportChange.bind(this)
+  }
+
+  /** Pone los contadores a cero antes de medir algo (el banco). */
+  resetStats() {
+    this.stats = nuevasStats()
   }
 
   // ------------------------------------------------------------- montaje
@@ -91,6 +115,8 @@ export class Overlay {
   destroy() {
     this.clearAll()
     this.setPicking(false)
+    cancelAnimationFrame(this._refreshRaf)
+    this._refreshRaf = 0
     document.removeEventListener('keydown', this._onKey, true)
     window.removeEventListener('scroll', this._onViewportChange, true)
     window.removeEventListener('resize', this._onViewportChange)
@@ -194,8 +220,25 @@ export class Overlay {
   }
 
   _onViewportChange() {
-    this.refreshMarks()
+    this._scheduleRefresh()
     if (this.followTarget) this._followTick()
+  }
+
+  /**
+   * Un repintado por frame, no uno por evento.
+   *
+   * El oyente de `scroll` está en `window` con captura, así que recibe el
+   * desplazamiento de la ventana y el de CADA contenedor con scroll propio: en
+   * un gesto de rueda llegan decenas, y cada uno medía y repintaba las dos
+   * capas enteras. Ahora sólo se apunta que hay que repintar; el frame lo hace
+   * una vez con la posición final.
+   */
+  _scheduleRefresh() {
+    if (this._refreshRaf) return
+    this._refreshRaf = requestAnimationFrame(() => {
+      this._refreshRaf = 0
+      this.refreshMarks()
+    })
   }
 
   /**
@@ -203,11 +246,14 @@ export class Overlay {
    *
    * Se llama sola al desplazar la página, pero también hace falta a mano justo
    * después de un desplazamiento propio: mientras el scroll suave termina, lo
-   * pintado se queda un instante en la posición vieja.
+   * pintado se queda un instante en la posición vieja. Ese repintado a mano
+   * deja sin sentido el frame que estuviera pendiente, así que lo cancela: si
+   * no, el mismo frame se pintaría dos veces.
    */
   refreshMarks() {
-    if (this.quoteRanges.length) this._paintQuoteRects(false)
-    if (this.notes.length) this._paintNoteBadges(false)
+    cancelAnimationFrame(this._refreshRaf)
+    this._refreshRaf = 0
+    if (this._groups.length) this._repaint(false)
     if (this.outlineTargets.length) this._paintOutlines(false)
   }
 
@@ -398,12 +444,15 @@ export class Overlay {
     // se van con ella.
     this.notes = []
     this.activeNote = 0
+    // Antes de la salida de abajo: si no hay nada que subrayar tampoco puede
+    // quedar nada preparado, o el siguiente scroll repintaría lo anterior.
+    this._groups = []
     this.quoteRanges = ranges.filter(Boolean)
     if (!this.quoteRanges.length) return false
 
     this._setHighlight(this.quoteRanges)
-    this._paintQuoteRects(sweep)
-    this._paintNoteBadges(false)
+    this._prepareGroups()
+    this._repaint(sweep)
     return true
   }
 
@@ -430,8 +479,8 @@ export class Overlay {
     this.activeNote = 0
     this.quoteRanges = todos
     this._setHighlight(todos)
-    this._paintQuoteRects(true)
-    this._paintNoteBadges(true)
+    this._prepareGroups()
+    this._repaint(true)
     return notas.length
   }
 
@@ -439,8 +488,7 @@ export class Overlay {
   focusNote(n) {
     if (!this.notes.some((x) => x.n === n)) return false
     this.activeNote = n
-    this._paintQuoteRects(false)
-    this._paintNoteBadges(false)
+    this._repaint(false)
     return true
   }
 
@@ -458,6 +506,7 @@ export class Overlay {
     this.quoteRanges = []
     this.notes = []
     this.activeNote = 0
+    this._groups = []
     try {
       CSS.highlights?.delete(HIGHLIGHT_NAME)
     } catch {
@@ -477,81 +526,182 @@ export class Overlay {
   }
 
   /**
-   * Los rectángulos amarillos.
+   * Qué grupos hay que pintar, con lo caro de cada uno buscado UNA vez.
    *
-   * Se pintan por grupos para poder marcar más fuerte la observación activa;
-   * cuando no hay observaciones, el grupo es uno solo y sin número, que es el
-   * caso de una cita normal.
+   * Un grupo es una observación numerada; cuando no hay observaciones, el
+   * grupo es uno solo y sin número, que es el caso de una cita normal. Lo caro
+   * es el elemento que recorta la marca (un `getComputedStyle` por cada
+   * antepasado, hasta diez) y si cae dentro de un bloque de código: ni lo uno
+   * ni lo otro cambia al desplazar la página, y se buscaba dos veces por
+   * observación EN CADA evento de scroll.
    */
-  _paintQuoteRects(sweep) {
-    const layer = this.el.quoteLayer
-    if (!layer) return
-
-    const grupos = this.notes.length ? this.notes : [{ n: 0, ranges: this.quoteRanges }]
-    layer.textContent = ''
-    let i = 0
-
-    for (const grupo of grupos) {
-      const activa = grupo.n && grupo.n === this.activeNote
-      // Fundidos por línea: el navegador devuelve una caja por cada trozo con
-      // estilo propio, y en un bloque de código eso son diecisiete cajas
-      // solapadas para cuatro líneas.
-      const enCodigo = inCode(grupo.ranges)
-      // Y recortados a su contenedor: un bloque de código con scroll propio
+  _prepareGroups() {
+    const grupos = this.notes.length
+      ? this.notes
+      : this.quoteRanges.length
+        ? [{ n: 0, ranges: this.quoteRanges }]
+        : []
+    this._groups = grupos.map((g) => ({
+      n: g.n || 0,
+      title: g.title,
+      ranges: g.ranges,
+      // Recortados a su contenedor: un bloque de código con scroll propio
       // recorta el texto, así que también tiene que recortar la marca.
-      const caja = clipBoxFor(grupo.ranges)
+      clipEl: clipElementFor(g.ranges),
+      // Sobre código la marca se aligera para no tapar la sintaxis.
+      enCodigo: inCode(g.ranges),
+    }))
+  }
 
-      for (const r of clipRects(rectsOf(grupo.ranges), caja)) {
-        const d = div('quote-rect' + (activa ? ' active' : '') + (enCodigo ? ' on-code' : ''))
-        setBox(d, r)
-        layer.appendChild(d)
-        const orden = i++
-        requestAnimationFrame(() => {
-          d.classList.add('on')
-          if (sweep && !this.stillMotion) setTimeout(() => d.classList.add('sweep'), 60 + orden * 40)
-        })
+  /**
+   * Dónde está ahora cada grupo: las cajas ya fundidas por línea y recortadas,
+   * y la última, que es donde va la insignia.
+   *
+   * Se mide una sola vez y sirve para las DOS capas: antes el subrayado y las
+   * insignias leían la geometría por separado, o sea dos veces por observación
+   * y por frame. La caja de recorte se relee siempre (se mueve con la página),
+   * pero el ELEMENTO sólo se vuelve a buscar si desapareció del documento,
+   * que es lo que pasa cuando Confluence repinta el párrafo marcado.
+   */
+  _measureGroups() {
+    const out = []
+    for (const g of this._groups) {
+      if (g.clipEl && !g.clipEl.isConnected) g.clipEl = clipElementFor(g.ranges)
+      const caja = g.clipEl ? g.clipEl.getBoundingClientRect() : null
+      const rects = clipRects(rectsOf(g.ranges), caja)
+      out.push({ n: g.n, title: g.title, enCodigo: g.enCodigo, rects, ultimo: rects[rects.length - 1] || null })
+    }
+    return out
+  }
+
+  /** Mide una vez y pinta las dos capas con esa misma medida. */
+  _repaint(sweep) {
+    const medidas = this._measureGroups()
+    this.stats.paints++
+    this._paintQuoteRects(sweep, medidas)
+    this._paintNoteBadges(sweep, medidas)
+  }
+
+  /**
+   * Deja en la capa exactamente un nodo por elemento de `items`, REUTILIZANDO
+   * los que ya están: se crea sólo lo que falta y se quita sólo lo que sobra.
+   *
+   * Vaciar la capa y volver a crearlo todo era lo que hacía parpadear las
+   * marcas: un `.quote-rect` recién creado tiene `opacity: 0` y una transición
+   * de .4 s, así que cada scroll las apagaba y las volvía a encender. Además,
+   * un nodo reutilizado conserva su oyente de clic y no vuelve a componer capa.
+   *
+   * @param {Element} layer capa del overlay donde viven los nodos
+   * @param {Array} items qué hay que pintar, en orden
+   * @param {() => Element} crear un nodo vacío de la clase que toque
+   * @param {(nodo: Element, item: any, i: number, nuevo: boolean) => void} pintar lo que cambia en cada frame
+   */
+  _syncNodes(layer, items, crear, pintar) {
+    const hijos = layer.children
+    for (let i = 0; i < items.length; i++) {
+      let nodo = hijos[i]
+      const nuevo = !nodo
+      if (nuevo) {
+        nodo = crear(items[i])
+        layer.appendChild(nodo)
+        this.stats.created++
+      } else {
+        this.stats.reused++
       }
+      pintar(nodo, items[i], i, nuevo)
+    }
+    while (hijos.length > items.length) {
+      layer.lastElementChild.remove()
+      this.stats.removed++
     }
   }
 
+  /**
+   * Los rectángulos amarillos, uno por línea de cada observación.
+   *
+   * La observación activa se marca más fuerte, y el barrido blanco sólo corre
+   * en el pintado que lo pide (el primero de un análisis o de una llegada):
+   * al desplazar la página las marcas se quedan donde están, encendidas.
+   */
+  _paintQuoteRects(sweep, medidas) {
+    const layer = this.el.quoteLayer
+    if (!layer) return
+
+    const items = []
+    for (const m of medidas) {
+      const activa = !!m.n && m.n === this.activeNote
+      for (const rect of m.rects) items.push({ rect, activa, enCodigo: m.enCodigo })
+    }
+
+    this._syncNodes(
+      layer,
+      items,
+      () => div('quote-rect'),
+      (nodo, item, i, nuevo) => {
+        setBox(nodo, item.rect)
+        nodo.classList.toggle('active', item.activa)
+        nodo.classList.toggle('on-code', item.enCodigo)
+        // Encender al instante, salvo la aparición del primer pintado: ahí sí
+        // se espera un frame para que la transición desde `opacity: 0` se vea.
+        if (nuevo && sweep) requestAnimationFrame(() => nodo.classList.add('on'))
+        else nodo.classList.add('on')
+        if (sweep && !this.stillMotion) setTimeout(() => barrer(nodo), 60 + i * 40)
+      }
+    )
+  }
+
   /** El número de cada observación, detrás del último carácter de su cita. */
-  _paintNoteBadges(animate) {
+  _paintNoteBadges(animate, medidas) {
     const layer = this.el.noteLayer
     if (!layer) return
-    layer.textContent = ''
 
     const ocupados = []
-
-    for (const nota of this.notes) {
-      const rects = clipRects(rectsOf(nota.ranges), clipBoxFor(nota.ranges))
-      const ultimo = rects[rects.length - 1]
-      if (!ultimo) continue
-
-      const b = document.createElement('button')
-      b.className = 'note-badge' + (nota.n === this.activeNote ? ' active' : '')
-      b.textContent = String(nota.n)
-      b.title = nota.title ? `${nota.n} · ${nota.title}` : 'Observación ' + nota.n
-      // Pegado al final de la cita, sin salirse de la ventana, y sin pisar a
+    const items = []
+    for (const m of medidas) {
+      if (!m.n || !m.ultimo) continue
+      // Pegada al final de la cita, sin salirse de la ventana, y sin pisar a
       // otra insignia: dos citas que acaban a la misma altura ponían sus números
       // uno encima del otro y sólo se leía el de arriba.
       const sitio = libre(
-        Math.min(ultimo.left + ultimo.width + 3, window.innerWidth - 26),
-        ultimo.top + ultimo.height / 2 - 8.5,
+        Math.min(m.ultimo.left + m.ultimo.width + 3, window.innerWidth - 26),
+        m.ultimo.top + m.ultimo.height / 2 - 8.5,
         ocupados
       )
       ocupados.push(sitio)
-      b.style.left = Math.round(sitio.left) + 'px'
-      b.style.top = Math.round(sitio.top) + 'px'
-      b.addEventListener('click', (ev) => {
-        ev.preventDefault()
-        ev.stopPropagation()
-        this.onNote?.(nota.n)
-      })
-
-      layer.appendChild(b)
-      if (animate) requestAnimationFrame(() => b.classList.add('on'))
-      else b.classList.add('on')
+      items.push({ n: m.n, title: m.title, sitio })
     }
+
+    this._syncNodes(
+      layer,
+      items,
+      () => {
+        const b = document.createElement('button')
+        b.className = 'note-badge'
+        // El oyente se pone al crear y sobrevive a los repintados: el número
+        // lo lee del propio nodo, porque el nodo se reutiliza para otra
+        // observación cuando una de las de arriba deja de tener caja.
+        b.addEventListener('click', (ev) => {
+          ev.preventDefault()
+          ev.stopPropagation()
+          this.onNote?.(Number(b.dataset.n))
+        })
+        return b
+      },
+      (nodo, item, i, nuevo) => {
+        const texto = String(item.n)
+        if (nodo.dataset.n !== texto) {
+          nodo.dataset.n = texto
+          nodo.textContent = texto
+        }
+        const titulo = item.title ? `${item.n} · ${item.title}` : 'Observación ' + item.n
+        if (nodo.title !== titulo) nodo.title = titulo
+        nodo.classList.toggle('active', item.n === this.activeNote)
+        css(nodo, 'left', Math.round(item.sitio.left) + 'px')
+        css(nodo, 'top', Math.round(item.sitio.top) + 'px')
+        if (nuevo && animate) requestAnimationFrame(() => nodo.classList.add('on'))
+        else nodo.classList.add('on')
+      }
+    )
   }
 
   // ---------------------------------------------------- recuadro de imagen
@@ -579,16 +729,24 @@ export class Overlay {
   _paintOutlines(animate) {
     const layer = this.el.outlineLayer
     if (!layer) return
-    layer.textContent = ''
+    const items = []
     for (const el of this.outlineTargets) {
       const r = el.getBoundingClientRect()
       if (r.width <= 0 || r.height <= 0) continue
-      const d = div('img-outline')
-      setBox(d, inflate(r, 2))
-      layer.appendChild(d)
-      if (animate) requestAnimationFrame(() => d.classList.add('on'))
-      else d.classList.add('on')
+      items.push(inflate(r, 2))
     }
+    // Por el mismo camino que las marcas: los filetes también se repintaban en
+    // cada scroll, y un filete recreado es un nodo más que componer.
+    this._syncNodes(
+      layer,
+      items,
+      () => div('img-outline'),
+      (nodo, rect, i, nuevo) => {
+        setBox(nodo, rect)
+        if (nuevo && animate) requestAnimationFrame(() => nodo.classList.add('on'))
+        else nodo.classList.add('on')
+      }
+    )
   }
 
   // ------------------------------------------------------ modo selección
@@ -699,6 +857,44 @@ function div(cls) {
   return d
 }
 
+function nuevasStats() {
+  return { paints: 0, created: 0, reused: 0, removed: 0 }
+}
+
+/**
+ * Lo que dura el barrido en styles.js (`faro-sweep 1.1s`), con margen. Es el
+ * respaldo para quitar la clase si `animationend` no llega: una marca fuera de
+ * la pantalla o con las animaciones apagadas por el sistema no lo dispara.
+ */
+const SWEEP_MS = 1200
+
+/**
+ * Lanza el barrido de una marca y lo retira al acabar.
+ *
+ * El pseudo-elemento sólo EXISTE mientras la clase está puesta (styles.js:
+ * `.quote-rect::after { content: none }`), y antes se iba solo porque cada
+ * scroll recreaba el rectángulo sin la clase. Ahora el nodo se reutiliza, así
+ * que la clase hay que quitarla a propósito: si no, cada marca de la página se
+ * queda componiendo una capa con la banda blanca aparcada fuera de su caja,
+ * que es justo lo que el comentario de styles.js cuenta que pasaba.
+ */
+function barrer(nodo) {
+  if (!nodo.isConnected) return
+  nodo.addEventListener('animationend', quitarBarrido, { once: true })
+  clearTimeout(nodo._faroSweep)
+  nodo._faroSweep = setTimeout(() => nodo.classList.remove('sweep'), SWEEP_MS)
+  nodo.classList.add('sweep')
+}
+
+function quitarBarrido(ev) {
+  ev.currentTarget.classList.remove('sweep')
+}
+
+/** Escribe una propiedad de estilo sólo si cambia: repintar no es reescribir. */
+function css(el, prop, value) {
+  if (el.style[prop] !== value) el.style[prop] = value
+}
+
 /** Un hueco de 17x17 que no pise a los ya puestos. Se aparta a la derecha. */
 function libre(left, top, ocupados) {
   const CHOCA = 19
@@ -711,11 +907,15 @@ function libre(left, top, ocupados) {
 }
 
 /**
- * La caja que recorta lo marcado: el contenedor con scroll o con overflow
+ * El elemento que recorta lo marcado: el contenedor con scroll o con overflow
  * oculto más cercano. Sin esto, una marca dentro de un bloque de código
  * desplazado en horizontal se pinta fuera del bloque.
+ *
+ * Devuelve el ELEMENTO y no su caja: buscarlo cuesta un `getComputedStyle` por
+ * cada antepasado y no cambia mientras la página no se repinte, así que se
+ * busca al anotar y en cada frame sólo se vuelve a leer su caja.
  */
-function clipBoxFor(ranges) {
+function clipElementFor(ranges) {
   for (const range of ranges || []) {
     const c = range?.commonAncestorContainer
     let el = c?.nodeType === 1 ? c : c?.parentElement
@@ -723,7 +923,7 @@ function clipBoxFor(ranges) {
       if (el === document.body || el === document.documentElement) break
       const s = getComputedStyle(el)
       if (/auto|scroll|hidden|clip/.test(s.overflowX) || /auto|scroll|hidden|clip/.test(s.overflowY)) {
-        return el.getBoundingClientRect()
+        return el
       }
       el = el.parentElement
     }
@@ -742,10 +942,10 @@ function inCode(ranges) {
 }
 
 function setBox(el, r) {
-  el.style.top = Math.round(r.top) + 'px'
-  el.style.left = Math.round(r.left) + 'px'
-  el.style.width = Math.round(r.width) + 'px'
-  el.style.height = Math.round(r.height) + 'px'
+  css(el, 'top', Math.round(r.top) + 'px')
+  css(el, 'left', Math.round(r.left) + 'px')
+  css(el, 'width', Math.round(r.width) + 'px')
+  css(el, 'height', Math.round(r.height) + 'px')
 }
 
 function inflate(r, p) {

@@ -11,23 +11,24 @@
  */
 
 import { OpencodeClient, OpencodeError } from '../opencode/client.js'
-import { suggestsAnotherModel, toolOutputSize } from '../opencode/turn.js'
+import { suggestsAnotherModel, sortMessages, dropOrphans, toolOutputSize } from '../opencode/turn.js'
 import { pickDefaultModel, pickAlternativeModel, pickPlannerModel, modelKey, parseModelKey } from '../shared/models.js'
 import { parseAtlassianUrl, describeLocation, defaultScope, locationParts, samePage, wikiPrefix as wikiPrefixOf } from '../atlassian/site.js'
 import { mergeIndex, mergeIndexKeepingTree, indexSize, normalizeIndex, ancestryOf } from '../atlassian/index-store.js'
-import { CORS_ORIGIN, DEFAULT_SETTINGS, mcpNameForHost } from '../shared/config.js'
+import { CORS_ORIGIN, DEFAULT_SETTINGS, RESTORE_LIMITS, SESSION_LIMITS, mcpNameForHost } from '../shared/config.js'
 import { MSG } from '../shared/messages.js'
 import { navOptions } from '../nav/options.js'
 import {
-  getSettings, saveSettings, getSite, saveSite, forgetSite,
+  getSettings, saveSettings, getSite, saveSite, forgetSite, getSiteBundle,
   getIndex, saveIndex, getSessionId, setSessionId, clearSessionId,
+  getSessionWeight, setSessionWeight, clearSessionWeight,
 } from '../shared/storage.js'
 import { renderMarkdown } from './markdown.js'
 import { SKILLS, DEFAULT_SKILL, skillById } from './skills.js'
 import { pickLabel } from '../content/pick-payload.js'
 import { prettyTool, clockTime, formatBytes } from '../shared/format.js'
 import { startTiming, timingLine } from '../shared/timing.js'
-import { log } from '../shared/log.js'
+import { LEVELS, log } from '../shared/log.js'
 import {
   configureMcp,
   mcpStatusFor,
@@ -180,6 +181,21 @@ const state = {
   // docs/PLAN.md: el texto de estado sigue viéndose, sin una pieza propia).
   statusLine: '',
   streaming: false,
+  // Cuántos caracteres de salidas de herramientas lleva arrastrados la sesión
+  // abierta de este host, y si ya se ha avisado de que pesa. Es lo que se
+  // reenvía al modelo en cada turno (el `system` no se acumula; las salidas sí,
+  // hasta donde llega la poda de opencode). El contador se guarda en
+  // storage.session junto a la sesión; el aviso no: se da una vez por sesión y
+  // por panel abierto, y quien reabre el panel merece que se le vuelva a decir.
+  sessionToolChars: 0,
+  heavyWarned: false,
+  // El índice que ha crecido y todavía no está en disco: `{host, index}`, el
+  // objeto aprendido junto al host que lo aprendió. Las tres cosas que hacen
+  // crecer el índice en un turno (lo que devolvieron las herramientas, el árbol
+  // de la barra lateral, el camino que lee el planificador) lo apuntan aquí y
+  // `persistIndex()` escribe UNA vez al final (P3). null cuando no hay nada
+  // pendiente.
+  indexDirty: null,
   lastQuestion: '',
   tabUrl: '',
   tabTitle: '',
@@ -365,6 +381,10 @@ async function refreshTab() {
     // de ESE host. Dejados puestos, el Registro del sitio nuevo enseñaba las
     // fases del anterior hasta que hubiera arranque y turno propios.
     state.timing = { boot: '', turn: '' }
+    // Y lo que arrastra la conversación, que es de la sesión de ESE host: el
+    // arranque del nuevo lo vuelve a leer del almacén al restaurar la suya.
+    state.sessionToolChars = 0
+    state.heavyWarned = false
     paintSourcesUi()
   }
   state.site = site
@@ -449,24 +469,50 @@ async function bootForSite() {
   cron.mark('health')
   client.connect()
 
-  // 2. Modelos y modo de trabajo, tal y como los dejaste en este sitio.
-  const guardadoAntes = await getSite(state.site.host)
+  // 2. Todo lo que este sitio tiene guardado, la lista de modelos y la sesión
+  // abierta: las tres cosas A LA VEZ, y lo de storage en UNA sola lectura.
+  // Antes iban en fila y el mismo `getSite` del mismo host se leía cinco veces
+  // —cada uno relee el mapa entero de `faro:sites`—, más el contexto, la
+  // memoria, el índice y la sesión por su cuenta: trece lecturas encadenadas
+  // detrás de una petición de red (docs/PLAN.md §2.6 P4).
+  const [bundle, sessionID, modelos] = await Promise.all([
+    getSiteBundle(state.site.host),
+    getSessionId(state.site.host),
+    // Un rechazo dentro de `Promise.all` se llevaría por delante las otras dos
+    // lecturas: sin lista de modelos el panel arranca igual y avisa, que es lo
+    // que hacía el try/catch de antes.
+    client.models().catch((err) => ({ error: err })),
+  ])
   if (state.bootToken !== testigo) return
-  setSkill(guardadoAntes?.skill || DEFAULT_SKILL)
+  // La fase mide lo que el usuario espera de verdad: las tres cosas juntas, o
+  // sea lo que tarde la más lenta (la petición). Antes eran dos fases en fila.
+  cron.mark('modelos y almacenamiento')
 
-  try {
-    const { models, defaults } = await client.models()
-    if (state.bootToken !== testigo) return
-    state.models = models
-    const stored = await getSite(state.site.host)
-    if (state.bootToken !== testigo) return
-    state.defaults = defaults
-    fillModels(models, stored?.model || pickDefaultModel(models, defaults))
-  } catch (err) {
-    if (state.bootToken !== testigo) return
-    showNotice('No he podido leer la lista de modelos: ' + err.message, true)
+  // El sitio guardado manda desde aquí hasta el final del arranque: sólo se
+  // vuelve a leer si adoptamos un MCP y lo reescribimos (paso 3).
+  let saved = bundle.site
+  setSkill(saved?.skill || DEFAULT_SKILL)
+  state.sessionID = sessionID
+  state.contextMd = bundle.contextMd
+  // La memoria se reconstruye con claves blancas al leerla, como siempre. Lo
+  // que aquí NO se hace es repararla en el almacén: esa escritura la sigue
+  // haciendo `getMemory`, por donde pasa la pantalla de memoria justo antes de
+  // que se pueda borrar una entrada por su `at`, que es para lo que hacía falta.
+  state.memory = memory.normalizeMemory(bundle.memoryRaw)
+  state.index = bundle.index
+  if (bundle.stale) {
+    log.warn('Índice descartado', 'era de una versión anterior de Faro; hay que reconstruir el contexto')
   }
-  cron.mark('modelos')
+  // Se pregunta por la LISTA, no por el error: así una respuesta rara (o un
+  // rechazo sin motivo) acaba en el aviso y no en un TypeError que se llevaría
+  // el arranque entero, que es justo lo que el try/catch de antes evitaba.
+  if (Array.isArray(modelos?.models)) {
+    state.models = modelos.models
+    state.defaults = modelos.defaults
+    fillModels(modelos.models, saved?.model || pickDefaultModel(modelos.models, modelos.defaults))
+  } else {
+    showNotice('No he podido leer la lista de modelos: ' + (modelos?.error?.message || modelos?.error || 'respuesta vacía'), true)
+  }
 
   // 3. ¿Tiene claves este sitio, y están de verdad conectadas? Se mira lo que
   // opencode tiene de verdad: el MCP que lleve este dominio en JIRA_URL o
@@ -480,8 +526,6 @@ async function bootForSite() {
   // La fase que se viene a leer: son las DOS peticiones, sin lo que se guarde
   // después. `GET /mcp` en frío es lo que hace que el panel tarde en abrirse.
   cron.mark('MCP')
-  let saved = await getSite(state.site.host)
-  if (state.bootToken !== testigo) return
   const found = mcpForHost(config, state.site.host, { status: mcp })
   // Se adopta sólo lo que está conectado: apuntar un MCP caído pisaba lo que
   // sí funcionaba. Y también cuando el MCP ya apuntado trae un host nuevo —el
@@ -524,31 +568,24 @@ async function bootForSite() {
     return
   }
 
-  // 4. Contexto y memoria. Desde Jira, también el contexto del Confluence
-  // enlazado: sirve para saber qué páginas mirar.
+  // 4. Desde Jira, el contexto del Confluence enlazado: es de OTRO host, así
+  // que no viene en el paquete de éste y hay que ir a por él (y sólo se sabe a
+  // cuál después de mirar el MCP). Es lo único que queda por leer.
   // Un arranque más nuevo pone su testigo antes de su primer await: éste
   // siempre va por delante, así que lo que escriba aquí antes de comprobarlo
   // lo pisa el nuevo en su propio paso 4.
-  state.contextMd = await memory.getContextMd(state.site.host)
-  if (state.bootToken !== testigo) return
   state.linkedContext = await loadLinkedContext(saved)
   if (state.bootToken !== testigo) return
-  state.memory = await memory.getMemory(state.site.host)
-  const guardado = await getIndex(state.site.host)
-  if (state.bootToken !== testigo) return
-  state.index = guardado.index
-  if (guardado.stale) {
-    log.warn('Índice descartado', 'era de una versión anterior de Faro; hay que reconstruir el contexto')
-  }
-  state.sessionID = await getSessionId(state.site.host)
-  const site = await getSite(state.site.host)
-  if (state.bootToken !== testigo) return
-  // Todo lo que se lee y se escribe en chrome.storage durante el arranque:
-  // el sitio, el contexto, el del Confluence enlazado, la memoria, el índice y
-  // la sesión.
-  cron.mark('almacenamiento')
+  // Lo que va desde la marca del MCP hasta aquí: adoptarlo si hacía falta
+  // (dos escrituras y una relectura, sólo la primera vez), pintar las páginas
+  // base y este contexto enlazado, que es lo único que de verdad se lee. Antes
+  // no tenía marca propia y esos milisegundos se contaban como «restaurar».
+  cron.mark('enlazado')
 
-  if (!site?.onboarded) {
+  // `onboarded` sale de lo leído al empezar (o de la relectura tras adoptar el
+  // MCP): durante el arranque no hay nada que lo cambie, y el único que lo
+  // escribe —`generateContext`— repinta el chat él mismo al terminar.
+  if (!saved?.onboarded) {
     hideScreens()
     showContextScreen()
     medir()
@@ -845,16 +882,78 @@ function fillModels(models, selected) {
 // ------------------------------------------------------------------- chat
 
 /**
+ * La fila que corona una conversación recortada.
+ *
+ * No se pide la sesión entera al abrir el panel (`RESTORE_LIMITS.messages`), así
+ * que cuando la ventana viene llena hay que decirlo: lo que falta no se ha
+ * perdido, está en opencode, y un botón lo trae. Va DENTRO del chat y no en el
+ * marco, para que se vaya con el scroll como el principio de la conversación que
+ * es; por eso se crea aquí y no en panel.html, donde sería un segundo elemento
+ * con el mismo id en cuanto el chat se repinta.
+ */
+function olderTurnsRow() {
+  const row = document.createElement('div')
+  row.className = 'older-turns'
+
+  const texto = document.createElement('span')
+  texto.textContent = `Conversación larga: se enseñan los últimos ${RESTORE_LIMITS.messages} mensajes.`
+
+  const btn = document.createElement('button')
+  btn.id = 'btn-older-turns'
+  btn.className = 'ghost small'
+  btn.type = 'button'
+  btn.textContent = 'Ver toda la conversación'
+  btn.addEventListener('click', () => {
+    btn.disabled = true
+    // El mismo testigo que el arranque vigente: si mientras se descarga la
+    // conversación entera se cambia de sitio, lo que se pinte será del suyo.
+    restoreConversation(state.bootToken, { all: true }).catch((err) => {
+      // El botón vuelve: si el chat no llegó a repintarse, la fila sigue ahí y
+      // se puede reintentar; si se repintó, este botón ya no está en el
+      // documento y reactivarlo no se ve.
+      btn.disabled = false
+      showNotice('No he podido traer el resto de la conversación: ' + (err?.message || err), true)
+    })
+  })
+
+  row.append(texto, btn)
+  return row
+}
+
+/**
  * @param {object} [testigo] el testigo del arranque que pide restaurar: si
  *        otro arranque tomó el relevo mientras se leía la sesión, lo suyo lo
  *        pinta él, y vaciar el chat aquí sería vaciar el suyo. Por defecto,
  *        el arranque vigente (reindexar, «Omitir», subir un contexto).
+ * @param {{all?: boolean}} [opciones] `all` pide la sesión ENTERA, sin ventana:
+ *        es lo que hace el botón «Ver toda la conversación».
  */
-async function restoreConversation(testigo = state.bootToken) {
+async function restoreConversation(testigo = state.bootToken, { all = false } = {}) {
   let messages = null
+  let recortada = false
+  // El peso de la sesión es de este host, como la sesión misma.
+  const host = state.site?.host ?? state.lastHost
+  let pesoGuardado = 0
   if (state.sessionID) {
     try {
-      messages = await state.client.listMessages(state.sessionID)
+      // Sin `limit` esto bajaba la sesión entera —las salidas de herramientas
+      // incluidas, megabytes— cada vez que se abre el panel, se vuelve al sitio
+      // o se sube un contexto, para pintar sólo el texto (docs/PLAN.md §2.6
+      // P6b). Y con ella, lo que la sesión lleva arrastrado, que se guardó
+      // aparte para no tener que recontar los mensajes que ya no se piden.
+      const [crudos, peso] = await Promise.all([
+        state.client.listMessages(state.sessionID, all ? undefined : RESTORE_LIMITS.messages),
+        host ? getSessionWeight(host).catch(() => 0) : 0,
+      ])
+      const lista = Array.isArray(crudos) ? crudos : []
+      // La ventana llena es la señal de que puede faltar conversación por
+      // arriba: opencode devuelve los ÚLTIMOS N (comprobado en integración).
+      recortada = !all && lista.length >= RESTORE_LIMITS.messages
+      // El orden se asegura aquí aunque opencode ya los mande ascendentes, y se
+      // tiran las respuestas del asistente que quedaron sin su pregunta al
+      // cortar: sin eso, el primer turno de la ventana sale descabezado.
+      messages = dropOrphans(sortMessages(lista))
+      pesoGuardado = peso
     } catch {
       state.sessionID = null
     }
@@ -864,6 +963,22 @@ async function restoreConversation(testigo = state.bootToken) {
   if (state.bootToken !== testigo) return
   el.chat.textContent = ''
   state.turns = []
+  // Lo que la conversación arrastra: lo guardado de la sesión y lo que se ve en
+  // la ventana, lo que sea mayor. Lo guardado cuenta la sesión entera (también
+  // los mensajes que ya no se piden) y es lo bueno; el recuento de la ventana
+  // rescata las sesiones abiertas antes de que esto existiera, y nunca lo baja.
+  // El aviso vuelve a quedar por dar: el chat se ha repintado entero —abrir el
+  // panel, volver al sitio, reindexar— y el que hubiera se fue con él.
+  const deLaVentana = (messages || []).reduce((n, m) => n + toolOutputSize(m.parts), 0)
+  state.sessionToolChars = Math.max(pesoGuardado, deLaVentana)
+  state.heavyWarned = false
+  if (recortada) {
+    el.chat.appendChild(olderTurnsRow())
+    log.info(
+      'Conversación recortada',
+      `se piden los últimos ${RESTORE_LIMITS.messages} mensajes · ${formatBytes(deLaVentana)} en salidas de herramientas`
+    )
+  }
   // Lo restaurado es historia: no se anuncia al lector de pantalla.
   state.restoring = true
 
@@ -1051,10 +1166,25 @@ function showWelcome() {
  * @param {string} text lo que escribió el usuario
  * @param {string} [nota] qué acompañaba a la pregunta, si acompañaba algo
  */
+/**
+ * Un mensaje que no es novedad no entra animado.
+ *
+ * `.msg` entra con un `rise` de 180 ms, que está bien para el mensaje que
+ * acabas de mandar y es confeti cuando se repinta la conversación entera
+ * (hasta `RESTORE_LIMITS.messages` burbujas a la vez). Se decide por mensaje y
+ * no con una clase en el chat: entre que se pondría y se quitaría no hay ningún
+ * await, así que el navegador nunca llegaría a ver el chat «restaurando».
+ */
+function markIfRestored(d) {
+  if (state.restoring) d.classList.add('restored')
+  return d
+}
+
 function addUserMessage(text, nota) {
   clearEmpty()
   const d = document.createElement('div')
   d.className = 'msg user'
+  markIfRestored(d)
   d.textContent = text
 
   // Si la pregunta llevaba adjunto un trozo de la página, se dice. Mandar
@@ -1077,6 +1207,7 @@ function addAssistantMessage(text) {
   clearEmpty()
   const d = document.createElement('div')
   d.className = 'msg assistant'
+  markIfRestored(d)
   d.appendChild(renderMarkdown(text, { onLink: openUrl, onNote: focusNote, allowHref: linkAllowed }))
   el.chat.appendChild(d)
   return d
@@ -1333,13 +1464,31 @@ async function send() {
       }),
     }
 
+    // ¿Está el estado diciendo ahora mismo que el modelo lleva callado? Se
+    // enciende con el aviso del vigilante y se apaga en cuanto vuelve a llegar
+    // algo: dejarlo puesto sería decir «sin señales» mientras se escribe.
+    let silencioso = false
+
     // Por runTurn y no a mano: trae el vigilante de turnos colgados y junta las
     // partes de TODOS los mensajes del turno, no solo del ultimo.
     medible = true
     const turn = await state.client.runTurn(state.sessionID, peticion, {
       signal: abort.signal,
       stallMs: 90000,
+      // A mitad del plazo (45 s de los 90) sin una sola señal del modelo, el
+      // estado lo dice donde ya dice «pensando…» (H6 P2): hasta ahora un turno
+      // muerto y uno que está leyendo tres páginas con el MCP se veían igual, y
+      // el usuario no sabía si esperar o parar. No se cancela nada, no se toca el
+      // chat y no entra en el registro: lo que pasa a los 90 s ya se registra.
+      onWarn: (ms) => {
+        silencioso = true
+        setStatus('busy', `pensando… ${Math.round(ms / 1000)} s sin señales del modelo`)
+      },
       onUpdate: (t) => {
+        if (silencioso) {
+          silencioso = false
+          setStatus('busy', 'pensando…')
+        }
         // La primera palabra del modelo, una sola vez: hasta que llega, el
         // usuario sólo ve los tres puntos. Se mide al LLEGAR el texto, no al
         // pintarlo: lo que se cronometra es el modelo, no el navegador.
@@ -1378,7 +1527,7 @@ async function send() {
 
     if (turn.stalled) {
       log.error('Turno colgado', modelKey(state.model))
-      toolsBox.remove()
+      keepToolsFolded(turn, toolsBox)
       cuerpo.textContent = ''
       const aviso = 'El modelo dejó de responder y no ha terminado nunca. No todos los de la lista son fiables.'
       cuerpo.appendChild(errorNode(
@@ -1391,7 +1540,7 @@ async function send() {
     }
 
     if (turn.aborted) {
-      toolsBox.remove()
+      keepToolsFolded(turn, toolsBox)
       cuerpo.textContent = ''
       cuerpo.appendChild(noticeNode('Turno cancelado.'))
       if (mismoSitio) announce('Turno cancelado.')
@@ -1400,7 +1549,7 @@ async function send() {
 
     if (!turn.ok) {
       log.error('Turno fallido', turn.error)
-      toolsBox.remove()
+      keepToolsFolded(turn, toolsBox)
       cuerpo.textContent = ''
       cuerpo.appendChild(errorNode(turn.error, tracker, text))
       if (mismoSitio) announce('La respuesta falló: ' + turn.error)
@@ -1457,27 +1606,27 @@ async function send() {
       mcpConnected: mcpAlPedir,
     })
 
+    // Y lo que este turno ha añadido a lo que la sesión arrastra: pasado el
+    // umbral se dice una vez, con la salida a mano.
+    await trackSessionWeight(salidaTools, bubble)
+
     // El modelo que acaba de funcionar se recuerda para este sitio: si el
     // proveedor por defecto está caducado, no hay que volver a tropezar.
     if (state.site && state.model) await saveSite(state.site.host, { model: state.model })
 
     // Lo que cuesta ENSEÑAR la respuesta: el repintado final, el aviso de las
-    // páginas base y guardar el modelo. Iba dentro de «índice» y los dos números
-    // salían sumados bajo una etiqueta que era de otra cosa.
+    // páginas base, apuntar lo que pesa la sesión y guardar el modelo. Iba
+    // dentro de «índice» y los dos números salían sumados bajo una etiqueta que
+    // era de otra cosa.
     cron.mark('pintar')
 
-    // Enriquecer el índice con lo que las herramientas acaban de devolver.
-    await growIndex(turn.parts)
-
-    // Y con la estructura del árbol que se ve en la barra lateral: es exacta,
-    // es gratis, y es justo por donde va a ir la navegación asistida.
-    await growTreeFromPage()
-    cron.mark('índice')
-
-    // Y, si procede, ofrecer llevar al usuario allí.
-    await offerNavigation(answer, bubble, skill, turn.parts)
-
-    // O, en el modo Análisis, subrayar en la página de qué habla cada punto.
+    // En el modo Análisis, subrayar en la página de qué habla cada punto. Va
+    // ANTES del índice (H6 P3): la tarjeta de observaciones es lo que el usuario
+    // está esperando, y el índice —que nadie ve— puede esperar a que esté puesta.
+    // En los demás modos esto no hace nada (`offerNotes` se sale a la primera si
+    // la Skill no es Análisis), así que el orden de los demás no cambia: la
+    // tarjeta de navegación sigue yendo detrás del índice, que es lo único que
+    // necesita crecido (y en Análisis no hay tarjeta: `offersNavigation`).
     // La página de la que salió el texto, tal y como la vio la pestaña; no
     // vale `state.tabUrl`, que el panel refresca solo y cambia por su cuenta.
     await offerNotes(answer, bubble, {
@@ -1505,11 +1654,29 @@ async function send() {
         destino.appendChild(renderMarkdown(prose, { onLink: openUrl, onNote: focusNote, allowHref: linkAllowed }))
       },
     })
-    // Sólo en Análisis: en los demás modos lo que pasa entre el índice y aquí es
-    // la tarjeta de navegación —con su turno del planificador—, que no es esta
-    // fase. Se queda en el total y sin etiqueta, antes que debajo de una
-    // etiqueta que no es la suya.
+    // Sólo en Análisis: en los demás modos `offerNotes` no hace nada y la fase
+    // sería un cero con etiqueta. Lo que tarda la tarjeta de navegación —con su
+    // turno del planificador— se queda en el total y sin etiqueta, antes que
+    // debajo de una etiqueta que no es la suya.
     if (skill === 'analisis') cron.mark('marcas')
+
+    // Enriquecer el índice con lo que las herramientas acaban de devolver.
+    await growIndex(turn.parts)
+
+    // Y con la estructura del árbol que se ve en la barra lateral: es exacta,
+    // es gratis, y es justo por donde va a ir la navegación asistida.
+    await growTreeFromPage()
+    cron.mark('índice')
+
+    // Y, si procede, ofrecer llevar al usuario allí (necesita el índice de
+    // arriba: el destino sólo vale si está en él).
+    await offerNavigation(answer, bubble, skill, turn.parts)
+
+    // Y una sola escritura del índice por turno, con todo lo que haya crecido
+    // (las herramientas, el árbol, el camino que leyó el planificador). Si el
+    // turno se va por el `catch` antes de llegar aquí, lo aprendido espera al
+    // siguiente con SU host apuntado: nunca se guarda bajo otro.
+    await persistIndex()
   } catch (err) {
     if (err?.name !== 'AbortError') {
       showNotice(err instanceof OpencodeError ? err.message : 'Fallo enviando: ' + err.message, true)
@@ -1536,38 +1703,11 @@ async function send() {
 function paintTurn(tracker, toolsBox, body, final = false) {
   const tools = tracker.tools
   toolsBox.textContent = ''
-  const filas = []
-  for (const t of tools) {
-    const row = document.createElement('div')
-    row.className = 'tool' + (t.status === 'completed' ? ' done' : '')
-    const dot = document.createElement('span')
-    dot.className = 'tdot'
-    const label = document.createElement('span')
-    label.textContent = t.title || prettyTool(t.tool)
-    row.append(dot, label)
-    filas.push(row)
-    toolsBox.appendChild(row)
-  }
   if (final && tools.length) {
     // Al terminar, la actividad de herramientas se pliega a una línea sobria.
-    // Plegada, no borrada: hasta ahora las filas se tiraban y con ellas la única
-    // forma de saber QUÉ leyó el modelo —y de ver que una consulta falló—, que
-    // es lo primero que se mira cuando la respuesta no cuadra. Se crea siempre
-    // cerrado, y `restoreConversation` no recrea filas de herramientas, así que
-    // no hay ningún abierto que sobreviva a repintar el chat.
-    toolsBox.textContent = ''
-    const fold = document.createElement('details')
-    fold.className = 'tools-fold'
-    const summary = document.createElement('summary')
-    summary.className = 'tool done'
-    const dot = document.createElement('span')
-    dot.className = 'tdot'
-    const label = document.createElement('span')
-    label.textContent = `${tools.length} consulta${tools.length === 1 ? '' : 's'} a Atlassian`
-    summary.append(dot, label)
-    fold.appendChild(summary)
-    for (const row of filas) fold.appendChild(row)
-    toolsBox.appendChild(fold)
+    toolsBox.appendChild(toolsFold(tools))
+  } else {
+    for (const t of tools) toolsBox.appendChild(toolRow(t))
   }
 
   // El bloque JSON de anclas con el que cierra un análisis no se pinta: ni
@@ -1591,6 +1731,63 @@ function paintTurn(tracker, toolsBox, body, final = false) {
   // lector de pantalla; lo que hay que decir se dice al final (A2).
   body.setAttribute('aria-busy', final ? 'false' : 'true')
   scrollChat()
+}
+
+/** Una consulta a Atlassian, como fila: el punto de estado y su título. */
+function toolRow(t) {
+  const row = document.createElement('div')
+  row.className = 'tool' + (t.status === 'completed' ? ' done' : '')
+  const dot = document.createElement('span')
+  dot.className = 'tdot'
+  const label = document.createElement('span')
+  label.textContent = t.title || prettyTool(t.tool)
+  row.append(dot, label)
+  return row
+}
+
+/**
+ * Las consultas de un turno terminado, plegadas en una línea sobria.
+ *
+ * Plegadas, no borradas: hasta H5 las filas se tiraban al acabar y con ellas la
+ * única forma de saber QUÉ leyó el modelo —y de ver que una consulta falló—, que
+ * es lo primero que se mira cuando la respuesta no cuadra (§8.14). Se crea
+ * siempre cerrado, y `restoreConversation` no recrea filas de herramientas, así
+ * que no hay ningún abierto que sobreviva a repintar el chat.
+ *
+ * Lo usan el pintado final y, desde H6, las tres salidas de un turno que acaba
+ * mal (`keepToolsFolded`): un turno colgado, cancelado o fallido las tiraba, que
+ * es justo cuando más falta hacen.
+ */
+function toolsFold(tools) {
+  const filas = tools.map(toolRow)
+  const fold = document.createElement('details')
+  fold.className = 'tools-fold'
+  const summary = document.createElement('summary')
+  summary.className = 'tool done'
+  const dot = document.createElement('span')
+  dot.className = 'tdot'
+  const label = document.createElement('span')
+  label.textContent = `${tools.length} consulta${tools.length === 1 ? '' : 's'} a Atlassian`
+  summary.append(dot, label)
+  fold.appendChild(summary)
+  for (const row of filas) fold.appendChild(row)
+  return fold
+}
+
+/**
+ * Las consultas de un turno que acaba mal: plegadas igual que las de uno que
+ * acaba bien, en vez de tiradas con la caja.
+ *
+ * Un turno colgado, cancelado o fallido hacía `toolsBox.remove()`, así que el
+ * aviso rojo no decía qué había leído el modelo hasta quedarse callado ni cuál de
+ * las consultas había fallado: lo que el registro sí guarda y el chat perdía
+ * (límite anotado en la revisión de H5, §8.14). Sin ninguna consulta, la caja se
+ * va como antes: un hueco vacío no dice nada.
+ */
+function keepToolsFolded(turn, toolsBox) {
+  if (!turn.tools?.length) return toolsBox.remove()
+  toolsBox.textContent = ''
+  toolsBox.appendChild(toolsFold(turn.tools))
 }
 
 /**
@@ -1799,6 +1996,74 @@ function errorNode(message, tracker, question) {
   return wrap
 }
 
+/**
+ * Lo que la conversación lleva arrastrado, turno a turno.
+ *
+ * El `system` se manda por turno y no se acumula, pero las salidas de las
+ * herramientas se quedan en el historial de la sesión y viajan otra vez en cada
+ * pregunta siguiente (§7). opencode poda las más antiguas y deja intactos los
+ * últimos 40 000 tokens (`PRUNE_PROTECT`, leído del binario en la auditoría del
+ * 2026-09-13), así que esto no es una fuga: es un techo. Pasado
+ * `SESSION_LIMITS.heavyToolChars` lo barato deja de ser seguir aquí.
+ *
+ * Se guarda en storage.session para que el número sobreviva a cerrar y abrir el
+ * panel sin volver a pedir los mensajes, y se escribe bajo el host con el que se
+ * pidió el turno: aquí sólo se llega con la respuesta ya dada por buena para
+ * este sitio (`mismoSitio`).
+ *
+ * Se cuentan CARACTERES y se enseñan como KB, igual que «Respuesta recibida»:
+ * con lo que devuelve Atlassian los bytes de verdad son algunos más, y lo que
+ * se decide con esto es el orden de magnitud, no el byte.
+ */
+async function trackSessionWeight(chars, bubble) {
+  const host = state.site?.host ?? state.lastHost
+  if (!host) return
+  state.sessionToolChars += Math.max(0, Number(chars) || 0)
+  await setSessionWeight(host, state.sessionToolChars).catch(() => {})
+  if (state.heavyWarned || state.sessionToolChars < SESSION_LIMITS.heavyToolChars) return
+  state.heavyWarned = true
+  log.warn('Conversación pesada', `${formatBytes(state.sessionToolChars)} de consultas a Atlassian se reenvían en cada turno`)
+  attachToBubble(bubble, heavySessionNotice())
+}
+
+/**
+ * El aviso de conversación pesada, con la salida.
+ *
+ * Dice lo que pasa (el tamaño), que el servidor ya hace su parte —si no, suena a
+ * avería— y qué gana empezando de nuevo. Sólo promete el resumen de la sesión si
+ * la memoria entre sesiones está activa: prometerlo apagado sería mentir.
+ */
+function heavySessionNotice() {
+  const wrap = document.createElement('div')
+  wrap.appendChild(
+    noticeNode(
+      `Esta conversación arrastra ${formatBytes(state.sessionToolChars)} de consultas a Atlassian. ` +
+        'opencode recorta las más antiguas, pero las últimas se reenvían en cada turno: una sesión nueva empieza limpia' +
+        (state.settings.crossSessionMemory ? ' y la memoria guarda un resumen de ésta.' : '.')
+    )
+  )
+
+  const row = document.createElement('div')
+  row.className = 'nav-actions'
+  const btn = document.createElement('button')
+  btn.className = 'primary'
+  btn.type = 'button'
+  btn.textContent = 'Sesión nueva'
+  btn.addEventListener('click', () => {
+    if (state.streaming) return
+    btn.disabled = true
+    newSession().catch((err) => {
+      // Si no se pudo cerrar la sesión, el botón vuelve: el aviso sigue ahí y
+      // dejarlo apagado sería quitar la única salida que ofrece.
+      btn.disabled = false
+      showNotice('No he podido abrir una sesión nueva: ' + (err?.message || err), true)
+    })
+  })
+  row.appendChild(btn)
+  wrap.appendChild(row)
+  return wrap
+}
+
 async function growIndex(parts) {
   if (!state.site) return
   // harvestIndex blanquea toda URL absoluta de otro host antes de mirar nada
@@ -1812,7 +2077,7 @@ async function growIndex(parts) {
   })
   if (added > 0) {
     state.index = index
-    await saveIndex(state.site.host, index)
+    markIndexDirty(index)
     log.ok('Índice ampliado', `+${added} · total ${indexSize(index)}`)
   }
 }
@@ -1845,8 +2110,58 @@ async function growTreeFromPage() {
   if (ganados <= 0 && indexSize(merged) === indexSize(state.index)) return
 
   state.index = merged
-  await saveIndex(state.site.host, merged)
+  markIndexDirty(merged)
   if (ganados > 0) log.ok('Árbol leído de la página', `+${ganados} relaciones · ${snap.scanned} filas`)
+}
+
+/**
+ * Apunta que el índice ha crecido, SIN escribirlo.
+ *
+ * Hasta H6 cada trozo que crecía escribía el índice entero en `chrome.storage`:
+ * lo que devolvieron las herramientas, el árbol de la barra lateral y el camino
+ * que leyó el planificador eran tres o cuatro serializaciones de hasta 43 KB por
+ * turno para dejar lo mismo en disco (docs/PLAN.md §2.6, P3). Ahora se apunta y
+ * `persistIndex()` escribe una vez al final del turno.
+ *
+ * Se guarda el HOST junto al índice porque entre aprender y guardar puede pasar
+ * un turno del planificador o una segunda pasada de notas, y en ese hueco el
+ * panel puede haberse ido a otro sitio (C2 de H2): lo aprendido se guarda bajo el
+ * host que lo aprendió, nunca bajo el de ahora.
+ */
+function markIndexDirty(index) {
+  const host = state.site?.host ?? state.lastHost
+  if (!host || !index) return
+  state.indexDirty = { host, index }
+}
+
+/**
+ * La única escritura del índice de un turno: lo que se haya apuntado, bajo el
+ * host que lo aprendió. Sin nada apuntado no toca el disco ni el registro.
+ *
+ * No lanza: se llama desde el camino de salida de un turno que ya ha respondido,
+ * y quedarse sin cuota de almacenamiento no puede tapar la respuesta. Lo que no
+ * se pudo guardar se dice en el registro y sigue en memoria, así que el turno
+ * siguiente lo intenta otra vez.
+ */
+async function persistIndex() {
+  const pendiente = state.indexDirty
+  state.indexDirty = null
+  if (!pendiente) return
+  const { host, index } = pendiente
+  try {
+    await saveIndex(host, index)
+  } catch (err) {
+    // Vuelve a quedar apuntado —salvo que algo más nuevo lo esté ya— para que el
+    // turno siguiente lo intente otra vez.
+    state.indexDirty = state.indexDirty || pendiente
+    log.error('Índice sin guardar', `${host} · ${err?.message || err}`)
+    return
+  }
+  log.ok(
+    'Índice guardado',
+    `${Object.keys(index.pages || {}).length} páginas · ${Object.keys(index.issues || {}).length} incidencias · ` +
+      `total ${indexSize(index)} · ${host}`
+  )
 }
 
 /**
@@ -1953,9 +2268,11 @@ async function offerNavigation(answer, bubble, skillId = state.skill, parts = []
     // En modo rápido no se lee el árbol: no se va a ofrecer «Paso a paso».
     navMode: state.settings.navMode,
     learnAncestry,
-    onIndex: async (enriquecido) => {
+    // El camino que el planificador lee de la API entra en el índice de
+    // memoria y se guarda con el resto al final del turno (P3).
+    onIndex: (enriquecido) => {
       state.index = enriquecido
-      await saveIndex(state.site.host, enriquecido)
+      markIndexDirty(enriquecido)
     },
   })
 
@@ -3725,6 +4042,20 @@ function paintSetupProducts() {
   }
 }
 
+/** Cuánto tiempo dice el botón «Copiado» antes de volver a su texto. */
+const COPY_FEEDBACK_MS = 1400
+
+/**
+ * El texto propio de cada botón de copiar, mientras dice «Copiado».
+ *
+ * Por botón y no en una variable suelta porque hay varios (el comando, la ruta,
+ * el bloque de configuración, el registro, las observaciones de cada tarjeta) y
+ * cada uno vuelve a lo suyo. Un WeakMap para que la entrada se vaya con el botón:
+ * la tarjeta de un análisis se pinta con `createElement` y desaparece al
+ * repintarse el chat.
+ */
+const textoDeCopiar = new WeakMap()
+
 /**
  * Copia y lo dice en el propio botón.
  *
@@ -3732,12 +4063,20 @@ function paintSetupProducts() {
  * el snippet y el registro) o el botón ya creado: la tarjeta de análisis se
  * pinta con `createElement` y no tiene id, y darle uno la haría irrepetible.
  *
+ * El texto de siempre se guarda UNA vez por botón: en un segundo clic dentro de
+ * los 1400 ms lo que hay escrito ya es «Copiado», y guardar eso como original
+ * dejaba el botón diciendo «Copiado» para siempre (límite anotado en la revisión
+ * de H5). El temporizador pendiente también se cancela, o el primero restauraría
+ * el texto a mitad del segundo aviso.
+ *
  * @returns {Promise<boolean>} si de verdad se copió: quien llama no debe
  *          apuntar en el registro un «copiado» que no ha pasado.
  */
 async function copyToClipboard(text, button) {
   const btn = typeof button === 'string' ? $(button) : button || null
-  const original = btn?.textContent
+  if (btn && !textoDeCopiar.has(btn)) textoDeCopiar.set(btn, { original: btn.textContent, timer: 0 })
+  const marca = btn ? textoDeCopiar.get(btn) : null
+  if (marca?.timer) clearTimeout(marca.timer)
   let ok = true
   try {
     await navigator.clipboard.writeText(text)
@@ -3746,7 +4085,12 @@ async function copyToClipboard(text, button) {
     ok = false
     if (btn) btn.textContent = 'No se pudo'
   }
-  if (btn) setTimeout(() => (btn.textContent = original), 1400)
+  if (btn) {
+    marca.timer = setTimeout(() => {
+      btn.textContent = marca.original
+      textoDeCopiar.delete(btn)
+    }, COPY_FEEDBACK_MS)
+  }
   return ok
 }
 
@@ -3799,39 +4143,68 @@ function showLogScreen() {
   paintLog()
   paintState()
   state.logUnsub?.()
-  state.logUnsub = log.subscribe(() => {
-    if (!$('screen-log').classList.contains('hidden')) paintLog()
+  state.logUnsub = log.subscribe((entry) => {
+    if ($('screen-log').classList.contains('hidden')) return
+    // Una línea nueva se mete arriba y nada más se toca (H6 P8): repintar las
+    // 200 filas por cada línea es lo que hacía que, con el Registro abierto
+    // durante un turno con herramientas, la pantalla fuera dando tirones.
+    // `log.clear()` avisa SIN entrada, y eso sí es un repintado: la lista se
+    // queda vacía.
+    if (entry) appendLogRow(entry)
+    else paintLog()
   })
   showScreen('screen-log')
 }
+
+/** Cuántas líneas del registro se enseñan, la más nueva arriba. */
+const LOG_ROWS = 200
 
 function paintLog() {
   const box = $('log-body')
   box.textContent = ''
   const entries = state.logOnlyProblems ? log.filter('warn') : log.entries
-  for (const e of entries.slice(-200).reverse()) {
-    const row = document.createElement('div')
-    row.className = 'logrow ' + e.level
-
-    const t = document.createElement('span')
-    t.className = 't'
-    t.textContent = clockTime(e.at)
-
-    const m = document.createElement('span')
-    m.className = 'm'
-    m.textContent = e.message
-    if (e.detail) {
-      const d = document.createElement('span')
-      d.className = 'd'
-      d.textContent = ' — ' + e.detail
-      m.appendChild(d)
-    }
-
-    row.append(t, m)
-    box.appendChild(row)
-  }
+  for (const e of entries.slice(-LOG_ROWS).reverse()) box.appendChild(logRow(e))
   $('btn-log-all').classList.toggle('on', !state.logOnlyProblems)
   $('btn-log-problems').classList.toggle('on', !!state.logOnlyProblems)
+}
+
+/**
+ * Una entrada nueva, arriba, sin reconstruir la lista.
+ *
+ * El filtro se aplica aquí igual que en `paintLog` —y con la misma tabla de
+ * niveles, `LEVELS` de log.js, para que «sólo problemas» signifique lo mismo en
+ * los dos sitios— y la lista se recorta por abajo: sin eso, un panel abierto
+ * durante horas acumularía filas que el registro ya ha olvidado (su tope son 400
+ * entradas).
+ */
+function appendLogRow(e) {
+  if (state.logOnlyProblems && (LEVELS[e.level] ?? 0) < LEVELS.warn) return
+  const box = $('log-body')
+  box.prepend(logRow(e))
+  while (box.childElementCount > LOG_ROWS) box.lastElementChild.remove()
+}
+
+/** Una línea del registro: la hora, el título y su detalle. */
+function logRow(e) {
+  const row = document.createElement('div')
+  row.className = 'logrow ' + e.level
+
+  const t = document.createElement('span')
+  t.className = 't'
+  t.textContent = clockTime(e.at)
+
+  const m = document.createElement('span')
+  m.className = 'm'
+  m.textContent = e.message
+  if (e.detail) {
+    const d = document.createElement('span')
+    d.className = 'd'
+    d.textContent = ' — ' + e.detail
+    m.appendChild(d)
+  }
+
+  row.append(t, m)
+  return row
 }
 
 /** Estado actual, en crudo: sirve para pegarlo cuando algo va mal. */
@@ -4268,6 +4641,7 @@ function wireEvents() {
   // --- ajustes
   $('set-delay').addEventListener('input', () => ($('delay-value').textContent = $('set-delay').value))
   $('btn-settings-close').addEventListener('click', async () => {
+    const antes = state.settings
     state.settings = await saveSettings({
       navMode: $('set-nav-quick').checked ? 'quick' : 'guided',
       reduceMotion: $('set-motion').checked,
@@ -4276,9 +4650,22 @@ function wireEvents() {
       serverUrl: $('set-url').value.trim() || DEFAULT_SETTINGS.serverUrl,
       password: $('set-pass').value,
     })
+    // Rearrancar es tirar el cliente —lo que CANCELA el turno en vuelo (C1)— y
+    // volver a descargar la conversación entera. Eso sólo hace falta si cambió
+    // con quién se habla: la dirección del servidor o la contraseña. Lo demás
+    // (el modo de navegación, la pausa entre pasos, el subrayado, «Reducir
+    // animaciones») se aplica en caliente: la UI del panel aquí mismo, y la
+    // página por el service worker, que ve el cambio de `faro:settings` con
+    // `chrome.storage.onChanged` y le empuja los ajustes. Hasta H6, cerrar
+    // Ajustes a mitad de respuesta mataba el turno (pendiente de §4.4).
+    const clientChanged = state.settings.serverUrl !== antes.serverUrl || state.settings.password !== antes.password
     applySettingsToUi()
     hideScreens()
-    await bootForSite()
+    if (clientChanged) {
+      await bootForSite()
+      return
+    }
+    log.info('Ajustes aplicados', 'sin rearrancar: el servidor y la contraseña no han cambiado')
   })
   $('btn-reindex').addEventListener('click', async () => {
     hideScreens()
@@ -4293,6 +4680,9 @@ function wireEvents() {
     await memory.saveContextMd(state.site.host, '')
     await clearSessionId(state.site.host)
     state.index = null
+    // Y lo que estuviera apuntado para guardar: olvidar el sitio no puede dejar
+    // un índice pendiente que el turno siguiente vuelva a escribir (P3).
+    state.indexDirty = null
     state.ancestryFetched = new Map()
     state.contextMd = ''
     state.sessionID = null
@@ -4666,6 +5056,11 @@ async function newSession() {
   }
 
   await clearSessionId(state.site.host)
+  // Y con ella, lo que arrastraba: la sesión nueva empieza sin nada que
+  // reenviar, que es justo lo que se ofrece al avisar de una pesada.
+  await clearSessionWeight(state.site.host)
+  state.sessionToolChars = 0
+  state.heavyWarned = false
   forgetNotes()
   log.ok('Sesión nueva', state.settings.crossSessionMemory ? 'la anterior quedó resumida' : '')
   state.sessionID = null

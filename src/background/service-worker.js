@@ -12,7 +12,7 @@
 
 import { MSG, sendToTab } from '../shared/messages.js'
 import { getSettings } from '../shared/storage.js'
-import { NAV_TIMING } from '../shared/config.js'
+import { NAV_TIMING, STORAGE_KEYS } from '../shared/config.js'
 
 const PLANS_KEY = 'faro:plans'
 
@@ -63,6 +63,28 @@ chrome.action?.onClicked.addListener(async (tab) => {
 })
 
 chrome.tabs.onRemoved.addListener((tabId) => setPlan(tabId, null))
+
+/**
+ * Los ajustes que cambian en el panel llegan a la página al momento.
+ *
+ * `pushSettings` sólo se llamaba al lanzar un recorrido y tras cada recarga
+ * (`onContentReady`), así que «Reducir animaciones» y el estilo del subrayado
+ * no llegaban al content script hasta que el usuario navegara. Desde H6,
+ * además, cerrar Ajustes ya no rearranca el panel, así que tampoco hay un
+ * arranque que los empuje de rebote. El worker no ve pulsar «Listo»: lo que ve
+ * es la escritura de `faro:settings`, y eso es esto.
+ *
+ * Sólo a la pestaña activa —es la única que el usuario está mirando, y la
+ * siguiente recibirá los suyos al estar lista— y sin esperar respuesta:
+ * `sendToTab` ya tolera que ahí no haya content script.
+ */
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'local' || !changes || !(STORAGE_KEYS.settings in changes)) return
+  ;(async () => {
+    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true })
+    if (tab?.id != null) await pushSettings(tab.id)
+  })().catch((err) => console.error('[faro] service worker', err))
+})
 
 // ------------------------------------------------------------------ mensajes
 

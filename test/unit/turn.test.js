@@ -119,6 +119,35 @@ test('turn: un error de sesión se traduce a algo legible', () => {
   assert(msg.includes('sesión nueva'), msg)
 })
 
+// --- H6 P2: qué merece un repintado -------------------------------------
+// `paintTurn` reconstruye la burbuja entera —markdown incluido— cada vez que el
+// tracker avisa, y el razonamiento de un modelo que piensa en voz alta no se
+// pinta en ninguna parte: `get text()` sólo junta las partes `text`. Avisar por
+// cada trozo de razonamiento era repintar lo mismo cientos de veces. El trozo se
+// guarda igual (`get reasoning()` lo sigue devolviendo) y el evento sigue
+// contando como señal de vida, pero eso lo mide el vigilante de `runTurn` con su
+// propio oyente, no este aviso (pinado en client.test.js).
+test('turn: un trozo de razonamiento se guarda pero no pide repintar', () => {
+  let avisos = 0
+  const t = new TurnTracker(SID, { onUpdate: () => avisos++ })
+  t.handle(ev('message.updated', { info: { id: 'm1', sessionID: SID, role: 'assistant' } }))
+
+  const cambio = t.handle(ev('message.part.delta', { sessionID: SID, messageID: 'm1', partID: 'prt_r', field: 'reasoning', delta: 'Pensando…' }))
+  eq(cambio, true, 'el evento sí cambia el turno: el vigilante lo cuenta como señal de vida')
+  eq(avisos, 0, 'pero no hay nada visible que repintar')
+  t.handle(ev('message.part.delta', { sessionID: SID, messageID: 'm1', partID: 'prt_r', field: 'reasoning', delta: ' y más' }))
+  eq(avisos, 0)
+  eq(t.reasoning, 'Pensando… y más', 'y el razonamiento se conserva entero')
+  eq(t.text, '', 'sin colarse en la respuesta')
+
+  // El texto sí: es lo único que cambia lo que el usuario ve.
+  t.handle(ev('message.part.delta', { sessionID: SID, messageID: 'm1', partID: 'prt_1', field: 'text', delta: 'Hola' }))
+  eq(avisos, 1)
+  // Y una parte de herramienta también: su fila se pinta.
+  t.handle(ev('message.part.updated', { part: { id: 'prt_t', sessionID: SID, messageID: 'm1', type: 'tool', tool: 'jira_search', state: { status: 'running' } } }))
+  eq(avisos, 2)
+})
+
 test('describeError: nombres conocidos y desconocidos', () => {
   // ProviderAuthError entra por la via de credenciales caducadas.
   assert(/caducado|auth login/i.test(describeError({ name: 'ProviderAuthError' })))

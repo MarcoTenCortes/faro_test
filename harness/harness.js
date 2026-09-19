@@ -15,11 +15,69 @@ import { treeContainer, rowFor, toggleFor, treeScroller } from '../src/content/t
 import { scrollWithinScrollers } from '../src/content/dom-utils.js'
 import { imagesWithin } from '../src/content/anchor.js'
 import { Picker } from '../src/content/picker.js'
-import { pageDigest } from '../src/content/digest.js'
+import { pageDigest, digestScope, resolveBlockQuote } from '../src/content/digest.js'
 import { jiraIssueFields } from '../src/content/jira-issue.js'
-import { formatDigest, blockHint } from '../src/shared/digest.js'
+import { formatDigest, blockHint, DIGEST_LIMITS } from '../src/shared/digest.js'
 
 // --------------------------------------------------------------- contenido
+
+/**
+ * Una página larga, generada al vuelo y determinista.
+ *
+ * El ADR-014 del banco tiene veinte bloques; una página de Confluence de
+ * verdad tiene cientos, y es ahí donde se nota lo que cuesta leerla en bloques
+ * y resolver una observación tras otra (P7 de H6). Ésta son doce apartados de
+ * veinticinco medidas, con sus listas y una tabla: 347 bloques y unos 25 600
+ * caracteres, por debajo de los topes de `DIGEST_LIMITS` a propósito, para que
+ * la comprobación 42 pueda exigir la página ENTERA y sin recortar.
+ *
+ * Cada párrafo nombra un servicio distinto («srv-042»), así que ninguna cita
+ * aparece dos veces y una marca sólo puede caer donde tiene que caer. Devuelve
+ * además cuántos bloques son, para no escribir el número a mano en la
+ * comprobación: el que manda es el que genera la página.
+ */
+function paginaLarga({ apartados = 12, porApartado = 25 } = {}) {
+  const html = []
+  let bloques = 1 // el <h1> que pone renderPage con el título
+
+  for (let a = 1; a <= apartados; a++) {
+    html.push(`<h2>Apartado ${a} — rotación por lotes</h2>`)
+    bloques++
+    for (let i = 1; i <= porApartado; i++) {
+      const n = (a - 1) * porApartado + i
+      html.push(`<p>Medida ${n}. El servicio srv-${String(n).padStart(3, '0')} renueva su credencial cada 90 días.</p>`)
+      bloques++
+    }
+    html.push(
+      `<ul><li>Lote ${a}: ventana de mantenimiento nocturna.</li><li>Lote ${a}: responsable de guardia asignado.</li></ul>`
+    )
+    bloques += 2
+  }
+
+  // `ul`, `table`, `tbody` y `tr` no tienen texto propio: no son bloques, lo
+  // son sus `li` y sus celdas. Ninguna celda baja de dos caracteres, que es lo
+  // que `DIGEST_LIMITS.blockMin` deja de contar como bloque.
+  html.push(
+    '<table><caption>Resumen de lotes</caption><tbody>' +
+      '<tr><th>Lote</th><th>Ventana</th><th>Estado</th></tr>' +
+      '<tr><td>Lote 1</td><td>Nocturna</td><td>Pendiente</td></tr>' +
+      '<tr><td>Lote 2</td><td>Diurna</td><td>Hecho</td></tr>' +
+      '</tbody></table>'
+  )
+  bloques += 10 // el pie de la tabla y sus nueve celdas
+
+  return {
+    path: '/wiki/spaces/ENG/pages/900/Pagina-larga',
+    title: 'Página larga de prueba',
+    crumb: 'Ingeniería / Página larga',
+    body: html.join(''),
+    bloques,
+    /** Cuántos párrafos tiene: de ahí salen las citas de la comprobación 42. */
+    medidas: apartados * porApartado,
+  }
+}
+
+const LARGO = paginaLarga()
 
 const PAGES = {
   'space:ENG': {
@@ -153,6 +211,7 @@ const PAGES = {
       <h2>Identity Provider Service</h2>
       <p>Backends en Java, interfaz en Angular, EJBCA para la autoridad de certificación y PostgreSQL para la persistencia.</p>`,
   },
+  'page:largo': LARGO,
   'page:1086': {
     path: '/wiki/spaces/ENG/pages/1086/ACV+Static+-+Identity+Provider+Service',
     title: 'ACV Static - Identity Provider Service',
@@ -645,6 +704,42 @@ function observacionesDeIncidencia(digest) {
   ]
 }
 
+/**
+ * Doce observaciones sobre la página larga, seis por cada camino que cuesta:
+ *   - seis con su bloque y una cita dentro («block+quote»), que es el caso
+ *     normal de un análisis;
+ *   - seis cuyo bloque NO existe, que caen al peldaño global («global+quote»)
+ *     y son las que antes recorrían la página entera una por una.
+ * Los bloques se buscan por su texto en el digest recién leído, nunca por un
+ * número escrito a mano.
+ */
+function observacionesDePaginaLarga(digest) {
+  const bloque = (n) => digest.blocks.find((b) => b.text.startsWith(`Medida ${n}.`))
+  const cita = (n) => `El servicio srv-${String(n).padStart(3, '0')} renueva su credencial`
+  const conBloque = [20, 70, 120, 170, 220, 270]
+  const sinBloque = [31, 81, 131, 181, 231, 281]
+
+  const notas = []
+  conBloque.forEach((n, i) => {
+    const b = bloque(n)
+    notas.push({
+      n: i + 1,
+      title: `Medida ${n} sin responsable`,
+      kind: 'hueco',
+      anchor: { kind: 'block-quote', block: b?.id || 999, hint: blockHint(b?.text || ''), exact: cita(n) },
+    })
+  })
+  sinBloque.forEach((n, i) => {
+    notas.push({
+      n: conBloque.length + i + 1,
+      title: `Medida ${n} sin fecha`,
+      kind: 'riesgo',
+      anchor: { kind: 'block-quote', block: 999, hint: 'un bloque que no existe', exact: cita(n) },
+    })
+  })
+  return notas
+}
+
 /** Imita el bucle del service worker: un paso por vuelta. */
 async function driveSteps(steps, anchor) {
   for (let i = 0; i < steps.length; i++) {
@@ -810,6 +905,57 @@ const actions = {
     say(`marcadas ${r.placed.join(', ') || 'ninguna'}${r.missed.length ? ' · sin anclar ' + r.missed.join(', ') : ''}`, 'ok')
     for (const x of r.detail || []) say(`  ${x.n} → ${x.strategy}${x.approximate ? ' (aproximada)' : ''}`)
     say('pulsa «Limpiar» y navega a otra página para volver a la Confluence simulada')
+  },
+
+  /**
+   * El parpadeo de P1, a ojo: marcas puestas y cuarenta scrolls de golpe.
+   * Antes cada evento vaciaba la capa y recreaba cada rectángulo desde
+   * `opacity: 0`; ahora los nodos son los mismos y siguen encendidos.
+   */
+  async scrollStress() {
+    renderPage('page:200')
+    await wait(360)
+    runner.clear()
+    const r = await runner.applyNotes({ notes: observacionesPorBloques(pageDigest()) })
+    await wait(700)
+    const capa = runner.overlay.el.quoteLayer
+    const antes = [...capa.children]
+    runner.overlay.resetStats()
+    for (let i = 0; i < 40; i++) {
+      window.dispatchEvent(new Event('scroll'))
+      treeScroller()?.dispatchEvent(new Event('scroll', { bubbles: true }))
+    }
+    await frame()
+    await frame()
+    const s = runner.overlay.stats
+    const mismos = capa.children.length === antes.length && antes.every((n, i) => n === capa.children[i])
+    say(
+      `40 scrolls → ${s.paints} repintado(s) · creados ${s.created} · reutilizados ${s.reused} · ` +
+        `los mismos nodos ${mismos ? 'sí' : 'NO'} · marcadas ${r.placed.join(', ')}`,
+      s.created === 0 && mismos ? 'ok' : 'bad'
+    )
+  },
+
+  /** Una página larga de verdad: leerla en bloques y marcar doce observaciones. */
+  async stress() {
+    renderPage('page:largo')
+    await wait(400)
+    runner.clear()
+    const tiempos = []
+    let d = null
+    for (let i = 0; i < 3; i++) {
+      const t = performance.now()
+      d = pageDigest()
+      tiempos.push(performance.now() - t)
+    }
+    tiempos.sort((a, b) => a - b)
+    say(
+      `${d.blocks.length} bloques (esperados ${LARGO.bloques}) · ${d.chars} caracteres` +
+        `${d.truncated ? ' · RECORTADA' : ''} · leer: mediana ${Math.round(tiempos[1])} ms`,
+      d.blocks.length === LARGO.bloques && !d.truncated ? 'ok' : 'bad'
+    )
+    const r = await runner.applyNotes({ notes: observacionesDePaginaLarga(d) })
+    say(`marcadas ${r.placed.length}/12 en ${r.ms} ms · ${(r.detail || []).map((x) => x.strategy).join(' ')}`, r.placed.length === 12 ? 'ok' : 'bad')
   },
 
   unsafe() {
@@ -1407,7 +1553,12 @@ const actions = {
 
     // El barrido blanco sólo existe mientras barre. Antes vivía siempre,
     // aparcado en translateX(-110%) —o en +110% al acabar, que `forwards`
-    // retiene—, y cada repintado por scroll lo dejaba fijo fuera de su caja.
+    // retiene—, y se iba sólo porque cada repintado por scroll recreaba el
+    // rectángulo sin la clase. Desde H6 los nodos se REUTILIZAN, así que la
+    // clase se quita a propósito al acabar la animación (`animationend`, con un
+    // respaldo por tiempo): se espera a que termine y se comprueba lo mismo,
+    // que es ahora una garantía y no un efecto secundario del scroll.
+    await wait(1200)
     ok(
       'codigo: el barrido no se queda aparcado fuera de la marca',
       cajas.every((d) => getComputedStyle(d, '::after').content === 'none'),
@@ -1925,6 +2076,146 @@ const actions = {
     renderPage('page:200')
     await wait(320)
 
+    // 41. Las marcas no se recrean ni parpadean al hacer scroll (P1 de H6,
+    //     docs/plan/anexo-E-eficiencia.md). El oyente de `scroll` está en
+    //     window con captura, así que recibe el de la ventana y el de cada
+    //     contenedor: decenas por gesto. Cada uno vaciaba la capa y volvía a
+    //     crear todos los rectángulos, que nacen con `opacity: 0` y una
+    //     transición de .4 s (styles.js), o sea que se apagaban y se volvían a
+    //     encender una y otra vez mientras te desplazabas.
+    runner.clear()
+    renderPage('page:200')
+    await wait(360)
+    const res41 = await runner.applyNotes({ notes: observacionesPorBloques(pageDigest()) })
+    // Sin prisa: `applyNotes` acaba desplazándose suavemente hasta la primera
+    // marca, y ese desplazamiento dispara scrolls de verdad que contarían.
+    await wait(700)
+
+    const capa41 = runner.overlay.el.quoteLayer
+    const antes41 = [...capa41.children]
+    const caja41 = runner.overlay.notes.find((x) => x.n === 1)?.ranges[0]?.getClientRects()[0]
+    runner.overlay.resetStats()
+    for (let i = 0; i < 40; i++) {
+      window.dispatchEvent(new Event('scroll'))
+      treeScroller()?.dispatchEvent(new Event('scroll', { bubbles: true }))
+    }
+    await frame()
+    await frame()
+
+    const stats41 = runner.overlay.stats
+    const despues41 = [...capa41.children]
+    const mismos41 = despues41.length === antes41.length && antes41.every((n, i) => n === despues41[i])
+    const encendidas41 = despues41.length > 0 && despues41.every((n) => n.classList.contains('on'))
+    const sobreElTexto41 =
+      !!caja41 &&
+      despues41.length > 0 &&
+      Math.abs(despues41[0].getBoundingClientRect().top - caja41.top) <= 2 &&
+      Math.abs(despues41[0].getBoundingClientRect().left - caja41.left) <= 2
+    ok(
+      'las marcas no se recrean al hacer scroll: los mismos nodos, encendidos y sobre su texto',
+      res41.placed.length > 0 && stats41.created === 0 && stats41.paints <= 2 && mismos41 && encendidas41 && sobreElTexto41,
+      `${despues41.length} marcas · ${stats41.paints} repintado(s) · creados ${stats41.created} · reutilizados ${stats41.reused} · ` +
+        `mismos nodos ${mismos41} · encendidas ${encendidas41} · sobre el texto ${sobreElTexto41}`
+    )
+
+    //     Y cuando el ancho cambia de verdad, el texto se reparte en otras
+    //     líneas: ahí sí hay que crear o quitar rectángulos, y ninguno puede
+    //     quedarse apagado ni en la posición vieja.
+    const main41 = document.getElementById('page-content')
+    const anchoAntes41 = main41.style.maxWidth
+    main41.style.maxWidth = '420px'
+    window.dispatchEvent(new Event('resize'))
+    await frame()
+    await frame()
+    const trasAncho41 = [...capa41.children]
+    const cajaAncho41 = runner.overlay.notes.find((x) => x.n === 1)?.ranges[0]?.getClientRects()[0]
+    const alineada41 =
+      !!cajaAncho41 &&
+      trasAncho41.length > 0 &&
+      Math.abs(trasAncho41[0].getBoundingClientRect().top - cajaAncho41.top) <= 2
+    ok(
+      'al cambiar el ancho las marcas se recolocan, sin quedarse apagadas ni en la posicion vieja',
+      trasAncho41.length > 0 && trasAncho41.every((n) => n.classList.contains('on')) && alineada41,
+      `${antes41.length} → ${trasAncho41.length} marcas · alineada ${alineada41}`
+    )
+    main41.style.maxWidth = anchoAntes41
+    if (!main41.getAttribute('style')) main41.removeAttribute('style')
+    runner.clearNotes()
+
+    // 42. Una página larga de verdad: 347 bloques en vez de los veinte de un
+    //     ADR. Se lee entera y sin recortar, y se marcan doce observaciones por
+    //     los dos caminos que cuestan: seis con su bloque y seis que caen al
+    //     peldaño global, que es el que recorría la página una vez por
+    //     observación antes de P7. Los ms se apuntan SIN umbral: son de esta
+    //     máquina, y sólo valen para comparar dos ejecuciones de la misma.
+    renderPage('page:largo')
+    await wait(400)
+    const tiempos42 = []
+    let dLargo = null
+    for (let i = 0; i < 3; i++) {
+      const t = performance.now()
+      dLargo = pageDigest()
+      tiempos42.push(performance.now() - t)
+    }
+    tiempos42.sort((a, b) => a - b)
+    ok(
+      'pagina larga: se lee entera en bloques, dentro de los topes de DIGEST_LIMITS',
+      dLargo.blocks.length === LARGO.bloques &&
+        !dLargo.truncated &&
+        dLargo.blocks.length <= DIGEST_LIMITS.maxBlocks &&
+        dLargo.chars <= DIGEST_LIMITS.maxChars,
+      `${dLargo.blocks.length}/${LARGO.bloques} bloques · ${dLargo.chars}/${DIGEST_LIMITS.maxChars} caracteres · ` +
+        `leer: mediana ${Math.round(tiempos42[1])} ms`
+    )
+
+    const res42 = await runner.applyNotes({ notes: observacionesDePaginaLarga(dLargo) })
+    await wait(400)
+    const estrategias42 = (res42.detail || []).map((x) => x.strategy)
+    ok(
+      'pagina larga: las doce observaciones se marcan, seis por su bloque y seis por la cita global',
+      res42.placed.length === 12 &&
+        estrategias42.filter((s) => s === 'block+quote').length === 6 &&
+        estrategias42.filter((s) => s === 'global+quote').length === 6 &&
+        Number.isFinite(res42.ms),
+      `marcadas ${res42.placed.length}/12 en ${res42.ms} ms · ${estrategias42.join(' ')}`
+    )
+    runner.clearNotes()
+
+    // 43. Resolver con el ámbito ya calculado da exactamente lo mismo que
+    //     calculándolo dentro. Es lo único que P7 podía cambiar: `applyNotes`
+    //     decide UNA vez qué es contenido y qué es interfaz y se lo pasa a cada
+    //     observación, en vez de que cada una lo recalcule hasta tres veces.
+    //     Sobre la incidencia, que es donde el ámbito no es la página entera.
+    runner.clear()
+    renderPage('issue:ENG-7')
+    await wait(360)
+    const ambito43 = digestScope()
+    const digest43 = pageDigest({ scope: ambito43 })
+    const notas43 = [
+      ...observacionesDeIncidencia(digest43),
+      {
+        n: 4,
+        title: 'Cita cuyo bloque ya no existe',
+        kind: 'dato',
+        anchor: { kind: 'block-quote', block: 999, hint: 'un bloque que no existe', exact: 'no admite recarga en caliente' },
+      },
+    ]
+    const texto43 = (r) => (r.ranges?.[0] ? r.ranges[0].toString() : '')
+    const conAmbito43 = notas43.map((x) => resolveBlockQuote(x.anchor, { digest: digest43, scope: ambito43 }))
+    const sinAmbito43 = notas43.map((x) => resolveBlockQuote(x.anchor, { digest: digest43 }))
+    const iguales43 = conAmbito43.every(
+      (r, i) => r.strategy === sinAmbito43[i].strategy && texto43(r) === texto43(sinAmbito43[i])
+    )
+    ok(
+      'resolver con el ambito ya calculado da lo mismo que calcularlo dentro, peldaño global incluido',
+      iguales43 && conAmbito43.every((r) => r.ok) && conAmbito43[3].strategy.startsWith('global+'),
+      conAmbito43.map((r, i) => `${i + 1}:${r.strategy}`).join(' ') +
+        ' · sin ámbito ' +
+        sinAmbito43.map((r) => r.strategy).join(' ')
+    )
+    renderPage('page:200')
+    await wait(320)
+
     runner.clear()
     const passed = results.filter((x) => x.pass).length
     say(`—— ${passed}/${results.length} comprobaciones ——`, passed === results.length ? 'ok' : 'bad')
@@ -1934,6 +2225,11 @@ const actions = {
 
 function wait(ms) {
   return new Promise((r) => setTimeout(r, ms))
+}
+
+/** Un frame de pintado: lo que tarda el overlay en atender una ráfaga de scroll. */
+function frame() {
+  return new Promise((r) => requestAnimationFrame(() => r()))
 }
 
 document.getElementById('rig-body').addEventListener('click', (ev) => {
@@ -1960,5 +2256,9 @@ window.faroHarness = {
   formatDigest,
   observacionesPorBloques,
   observacionesDeIncidencia,
+  observacionesDePaginaLarga,
+  // Una función y no el objeto: `resetStats()` lo sustituye, así que una
+  // referencia guardada se quedaría contando lo de antes.
+  overlayStats: () => runner.overlay.stats,
 }
 say('banco listo')

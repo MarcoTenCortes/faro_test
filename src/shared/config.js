@@ -38,6 +38,18 @@ export const NAV_TIMING = {
   stepStallMs: 9000, // el service worker abandona un paso cuya pestaña no avisa en este tiempo
 }
 
+/**
+ * Cuánto vale la medida de la cabecera pegajosa antes de volver a tomarla.
+ *
+ * `stickyOffset()` (dom-utils.js) recorre hasta 400 elementos con un
+ * `getComputedStyle` cada uno para saber qué barras hay fijadas arriba, y un
+ * solo desplazamiento lo llama dos veces (`scrollToElement` y, dentro,
+ * `scrollToRect`). En 400 ms la cabecera no cambia de sitio; si el usuario
+ * cambia el tamaño de la ventana sí, y eso se nota sin esperar porque la
+ * medida se guarda junto al tamaño del viewport con el que se tomó.
+ */
+export const STICKY_CACHE_MS = 400
+
 export const DEFAULT_SETTINGS = {
   serverUrl: DEFAULT_SERVER,
   password: '',
@@ -73,11 +85,47 @@ export const INDEX_LIMITS = {
   timeoutMs: 10 * 60 * 1000,
 }
 
+/**
+ * Cuántos mensajes se piden al restaurar la conversación.
+ *
+ * `listMessages` sin `limit` trae la sesión ENTERA, y en una sesión de opencode
+ * lo que pesa no son los textos sino las salidas de las herramientas: medido
+ * contra un servidor desechable, 7 mensajes eran 4 890 KB y los dos últimos
+ * 14 KB (auditoría del 2026-09-13). Eso se descargaba cada vez que se abre el
+ * panel, se cambia de pestaña o se cierra Ajustes, para pintar sólo el texto.
+ *
+ * 60 es un TOPE DE SEGURIDAD, no una ventana: las sesiones reales de Faro son
+ * de 1 a 4 turnos de usuario (77 sesiones de la base de esta máquina), o sea
+ * unos 8 mensajes, así que en la práctica no recorta ninguna. Cuando sí recorta,
+ * el chat lo dice y ofrece traer el resto.
+ *
+ * Comprobado contra opencode 1.2.25: `?limit=N` devuelve los ÚLTIMOS N en orden
+ * ascendente (el más viejo primero), igual que sin `limit`.
+ */
+export const RESTORE_LIMITS = { messages: 60 }
+
+/**
+ * Cuándo se avisa de que la conversación arrastra demasiado.
+ *
+ * Las salidas de las herramientas se quedan en el historial de la sesión y se
+ * reenvían en cada turno (el `system` no). opencode las poda —deja intactos los
+ * últimos 40 000 tokens (`PRUNE_PROTECT`, leído del binario) y recorta hacia
+ * atrás—, así que avisar por debajo de eso sería avisar de algo que el servidor
+ * ya resuelve solo. 200 000 caracteres son ≈50 000 tokens: el primer punto en el
+ * que la conversación arrastra de verdad MÁS de lo que la poda protege.
+ *
+ * Es una hipótesis medible: los KB por turno salen en «Respuesta recibida».
+ */
+export const SESSION_LIMITS = { heavyToolChars: 200000 }
+
 export const STORAGE_KEYS = {
   settings: 'faro:settings',
   sites: 'faro:sites',
   index: (host) => `faro:index:${host}`,
   session: (host) => `faro:session:${host}`,
+  // Lo que llevan devuelto las herramientas en la sesión abierta de ese host.
+  // Va en storage.session, al lado de `session`: nace y muere con ella.
+  sessionWeight: (host) => `faro:session-weight:${host}`,
   context: (host) => `faro:context:${host}`,
   memory: (host) => `faro:memory:${host}`,
 }

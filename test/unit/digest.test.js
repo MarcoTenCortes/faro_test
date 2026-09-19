@@ -6,8 +6,15 @@
  * del texto que leyó la extensión, y que reconocer un bloque es comparar texto,
  * no fiarse del número. Si la página se desplaza un párrafo entre que se leyó y
  * se marcó, la marca tiene que seguir cayendo donde estaba el texto.
+ *
+ * La mitad pura (`src/shared/digest.js`) se ejecuta aquí. La otra mitad
+ * (`src/content/digest.js`) necesita DOM, así que de ella se pina el cableado
+ * por regex sobre el fuente, como hacen runner-wiring y overlay-wiring: que el
+ * ÁMBITO de lectura se calcule una vez y se reparta (P7 de H6).
  */
 import { test, eq, assert } from '../harness.js'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { DIGEST_LIMITS, squash, blockHint, formatDigest, matchBlock } from '../../src/shared/digest.js'
 import { ANCHOR_LIMITS } from '../../src/nav/validate.js'
 
@@ -106,4 +113,50 @@ test('matchBlock: un número fuera de rango o roto no tumba la búsqueda por tex
   eq(matchBlock(BLOQUES, { block: 999, hint: 'Contexto' }), { index: 1, strategy: 'block-moved' })
   eq(matchBlock(BLOQUES, { block: 'x', hint: 'Contexto' }), { index: 1, strategy: 'block-moved' })
   eq(matchBlock(BLOQUES, { block: 0, hint: 'Contexto' }), { index: 1, strategy: 'block-moved' })
+})
+
+// --- P7 (H6): el ámbito de lectura, calculado una vez y repartido ----------
+// Por regex sobre `src/content/digest.js`, que necesita DOM para ejecutarse.
+
+const ROOT = join(import.meta.dirname, '..', '..')
+
+/** El fuente sin comentarios: lo que se pina es código, no lo que se cuenta de él. */
+function sinComentarios(src) {
+  return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '')
+}
+
+const CONTENT = sinComentarios(readFileSync(join(ROOT, 'src/content/digest.js'), 'utf8'))
+
+/** El cuerpo de una función de nivel superior: de su firma al «}» de la columna 0. */
+function funcion(firma) {
+  const ini = CONTENT.indexOf(firma)
+  assert(ini >= 0, `src/content/digest.js no tiene «${firma}»`)
+  const fin = CONTENT.indexOf('\n}\n', ini)
+  assert(fin > ini, `no se encuentra el cierre de «${firma}»`)
+  return CONTENT.slice(ini, fin)
+}
+
+const cuenta = (src, trozo) => src.split(trozo).length - 1
+
+test('P7: resolveBlockQuote acepta el ámbito ya calculado y lo usa en los tres sitios que lo pedían', () => {
+  const fn = funcion('export function resolveBlockQuote(')
+  assert(
+    fn.includes('export function resolveBlockQuote(anchor, { digest = null, scope = null } = {})'),
+    'el ámbito entra por opciones, con valor por defecto para quien no lo pase'
+  )
+  eq(cuenta(fn, 'digestScope()'), 1, 'como mucho una llamada, y sólo si no llegó el ámbito')
+  assert(/const elAmbito = \(\) =>/.test(fn), 'y perezosa: con `digest` y `scope` dados no se calcula nada')
+  assert(fn.includes('pageDigest({ scope: elAmbito() })'), 'leer la página usa ese ámbito')
+  assert(fn.includes('blockBoundary(elAmbito())'), 'la frontera del texto del bloque, también')
+  assert(fn.includes('resolveScopedQuote(exact, { scope: elAmbito() })'), 'y el peldaño global')
+})
+
+test('P7: el índice de texto de una raíz se memoriza en el ámbito, no se reconstruye por observación', () => {
+  const fn = funcion('export function resolveScopedQuote(')
+  assert(fn.includes('rootIndex(scope, r.el)'), 'la cita suelta pide el índice memorizado')
+  assert(!fn.includes('buildTextIndex('), 'y no lo construye ella')
+  const memo = funcion('function rootIndex(')
+  assert(memo.includes('scope._indices.get(root)'), 'el índice se busca en el ámbito, que dura lo que una pasada de marcado')
+  assert(memo.includes('scope._indices.set(root, index)'), 'y se guarda ahí: si no, memorizar no memoriza nada')
+  assert(memo.includes('buildTextIndex('), 'y se construye una sola vez por raíz')
 })

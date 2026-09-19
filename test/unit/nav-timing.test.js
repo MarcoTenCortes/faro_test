@@ -59,7 +59,13 @@ test('runner.js: cada caída de un tiempo (this.timing.x ?? …) va a NAV_TIMING
 
 test('el service worker abandona un paso atascado a los NAV_TIMING.stepStallMs, no a un 9000 suelto', () => {
   const sw = read('src/background/service-worker.js')
-  assert(/^import \{ NAV_TIMING \} from '\.\.\/shared\/config\.js'$/m.test(sw), 'import estático de config.js')
+  // Lo que se pina es que NAV_TIMING venga de config.js por import estático;
+  // que el service worker traiga además otras constantes del mismo módulo no
+  // es asunto de este test (H6 le añadió STORAGE_KEYS).
+  assert(
+    /^import \{[^}]*\bNAV_TIMING\b[^}]*\} from '\.\.\/shared\/config\.js'$/m.test(sw),
+    'import estático de config.js'
+  )
   assert(/function watchStalledStep\(tabId, index, ms = NAV_TIMING\.stepStallMs\)/.test(sw))
   assert(!/\b9000\b/.test(sw), 'el 9000 ya no va suelto')
 })

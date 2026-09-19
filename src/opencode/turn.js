@@ -207,9 +207,16 @@ export class TurnTracker {
         const entry = this._touch(p.partID)
         entry.messageID = p.messageID
         if (p.field === 'text' || p.field === 'reasoning') {
-          if (p.field === 'reasoning') entry.type = 'reasoning'
+          const razonando = p.field === 'reasoning'
+          if (razonando) entry.type = 'reasoning'
           entry.text = (entry.text || '') + (p.delta || '')
-          this._notify()
+          // El razonamiento se guarda, pero no pide repintar: no se pinta en
+          // ninguna parte (`get text()` sólo junta las partes de texto) y quien
+          // escucha esto reconstruye la burbuja entera por aviso (H6 P2). El
+          // evento sigue devolviendo `true` y el vigilante de `runTurn` lo cuenta
+          // como señal de vida por su cuenta: un modelo que razona un minuto no
+          // puede morir por «colgado».
+          if (!razonando) this._notify()
           return true
         }
         return false

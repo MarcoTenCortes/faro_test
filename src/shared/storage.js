@@ -53,17 +53,92 @@ export async function forgetSite(host) {
 export async function getIndex(host) {
   const key = STORAGE_KEYS.index(host)
   const got = await chrome.storage.local.get(key)
-  const index = got[key]
-  if (!index) return { index: null, stale: false }
+  return takeIndex(host, got[key])
+}
 
-  // Un indice de una version anterior puede traer rutas que ya sabemos que no
-  // funcionan. Mejor quedarse sin indice y reconstruirlo que llevar a alguien
-  // a una pagina que no existe.
+/**
+ * Qué hacer con el índice que acaba de salir del almacén. Lo deciden en un
+ * solo sitio `getIndex` y `getSiteBundle`: si cada uno comprobara la versión
+ * por su cuenta, uno de los dos acabaría sirviendo un índice viejo.
+ *
+ * Un indice de una version anterior puede traer rutas que ya sabemos que no
+ * funcionan. Mejor quedarse sin indice y reconstruirlo que llevar a alguien a
+ * una pagina que no existe.
+ */
+async function takeIndex(host, index) {
+  if (!index) return { index: null, stale: false }
   if (index.version !== INDEX_VERSION) {
-    await chrome.storage.local.remove(key)
+    await chrome.storage.local.remove(STORAGE_KEYS.index(host))
     return { index: null, stale: true }
   }
   return { index, stale: false }
+}
+
+/**
+ * Las claves POR HOST que el paquete del sitio trae ADEMÁS de las de siempre
+ * (el mapa de sitios, el índice, el contexto y la memoria).
+ *
+ * Hoy ninguna. Lo que viene (docs/PLAN.md §3.5) —el perfil del proyecto (H9),
+ * las referencias y el historial de páginas base (H10), la actividad (H11)—
+ * entra aquí con el NOMBRE de su clave en `STORAGE_KEYS` y su valor sale en
+ * `bundle.extras` SIN TOCAR: la forma de cada una la decide su hito con sus
+ * propias claves blancas, no este módulo. Añadir el nombre aquí es todo lo que
+ * hace falta para que su lectura viaje en la misma petición al almacén.
+ */
+export const BUNDLE_EXTRA_KEYS = []
+
+/**
+ * Las claves de almacenamiento que lee `getSiteBundle` para un host. Pura.
+ *
+ * Está fuera para poder mirarlas sin leer nada (y para que su prueba pueda
+ * ejercitar el mecanismo de `extra` antes de que exista la primera clave
+ * nueva). Un nombre que no esté en `STORAGE_KEYS` se ignora: una clave a medio
+ * añadir no puede hacer que el arranque entero se caiga.
+ */
+export function bundleKeys(host, extra = BUNDLE_EXTRA_KEYS) {
+  const claves = [
+    STORAGE_KEYS.sites,
+    STORAGE_KEYS.index(host),
+    STORAGE_KEYS.context(host),
+    STORAGE_KEYS.memory(host),
+  ]
+  for (const name of extra || []) {
+    if (typeof STORAGE_KEYS[name] === 'function') claves.push(STORAGE_KEYS[name](host))
+  }
+  return claves
+}
+
+/**
+ * Todo lo que este sitio tiene guardado, en UNA lectura.
+ *
+ * El arranque del panel encadenaba trece lecturas de `chrome.storage.local`,
+ * cinco de ellas el mismo `getSite` del mismo host (y cada `getSite` relee el
+ * mapa entero de `faro:sites`), detrás de las peticiones a opencode
+ * (docs/PLAN.md §2.6 P4). `chrome.storage.local.get` acepta una lista de
+ * claves y contesta con todas de una vez: eso es esto.
+ *
+ * `memoryRaw` sale TAL CUAL está guardada, sin normalizar: quien la usa la
+ * pasa por `normalizeMemory` (y por `getMemory` cuando además hay que reparar
+ * lo guardado), que viven en `src/panel/memory.js`, y `shared/` no importa de
+ * `panel/`. El índice sí se comprueba aquí, porque la comprobación es de
+ * almacenamiento y ya estaba en este módulo.
+ */
+export async function getSiteBundle(host, { extra = BUNDLE_EXTRA_KEYS } = {}) {
+  const got = await chrome.storage.local.get(bundleKeys(host, extra))
+  const sites = got[STORAGE_KEYS.sites] || {}
+  const { index, stale } = await takeIndex(host, got[STORAGE_KEYS.index(host)])
+  const extras = {}
+  for (const name of extra || []) {
+    if (typeof STORAGE_KEYS[name] === 'function') extras[name] = got[STORAGE_KEYS[name](host)] ?? null
+  }
+  return {
+    site: sites[host] || null,
+    index,
+    stale,
+    contextMd: got[STORAGE_KEYS.context(host)] || '',
+    memoryRaw: got[STORAGE_KEYS.memory(host)] ?? null,
+    extras,
+  }
 }
 
 export async function saveIndex(host, index) {
@@ -83,4 +158,39 @@ export async function setSessionId(host, sessionID) {
 
 export async function clearSessionId(host) {
   await chrome.storage.session.remove(STORAGE_KEYS.session(host))
+}
+
+/**
+ * Cuántos caracteres de salidas de herramientas arrastra la sesión abierta.
+ *
+ * Es lo que el turno siguiente vuelve a mandar al modelo (el `system` no se
+ * acumula; las salidas de las herramientas sí, acotadas por la poda de
+ * opencode), y con ello se decide si el panel avisa de que conviene empezar una
+ * sesión nueva. Vive en storage.session junto al id de la sesión para que el
+ * aviso sobreviva a cerrar y abrir el panel sin volver a pedir los mensajes, y
+ * muera con ella.
+ *
+ * Un contador, no un dato del modelo: se reconstruye a número entero no negativo
+ * al leer Y al escribir. Un NaN guardado dejaría la comparación con el umbral
+ * siempre en falso y el aviso no saldría nunca. Tiene que ser un NÚMERO: lo que
+ * Faro escribe ahí siempre lo es, así que cualquier otra cosa en esa casilla no
+ * es suya y cuenta como cero (el turno siguiente vuelve a escribir el bueno).
+ */
+function soloCuenta(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return 0
+  return Math.floor(value)
+}
+
+export async function getSessionWeight(host) {
+  const key = STORAGE_KEYS.sessionWeight(host)
+  const got = await chrome.storage.session.get(key)
+  return soloCuenta(got[key])
+}
+
+export async function setSessionWeight(host, chars) {
+  await chrome.storage.session.set({ [STORAGE_KEYS.sessionWeight(host)]: soloCuenta(chars) })
+}
+
+export async function clearSessionWeight(host) {
+  await chrome.storage.session.remove(STORAGE_KEYS.sessionWeight(host))
 }

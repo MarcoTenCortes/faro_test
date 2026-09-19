@@ -13,15 +13,30 @@ import { NAV_TIMING } from '../../src/shared/config.js'
 // se comparte entre todos los entornos simulados: lo que cambia en cada prueba
 // es el `chrome` global que esos manejadores consultan al ejecutarse.
 const LISTENERS = []
+/**
+ * Los oyentes de `chrome.storage.onChanged`, compartidos por el mismo motivo
+ * que LISTENERS: el worker se registra UNA vez, al importarse, así que quien
+ * los guarda es el primer `chrome` simulado y los demás tienen que seguir
+ * viéndolos.
+ */
+const CAMBIOS = []
 
 /** Construye un entorno `chrome` simulado y devuelve los mandos. */
 function makeChrome() {
   const listeners = LISTENERS
   const state = {
-    tabs: { 1: { id: 1, url: 'https://acme.atlassian.net/wiki/spaces/ENG/pages/400/Onboarding', windowId: 9 } },
+    // La pestaña del recorrido (1) NO es la activa: la activa es otra, y con un
+    // id más alto. Así «se empuja a la pestaña activa» no puede pasar por
+    // casualidad quedándose con la primera de la lista.
+    tabs: {
+      1: { id: 1, url: 'https://acme.atlassian.net/wiki/spaces/ENG/pages/400/Onboarding', windowId: 9, active: false },
+      2: { id: 2, url: 'https://mail.example.com/inbox', windowId: 9, active: false },
+      3: { id: 3, url: 'https://acme.atlassian.net/wiki/spaces/ENG/pages/200/ADR-014', windowId: 9, active: true },
+    },
     session: {},
     local: {},
     sentToTab: [],
+    sentWithTab: [],
     contentReply: () => ({ status: 'clicked' }),
     panelMessages: [],
   }
@@ -42,17 +57,25 @@ function makeChrome() {
       onUpdated: { addListener() {} },
       onActivated: { addListener() {} },
       get: async (id) => state.tabs[id],
-      query: async () => Object.values(state.tabs),
+      // Como la de Chrome en lo que aquí importa: si se pide `active`, sólo
+      // salen las pestañas activas. Sin esto, «se empuja a la pestaña activa»
+      // se habría probado con una lista que las devolvía todas.
+      query: async (filtro = {}) =>
+        Object.values(state.tabs).filter((t) => (filtro.active === undefined ? true : !!t.active === filtro.active)),
       update: async (id, { url }) => {
         state.tabs[id].url = url
         return state.tabs[id]
       },
       sendMessage: async (id, msg) => {
         state.sentToTab.push(msg)
+        // Con destinatario: lo que se manda a la pestaña activa y no a otra
+        // sólo se puede comprobar si se apunta a quién iba.
+        state.sentWithTab.push({ tabId: id, msg })
         return state.contentReply(msg)
       },
     },
     storage: {
+      onChanged: { addListener: (fn) => CAMBIOS.push(fn) },
       session: {
         get: async (k) => (k in state.session ? { [k]: state.session[k] } : {}),
         set: async (o) => Object.assign(state.session, o),
@@ -119,8 +142,17 @@ async function loadWorker(rig) {
   // empezar, igual que haría cerrar la pestaña.
   await rig.send({ type: MSG.CANCEL_PLAN, tabId: 1 })
   rig.state.sentToTab.length = 0
+  rig.state.sentWithTab.length = 0
   rig.state.panelMessages.length = 0
   return rig
+}
+
+/** Dispara `chrome.storage.onChanged` como lo haría Chrome al escribir el panel. */
+async function cambiar(changes, area = 'local') {
+  for (const fn of CAMBIOS) await fn(changes, area)
+  // El oyente hace su trabajo en una promesa suelta (no puede ser async: Chrome
+  // no espera a nadie ahí), así que hay que dejar correr la cola de microtareas.
+  await new Promise((r) => setTimeout(r, 0))
 }
 
 const esperar = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -388,4 +420,46 @@ test('sw: si al vencer el margen la pestaña ya contesta, se retoma el MISMO pas
     eq(steps.map((s) => s.index), [0, 0], 'el mismo paso, dos veces: no se salta ninguno')
     eq(rig.state.panelMessages.filter((m) => m.type === MSG.PLAN_FINISHED).map((m) => m.result), [{ cancelled: true }])
   })
+})
+
+test('H6 P6a: al cambiar los ajustes, el worker los empuja a la pestaña activa', async () => {
+  // Hasta H6 el content script no se enteraba de un ajuste nuevo hasta navegar
+  // o recargar: `pushSettings` sólo se llamaba al lanzar un recorrido y en
+  // `onContentReady`. Y desde H6 cerrar Ajustes ya no rearranca el panel, así
+  // que tampoco hay un arranque que los empuje de rebote. Lo que el worker ve
+  // del panel es la escritura de `faro:settings`.
+  const rig = makeChrome()
+  await loadWorker(rig)
+  rig.state.local['faro:settings'] = {
+    reduceMotion: true,
+    highlightStyle: 'marker',
+    stepDelayMs: 1200,
+    password: 'secreta',
+  }
+
+  await cambiar({ 'faro:settings': { newValue: rig.state.local['faro:settings'] } })
+
+  const empujados = rig.state.sentWithTab.filter((s) => s.msg.type === MSG.SETTINGS)
+  eq(empujados.length, 1, 'un solo empujón')
+  eq(empujados[0].tabId, 3, 'a la pestaña ACTIVA, no a la primera de la lista ni a la del recorrido')
+  eq(empujados[0].msg.reduceMotion, true)
+  eq(empujados[0].msg.highlightStyle, 'marker')
+  eq(empujados[0].msg.timing, { stepPauseMs: 1200 }, 'con la pausa que el usuario acaba de poner')
+  // SEGURIDAD: al content script van los ajustes de la página, no la contraseña
+  // del servidor (que es lo que vive en la misma clave).
+  eq(Object.keys(empujados[0].msg).sort(), ['highlightStyle', 'reduceMotion', 'timing', 'type'])
+})
+
+test('H6 P6a: otra clave, u otra zona del almacén, no empujan nada', async () => {
+  const rig = makeChrome()
+  await loadWorker(rig)
+
+  await cambiar({ 'faro:sites': { newValue: {} } })
+  await cambiar({ 'faro:index:acme.atlassian.net': { newValue: {} } })
+  // El recorrido en marcha vive en storage.session y cambia en cada paso: si la
+  // zona no se mirara, cada paso mandaría además un MSG.SETTINGS.
+  await cambiar({ 'faro:settings': { newValue: {} } }, 'session')
+  await cambiar(null)
+
+  eq(rig.state.sentToTab.filter((m) => m.type === MSG.SETTINGS).length, 0, 'sólo faro:settings en local')
 })

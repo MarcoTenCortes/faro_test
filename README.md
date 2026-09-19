@@ -392,12 +392,42 @@ Trece decisiones que sostienen el diseño:
    presupuesto: sirve para saber qué páginas mirar, que es lo que necesitará el
    análisis de una incidencia.
 
+14. **Nada se hace dos veces si se puede hacer una.** Casi todo lo que Faro
+   tardaba era trabajo repetido, y quitarlo no cambia lo que hace, sólo cuándo
+   responde:
+
+   - **Abrir el panel** leía trece veces el almacén del navegador, cinco de
+     ellas el mismo registro del mismo sitio, y en fila detrás de las consultas
+     a opencode. Ahora es **una** lectura con todo lo del sitio, y va en
+     paralelo con la lista de modelos. El registro lo dice fase por fase.
+   - **Cerrar Ajustes** rearrancaba el panel siempre: reconstruía el cliente
+     —lo que cancelaba la respuesta en curso— y volvía a descargar la
+     conversación. Ahora rearranca **sólo si cambiaste la dirección del
+     servidor o la contraseña**; lo demás se aplica en caliente, y la página se
+     entera al momento sin esperar a que navegues.
+   - **Volver a una conversación** descargaba la sesión entera, salidas de
+     herramientas incluidas (megabytes), para pintar sólo el texto. Ahora pide
+     los últimos 60 mensajes y, si recorta, lo dice con un botón **Ver toda la
+     conversación**. Y cuando lo que la conversación arrastra pasa de cierto
+     tamaño, Faro te avisa una vez, explica que opencode ya poda las salidas
+     viejas y te ofrece empezar una sesión nueva ahí mismo.
+   - **El índice del sitio** se escribía entero hasta tres veces por turno para
+     dejar lo mismo en disco. Ahora se apunta lo aprendido y se escribe una sola
+     vez al final, bajo el sitio que lo aprendió.
+   - **Las marcas del análisis parpadeaban al hacer scroll**: el overlay
+     recreaba cada rectángulo en cada evento, y un rectángulo nace transparente
+     y aparece con una transición. Ahora una ráfaga de scroll se junta en un
+     fotograma y los nodos se reutilizan. Y marcar una incidencia larga dejó de
+     recorrerla tres veces por observación.
+   - **El razonamiento** de un modelo que piensa en voz alta repintaba la
+     respuesta entera por cada trozo, sin que se viera nada: ya no.
+
 ---
 
 ## Comprobaciones
 
 ```bash
-npm run check              # sintaxis + orden + manifest + 904 pruebas unitarias + docs
+npm run check              # sintaxis + orden + manifest + 943 pruebas unitarias + docs
 npm run check:docs         # sólo el paso docs: número de pruebas, títulos del registro, mensajes y ficheros del mapa
 npm run test:integration   # contra un opencode real que arranca la propia prueba
 npm run harness            # banco de pruebas visual en http://127.0.0.1:5175
@@ -524,6 +554,14 @@ Con el banco levantado hay dos páginas:
   de un análisis puestas, llega a la página y no las borra, mientras que con
   el foco de un recorrido encendido lo apaga y con la cita de una llegada
   subrayada —y sin marcas numeradas— la quita.
+
+  Y las tres de rendimiento: que **cuarenta scrolls seguidos no recrean ni una
+  sola marca** (el overlay cuenta cuántos nodos crea y cuántos reutiliza) ni las
+  dejan apagadas al cambiar el ancho de la ventana; que una **página larga de
+  verdad** —347 bloques generados al vuelo— se lee entera y se marca con doce
+  observaciones, seis a su propio párrafo y seis encontradas por su cita en toda
+  la página; y que resolver una observación con el ámbito de lectura ya calculado
+  da exactamente el mismo resultado que dejando que se calcule solo.
 
   Y las del camino leído por la API: la Confluence de mentira contesta a
   `…/rest/api/content/<id>?expand=ancestors` como la de verdad —con la portada
@@ -659,8 +697,9 @@ tienes Faro.
 - **Escape.** Cierra esas pantallas (en Páginas base, primero vacía las
   sugerencias) y cancela el velo «Trabajando…», desde cualquier sitio del
   panel. En Ajustes cierra **sin guardar**: lo que hayas tecleado y no
-  guardado se pierde, porque su flecha de volver guarda la contraseña y la
-  dirección y rearranca el panel, y por eso se llama «Guardar y volver». En la
+  guardado se pierde, porque su flecha de volver guarda todos los campos —la
+  contraseña y la dirección del servidor incluidas—, y por eso se llama
+  «Guardar y volver». En la
   página, Escape es de Faro sólo mientras tiene algo
   en marcha —el foco de un recorrido, el cartel, la barra de señalar— o
   mientras el único subrayado es el de una llegada por cita, que sí quita; con
@@ -674,11 +713,16 @@ tienes Faro.
   anuncia nada.
 - **Scroll.** El chat sólo baja solo al fondo si ya estabas pegado a él: si
   subiste a leer, se queda donde estás; tu propia pregunta sí lo baja.
-- **Cambiar de sitio a mitad de respuesta.** Pasar a una pestaña de otro
-  host, cerrar Ajustes o abrir una sesión nueva cancela el turno en vez de
-  dejarlo «pensando…» 90 segundos, y lo dice en el registro; lo que ya llegó a
-  opencode sigue en la sesión de aquel sitio. Un indexado que termina cuando
-  ya estás en otro sitio se guarda bajo el sitio que se indexó.
+- **Cambiar de sitio a mitad de respuesta.** Pasar a una pestaña de otro host o
+  abrir una sesión nueva cancela el turno en vez de dejarlo «pensando…» 90
+  segundos, y lo dice en el registro; lo que ya llegó a opencode sigue en la
+  sesión de aquel sitio. Cerrar Ajustes ya **no** lo cancela, salvo que hayas
+  cambiado la dirección del servidor o la contraseña. Un indexado que termina
+  cuando ya estás en otro sitio se guarda bajo el sitio que se indexó.
+- **Mientras esperas.** Si el modelo lleva 45 segundos sin dar ninguna señal, la
+  cabecera lo dice («pensando… 45 s sin señales del modelo») en vez de dejarte
+  adivinar si sigue vivo; el turno sigue esperando su plazo entero, y el texto
+  vuelve a «pensando…» con la primera palabra.
 
 ---
 
@@ -802,7 +846,8 @@ src/
   shared/
     confluence-rest.js      el árbol y la búsqueda de páginas por la API REST del sitio, con tu sesión (puro)
     digest.js               cómo se enseñan los bloques y cómo se reconoce uno después (puro)
-    config.js               ajustes por defecto y su migración; NAV_TIMING, el único sitio con los tiempos de la navegación
+    config.js               ajustes por defecto y su migración; NAV_TIMING, el único sitio con los tiempos de la navegación; y los topes de la eficiencia: cuántos mensajes se piden al restaurar y cuándo se avisa de una conversación pesada
+    storage.js              lo guardado del navegador; todo lo de un sitio en UNA lectura (getSiteBundle) y lo que arrastra la sesión abierta
     permissions.js          los permisos de cada sesión de opencode: todo denegado salvo el MCP, y una copia de cómo los evalúa opencode para probarlo (puro)
     timing.js               el cronómetro por fases que el registro enseña: sólo etiquetas y números, nunca cuerpos ni claves (puro)
 harness/                    Confluence de mentira para pruebas visuales

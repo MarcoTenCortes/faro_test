@@ -37,6 +37,17 @@ function b64(str) {
   return Buffer.from(str, 'utf8').toString('base64')
 }
 
+/**
+ * A qué parte del plazo de «colgado» se avisa de que no llegan señales.
+ *
+ * La mitad: con los 90 s del chat son 45 s callado, que es cuando el usuario ya
+ * se está preguntando si esto sigue vivo. Avisar antes sería ruido (un modelo
+ * que lee tres páginas con el MCP tarda eso en escribir la primera palabra) y
+ * avisar después no daría tiempo a nada: a los 90 s el turno ya está muerto.
+ * El aviso no cambia el plazo ni aborta nada; sólo se dice.
+ */
+const STALL_WARN_AT = 0.5
+
 export class OpencodeClient {
   /**
    * @param {{baseUrl?: string, password?: string, directory?: string}} opts
@@ -263,7 +274,7 @@ export class OpencodeClient {
    *            stalled?:boolean, aborted?:boolean, model?:object}}
    */
   async runTurn(id, prompt, control = {}) {
-    const { stallMs = 90000, maxMs = 15 * 60 * 1000, onUpdate, signal } = control
+    const { stallMs = 90000, maxMs = 15 * 60 * 1000, onUpdate, onWarn, signal } = control
 
     // Un turno nuevo en esta sesión: lo que se abandonó antes ya no es asunto
     // de nadie (abortarlo ahora se llevaría a ESTE turno).
@@ -323,6 +334,9 @@ export class OpencodeClient {
     const started = Date.now()
     let watchdog
     let onAbort
+    // El aviso de «lleva callado» es uno por turno: el vigilante da una vuelta
+    // por segundo y, sin este testigo, lo repetiría cuarenta y cinco veces.
+    let avisado = false
     const guard = new Promise((resolve) => {
       // La señal se ESCUCHA, no se sondea. Reproducido en la auditoría del
       // 2026-09-13 (docs/PLAN.md §2, C6): con el sondeo de 1 s, Parar y mandar
@@ -333,8 +347,20 @@ export class OpencodeClient {
       if (signal?.aborted) return onAbort()
       signal?.addEventListener('abort', onAbort, { once: true })
       watchdog = setInterval(() => {
-        if (Date.now() - touch > stallMs) return resolve({ ok: false, stalled: true })
+        const callado = Date.now() - touch
+        if (callado > stallMs) return resolve({ ok: false, stalled: true })
         if (Date.now() - started > maxMs) return resolve({ ok: false, stalled: true, expired: true })
+        // A mitad del plazo, y una sola vez por turno: quien escucha lo dice en
+        // el estado visible («pensando… 45 s sin señales del modelo»). Un aviso
+        // que reviente no puede llevarse el turno: esto corre en un temporizador.
+        if (!avisado && callado > stallMs * STALL_WARN_AT) {
+          avisado = true
+          try {
+            onWarn?.(callado)
+          } catch (err) {
+            console.error('[faro] fallo avisando de un turno callado', err)
+          }
+        }
       }, 1000)
     })
 

@@ -20,13 +20,26 @@
  * «Quitar las marcas» o con la siguiente orden. Y quien lo borra todo pone
  * `onCancel` a null, para que un overlay huérfano (extensión recargada sin
  * recargar la pestaña) tampoco intercepte nada.
+ *
+ * Y desde H6 (P1, docs/plan/anexo-E-eficiencia.md), cómo se repinta: un solo
+ * frame por ráfaga de scroll, la geometría medida UNA vez por observación para
+ * las dos capas, y los nodos reutilizados en vez de recreados. Antes cada
+ * evento de scroll vaciaba la capa y volvía a crear cada rectángulo, que nace
+ * con `opacity: 0` y una transición de .4 s: eso era el parpadeo que se veía
+ * en el Jira del usuario.
  */
 import { test, assert } from '../harness.js'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 const ROOT = join(import.meta.dirname, '..', '..')
-const overlay = readFileSync(join(ROOT, 'src/content/overlay/overlay.js'), 'utf8')
+
+/** El fuente sin comentarios: lo que se pina es código, no lo que se cuenta de él. */
+function sinComentarios(src) {
+  return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '')
+}
+
+const overlay = sinComentarios(readFileSync(join(ROOT, 'src/content/overlay/overlay.js'), 'utf8'))
 
 /**
  * El cuerpo de un método de la clase: de su firma (con dos espacios de
@@ -91,4 +104,68 @@ test('overlay: hideCard() no suelta onCancel (el recorrido sigue con el foco pue
   assert(overlay.includes("document.addEventListener('keydown', this._onKey, true)"), 'el listener va en captura sobre document')
   assert(cuerpo('destroy() {').includes("document.removeEventListener('keydown', this._onKey, true)"), 'destroy() lo quita')
   assert(cuerpo('destroy() {').includes('this.clearAll()'), 'destroy() limpia (y con ello suelta onCancel)')
+})
+
+// --- P1 (H6): repintar por frames, medir una vez y reutilizar los nodos -----
+
+const PINTAN = ['_paintQuoteRects(sweep, medidas) {', '_paintNoteBadges(animate, medidas) {', '_paintOutlines(animate) {']
+
+test('P1: una ráfaga de scroll se junta en UN frame, y el repintado a mano cancela el pendiente', () => {
+  // `scroll` con captura en window llega por cada contenedor que se desplaza y
+  // decenas de veces por gesto; cada uno repintaba a pelo las dos capas.
+  const v = cuerpo('_onViewportChange() {')
+  assert(v.includes('this._scheduleRefresh()'), 'el scroll pide un frame, no repinta')
+  assert(!/this\.refreshMarks\(\)/.test(v), '_onViewportChange no llama a refreshMarks() directamente')
+
+  const s = cuerpo('_scheduleRefresh() {')
+  assert(s.includes('if (this._refreshRaf) return'), 'un frame pedido a la vez')
+  assert(s.includes('requestAnimationFrame('), 'y es un requestAnimationFrame')
+  assert(s.includes('this.refreshMarks()'), 'que acaba repintando')
+
+  const r = cuerpo('refreshMarks() {')
+  assert(r.includes('cancelAnimationFrame(this._refreshRaf)'), 'el repintado síncrono cancela el frame pendiente')
+  assert(cuerpo('destroy() {').includes('cancelAnimationFrame(this._refreshRaf)'), 'destroy() no deja un frame vivo')
+})
+
+test('P1: las capas reutilizan sus nodos en vez de vaciarse y volver a crearlos', () => {
+  for (const firma of PINTAN) {
+    const c = cuerpo(firma)
+    assert(c.includes('this._syncNodes('), `«${firma}» pinta con _syncNodes`)
+    assert(!/textContent = ''/.test(c), `«${firma}» ya no vacía su capa en cada repintado`)
+  }
+  const sync = cuerpo('_syncNodes(layer, items, crear, pintar) {')
+  assert(sync.includes('this.stats.created++'), '_syncNodes cuenta los nodos que crea')
+  assert(sync.includes('this.stats.reused++'), 'y los que reutiliza (es lo que mide el banco)')
+  assert(sync.includes('crear(') && sync.includes('pintar('), 'crea sólo lo que falta y pinta todos')
+})
+
+test('P1: la clase «on» se pone al instante salvo en el primer pintado con barrido', () => {
+  // El rectángulo nace con `opacity: 0` y una transición de .4 s (styles.js):
+  // encenderlo dentro de un requestAnimationFrame en CADA scroll lo hacía
+  // aparecer desde cero una y otra vez. Eso era el parpadeo.
+  const rects = cuerpo('_paintQuoteRects(sweep, medidas) {')
+  assert(/if \(nuevo && sweep\)/.test(rects), 'sólo un nodo nuevo de un pintado con barrido espera a un frame')
+  assert(rects.includes("nodo.classList.add('on')"), 'los demás se encienden al instante')
+  const badges = cuerpo('_paintNoteBadges(animate, medidas) {')
+  assert(/if \(nuevo && animate\)/.test(badges), 'las insignias, igual')
+})
+
+test('P1: la geometría de cada observación se mide UNA vez para las dos capas', () => {
+  const prep = cuerpo('_prepareGroups() {')
+  assert(prep.includes('clipElementFor('), 'la caja de recorte se busca al anotar, no en cada frame')
+  assert(prep.includes('inCode('), 'y si la marca va sobre código, también')
+
+  const med = cuerpo('_measureGroups() {')
+  assert(med.includes('rectsOf(') && med.includes('clipRects('), 'medir es leer las cajas de los Range y recortarlas')
+  assert(med.includes('!g.clipEl.isConnected'), 'un contenedor de recorte que ya no está en la página se vuelve a buscar')
+
+  for (const firma of ['_paintQuoteRects(sweep, medidas) {', '_paintNoteBadges(animate, medidas) {']) {
+    const c = cuerpo(firma)
+    for (const caro of ['rectsOf(', 'clipRects(', 'clipElementFor(', 'inCode(']) {
+      assert(!c.includes(caro), `«${firma}» no vuelve a medir con ${caro}: recibe las medidas`)
+    }
+  }
+  const rep = cuerpo('_repaint(sweep) {')
+  assert(rep.includes('const medidas = this._measureGroups()'), '_repaint mide una vez…')
+  assert(rep.includes('this._paintQuoteRects(sweep, medidas)') && rep.includes('this._paintNoteBadges(sweep, medidas)'), '…y se la pasa a las dos capas')
 })

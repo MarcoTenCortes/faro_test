@@ -7,6 +7,7 @@
  */
 
 import { isScrollable } from './tree-dom.js'
+import { STICKY_CACHE_MS } from '../shared/config.js'
 
 /** Selectores del contenedor de contenido, del más específico al más laxo. */
 const CONTENT_ROOTS = [
@@ -28,14 +29,35 @@ export function contentRoot() {
   return document.body
 }
 
+/** Lo último que midió `stickyOffset`, con cuándo y con qué ventana. */
+let sticky = { at: -Infinity, ancho: 0, alto: 0, valor: 0 }
+
 /**
  * Alto de las cabeceras pegajosas que hay ahora mismo arriba.
  *
  * Sin esto, `scrollIntoView` deja el objetivo escondido debajo de la barra de
  * Confluence. Es el fallo más habitual de las extensiones que resaltan cosas,
  * así que se mide de verdad en vez de codificar un número.
+ *
+ * Medirlo cuesta: hasta 400 elementos con un `getComputedStyle` cada uno, y un
+ * solo desplazamiento lo pide dos veces (`scrollToElement` y, dentro de él,
+ * `scrollToRect`). La medida vale `STICKY_CACHE_MS`, que es mucho menos de lo
+ * que tarda la cabecera en cambiar de sitio, y se descarta en cuanto cambia el
+ * tamaño de la ventana —que es cuando de verdad cambia la barra— sin necesidad
+ * de un oyente de `resize`: este módulo no puede tocar `window` al importarse,
+ * porque lo importan los tests en Node. Reloj monótono (`performance.now`).
+ *
+ * Límite asumido: una barra que aparece o se esconde al desplazarse puede
+ * quedar hasta `STICKY_CACHE_MS` desactualizada, y el destino queda unos pocos
+ * píxeles más alto o más bajo de lo ideal; `scrollToRect` ya deja 24 px de
+ * holgura y nadie vuelve a leer este número para decidir nada.
  */
 export function stickyOffset() {
+  const ahora = performance.now()
+  const ancho = window.innerWidth
+  const alto = window.innerHeight
+  if (ahora - sticky.at < STICKY_CACHE_MS && sticky.ancho === ancho && sticky.alto === alto) return sticky.valor
+
   let max = 0
   const candidates = document.querySelectorAll('header, nav, div, [role="banner"], [data-testid*="header" i]')
   let checked = 0
@@ -45,11 +67,12 @@ export function stickyOffset() {
     if (style.position !== 'fixed' && style.position !== 'sticky') continue
     if (style.visibility === 'hidden' || style.display === 'none') continue
     const r = el.getBoundingClientRect()
-    if (r.top <= 2 && r.height > 8 && r.height < 200 && r.width > window.innerWidth * 0.5) {
+    if (r.top <= 2 && r.height > 8 && r.height < 200 && r.width > ancho * 0.5) {
       max = Math.max(max, r.bottom)
     }
   }
-  return Math.min(max, 200)
+  sticky = { at: ahora, ancho, alto, valor: Math.min(max, 200) }
+  return sticky.valor
 }
 
 /**

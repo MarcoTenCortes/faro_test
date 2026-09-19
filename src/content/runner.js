@@ -654,15 +654,21 @@ export class NavRunner {
     const t0 = performance.now()
     const transcurrido = () => Math.round(performance.now() - t0)
 
+    // Qué es contenido y qué es interfaz se decide UNA vez para toda la pasada.
+    // Antes lo recalculaba `pageDigest()` y después cada observación —al leer
+    // el texto propio de su bloque y al bajar al peldaño global—, hasta tres
+    // veces por observación y doce observaciones por análisis, y en una
+    // incidencia de Jira decidirlo cuesta recorrer sus módulos (P7).
+    const scope = digestScope()
     // La página en bloques se lee UNA vez para todas las observaciones, y de la
     // página de ahora: lo que vio el modelo pudo haberse repintado desde entonces.
-    const digest = pageDigest()
+    const digest = pageDigest({ scope })
 
     const items = []
     const missed = []
     const detail = []
     for (const nota of notes || []) {
-      const resolved = resolveNote(nota, digest)
+      const resolved = resolveNote(nota, digest, scope)
       if (!visibleResolution(resolved)) {
         missed.push(nota.n)
         detail.push({ n: nota.n, strategy: 'none' })
@@ -698,7 +704,10 @@ export class NavRunner {
     // no están en el documento no se ve. Si pasó, se vuelve a resolver la
     // observación contra la página de ahora; si tampoco así, se dice.
     if (nota.anchor && !rangeAlive(nota.ranges[0])) {
-      const resolved = resolveNote(nota, pageDigest())
+      // Una sola observación, pero el mismo ámbito para leer y para resolver:
+      // no tiene sentido decidir dos veces qué es interfaz en esta página.
+      const scope = digestScope()
+      const resolved = resolveNote(nota, pageDigest({ scope }), scope)
       // La MISMA guardia que al poner las marcas: aceptar aquí cualquier Range
       // contestaba `ok` con la cita caída en una pestaña oculta, sin marca ni
       // desplazamiento, y el panel encendía la fila (M8).
@@ -730,17 +739,19 @@ export class NavRunner {
  * Las del análisis apuntan a un bloque numerado de la página («¶12») y llevan
  * la escalera de `digest.js`; el resto —una cita suelta, un encabezado— siguen
  * el camino de siempre. Sin ancla no hay nada que resolver.
+ *
+ * El ámbito llega ya calculado por quien recorre todas las observaciones; el
+ * valor por defecto es para quien resuelva una suelta.
  */
-function resolveNote(nota, digest) {
+function resolveNote(nota, digest, scope = digestScope()) {
   if (!nota?.anchor) return null
-  if (nota.anchor.kind === 'block-quote') return resolveBlockQuote(nota.anchor, { digest })
+  if (nota.anchor.kind === 'block-quote') return resolveBlockQuote(nota.anchor, { digest, scope })
   // Una cita suelta se busca en el ÁMBITO de lectura cuando lo hay (una
   // incidencia de Jira): en toda la página caería en la barra de acciones o en
   // una pestaña de campos oculta. En Confluence no hay ámbito que acote y
   // sigue siendo la búsqueda de siempre, con su contexto por delante y detrás.
-  if (nota.anchor.kind === 'text-quote') {
-    const scope = digestScope()
-    if (scope.chrome) return resolveScopedQuote(nota.anchor, { scope }) || { ok: false, strategy: 'none' }
+  if (nota.anchor.kind === 'text-quote' && scope.chrome) {
+    return resolveScopedQuote(nota.anchor, { scope }) || { ok: false, strategy: 'none' }
   }
   return resolveAnchor(nota.anchor)
 }

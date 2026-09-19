@@ -265,3 +265,55 @@ test('mergeIndexKeepingTree: sin base, o con una de otra version, es como mergeI
   const viejo = { version: 1, host: HOST, pages: { 1: { id: '1', title: 'Vieja', parentId: '9', path: '/wiki/spaces/~/pages/1' } }, spaces: {}, projects: {}, issues: {} }
   eq(mergeIndexKeepingTree(viejo, nuevo).pages['1'].parentId, null, 'de un indice descartado no se rescata nada')
 })
+
+// --- copia superficial (H6 P3) ---------------------------------------------
+// Fundir clonaba el índice ENTERO por JSON en cada llamada, y desde H6 se funde
+// una vez por turno con lo que haya crecido: con 2 000 páginas eso era copiar
+// 2 000 objetos para cambiar tres. Las entradas son inmutables —nadie las
+// modifica en su sitio, todo el que las cambia construye otra (`normalizeIndex`,
+// `mergeIndexKeepingTree`)—, así que compartirlas es seguro y lo único que hay
+// que copiar de verdad son los cuatro cubos.
+
+test('mergeIndex: copia superficial — las entradas que nadie toca se comparten, y la base no se toca', () => {
+  const a = normalizeIndex({ updated: 10, pages: [{ id: '1', title: 'Vieja', url: '/a' }], spaces: [{ key: 'ENG', name: 'Ing' }] }, HOST)
+  const b = normalizeIndex({ updated: 20, pages: [{ id: '2', title: 'Otra', url: '/b' }] }, HOST)
+  const m = mergeIndex(a, b)
+
+  // La entrada que el índice nuevo no menciona es LA MISMA, no una copia: es lo
+  // que hace que fundir no cueste proporcional al tamaño del índice.
+  assert(m.pages['1'] === a.pages['1'], 'la página que nadie toca no se clona')
+  assert(m.spaces['ENG'] === a.spaces['ENG'], 'ni el espacio')
+  assert(m.pages['2'] === b.pages['2'], 'y la nueva entra tal cual')
+
+  // Pero los CUBOS sí son propios: escribir en el resultado no puede tocar la
+  // base, que es el índice que el panel sigue teniendo en `state.index`.
+  for (const cubo of ['spaces', 'pages', 'projects', 'issues']) {
+    assert(m[cubo] !== a[cubo], `el cubo ${cubo} se copia`)
+  }
+  m.pages['3'] = { id: '3', title: 'Colada', spaceKey: null, parentId: null, path: '/c' }
+  delete m.pages['1']
+  eq(Object.keys(a.pages), ['1'], 'la base sigue como estaba')
+  eq(a.updated, 10, 'y su fecha también')
+  eq(m.updated, 20, 'la del resultado es la más nueva de las dos')
+})
+
+test('mergeIndexKeepingTree: fundir dos veces lo mismo da lo mismo (una escritura por turno)', () => {
+  // H6 P3: el índice se funde en memoria varias veces durante un turno
+  // (`growIndex`, el árbol de la barra lateral, el camino del planificador) y se
+  // guarda UNA vez al final. Si fundir no fuera idempotente, el índice guardado
+  // dependería de cuántas veces se hubiera fundido antes.
+  const suelta = normalizeIndex(
+    { updated: 99, pages: [{ id: '98830281', title: 'TCV Static - Identity Provider Service', url: '/pages/viewpage.action?pageId=98830281' }] },
+    'confluence.simplprogramme.eu',
+    null,
+    { wikiPrefix: '' }
+  )
+  const una = mergeIndexKeepingTree(CON_ARBOL, suelta)
+  const dos = mergeIndexKeepingTree(una, suelta)
+  eq(dos, una, 'el segundo funde no cambia nada')
+  eq(mergeIndexKeepingTree(dos, suelta), una, 'ni el tercero')
+
+  // Y la base de la que se partió sigue intacta después de las tres.
+  eq(CON_ARBOL.pages['98830281'].path, '/spaces/SIMPL/pages/98830281/TCVIdP')
+  eq(Object.keys(CON_ARBOL.pages).sort(), ['3002', '98830281'])
+})

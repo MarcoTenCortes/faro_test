@@ -504,6 +504,102 @@ test('runTurn: sin contenido durante stallMs el vigilante lo da por colgado y ab
     )
   ))
 
+// --- H6 P2: razonar es estar vivo, y el silencio se dice ---------------------
+
+test('runTurn: un modelo que sólo razona sigue vivo para el vigilante, y su razonamiento no pide repintar', () =>
+  conIntervaloRapido(() =>
+    conServidor(
+      {
+        'POST /session/ses_1/prompt_async': (ll, s) => {
+          // Doce trozos de razonamiento en 60 ms, con el plazo de colgado en 80:
+          // sin contarlos como señal de vida, el turno moriría por el camino.
+          let n = 0
+          const tic = setInterval(() => {
+            s.sse.push(ev('message.part.delta', { sessionID: SID, messageID: 'msg_a', partID: 'prt_r', field: 'reasoning', delta: 'pienso ' }))
+            if (++n < 12) return
+            clearInterval(tic)
+            s.sse.push(ev('message.part.updated', { part: { id: 'prt_1', sessionID: SID, messageID: 'msg_a', type: 'text', text: 'Ya está' } }))
+            s.sse.push(ev('session.idle', { sessionID: SID }))
+          }, 5)
+          return { id: 'msg_1' }
+        },
+        'POST /session/ses_1/abort': {},
+      },
+      async (client, s) => {
+        const pintados = []
+        let avisos = 0
+        const r = await client.runTurn(
+          SID,
+          { text: 'hola' },
+          { stallMs: 80, onUpdate: (t) => pintados.push(t.text), onWarn: () => avisos++ }
+        )
+        eq(r.ok, true)
+        eq(r.stalled, undefined, 'el razonamiento cuenta como señal de vida')
+        eq(r.text, 'Ya está')
+        eq(pintados, ['Ya está'], 'y sólo el texto pidió repintar (H6 P2)')
+        eq(avisos, 0, 'ni se avisa de silencio mientras razona')
+        eq(s.calls.filter((c) => c.path.endsWith('/abort')).length, 0)
+      }
+    )
+  ))
+
+test('runTurn: a mitad del plazo sin señales avisa UNA vez, y sigue esperando hasta el final', () =>
+  conIntervaloRapido(() =>
+    conServidor(
+      { 'POST /session/ses_1/prompt_async': { id: 'msg_1' }, 'POST /session/ses_1/abort': {} },
+      async (client) => {
+        // El vigilante mira cada 5 ms aquí, y entre el aviso (100 ms) y el
+        // colgado (200 ms) da muchas vueltas: «una vez» es una comprobación de
+        // verdad y no un accidente del reloj. El plazo va holgado a propósito —en
+        // Windows `Date.now()` avanza a saltos de ~16 ms— para que el hueco entre
+        // el aviso y el final quepa siempre.
+        const avisos = []
+        const r = await client.runTurn(SID, { text: 'hola' }, { stallMs: 200, onWarn: (ms) => avisos.push(ms) })
+        eq(r.stalled, true, 'el aviso no sustituye al plazo: el turno sigue muriendo a los 200 ms')
+        eq(avisos.length, 1, 'un aviso por turno, no uno por vuelta del vigilante')
+        assert(avisos[0] >= 100, 'y con los ms que lleva callado: ' + avisos[0])
+      }
+    )
+  ))
+
+test('runTurn: un onWarn que revienta no se lleva el turno por delante', () =>
+  conIntervaloRapido(() =>
+    conServidor(
+      {
+        'POST /session/ses_1/prompt_async': (ll, s) => {
+          // Calla lo bastante para que salte el aviso (a los 100 ms) y contesta
+          // antes del plazo (200 ms).
+          setTimeout(() => {
+            for (const e of turnoNormal()) s.sse.push(e)
+          }, 140)
+          return { id: 'msg_1' }
+        },
+        'POST /session/ses_1/abort': {},
+      },
+      async (client) => {
+        // El cliente escribe el fallo por consola: aquí se calla, o `npm run
+        // check` enseñaría una traza en cada ejecución como si algo fuera mal.
+        const errorReal = console.error
+        console.error = () => {}
+        let avisado = 0
+        try {
+          const r = await client.runTurn(SID, { text: 'hola' }, {
+            stallMs: 200,
+            onWarn: () => {
+              avisado++
+              throw new Error('el panel se rompió')
+            },
+          })
+          eq(avisado, 1, 'el aviso llegó (si no, esta prueba no comprueba nada)')
+          eq(r.ok, true)
+          eq(r.text, 'Hola mundo')
+        } finally {
+          console.error = errorReal
+        }
+      }
+    )
+  ))
+
 // Reproducido en la auditoría del 2026-09-13 (docs/PLAN.md §2, C6): el vigilante
 // sondeaba la señal cada 1 s y al despertar mandaba POST abort; Parar + otra
 // pregunta en menos de un segundo, en la MISMA sesión, abortaba el turno nuevo.

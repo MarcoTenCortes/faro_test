@@ -16,8 +16,12 @@
  *    2026-09-14).
  *  - M8: `applyNotes` y `focusNote` exigen lo mismo para dar una marca por
  *    puesta: `visibleResolution(resolved)`, que pide caja visible.
- * Estas dos no se pueden ejecutar en Node (necesitan el DOM), así que se
- * comprueba el cableado; `visibleResolution` sí, con Ranges de mentira.
+ *  - P7 (H6, docs/plan/anexo-E-eficiencia.md): el ÁMBITO de lectura (qué es
+ *    contenido y qué interfaz) se calcula una vez por pasada y se pasa; antes
+ *    lo recalculaban `pageDigest()`, `blockBoundary()` y el peldaño global,
+ *    hasta tres veces por observación y doce observaciones por análisis.
+ * Estas no se pueden ejecutar en Node (necesitan el DOM), así que se comprueba
+ * el cableado; `visibleResolution` sí, con Ranges de mentira.
  */
 import { test, eq, assert } from '../harness.js'
 import { readFileSync } from 'node:fs'
@@ -136,6 +140,44 @@ test('M8: applyNotes y focusNote comparten la guardia de caja visible', () => {
   const tras = foco.slice(foco.indexOf('if (!visibleResolution(resolved))'))
   assert(tras.includes("return { ok: false, reason: 'esa marca ya no está en la página' }"), 'sin caja, se dice')
   assert(tras.indexOf("reason: 'esa marca ya no está en la página'") < tras.indexOf('nota.ranges = resolved.ranges'), 'antes de adoptar el Range')
+})
+
+// --- P7: el ámbito de lectura, una vez por pasada --------------------------
+
+test('P7: applyNotes calcula el ámbito UNA vez y lo pasa a la lectura y a cada observación', () => {
+  const marcas = metodo('applyNotes')
+  assert(marcas.includes('const scope = digestScope()'), 'applyNotes calcula el ámbito')
+  eq(cuenta(marcas, 'digestScope()'), 1, 'una sola vez para toda la pasada')
+  assert(marcas.includes('pageDigest({ scope })'), 'la página se lee con ese ámbito')
+  assert(marcas.includes('resolveNote(nota, digest, scope)'), 'y cada observación se resuelve con él')
+})
+
+test('P7: el ámbito se calcula DENTRO de lo que mide el reloj de H3', () => {
+  // El `ms` que sale detrás de «Análisis marcado» sirve para comparar la misma
+  // página antes y después de tocarla: si el trabajo que se ahorra quedara
+  // fuera del tramo medido, el número no diría nada. (Dónde empieza y dónde
+  // acaba el reloj lo pina panel-wiring.test.js, que es de quien es el número.)
+  const marcas = metodo('applyNotes')
+  const reloj = marcas.indexOf('const t0 = performance.now()')
+  const ambito = marcas.indexOf('const scope = digestScope()')
+  const para = marcas.indexOf('const ms = transcurrido()')
+  assert(reloj >= 0 && ambito > reloj, 'calcular el ámbito es trabajo de marcar: cuenta')
+  assert(para > ambito, 'y sigue dentro del tramo que se mide')
+})
+
+test('P7: resolveNote reparte el ámbito que recibe, y focusNote también lo calcula una sola vez', () => {
+  const fn = JS.slice(JS.indexOf('function resolveNote('), JS.indexOf('export function visibleResolution('))
+  assert(
+    fn.includes('function resolveNote(nota, digest, scope = digestScope())'),
+    'el ámbito llega por parámetro, con valor por defecto para quien no lo pase'
+  )
+  assert(fn.includes('resolveBlockQuote(nota.anchor, { digest, scope })'), 'la escalera del bloque lo recibe')
+  assert(fn.includes('resolveScopedQuote(nota.anchor, { scope })'), 'y la cita suelta también')
+  eq(cuenta(fn, 'digestScope()'), 1, 'sólo el valor por defecto: ya no lo calcula por observación')
+
+  const foco = metodo('focusNote')
+  assert(foco.includes('resolveNote(nota, pageDigest({ scope }), scope)'), 'focusNote lee y resuelve con el mismo ámbito')
+  eq(cuenta(foco, 'digestScope()'), 1)
 })
 
 // --- visibleResolution con Ranges de mentira ------------------------------

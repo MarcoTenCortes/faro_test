@@ -6,7 +6,15 @@
  * cambiarle a nadie lo que había elegido.
  */
 import { test, eq, assert } from '../harness.js'
-import { migrateSettings, DEFAULT_SETTINGS, NAV_MODES, SAFE_PERMISSIONS as DESDE_CONFIG } from '../../src/shared/config.js'
+import {
+  migrateSettings,
+  DEFAULT_SETTINGS,
+  NAV_MODES,
+  RESTORE_LIMITS,
+  SESSION_LIMITS,
+  STORAGE_KEYS,
+  SAFE_PERMISSIONS as DESDE_CONFIG,
+} from '../../src/shared/config.js'
 import { SAFE_PERMISSIONS } from '../../src/shared/permissions.js'
 
 test('config.js reexporta SAFE_PERMISSIONS de permissions.js: quien lo importaba de aquí recibe la misma lista', () => {
@@ -51,4 +59,41 @@ test('no se muta lo que entra', () => {
   const raw = { assistedByDefault: false }
   migrateSettings(raw)
   eq(raw, { assistedByDefault: false })
+})
+
+// ------------------------------------------------------------------ H6 (P6b)
+
+test('H6: la ventana de la restauración es un tope de seguridad, no una ventana deslizante', () => {
+  // `listMessages` sin `limit` traía la sesión ENTERA —salidas de herramientas
+  // incluidas, megabytes— cada vez que se abre el panel (docs/PLAN.md §2.6 P6b).
+  // El número tiene que ser de mensajes, entero y holgado: las sesiones reales
+  // son de 1-4 turnos (≈8 mensajes), así que 60 no recorta ninguna de verdad.
+  eq(Object.keys(RESTORE_LIMITS).sort(), ['messages'])
+  assert(Number.isInteger(RESTORE_LIMITS.messages), 'un número de mensajes es entero')
+  assert(RESTORE_LIMITS.messages >= 20, 'por debajo de 20 se recortarían conversaciones normales')
+})
+
+test('H6: el umbral de «Conversación pesada» va por encima de lo que opencode protege', () => {
+  // opencode poda las salidas de herramientas viejas dejando `PRUNE_PROTECT`
+  // (40 000 tokens) sin tocar: avisar por debajo de eso sería avisar de algo que
+  // el servidor ya resuelve solo. 200 000 caracteres ≈ 50 000 tokens, o sea el
+  // primer punto en el que la conversación arrastra MÁS de lo protegido.
+  eq(Object.keys(SESSION_LIMITS).sort(), ['heavyToolChars'])
+  assert(Number.isInteger(SESSION_LIMITS.heavyToolChars), 'se cuenta en caracteres enteros')
+  assert(
+    SESSION_LIMITS.heavyToolChars >= 160000,
+    'el aviso tiene que quedar por encima de los 40 000 tokens que opencode protege (≈160 000 caracteres)'
+  )
+})
+
+test('H6: el peso de la sesión se guarda por host, como la sesión misma', () => {
+  eq(typeof STORAGE_KEYS.sessionWeight, 'function', 'es una clave POR HOST')
+  eq(STORAGE_KEYS.sessionWeight('a.b'), 'faro:session-weight:a.b')
+  // Vive junto a `faro:session:<host>` y muere con ella (las dos en
+  // storage.session): un peso que sobreviviera a su sesión avisaría de lo que
+  // arrastra una conversación que ya no existe.
+  assert(
+    STORAGE_KEYS.sessionWeight('a.b') !== STORAGE_KEYS.session('a.b'),
+    'pero no es la misma clave: el id de la sesión no se pisa con un número'
+  )
 })

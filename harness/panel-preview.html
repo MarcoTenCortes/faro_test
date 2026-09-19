@@ -508,6 +508,40 @@ async function arrancar() {
 
   const aviso = (texto, malo = false) => mk('div', 'notice' + (malo ? ' bad' : ''), texto)
 
+  /**
+   * La fila que corona una conversación recortada (H6): el panel pide los
+   * últimos RESTORE_LIMITS.messages mensajes y desde aquí se trae el resto.
+   * Va dentro del chat, así que se desplaza con la conversación.
+   */
+  function filaConversacionLarga() {
+    const row = mk('div', 'older-turns')
+    row.appendChild(mk('span', null, 'Conversación larga: se enseñan los últimos 60 mensajes.'))
+    const btn = mk('button', 'ghost small', 'Ver toda la conversación')
+    btn.type = 'button'
+    row.appendChild(btn)
+    return row
+  }
+
+  /**
+   * El aviso de conversación pesada (H6), tal como lo cuelga `trackSessionWeight`
+   * de la respuesta: el tamaño, que opencode ya poda, y la salida a mano.
+   */
+  function avisoConversacionPesada() {
+    const wrap = doc.createElement('div')
+    wrap.appendChild(
+      aviso(
+        'Esta conversación arrastra 305 KB de consultas a Atlassian. opencode recorta las más antiguas, ' +
+          'pero las últimas se reenvían en cada turno: una sesión nueva empieza limpia y la memoria guarda un resumen de ésta.'
+      )
+    )
+    const acciones = mk('div', 'nav-actions')
+    const btn = mk('button', 'primary', 'Sesión nueva')
+    btn.type = 'button'
+    acciones.appendChild(btn)
+    wrap.appendChild(acciones)
+    return wrap
+  }
+
   /** La tarjeta de «Falta un permiso», que cuelga del chat y no de una burbuja. */
   function tarjetaPermiso(host) {
     const card = mk('div', 'nav-card perm-card')
@@ -622,6 +656,10 @@ async function arrancar() {
   }
 
   function conversacionJira() {
+    // Es la conversación larga: la ventana de la restauración vino llena, así
+    // que arriba del todo va la fila que ofrece traer el resto (H6).
+    chat.appendChild(filaConversacionLarga())
+
     // Primero un análisis viejo, restaurado: sus marcas ya no están puestas.
     chat.appendChild(burbujaUsuario('Analiza esta incidencia', 'con el texto de la incidencia (41 bloques)'))
     const b0 = mk('div', 'msg assistant')
@@ -716,6 +754,9 @@ async function arrancar() {
           'Tenlo en cuenta al leer la respuesta: el alcance se le pide, no se le impone, y otro modelo suele respetarlo mejor.'
       )
     )
+    // Y, debajo de todo lo que cuelga de la respuesta, el aviso de que la
+    // conversación ya arrastra más de lo que conviene reenviar (H6).
+    b1.appendChild(avisoConversacionPesada())
     chat.appendChild(b1)
 
     chat.appendChild(tarjetaPermiso(SITIOS.jira.host))
@@ -907,8 +948,8 @@ async function arrancar() {
     ['MCP', 'atlassian-confluence-simplprogramme-eu · connected', 'ok'],
     // H3 (medir): las tres filas de medidas. La de almacenamiento va a
     // propósito por encima de los 8 MB para ver el aviso en los dos temas.
-    ['tiempos (arranque)', '14,3 s · health 1 ms · modelos 61 ms · MCP 13,8 s · almacenamiento 60 ms · restaurar 420 ms', ''],
-    ['tiempos (último turno)', '41,2 s · página 61 ms · sesión 3 ms · primer texto 3,1 s · fin 38,1 s · pintar 12 ms · índice 90 ms · marcas 210 ms', ''],
+    ['tiempos (arranque)', '14,3 s · health 1 ms · modelos y almacenamiento 61 ms · MCP 13,8 s · enlazado 2 ms · restaurar 420 ms', ''],
+    ['tiempos (último turno)', '41,2 s · página 61 ms · sesión 3 ms · primer texto 3,1 s · fin 38,1 s · pintar 12 ms · marcas 210 ms · índice 90 ms', ''],
     ['almacenamiento', '8,4 MB de 10 MB', 'bad'],
   ]) {
     const row = mk('div', 'state-row')
