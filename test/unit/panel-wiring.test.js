@@ -16,6 +16,16 @@ const CSS = readFileSync(join(ROOT, 'src/panel/panel.css'), 'utf8')
 
 const htmlIds = new Set([...HTML.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]))
 
+/**
+ * El fuente sin comentarios, como en runner-wiring.test.js: cuando lo que se
+ * cuenta son LLAMADAS, un nombre citado en una explicación no vale. Pasó: el pin
+ * de `medir()` contaba 4 y una de las cuatro era la del comentario de encima
+ * (revisión adversaria de H3).
+ */
+function sinComentarios(src) {
+  return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '')
+}
+
 function jsIds() {
   const ids = new Set()
   for (const m of JS.matchAll(/\$\('([^']+)'\)/g)) ids.add(m[1])
@@ -565,7 +575,12 @@ test('H2 C7: el pintado final de un turno busca la burbuja viva si el chat se re
   // Contra el sitio del PANEL (el último host de Atlassian visto), no contra
   // la pestaña: mirar el correo a mitad de respuesta no deja el turno sin chat.
   assert(/const mismoSitio = \(state\.site\?\.host \?\? state\.lastHost\) === hostAlPedir && state\.sessionID === sesionAlPedir/.test(antes), 'y se comprueba al terminar, con la sesión (una «Nueva sesión» a mitad también deja el turno sin chat)')
-  assert(/const sesionAlPedir = state\.sessionID/.test(envio) && envio.indexOf('const sesionAlPedir') < envio.indexOf('runTurn('), 'la sesión se captura al mandar')
+  // Declarada fuera del `try` (el `finally` la pregunta para su línea de tiempos)
+  // y asignada al abrir la sesión, siempre antes de mandar.
+  assert(
+    /sesionAlPedir = state\.sessionID/.test(envio) && envio.indexOf('sesionAlPedir = state.sessionID') < envio.indexOf('runTurn('),
+    'la sesión se captura al mandar'
+  )
   assert(antes.indexOf('if (!mismoSitio)') < antes.indexOf("state.turns.push({ role: 'assistant'"), 'antes de tocar los turnos de otro sitio')
 })
 
@@ -841,7 +856,10 @@ test('H3: el arranque dice cuánto tardó cada fase, y la del MCP es la que se v
   // `bootForSite` lo espera antes de enseñar el chat. Nadie lo veía: sin el
   // número en el registro, sacarlo del camino (H6) sería a ciegas.
   const arranque = JS.slice(JS.indexOf('async function bootForSite'), JS.indexOf('async function loadLinkedContext'))
-  assert(/const cron = startTiming\(\)/.test(arranque), 'el arranque se cronometra desde el principio')
+  // Reloj MONÓTONO: `Date.now` salta con el reloj del sistema (NTP, cambio de
+  // hora) y una fase podía salir negativa o de horas. El content script ya medía
+  // con `performance.now`; el panel también (revisión adversaria de H3).
+  assert(/const cron = startTiming\(\(\) => performance\.now\(\)\)/.test(arranque), 'el arranque se cronometra desde el principio, con reloj monótono')
   assert(/'Arranque del panel'/.test(arranque), 'y se registra al acabar')
   assert(/state\.timing\.boot = timingLine\(cron\.done\(\)\)/.test(arranque), 'con la línea que también enseña el Registro')
   for (const fase of ['health', 'modelos', 'MCP', 'almacenamiento', 'restaurar']) {
@@ -852,11 +870,20 @@ test('H3: el arranque dice cuánto tardó cada fase, y la del MCP es la que se v
   const mcp = arranque.indexOf("cron.mark('MCP')")
   assert(arranque.lastIndexOf('client.listMcp()', mcp) > -1, 'la marca va después de pedir /mcp y /config')
   assert(mcp < arranque.indexOf('siteRecords({'), 'y antes de adoptar el MCP y escribir en storage')
-  // El arranque tiene cuatro salidas y las cortas son justo las que enseñan lo
-  // que cuesta el MCP: la pantalla de claves y la de contexto también miden.
-  eq(arranque.split('medir()').length - 1, 4, 'medir() se define y se llama en las tres salidas que llegan a medir algo')
-  const claves = arranque.slice(arranque.indexOf('if (!status.connected && !saved?.skippedKeys) {'))
+  // El arranque tiene cuatro salidas: tres miden —pantalla de claves, pantalla de
+  // contexto y el chat, y las dos cortas son justo las que enseñan lo que cuesta
+  // el MCP— y la de «sin opencode» no mide nada. Se cuenta sobre el fuente SIN
+  // comentarios: el pin contaba 4 llamadas y una era la del comentario de encima.
+  const codigo = sinComentarios(arranque)
+  eq(codigo.split('medir()').length - 1, 3, 'medir() se llama en las tres salidas que llegan a medir algo')
+  const claves = codigo.slice(codigo.indexOf('if (!status.connected && !saved?.skippedKeys) {'))
   assert(claves.indexOf('medir()') < claves.indexOf('return'), 'la salida por la pantalla de claves mide antes de volver')
+  // La salida «sin opencode» no registra un arranque verde que no hubo, y además
+  // VACÍA la fila: si no, «tiempos (arranque)» se quedaba con la línea del
+  // arranque anterior, que era de otro momento y quizá de otro sitio.
+  const sinOpencode = codigo.slice(codigo.indexOf('await client.health()'), codigo.indexOf("cron.mark('health')"))
+  assert(/state\.timing\.boot = ''/.test(sinOpencode), 'sin opencode, la fila de tiempos vuelve a «(sin medir)»')
+  assert(!sinOpencode.includes('medir()'), 'y no se registra ningún «Arranque del panel»')
   // SEGURIDAD: de la configuración de opencode no sale nada al registro; una
   // línea de tiempos son etiquetas de Faro y números.
   assert(!/log\.\w+\([^)]*\bconfig\b/.test(arranque), 'la configuración no se registra')
@@ -867,10 +894,18 @@ test('H3: «Respuesta recibida» dice lo que costó el turno, y el Registro guar
   // arrastra justifican «YA LEÍDAS» (H12) y si el sistema de un Análisis de
   // Jira —23-27 000 caracteres— merece tocarse. Medir, no cambiar nada.
   const envio = JS.slice(JS.indexOf('async function send('), JS.indexOf('function paintTurn('))
-  assert(/const cron = startTiming\(\)/.test(envio), 'el turno se cronometra')
-  for (const fase of ['página', 'sesión', 'primer texto', 'fin', 'índice', 'marcas']) {
+  assert(/const cron = startTiming\(\(\) => performance\.now\(\)\)/.test(envio), 'el turno se cronometra con reloj monótono')
+  // «pintar» separa lo que cuesta ENSEÑAR la respuesta (repintado final, aviso de
+  // páginas base, guardar el modelo) de lo que cuesta el índice: sin ella, los
+  // dos números salían juntos bajo la etiqueta «índice» (revisión adversaria de H3).
+  for (const fase of ['página', 'sesión', 'primer texto', 'fin', 'pintar', 'índice', 'marcas']) {
     assert(envio.includes(`cron.mark('${fase}')`), `falta la fase ${fase}`)
   }
+  assert(
+    envio.indexOf("cron.mark('pintar')") < envio.indexOf('await growIndex(turn.parts)'),
+    'la marca de «pintar» va antes del índice, que es lo que separa'
+  )
+  assert(envio.indexOf('await growTreeFromPage()') < envio.indexOf("cron.mark('índice')"), 'y «índice» cierra tras el árbol')
   // La primera palabra se marca UNA vez y sin tocar lo que se pinta.
   assert(/if \(!primerTexto && t\.text\) \{/.test(envio), 'la primera palabra del modelo se detecta en el primer onUpdate con texto')
   assert(/paintTurn\(t, toolsBox, body\)/.test(envio), 'y el pintado sigue siendo el de antes')
@@ -886,7 +921,25 @@ test('H3: «Respuesta recibida» dice lo que costó el turno, y el Registro guar
   const fin = envio.slice(envio.indexOf('} finally {'))
   assert(/state\.timing\.turn = timingLine\(cron\.done\(\)\)/.test(fin), 'el turno deja su línea de tiempos')
   assert(fin.indexOf('state.timing.turn') > fin.indexOf('if (state.turnToken === testigo)'), 'sólo el turno vigente')
+  // Y sólo si llegó a mandarse y sigue siendo de este sitio y de esta sesión: la
+  // misma condición que `mismoSitio`. Un turno que murió leyendo la página, o uno
+  // que acabó con el panel en otro host, dejaba en el Registro una línea de fases
+  // vacías o de otro sitio (revisión adversaria de H3).
+  assert(/let medible = false/.test(envio) && envio.indexOf('let medible = false') < envio.indexOf('try {'), 'el testigo de «llegó a mandarse» vive fuera del try')
+  assert(/medible = true/.test(envio) && envio.indexOf('medible = true') < envio.indexOf('runTurn('), 'y se enciende justo antes de mandar')
+  assert(
+    /if \(medible && \(state\.site\?\.host \?\? state\.lastHost\) === hostAlPedir && state\.sessionID === sesionAlPedir\) \{/.test(fin),
+    'la línea del turno se apunta con la misma condición que mismoSitio'
+  )
+  // Dentro del testigo, pero SIN tocar lo demás del finally: apagar el estado y
+  // soltar el testigo siguen dependiendo sólo de él.
+  assert(fin.indexOf('setStreaming(false)') < fin.indexOf('if (medible &&'), 'y el resto del finally no cambia')
   assert(/timing: \{ boot: '', turn: '' \}/.test(JS), 'los dos tiempos viven en el estado, no en disco')
+  // Los tiempos son del SITIO: al cambiar de host se van con el índice y el
+  // contexto, porque hablan de un arranque y de un turno de otro sitio.
+  const refresco = JS.slice(JS.indexOf('async function refreshTab'), JS.indexOf('async function bootForSite'))
+  const cambio = refresco.slice(refresco.indexOf('if (changedHost) {'), refresco.indexOf('state.site = site'))
+  assert(/state\.timing = \{ boot: '', turn: '' \}/.test(cambio), 'al cambiar de sitio los tiempos se vacían')
 
   // Y el Registro los enseña, con lo que ocupa el almacenamiento: un «va lento»
   // o un «no guarda» deja de ser una impresión.
@@ -894,6 +947,18 @@ test('H3: «Respuesta recibida» dice lo que costó el turno, y el Registro guar
   assert(/add\('tiempos \(arranque\)'/.test(estado) && /add\('tiempos \(último turno\)'/.test(estado), 'las dos filas de tiempos')
   assert(/getBytesInUse/.test(estado), 'y cuánto se lleva gastado de la cuota')
   assert(/bytes > 8 \* 1024 \* 1024 \? 'bad' : ''/.test(estado), 'con aviso antes de que storage.set empiece a fallar')
+  // En la misma unidad que la cuota, y con el mismo formateador que el espejo del
+  // panel enseña («8,4 MB de 10 MB»): escrito siempre en KB, el número no decía si
+  // quedaba sitio (revisión adversaria de H3).
+  assert(/\$\{formatBytes\(bytes\)\} de \$\{Math\.round\(cuota \/ \(1024 \* 1024\)\)\} MB/.test(estado), 'el tamaño se formatea con formatBytes')
+  const espejo = readFileSync(join(ROOT, 'harness/panel-preview.html'), 'utf8')
+  assert(espejo.includes("'8,4 MB de 10 MB'"), 'y el espejo enseña exactamente lo que pinta el panel')
+  // El espejo es la referencia visual de estas filas: si el turno gana una fase,
+  // su línea de ejemplo también, o se está diseñando contra algo que ya no existe.
+  const filaTurno = espejo.slice(espejo.indexOf("['tiempos (último turno)'"), espejo.indexOf("['almacenamiento'"))
+  for (const fase of ['página', 'sesión', 'primer texto', 'fin', 'pintar', 'índice', 'marcas']) {
+    assert(filaTurno.includes(fase + ' '), `la línea de ejemplo del espejo no enseña la fase ${fase}`)
+  }
 })
 
 test('H3: lo que tardó leer la página y marcarla lo dice la propia página', () => {
@@ -925,5 +990,15 @@ test('H3: lo que tardó leer la página y marcarla lo dice la propia página', (
   const runner = readFileSync(join(ROOT, 'src/content/runner.js'), 'utf8')
   const marcas = runner.slice(runner.indexOf('  async applyNotes('), runner.indexOf('  async focusNote('))
   assert(marcas.includes('const transcurrido = () => Math.round(performance.now() - t0)'), 'un solo reloj en applyNotes')
-  eq(marcas.split('ms: transcurrido()').length - 1, 3, 'las tres salidas de applyNotes llevan ms')
+  eq(marcas.match(/return \{[^}]*\bms\b/g)?.length, 3, 'las tres salidas de applyNotes llevan ms')
+  // El reloj arranca DESPUÉS de esperar a que la página tenga texto —el mismo
+  // criterio que PAGE_DIGEST, que deja ese `waitFor` fuera a propósito— y se para
+  // en cuanto las marcas están puestas, ANTES del desplazamiento suave hasta la
+  // primera: esos 420-820 ms son animación fija, no trabajo de marcar, y tapaban
+  // la diferencia entre una página corta y una larga (revisión adversaria de H3).
+  assert(marcas.indexOf('await waitFor(') < marcas.indexOf('const t0 = performance.now()'), 'el reloj arranca tras esperar a la página')
+  assert(/reason: 'editando', ms: 0/.test(marcas), 'y la salida por el editor, que es antes de esperar, devuelve 0')
+  const paraReloj = marcas.indexOf('const ms = transcurrido()')
+  assert(paraReloj > marcas.indexOf('this.overlay.annotate(items)'), 'el reloj se para con las marcas ya puestas')
+  assert(paraReloj > -1 && paraReloj < marcas.indexOf('scrollToRange('), 'y antes del desplazamiento suave')
 })

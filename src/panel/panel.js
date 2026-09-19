@@ -25,7 +25,7 @@ import {
 import { renderMarkdown } from './markdown.js'
 import { SKILLS, DEFAULT_SKILL, skillById } from './skills.js'
 import { pickLabel } from '../content/pick-payload.js'
-import { prettyTool, clockTime } from '../shared/format.js'
+import { prettyTool, clockTime, formatBytes } from '../shared/format.js'
 import { startTiming, timingLine } from '../shared/timing.js'
 import { log } from '../shared/log.js'
 import {
@@ -354,6 +354,10 @@ async function refreshTab() {
     state.ancestryFetched = new Map()
     state.contextMd = ''
     state.linkedContext = null
+    // Los tiempos también son del sitio: hablan del arranque y del último turno
+    // de ESE host. Dejados puestos, el Registro del sitio nuevo enseñaba las
+    // fases del anterior hasta que hubiera arranque y turno propios.
+    state.timing = { boot: '', turn: '' }
     paintSourcesUi()
   }
   state.site = site
@@ -409,9 +413,13 @@ async function bootForSite() {
   // decidir si vale la pena sacarlo del camino, así que primero se mide.
   // El arranque tiene cuatro salidas —sin opencode, pantalla de claves,
   // pantalla de contexto y el chat— y justo las cortas son las que enseñan lo
-  // que cuesta el MCP: la medida se cierra en cada una con `medir()`, nunca en
-  // una salida de un arranque que ya no manda.
-  const cron = startTiming()
+  // que cuesta el MCP: TRES miden, y nunca en un arranque que ya no manda. La de
+  // «sin opencode» no mide nada (un arranque verde que no hubo engañaría) y
+  // además vacía la fila: si no, «tiempos (arranque)» se quedaba enseñando la
+  // línea del arranque ANTERIOR, de otro momento y quizá de otro sitio.
+  // El reloj es monótono: `Date.now` salta con el del sistema (NTP, cambio de
+  // hora) y una fase podía salir negativa o de horas.
+  const cron = startTiming(() => performance.now())
   const medir = () => {
     state.timing.boot = timingLine(cron.done())
     log.ok('Arranque del panel', state.timing.boot)
@@ -426,6 +434,7 @@ async function bootForSite() {
   } catch (err) {
     if (state.bootToken !== testigo) return
     setStatus('bad', 'sin opencode')
+    state.timing.boot = ''
     showScreen('screen-connect', String(err?.message || err))
     return
   }
@@ -1196,14 +1205,23 @@ async function send() {
   setStreaming(true)
 
   // Cuánto tarda cada fase del turno (H3): leer la página, abrir la sesión, la
-  // primera palabra del modelo, el final, el índice y las marcas. Sólo mide;
-  // ninguna decisión cuelga de esto. `done()` es una lectura, no un freno: se
-  // pregunta al llegar la respuesta —para la línea del registro— y otra vez al
-  // acabar, cuando ya están las fases de después.
-  const cron = startTiming()
+  // primera palabra del modelo, el final, pintar la respuesta, el índice y las
+  // marcas. Sólo mide; ninguna decisión cuelga de esto. `done()` es una lectura,
+  // no un freno: se pregunta al llegar la respuesta —para la línea del registro—
+  // y otra vez al acabar, cuando ya están las fases de después.
+  // Monótono, como en el arranque: un salto del reloj del sistema a mitad de
+  // turno daría una fase negativa o de horas.
+  const cron = startTiming(() => performance.now())
   // La primera palabra es el número que se nota: hasta que llega, el usuario
   // sólo ve los tres puntos.
   let primerTexto = false
+  // ¿Llegó a mandarse el turno, y con qué sesión? Lo pregunta el `finally` para
+  // decidir si esta línea de tiempos habla de algo: un turno que murió leyendo la
+  // página no tiene fases que contar, y uno que acabó con el panel en otro sitio
+  // o en otra sesión no es del Registro que se está mirando. Fuera del `try` para
+  // que el `finally` los alcance; `hostAlPedir` ya vive fuera.
+  let medible = false
+  let sesionAlPedir = ''
 
   try {
     // En el modo Análisis la página viaja en el prompt, troceada en bloques
@@ -1247,7 +1265,7 @@ async function send() {
     if (abort.signal.aborted) return
     // La sesión de ESTE turno: «Nueva sesión» a mitad la olvida, y entonces
     // la respuesta tampoco entra en el chat (queda en la sesión de opencode).
-    const sesionAlPedir = state.sessionID
+    sesionAlPedir = state.sessionID
     cron.mark('sesión')
 
     let bubble = document.createElement('div')
@@ -1307,6 +1325,7 @@ async function send() {
 
     // Por runTurn y no a mano: trae el vigilante de turnos colgados y junta las
     // partes de TODOS los mensajes del turno, no solo del ultimo.
+    medible = true
     const turn = await state.client.runTurn(state.sessionID, peticion, {
       signal: abort.signal,
       stallMs: 90000,
@@ -1390,8 +1409,10 @@ async function send() {
     state.turns.push({ role: 'assistant', text: answer })
     paintTurn(turn, toolsBox, cuerpo, true)
     // Lo que costó este turno, en una línea comparable con la del siguiente: la
-    // respuesta, cuántas herramientas y cuánto texto devolvieron —eso es lo que
-    // la sesión arrastra al turno de después—, el reloj por fases y lo que pesa
+    // respuesta, cuántas herramientas y cuánto texto devolvieron —salidas de las
+    // que salieron bien y trazas de las que fallaron: las dos se quedan en la
+    // sesión y viajan al turno de después, y el recuento de herramientas de esta
+    // misma línea también cuenta las fallidas—, el reloj por fases y lo que pesa
     // el sistema (en un Análisis de Jira, 23-27 000 caracteres). Los KB van
     // redondeados: aquí interesa el orden de magnitud, no el byte.
     const salidaTools = toolOutputSize(turn.parts)
@@ -1422,6 +1443,11 @@ async function send() {
     // El modelo que acaba de funcionar se recuerda para este sitio: si el
     // proveedor por defecto está caducado, no hay que volver a tropezar.
     if (state.site && state.model) await saveSite(state.site.host, { model: state.model })
+
+    // Lo que cuesta ENSEÑAR la respuesta: el repintado final, el aviso de las
+    // páginas base y guardar el modelo. Iba dentro de «índice» y los dos números
+    // salían sumados bajo una etiqueta que era de otra cosa.
+    cron.mark('pintar')
 
     // Enriquecer el índice con lo que las herramientas acaban de devolver.
     await growIndex(turn.parts)
@@ -1477,9 +1503,14 @@ async function send() {
       setStreaming(false)
       // El reloj del turno entero, ya con las fases de después de la respuesta,
       // para la fila «tiempos (último turno)» del Registro. Sólo lo apunta el
-      // turno que sigue siendo el del panel: el de un turno abandonado hablaría
-      // de otra cosa.
-      state.timing.turn = timingLine(cron.done())
+      // turno que sigue siendo el del panel, que llegó a MANDARSE y que acabó en
+      // el mismo sitio y en la misma sesión con la que se pidió: la misma
+      // condición que `mismoSitio`. Sin ella, cancelar mientras se leía la página
+      // dejaba una línea de fases vacías, y una respuesta que llegó con el panel
+      // ya en otro host ponía sus tiempos en el Registro de un sitio ajeno.
+      if (medible && (state.site?.host ?? state.lastHost) === hostAlPedir && state.sessionID === sesionAlPedir) {
+        state.timing.turn = timingLine(cron.done())
+      }
     }
     scrollChat()
   }
@@ -3677,9 +3708,12 @@ async function paintState() {
   try {
     const bytes = await chrome.storage.local.getBytesInUse(null)
     const cuota = chrome.storage.local.QUOTA_BYTES || 10 * 1024 * 1024
+    // En la misma unidad que la cuota en cuanto pasa de 1 MB: en KB («8598 KB de
+    // 10 MB») no se ve de un vistazo cuánto queda, y el espejo del panel ya lo
+    // enseñaba en MB.
     add(
       'almacenamiento',
-      `${Math.round(bytes / 1024)} KB de ${Math.round(cuota / (1024 * 1024))} MB`,
+      `${formatBytes(bytes)} de ${Math.round(cuota / (1024 * 1024))} MB`,
       bytes > 8 * 1024 * 1024 ? 'bad' : ''
     )
   } catch (err) {

@@ -387,7 +387,7 @@ Trece decisiones que sostienen el diseño:
 ## Comprobaciones
 
 ```bash
-npm run check              # sintaxis + orden + manifest + 850 pruebas unitarias + docs
+npm run check              # sintaxis + orden + manifest + 852 pruebas unitarias + docs
 npm run check:docs         # sólo el paso docs: número de pruebas, títulos del registro, mensajes y ficheros del mapa
 npm run test:integration   # contra un opencode real que arranca la propia prueba
 npm run harness            # banco de pruebas visual en http://127.0.0.1:5175
@@ -442,7 +442,11 @@ Con el banco levantado hay dos páginas:
 - **`npm run test:integration`** arranca su propio `opencode serve` con
   contraseña y CORS, y ejercita el mismo cliente que usa la extensión:
   autenticación, CORS, lista de modelos, sesiones, streaming por SSE y salida
-  estructurada con el esquema real de navegación.
+  estructurada con el esquema real de navegación. Gasta turnos de verdad: sin
+  `FARO_TEST_MODEL=proveedor/modelo` sondea los candidatos con un turno de dos
+  palabras —los gratuitos primero— y cae en `github-copilot/gpt-5.6-luna`, que
+  paga la suscripción de Copilot, porque el nivel gratuito de opencode ya no vale
+  desde `opencode serve`.
 
 - **`npm run harness`** levanta una Confluence de mentira —con cabecera
   pegajosa, árbol lateral y navegación por pushState— y ejecuta encima las

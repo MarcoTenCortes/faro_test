@@ -320,6 +320,26 @@ test('toolOutputSize: sólo las salidas de texto de herramientas completadas', (
   eq(toolOutputSize('no es una lista'), 0)
 })
 
+test('toolOutputSize: el texto de una herramienta FALLIDA también se arrastra', () => {
+  // Lo que se mide es lo que la sesión reenvía en el turno siguiente, y el error
+  // de una herramienta va en el historial igual que su salida: un `jira_search`
+  // con un JQL malo devuelve 9 KB de traza y se pegaban al turno de después sin
+  // aparecer en «Respuesta recibida» (revisión adversaria de H3). La línea del
+  // registro cuenta N herramientas incluyendo las fallidas, así que los KB tienen
+  // que hablar de las mismas.
+  eq(
+    toolOutputSize([
+      { type: 'tool', state: { status: 'completed', output: 'x'.repeat(3000) } },
+      { type: 'tool', state: { status: 'error', error: 'x'.repeat(9000) } },
+    ]),
+    12000
+  )
+  // Un error que no es texto no se puede contar, y la salida de una fallida no es
+  // lo que opencode guarda: sin cadena de error, cero.
+  eq(toolOutputSize([{ type: 'tool', state: { status: 'error', error: { message: 'roto' } } }]), 0)
+  eq(toolOutputSize([{ type: 'tool', state: { status: 'error' } }]), 0)
+})
+
 test('sortMessages: por hora de creación, ascendente y estable', () => {
   const m = (id, created, role = 'user') => ({ info: { id, role, time: { created } } })
   const orden = (lista) => sortMessages(lista).map((x) => x.info.id)

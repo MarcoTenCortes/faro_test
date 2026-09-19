@@ -615,18 +615,14 @@ export class NavRunner {
    * pueden anclar se devuelven aparte en vez de marcarse en cualquier sitio,
    * que sería peor que no marcarlas.
    *
+   * El `ms` que devuelve es el trabajo de marcar y nada más: desde que la página
+   * tiene texto hasta que las marcas están puestas. Ni la espera a que pinte ni el
+   * desplazamiento suave hasta la primera cuentan.
+   *
    * @param {{notes: Array<{n:number, title?:string, anchor:object}>}} msg
    * @returns {{ok:boolean, placed:number[], missed:number[], detail?:Array<{n:number, strategy:string, approximate?:boolean}>, reason?:string, ms:number}}
    */
   async applyNotes({ notes }) {
-    // Lo que tarda en marcar, de la primera línea a la respuesta: es el número
-    // con el que se compara una página corta con una larga, y el mismo trabajo
-    // antes y después de tocarlo. Reloj monótono, sin fechas ni nada del
-    // contenido: sólo un número que el panel apunta detrás de «Análisis
-    // marcado». Aquí no cambia nada más que eso.
-    const t0 = performance.now()
-    const transcurrido = () => Math.round(performance.now() - t0)
-
     this.overlay.mount()
     // Aquí NO se instala manejador de Escape: con la tecla, las marcas se
     // borraban sin que el panel se enterase (seguía con `state.notes` y
@@ -638,10 +634,25 @@ export class NavRunner {
 
     if (isEditing()) {
       this.overlay.toast('Estás en el editor: no marco nada para no interferir.')
-      return { ok: false, placed: [], missed: todas, reason: 'editando', ms: transcurrido() }
+      // Antes de arrancar el reloj: no se ha marcado nada, así que no hay tiempo
+      // que contar (0 es la medida, no «no se midió»).
+      return { ok: false, placed: [], missed: todas, reason: 'editando', ms: 0 }
     }
 
     await waitFor(() => contentRoot()?.textContent?.trim()?.length > 40, { timeout: 2000 })
+
+    // Lo que tarda en MARCAR: leer la página en bloques, resolver cada ancla y
+    // pintar las marcas. Es el número con el que se compara una página corta con
+    // una larga, y el mismo trabajo antes y después de tocarlo. Arranca AQUÍ, tras
+    // la espera a que la página tenga texto —hasta 2 s que no son trabajo de Faro,
+    // igual que PAGE_DIGEST deja su espera fuera— y se para con las marcas ya
+    // puestas, antes del desplazamiento suave hasta la primera (420-820 ms de
+    // animación fija que tapaban la diferencia entre una página corta y una
+    // larga). Reloj monótono, sin fechas ni nada del contenido: sólo un número que
+    // el panel apunta detrás de «Análisis marcado». Aquí no cambia nada más que
+    // dónde se lee el reloj; el orden de lo que se hace es el mismo.
+    const t0 = performance.now()
+    const transcurrido = () => Math.round(performance.now() - t0)
 
     // La página en bloques se lee UNA vez para todas las observaciones, y de la
     // página de ahora: lo que vio el modelo pudo haberse repintado desde entonces.
@@ -665,6 +676,9 @@ export class NavRunner {
     if (!items.length) return { ok: true, placed: [], missed, detail, ms: transcurrido() }
 
     this.overlay.annotate(items)
+    // Aquí acaba el trabajo de marcar: lo que viene es un desplazamiento suave y
+    // una pausa de 80 ms, tiempo de animación que no depende de la página.
+    const ms = transcurrido()
 
     // A la vista de la primera, sin destacarla: al principio todas valen igual.
     if (await scrollToRange(items[0].ranges[0], { extra: 110, behavior: this.behavior })) {
@@ -672,7 +686,7 @@ export class NavRunner {
       this.overlay.refreshMarks()
     }
 
-    return { ok: true, placed: items.map((x) => x.n), missed, detail, ms: transcurrido() }
+    return { ok: true, placed: items.map((x) => x.n), missed, detail, ms }
   }
 
   /** Lleva a una observación concreta y la destaca sobre las demás. */

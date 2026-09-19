@@ -6,7 +6,7 @@
  * en cualquier zona horaria. (Plan 2026-09-13, D6: puras sin test.)
  */
 import { test, eq } from '../harness.js'
-import { clockTime, prettyTool } from '../../src/shared/format.js'
+import { clockTime, prettyTool, formatBytes } from '../../src/shared/format.js'
 
 test('clockTime: HH:MM:SS en hora local, con ceros a la izquierda', () => {
   eq(clockTime(new Date(2026, 8, 13, 9, 5, 7).getTime()), '09:05:07')
@@ -37,4 +37,23 @@ test('prettyTool: el nombre largo del MCP se queda en «Confluence: get page»',
   eq(prettyTool(''), 'trabajando…')
   eq(prettyTool(null), 'trabajando…')
   eq(prettyTool(undefined), 'trabajando…')
+})
+
+test('formatBytes: KB por debajo de 1 MB y MB con un decimal a partir de ahí', () => {
+  // La fila «almacenamiento» del Registro decía «8598 KB de 10 MB» y el espejo del
+  // panel enseñaba «8,4 MB de 10 MB»: dos unidades para el mismo dato, y en KB
+  // nadie ve de un vistazo si queda sitio (revisión adversaria de H3).
+  eq(formatBytes(0), '0 KB')
+  eq(formatBytes(1023), '1 KB')
+  eq(formatBytes(512 * 1024), '512 KB')
+  eq(formatBytes(1024 * 1024), '1,0 MB', 'coma decimal, como el resto de las medidas de Faro')
+  eq(formatBytes(8.4 * 1024 * 1024), '8,4 MB')
+  eq(formatBytes(10 * 1024 * 1024), '10,0 MB')
+  // Una fila del Registro no puede tumbar la pantalla de estado: lo que no es un
+  // número de bytes cuenta como cero.
+  eq(formatBytes(NaN), '0 KB')
+  eq(formatBytes(-1), '0 KB')
+  eq(formatBytes(null), '0 KB')
+  eq(formatBytes(undefined), '0 KB')
+  eq(formatBytes('mucho'), '0 KB')
 })

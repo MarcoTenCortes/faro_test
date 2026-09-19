@@ -10,7 +10,13 @@
  *   node test/integration/opencode.test.js
  *
  * Variables opcionales:
- *   FARO_TEST_MODEL=proveedor/modelo   modelo a usar (por defecto, uno gratuito)
+ *   FARO_TEST_MODEL=proveedor/modelo   modelo a usar. Sin esta variable se sondean
+ *                                      los candidatos con un turno de dos palabras
+ *                                      —los gratuitos primero— y se cae en
+ *                                      `github-copilot/gpt-5.6-luna`, que SÍ gasta
+ *                                      turnos de la suscripción de Copilot: desde
+ *                                      2026-09 el nivel gratuito de opencode no se
+ *                                      puede usar desde `opencode serve`.
  *   FARO_TEST_PORT=4123                puerto
  */
 
@@ -359,9 +365,12 @@ async function main() {
 
     // R4 (docs/PLAN.md §2): hasta H2 `client.summarize()` mandaba `{model}` y el esquema
     // exige `{providerID, modelID}`. La prueba de más arriba comprueba que el cuerpo
-    // VIEJO da 400; ésta manda el BUENO y sólo exige que el esquema NO lo rechace. Va
-    // la última porque deja una compactación en la sesión, y no espera a que el modelo
-    // termine: en cuanto el servidor la acepta, la pregunta está contestada.
+    // VIEJO da 400; ésta manda el BUENO y sólo exige que el esquema NO lo rechace. Es la
+    // última que usa ESTA sesión —la de «respuesta en streaming», que comparte con
+    // `listMessages(id, 2)` y con la marca de poda— porque la deja compactada; las
+    // comprobaciones de después crean la suya («Faro · plan», «Faro · adjunto») o no
+    // tocan ninguna. Y no espera a que el modelo termine: en cuanto el servidor la
+    // acepta, la pregunta está contestada.
     await check('summarize con {providerID, modelID} lo acepta el esquema (no es 400)', async () => {
       assert(sesionTurnos, 'la prueba de streaming no dejó una sesión con turnos')
       const TOPE_MS = 45000

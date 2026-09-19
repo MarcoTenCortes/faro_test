@@ -363,13 +363,15 @@ test('runTurn: un turno normal — abre el stream, manda prompt_async, reconstru
 
 // H3 (medir): el tracker ya sumaba lo que costó el turno, pero `runTurn` no lo
 // sacaba en su resultado y «Respuesta recibida» se quedaba sin ese trozo.
-test('runTurn: saca en el resultado lo que costó el turno, y null cuando nadie lo informó', () =>
+test('runTurn: saca en el resultado lo que costó el turno, y de un mismo mensaje manda la última foto', () =>
   conServidor(
     {
       'POST /session/ses_1/prompt_async': (ll, s) => {
         for (const e of turnoNormal()) {
-          // La foto del mensaje del asistente llega otra vez con el gasto: es
-          // la última la que manda, no la suma de todas.
+          // `message.updated` del MISMO mensaje llega muchas veces, y cada foto
+          // trae el gasto ACUMULADO hasta ese momento: manda la última, no la
+          // suma. Sumando por evento, un turno de 21 841 tokens se registraba como
+          // 30 000 y pico y el número del Registro no valía para nada.
           if (e.properties?.info?.role === 'assistant') {
             s.sse.push(e)
             s.sse.push(
@@ -378,8 +380,19 @@ test('runTurn: saca en el resultado lo que costó el turno, y null cuando nadie 
                   id: 'msg_a',
                   sessionID: SID,
                   role: 'assistant',
+                  tokens: { total: 8000, input: 780, output: 200, reasoning: 0, cache: { read: 7020, write: 0 } },
+                  cost: 0.004,
+                },
+              })
+            )
+            s.sse.push(
+              ev('message.updated', {
+                info: {
+                  id: 'msg_a',
+                  sessionID: SID,
+                  role: 'assistant',
                   tokens: { total: 21841, input: 780, output: 806, reasoning: 0, cache: { read: 21035, write: 0 } },
-                  cost: 0,
+                  cost: 0.011,
                 },
               })
             )
@@ -390,8 +403,8 @@ test('runTurn: saca en el resultado lo que costó el turno, y null cuando nadie 
     },
     async (client) => {
       const r = await client.runTurn(SID, { text: 'hola' })
-      eq(r.tokens, { total: 21841, input: 780, output: 806, reasoning: 0, cache: { read: 21035, write: 0 } })
-      eq(r.cost, 0, 'un coste de 0 es un dato: github-copilot y los -free lo dan a cero')
+      eq(r.tokens, { total: 21841, input: 780, output: 806, reasoning: 0, cache: { read: 21035, write: 0 } }, 'la segunda foto, no las dos sumadas')
+      eq(r.cost, 0.011, 'y el coste tampoco se suma consigo mismo')
     }
   ))
 

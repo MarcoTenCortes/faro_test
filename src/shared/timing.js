@@ -18,7 +18,13 @@
  * porque algún día una podría llevar un host o el id de una Skill, y una sola
  * fase no puede inventarse otras en la línea del Registro.
  *
- * El reloj se inyecta (`startTiming(now)`) para poder probarlo sin esperar.
+ * El reloj se inyecta (`startTiming(now)`) para poder probarlo sin esperar. El
+ * panel le pasa `() => performance.now()`, que es MONÓTONO: con el `Date.now`
+ * por defecto, un salto del reloj del sistema a mitad del arranque o del turno
+ * (NTP, cambio de hora) daba una fase negativa —que aquí se acota a 0, o sea una
+ * medida falsa— o de horas. Por defecto sigue `Date.now` porque las pruebas de
+ * Node no tienen por qué depender de `performance` y porque un reloj inyectado no
+ * necesita nada del entorno.
  */
 
 /** Una etiqueta larga no aporta y desborda la línea del Registro. */

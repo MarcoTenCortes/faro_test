@@ -15,6 +15,28 @@ export function prettyTool(name) {
     .trim()
 }
 
+/**
+ * Un tamaño en bytes para una fila del Registro: «512 KB» · «8,4 MB».
+ *
+ * POR QUÉ EXISTE: la fila «almacenamiento» se escribía siempre en KB («8598 KB
+ * de 10 MB») mientras el espejo del panel la enseñaba en MB, así que el mismo
+ * dato tenía dos unidades según dónde se mirara; y en KB nadie ve de un vistazo
+ * cuánto queda de la cuota de 10 MB (revisión adversaria de H3). Coma decimal y
+ * un decimal, como las duraciones de `timingLine`.
+ *
+ * No es la `formatSize` de tools/last-turn.mjs: ésa mide salidas de herramientas,
+ * que pueden ser de tres caracteres, y por eso tiene tramo en «B». Aquí lo
+ * medido es una cuota de megas y por debajo de 1 MB los KB bastan.
+ *
+ * Lo que no sea un número de bytes cuenta como cero: una fila del Registro no
+ * puede tumbar la pantalla de estado. Pura.
+ */
+export function formatBytes(bytes) {
+  const b = Math.max(0, Number(bytes) || 0)
+  if (b < 1024 * 1024) return `${Math.round(b / 1024)} KB`
+  return `${(b / (1024 * 1024)).toFixed(1).replace('.', ',')} MB`
+}
+
 /** Hora corta para el registro. */
 export function clockTime(ms) {
   const d = new Date(ms)

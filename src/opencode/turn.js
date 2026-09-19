@@ -285,8 +285,12 @@ function usageOf(info) {
  * Las salidas de herramientas se quedan en el historial de la sesión y se
  * reenvían en los turnos siguientes (§7), acotadas por la poda de opencode:
  * este número es lo que hace visible ese arrastre en «Respuesta recibida · N
- * herramientas (310 KB)». Sólo cuenta lo que de verdad ocupa: partes `tool`
- * completadas con `state.output` de texto. Pura.
+ * herramientas (310 KB)». Cuenta lo que de verdad ocupa: el `state.output` de
+ * texto de las partes `tool` completadas Y el `state.error` de las FALLIDAS, que
+ * también se queda en el historial (un `jira_search` con un JQL malo devuelve
+ * kilobytes de traza). Lo cuentan las dos porque la línea del registro pega
+ * estos KB a un recuento de herramientas que incluye las fallidas: si no, el
+ * número hablaba de menos herramientas de las que decía. Pura.
  *
  * @param {Array<{type?:string, state?:object}>} parts
  * @returns {number}
@@ -294,8 +298,9 @@ function usageOf(info) {
 export function toolOutputSize(parts) {
   let total = 0
   for (const p of Array.isArray(parts) ? parts : []) {
-    if (!p || p.type !== 'tool' || p.state?.status !== 'completed') continue
-    if (typeof p.state.output === 'string') total += p.state.output.length
+    if (!p || p.type !== 'tool') continue
+    if (p.state?.status === 'completed' && typeof p.state.output === 'string') total += p.state.output.length
+    else if (p.state?.status === 'error' && typeof p.state.error === 'string') total += p.state.error.length
   }
   return total
 }
