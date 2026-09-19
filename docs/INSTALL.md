@@ -760,9 +760,11 @@ Chrome), el panel cambia con él; no hace falta recargar la extensión.
 
 **Los textos se ven apagados o los bordes de los campos no se distinguen**
 Desde el rediseño los colores del panel están medidos, no elegidos a ojo: todo
-el texto llega a 4,5:1 y el borde de un campo o de un botón fantasma a 3:1, en
-los dos temas. Si algo se ve peor que eso, es del tema del sistema o del brillo
-de la pantalla, no del panel. Quien quiera la tabla con la que se comprueba:
+el texto llega a 4,5:1 —el número de una lista ordenada incluido, que hasta la
+revisión de H4 se quedaba en 3,04— y el borde de un campo, de un botón
+fantasma, de una pastilla del redactor o de una tarjeta de elección a 3:1, en
+los dos temas y sobre los tres fondos del panel. Si algo se ve peor que eso, es
+del tema del sistema o del brillo de la pantalla, no del panel. Quien quiera la tabla con la que se comprueba:
 `npm run contrast` la imprime pareja por pareja, y `npm run check` no pasa si
 alguna baja de su umbral.
 

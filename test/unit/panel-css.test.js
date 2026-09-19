@@ -12,18 +12,23 @@
  * mide con la fórmula de WCAG 2.1 (test/contrast.js) en los dos temas, así que
  * un color nuevo que no llegue al umbral rompe `npm run check`.
  *
+ * Las parejas NO se declaran aquí: viven en `test/contrast-pairs.js`, que es
+ * también lo que imprime `npm run contrast`. Hasta la revisión adversaria de H4
+ * había dos listas y ya se habían separado (hallazgo 8).
+ *
  * Lo que se pina, además del contraste: que los dos bloques oscuros digan lo
  * mismo (uno es el del sistema y el otro el que fuerza el espejo del banco),
  * que el ámbar de relleno del panel sea byte a byte el del overlay —la pastilla
  * [n] del chat y la insignia de la página son la misma marca—, que cada tema
- * declare su `color-scheme`, y que fuera de :root no haya tamaños, espaciados
- * ni radios a ojo.
+ * declare su `color-scheme`, que un token de BORDE no se use como tinta, y que
+ * fuera de :root no haya tamaños, espaciados, radios ni duraciones a ojo.
  */
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { test, eq, assert } from '../harness.js'
-import { contrastRatio, cssVarsOf, parseColor, pxLiterals } from '../contrast.js'
+import { contrastRatio, cssVarsOf, durationLiterals, parseColor, pxLiterals } from '../contrast.js'
+import { TEXTO, CONTROL, EXENTOS, UMBRAL } from '../contrast-pairs.js'
 import { OVERLAY_CSS } from '../../src/content/overlay/styles.js'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
@@ -48,39 +53,10 @@ const oscuroForzado = cssVarsOf(CSS, OSCURO_FORZADO)
 /** El tema oscuro tal como se ve: los colores del bloque oscuro sobre el claro. */
 const oscuro = { ...claro, ...oscuroSistema }
 
+/** Nombre para el mensaje de error, tokens, y la clave con la que las parejas acotan su tema. */
 const TEMAS = [
-  ['claro', claro],
-  ['oscuro', oscuro],
-]
-
-/**
- * Las parejas que dibujan el panel. `texto` pide 4,5:1 (WCAG SC 1.4.3) y
- * `control` 3:1 (SC 1.4.11, el borde que es lo único que dibuja un control).
- * `temas` acota una pareja al tema en el que existe de verdad.
- */
-const TEXTO = [
-  ['--ink', '--surface', 'cuerpo del chat sobre una tarjeta'],
-  ['--ink', '--ground', 'título de pantalla sobre el fondo'],
-  ['--ink-2', '--surface', 'prosa del asistente'],
-  ['--ink-2', '--gold-bg', 'texto dentro de un chip dorado'],
-  ['--muted', '--surface', 'meta y cita de una observación'],
-  ['--muted', '--surface-2', 'meta en una fila resaltada'],
-  ['--muted', '--ground', 'letra fina de una pantalla'],
-  ['--gold', '--surface', 'acento de texto: kicker, enlace'],
-  ['--gold', '--gold-bg', 'icono encendido sobre su tinte'],
-  ['--on-mark', '--mark', 'texto del botón primario, del .send y de la pastilla [n]'],
-  ['--on-mark', '--mark-strong', 'el mismo, con el ratón encima'],
-  ['--ok', '--surface', 'línea «ok» del registro'],
-  ['--danger', '--surface', 'aviso y error'],
-  ['--danger', '--danger-bg', 'fila de error del registro'],
-]
-
-const CONTROL = [
-  ['--hairline-strong', '--surface', 'borde de input, select y textarea', null],
-  ['--hairline-strong', '--ground', 'borde del botón fantasma y punto de estado', null],
-  // En claro el relleno ámbar lleva texto encima y es el texto quien identifica
-  // el control (2,01 contra el blanco): lo que cuenta es --on-mark sobre --mark.
-  ['--mark', '--surface', 'relleno de la pastilla [n] y del faro', ['oscuro']],
+  ['claro', claro, 'light'],
+  ['oscuro', oscuro, 'dark'],
 ]
 
 function ratio(tokens, a, b) {
@@ -94,31 +70,77 @@ function dos(v) {
 }
 
 test('estilo: cada pareja texto/fondo cumple AA en claro y en oscuro', () => {
-  for (const [tema, tokens] of TEMAS) {
-    for (const [fg, bg, que] of TEXTO) {
+  for (const [tema, tokens, clave] of TEMAS) {
+    for (const [fg, bg, que, soloEn] of TEXTO) {
+      if (soloEn && soloEn !== clave) continue
       const r = ratio(tokens, fg, bg)
-      assert(r >= 4.5, `${tema}: ${fg} sobre ${bg} da ${dos(r)}:1 y AA pide 4,5 · ${que}`)
+      assert(r >= UMBRAL.texto, `${tema}: ${fg} sobre ${bg} da ${dos(r)}:1 y AA pide 4,5 · ${que}`)
     }
   }
 })
 
 test('estilo: lo que dibuja un control llega a 3:1 en los dos temas', () => {
-  for (const [tema, tokens] of TEMAS) {
-    for (const [fg, bg, que, temas] of CONTROL) {
-      if (temas && !temas.includes(tema)) continue
+  for (const [tema, tokens, clave] of TEMAS) {
+    for (const [fg, bg, que, soloEn] of CONTROL) {
+      if (soloEn && soloEn !== clave) continue
       const r = ratio(tokens, fg, bg)
-      assert(r >= 3, `${tema}: ${fg} sobre ${bg} da ${dos(r)}:1 y SC 1.4.11 pide 3 · ${que}`)
+      assert(r >= UMBRAL.control, `${tema}: ${fg} sobre ${bg} da ${dos(r)}:1 y SC 1.4.11 pide 3 · ${que}`)
     }
   }
+  // Medir el token no basta si el control no lo usa: la tarjeta de elección es un
+  // role="button" cuyo único límite es su borde, y en H4 se quedó con --hairline
+  // (1,30:1) sin que ninguna pareja lo notara (revisión adversaria de H4).
+  const choice = SIN_COMENTARIOS.match(/(?:^|\n)\.choice\s*\{([^}]*)\}/)
+  assert(choice, 'panel.css tiene la regla .choice')
+  assert(
+    /border:\s*1px solid var\(--hairline-strong\)/.test(choice[1]),
+    '.choice es un control: su borde en reposo es --hairline-strong, no la hairline decorativa'
+  )
 })
 
-test('estilo: --hairline es decorativa y está exenta a propósito', () => {
-  // Separa filas y no dibuja ningún control: por eso puede ser suave. Se mide
-  // igualmente para que quede dicho que está por debajo de 3 y que es querido;
-  // el borde de un control es --hairline-strong, que sí se pina arriba.
+/** Los tokens que dibujan un BORDE, cuyo umbral es 3 y no el 4,5 del texto. */
+const BORDES = ['--hairline', '--hairline-strong', '--gold-line', '--line', '--line-2']
+
+test('estilo: un token de borde no es tinta', () => {
+  // `.md-list li::marker` pintaba el número de una lista ordenada con
+  // --hairline-strong: 3,04:1 en claro y 3,52 en oscuro, cuando docs/INSTALL.md
+  // promete 4,5 a TODO el texto (hallazgo 1 de la revisión adversaria de H4). El
+  // marcador de una lista es texto, no un filete, y ahora es --muted.
+  // Se miran sólo las declaraciones `color:`: `border-color`, `accent-color` y
+  // `scrollbar-color` sí son superficie y pueden llevar un token de borde.
+  const tinta = [...SIN_COMENTARIOS.matchAll(/([^{}]+)\{([^}]*)\}/g)].flatMap((m) =>
+    [...m[2].matchAll(/(?:^|[;{\s])color\s*:\s*([^;}]*)/g)].map((d) => ({
+      selector: m[1].trim().split('\n').pop().trim(),
+      valor: d[1].trim(),
+    }))
+  )
+  assert(tinta.length > 20, 'el panel pinta texto en muchos sitios: si esto es 0, la regex no está leyendo nada')
+  eq(
+    tinta.filter((t) => BORDES.some((b) => t.valor.includes(`var(${b})`))).map((t) => `${t.selector} { color: ${t.valor} }`),
+    [],
+    'un token de borde no vale como color de texto: su umbral es 3, no el 4,5 que pide AA'
+  )
+})
+
+test('estilo: las exenciones de borde están medidas y por debajo de 3', () => {
+  // Una exención no es una promesa, es una medida: se comprueba que sigue POR
+  // DEBAJO de 3 en los dos temas, así que el día que alguien refuerce uno de
+  // estos bordes el test obliga a moverlo a CONTROL en vez de dejarlo en la
+  // lista de excusas. Ninguno de los tres es lo único que identifica su
+  // control: --hairline separa filas y enmarca tarjetas que no lo son, y
+  // --gold-line enmarca el chip de lo señalado, el de páginas base y los
+  // botones encendidos, que se reconocen por su TEXTO --ink-2 o por su icono
+  // --gold sobre --gold-bg. La tarjeta `.choice`, que SÍ es un control
+  // (role="button") y cuyo único borde era --hairline (1,30), pasó a
+  // --hairline-strong en la revisión adversaria de H4 (hallazgo 5).
   for (const [tema, tokens] of TEMAS) {
-    const r = ratio(tokens, '--hairline', '--surface')
-    assert(r < 3, `${tema}: si --hairline llegara a ${dos(r)}:1 ya no sería un filete, sería un borde`)
+    for (const [fg, bg, que] of EXENTOS) {
+      const r = ratio(tokens, fg, bg)
+      assert(
+        r < UMBRAL.control,
+        `${tema}: ${fg} sobre ${bg} ya da ${dos(r)}:1 · ${que} · si llega a 3 es un borde de verdad: llévalo a CONTROL`
+      )
+    }
   }
   assert(/rgba\(255,255,255,\.08\)/.test(oscuroSistema['--hairline']), 'en oscuro la hairline es luz, no un gris')
 })
@@ -178,37 +200,133 @@ test('estilo: color-scheme explícito por tema', () => {
 
 // --------------------------------------------------- escala, sombras y motor
 
-/** Los px que declara la escala, más los tres que son bordes y ajustes ópticos. */
+/**
+ * Los px que declara la escala, más el 0, el 1 y el 2 (un filete, un anillo y
+ * un ajuste óptico no son pasos de la retícula).
+ *
+ * `--r-pill` (999px) queda FUERA a propósito: no es un radio, es «redondea del
+ * todo», y sólo vale escrito como `var(--r-pill)`. Colándose en la escala hacía
+ * que un `padding: 999px` pasara la comprobación (hallazgo 2 de la revisión
+ * adversaria de H4).
+ */
 const ESCALA = new Set([0, 1, 2])
 for (const [nombre, valor] of Object.entries(claro)) {
+  if (nombre === '--r-pill') continue
   if (/^--(text|s\d|r)-?/.test(nombre)) {
     const m = /^(-?\d*\.?\d+)px$/.exec(valor.trim())
     if (m) ESCALA.add(Number(m[1]))
   }
 }
 
+/** Las propiedades que miden una PIEZA, no la retícula. */
+const TAMANOS = /^(?:width|height|min-width|min-height|max-width|max-height)$/
+
 /**
- * Lo que no sale de la escala y tiene su razón. Son medidas de una pieza, no
- * de la retícula: la pastilla [n] mide lo mismo en el chat, en la tarjeta y
- * sobre la página (17), los botones de icono y el de enviar son cuadrados de
- * 28 y 32, y las dos cabeceras —la del panel y la de cada pantalla— 44.
+ * Lo que no sale de la escala y tiene su razón: la medida de una pieza concreta.
+ * Hasta la revisión adversaria de H4 esta lista era INERTE —se comprobaba contra
+ * font-size|padding|gap|margin|border-radius, y 17, 28, 32 y 44 no aparecen
+ * nunca en esas propiedades: viven en width y height—, así que la mitad del
+ * fichero no la miraba nadie. Ahora se comprueba en las dos direcciones: ningún
+ * tamaño sin motivo, y ningún motivo sin tamaño.
+ *
+ * «heredado de antes de H4» es un valor a ojo que cabría en la escala y que H4
+ * no cambia porque no se puede mirar en el navegador desde aquí: queda apuntado
+ * para quien tenga el panel delante.
  */
 const EXCEPCIONES = new Map([
-  [17, 'alto de la pastilla [n]'],
+  [3, 'grosor de la barra de «Trabajando…»: un filete que se mueve, no un paso de la retícula'],
+  [5, 'diámetro del punto de una fila de herramienta y del de una pastilla — heredado de antes de H4: los demás puntos miden 6'],
+  [9, 'ancho de la barra de desplazamiento del chat: 3 de pulgar más el aire de su borde de 3 por lado'],
+  [13, 'lado del spinner que espera al MCP — heredado de antes de H4'],
+  [
+    14,
+    'lado del faro de la cabecera, alto de los puntos de «pensando», lado de una casilla y mínimo de la insignia — heredado de antes de H4',
+  ],
+  [17, 'alto de la pastilla [n], el mismo en el chat, en la tarjeta y sobre la página'],
+  [26, 'lado del faro grande del estado vacío — heredado de antes de H4'],
   [28, 'lado del botón de icono'],
-  [32, 'lado del botón de enviar'],
-  [44, 'alto de las cabeceras'],
+  [32, 'lado del botón de enviar, y alto reservado al texto del velo para que la tarjeta no salte al cambiarlo'],
+  [34, 'ancho mínimo de los dos <select> del redactor: lo que cabe sin comerse su flecha'],
+  [44, 'alto de las cabeceras: la del panel y la de cada pantalla'],
+  [92, 'ancho de la columna de claves del Registro, para que los valores queden alineados'],
+  [160, 'cuánto crece el redactor antes de desplazarse'],
+  [230, 'alto del bloque de configuración del MCP'],
+  [260, 'alto de la lista de sugerencias'],
+  [300, 'alto del registro'],
+  [320, 'alto de la memoria guardada, y ancho de la tarjeta del velo'],
+  [520, 'ancho de lectura de una pantalla'],
 ])
 
 test('estilo: tamaños, espaciado y radios salen de la escala', () => {
   const fuera = pxLiterals(CSS, /font-size|padding|gap|margin|border-radius/).filter(
-    (d) => !ESCALA.has(Math.abs(d.px)) && !EXCEPCIONES.has(Math.abs(d.px))
+    (d) => !ESCALA.has(Math.abs(d.px))
   )
   eq(
     fuera.map((d) => `${d.selector} { ${d.prop}: ${d.px}px }`),
     [],
-    'fuera de :root no hay números a ojo: o es un token o es una excepción con nombre'
+    'fuera de :root la retícula no tiene números a ojo: o es un token o es 0, 1 o 2'
   )
+})
+
+test('estilo: cada tamaño de pieza está en la escala o es una excepción con motivo', () => {
+  const medidas = pxLiterals(CSS, TAMANOS)
+  assert(medidas.length > 20, 'el panel mide muchas piezas: si esto es 0, la regex no está leyendo nada')
+
+  const fuera = medidas.filter((d) => !ESCALA.has(Math.abs(d.px)) && !EXCEPCIONES.has(Math.abs(d.px)))
+  eq(
+    fuera.map((d) => `${d.selector} { ${d.prop}: ${d.px}px }`),
+    [],
+    'una medida que no sale de la escala necesita una entrada en EXCEPCIONES con su motivo'
+  )
+
+  const medidos = new Set(medidas.map((d) => Math.abs(d.px)))
+  eq(
+    [...EXCEPCIONES.keys()].filter((px) => !medidos.has(px)),
+    [],
+    'una excepción que ya no mide nada deja de ser una excepción: bórrala (si no, la lista se vuelve inerte)'
+  )
+})
+
+/**
+ * Las duraciones que NO son tokens: cada animación de espera tiene su propio
+ * ritmo y no hay ningún paso de escala que las una. Se declaran con su motivo, y
+ * el test comprueba también que cada una siga existiendo.
+ */
+const DURACIONES_PROPIAS = new Map([
+  ['1.1s', 'el latido del faro y del punto de estado, y el rebote de los puntos de «pensando»'],
+  ['2.4s', 'la onda del faro del estado vacío: lenta a propósito, para que acompañe y no llame'],
+  ['.16s', 'el desfase del segundo punto de «pensando»'],
+  ['.32s', 'el del tercero'],
+  ['1.4s', 'el barrido de la barra de «Trabajando…», que no mide progreso: sólo dice que algo sigue'],
+  ['.8s', 'la vuelta del spinner que espera al MCP'],
+  [
+    '.001ms',
+    'el apagado de «Reducir animaciones»: casi cero y no cero, para que animationend y transitionend sigan disparándose y nada se quede a medio pintar',
+  ],
+])
+
+test('estilo: cada duración es un token o una animación de espera declarada', () => {
+  const medidas = durationLiterals(CSS)
+  const clave = (d) => d.value.toLowerCase()
+
+  eq(
+    medidas.filter((d) => !DURACIONES_PROPIAS.has(clave(d))).map((d) => `${d.selector} { ${d.prop}: … ${d.value} }`),
+    [],
+    'una duración nueva es var(--dur-1)/var(--dur-2) o una espera con su motivo en DURACIONES_PROPIAS'
+  )
+
+  const usadas = new Set(medidas.map(clave))
+  eq(
+    [...DURACIONES_PROPIAS.keys()].filter((v) => !usadas.has(v)),
+    [],
+    'una duración propia que ya no está en el CSS sobra de la lista'
+  )
+
+  // Y que los tokens de movimiento los pida alguien: si nadie los usa, «fuera
+  // de :root no hay duraciones a ojo» se cumpliría por vacío.
+  for (const dur of ['--dur-1', '--dur-2']) {
+    assert(SIN_COMENTARIOS.includes(`var(${dur})`), `${dur} tiene que usarlo alguien`)
+  }
 })
 
 test('estilo: sin sombras en el chrome', () => {
@@ -241,15 +359,61 @@ test('estilo: sin pesos raros', () => {
   )
 })
 
+/** El cuerpo balanceado del bloque que abre justo después de `marcador`, o ''. */
+function bloqueTras(css, marcador) {
+  const i = css.indexOf(marcador)
+  if (i === -1) return ''
+  const abre = css.indexOf('{', i + marcador.length)
+  if (abre === -1) return ''
+  let n = 0
+  for (let j = abre; j < css.length; j++) {
+    if (css[j] === '{') n++
+    else if (css[j] === '}' && --n === 0) return css.slice(abre + 1, j)
+  }
+  return ''
+}
+
+/** Lo que tiene que declarar cada uno de los dos apagados de movimiento. */
+const QUIETO = ['animation-duration', 'animation-iteration-count', 'transition-duration', 'scroll-behavior']
+
 test('estilo: el ajuste «Reducir animaciones» apaga también el panel', () => {
   // Se leía y se guardaba, pero sólo lo aplicaba el overlay (A9). Ahora el
   // panel se cuelga la misma clase que el overlay usa en la página.
-  assert(/html\.faro-still\b/.test(SIN_COMENTARIOS), 'falta el bloque html.faro-still')
-  assert(/prefers-reduced-motion/.test(SIN_COMENTARIOS), 'y la preferencia del sistema sigue')
-  for (const trozo of ['animation-duration', 'animation-iteration-count', 'transition-duration', 'scroll-behavior']) {
-    const veces = [...SIN_COMENTARIOS.matchAll(new RegExp(trozo + ':', 'g'))].length
-    assert(veces >= 2, `${trozo} tiene que estar en los dos sitios (la media query y faro-still)`)
+  // Contar apariciones en TODO el fichero —lo que se hacía hasta la revisión
+  // adversaria de H4 (hallazgo 3)— no comprueba nada: cuatro declaraciones
+  // repartidas donde fuera sumaban «al menos dos veces» aunque uno de los dos
+  // bloques estuviera vacío. Se mira CADA bloque por separado.
+  const media = bloqueTras(SIN_COMENTARIOS, '@media (prefers-reduced-motion: reduce)')
+  assert(media.trim(), 'falta el bloque @media (prefers-reduced-motion: reduce)')
+
+  const faroStill = [...SIN_COMENTARIOS.matchAll(/([^{}]*html\.faro-still[^{}]*)\{([^}]*)\}/g)].map((m) => ({
+    selector: m[1].trim(),
+    body: m[2],
+  }))
+  assert(faroStill.length, 'falta el bloque html.faro-still')
+
+  for (const [donde, cuerpo] of [
+    ['la media query del sistema', media],
+    ['html.faro-still', faroStill.map((r) => r.body).join(';')],
+  ]) {
+    for (const prop of QUIETO) {
+      assert(new RegExp('(?:^|[;{\\s])' + prop + '\\s*:').test(cuerpo), `${donde} no declara ${prop}`)
+    }
   }
+
+  // Y la barra de «Trabajando…», que sólo dice algo mientras se mueve, se queda
+  // llena en vez de vacía. En los DOS sitios.
+  const enMedia = /\.busy-bar i\s*\{([^}]*)\}/.exec(media)
+  const enStill = faroStill.find((r) => r.selector.includes('.busy-bar i'))
+  for (const [donde, cuerpo] of [
+    ['la media query del sistema', enMedia && enMedia[1]],
+    ['html.faro-still', enStill && enStill.body],
+  ]) {
+    assert(cuerpo, `${donde} no lleva su regla de .busy-bar i`)
+    assert(/animation:\s*none/.test(cuerpo), `${donde}: la barra tiene que parar`)
+    assert(/width:\s*100%/.test(cuerpo), `${donde}: y quedarse llena, no vacía`)
+  }
+
   const js = readFileSync(join(ROOT, 'src', 'panel', 'panel.js'), 'utf8')
   const aplica = /function applySettingsToUi\(\)\s*\{[\s\S]*?\n\}/.exec(js)
   assert(aplica, 'applySettingsToUi sigue existiendo')

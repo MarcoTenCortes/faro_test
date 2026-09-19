@@ -390,7 +390,7 @@ Trece decisiones que sostienen el diseño:
 ## Comprobaciones
 
 ```bash
-npm run check              # sintaxis + orden + manifest + 879 pruebas unitarias + docs
+npm run check              # sintaxis + orden + manifest + 884 pruebas unitarias + docs
 npm run check:docs         # sólo el paso docs: número de pruebas, títulos del registro, mensajes y ficheros del mapa
 npm run test:integration   # contra un opencode real que arranca la propia prueba
 npm run harness            # banco de pruebas visual en http://127.0.0.1:5175
@@ -549,11 +549,13 @@ Con el banco levantado hay dos páginas:
   tema a tema: ratio, nivel (AA/AAA) y qué dibuja cada pareja de colores. No
   genera nada; sólo dice qué mide el CSS de hoy, con la fórmula de WCAG 2.1.
   Como el metro, queda fuera de `npm run check`; a diferencia de él, sale con 1
-  si alguna pareja baja de su umbral: 4,5:1 el texto y 3:1 lo que dibuja un
-  control (el borde de un campo, cuando el borde es lo único que lo dibuja).
-  Los filetes decorativos entre filas salen marcados «exenta» con su número.
-  Lo que tiene que seguir cumpliéndose está pinado en `panel-css.test.js`, que
-  sí corre en `npm run check`.
+  si alguna pareja baja de su umbral —4,5:1 el texto y 3:1 lo que dibuja un
+  control (el borde de un campo, cuando el borde es lo único que lo dibuja)— o
+  si falta un token, que sale en rojo como «falta» y no como un hueco. Los
+  bordes decorativos salen marcados «exenta» con su número, y el test comprueba
+  que sigan por debajo de 3. Las parejas no se declaran en el informe: viven en
+  `test/contrast-pairs.js`, que es la misma lista que pina `panel-css.test.js`,
+  el que sí corre en `npm run check`.
 
 - **`npm run snapshots`** reescribe `test/fixtures/prompts/*.txt` con los
   prompts que el código produce hoy para 33 escenarios fijos (Confluence y Jira
@@ -792,7 +794,7 @@ tools/                      generación de iconos, clave del manifest, servidor 
   check-docs.mjs            el paso «docs» de npm run check (npm run check:docs suelto)
   last-turn.mjs             el último turno real desde una copia de opencode.db (npm run turn)
   bench.mjs                 el metro: tamaño del system por escenario y tiempos de los módulos puros (npm run bench)
-  contrast-report.mjs       la tabla de contraste del panel y del overlay, por tema (npm run contrast)
+  contrast-report.mjs       la tabla de contraste del panel y del overlay, por tema, con las parejas de test/contrast-pairs.js (npm run contrast); un token que no exista es un fallo, no un hueco
   prompt-snapshots.mjs      comprobar o regenerar (--update) las instantáneas de los prompts (npm run snapshots)
 AGENTS.md                   puntero a CLAUDE.md, que es el mapa del proyecto para una sesión nueva
 ```

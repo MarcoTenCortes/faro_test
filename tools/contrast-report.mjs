@@ -16,17 +16,21 @@
  * en un repo «sin build» y un template literal JS editado por regex. Lo que sí
  * hay es este informe y, desde H4, un test que pina cada pareja.
  *
- * Las parejas se declaran AQUÍ, en las dos tablas de abajo, con el nombre del
- * token y qué dibuja cada una. Cada nombre lleva su cadena de respaldo
- * (`['--hairline-strong', '--line-2']`) para que el informe siga midiendo lo
- * mismo antes y después de que H4 renombre los tokens: si el token nuevo no
- * está todavía, se mide el viejo y se dice qué nombre se usó.
+ * Las parejas NO se declaran aquí: viven en `test/contrast-pairs.js`, que es la
+ * misma lista que pina `test/unit/panel-css.test.js`. Hasta la revisión
+ * adversaria de H4 había dos copias y ya se habían separado (hallazgo 8): el
+ * informe medía `--ink-2` sobre `--surface-2` llamándolo «burbuja del usuario»
+ * —que pinta `--ink`— y el test no lo medía. De las cadenas de respaldo por
+ * token (`['--hairline-strong', '--line-2']`) y del camino que buscaba el tema
+ * oscuro dentro de `@media (prefers-color-scheme: dark) → :root` tampoco queda
+ * nada: existían para medir lo mismo antes y después del renombrado de H4, que
+ * ya está hecho. Si un token o un bloque de tema no existe, esto falla en voz
+ * alta en vez de imprimir un «—» que nadie mira.
  *
  * Umbrales: 4,5:1 para texto normal (WCAG 2.1 SC 1.4.3, «AAA» a partir de 7) y
  * 3:1 para lo que dibuja un control (SC 1.4.11). Sale con 1 si alguna pareja
- * medida baja de su umbral; las parejas marcadas «exenta» se imprimen con su
- * número y no cuentan, y las que necesitan un token que aún no existe se
- * imprimen como «—».
+ * medida baja de su umbral o si falta un token; las parejas marcadas «exenta»
+ * se imprimen con su número y no cuentan.
  *
  *   node tools/contrast-report.mjs        (= npm run contrast)
  */
@@ -36,6 +40,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { OVERLAY_CSS } from '../src/content/overlay/styles.js'
 import { contrastRatio, cssVarsOf, parseColor } from '../test/contrast.js'
+import { TEXTO, CONTROL, EXENTOS, OVERLAY_REGLAS, OVERLAY_TOKENS, UMBRAL } from '../test/contrast-pairs.js'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -45,119 +50,49 @@ const DIM = '\x1b[2m'
 const BOLD = '\x1b[1m'
 const OFF = '\x1b[0m'
 
-/** Los umbrales de WCAG 2.1, por tipo de pareja. */
-const UMBRAL = { texto: 4.5, control: 3 }
 const AAA = 7
 
 // -------------------------------------------------------- parejas declaradas
 
-/**
- * El panel. Cada pareja: el color de delante, el de detrás, si es texto (4,5) o
- * lo que dibuja un control (3), y qué se está mirando en la pantalla.
- *
- * Los respaldos cuentan la historia del cambio: hoy el relleno del primario es
- * `--gold` (el ocre de texto, 3,09 con su propio texto) y en H4 pasa a ser
- * `--mark` (el ámbar de la página, 9,11); hoy el borde de un input es `--line`,
- * la misma hairline decorativa que separa filas, y en H4 se desdobla en
- * `--hairline` (decorativa, exenta) y `--hairline-strong` (≥3:1).
- */
+/** Una fila `[frente, fondo, qué dibuja, tema?]` de contrast-pairs.js, con su tipo. */
+function par([fg, bg, que, tema], tipo) {
+  return { fg, bg, que, tipo, tema }
+}
+
+/** El panel, en orden de lectura: primero lo que lleva letra, luego los bordes. */
 const PANEL = [
-  { fg: ['--ink'], bg: ['--surface'], tipo: 'texto', que: 'cuerpo del chat en una tarjeta' },
-  { fg: ['--ink'], bg: ['--ground'], tipo: 'texto', que: 'título de pantalla sobre el fondo' },
-  { fg: ['--ink-2'], bg: ['--surface'], tipo: 'texto', que: 'prosa del asistente' },
-  { fg: ['--ink-2'], bg: ['--surface-2'], tipo: 'texto', que: 'burbuja del usuario' },
-  { fg: ['--ink-2'], bg: ['--gold-bg'], tipo: 'texto', que: 'texto dentro de un chip dorado' },
-  { fg: ['--muted'], bg: ['--surface'], tipo: 'texto', que: 'meta y cita de una observación' },
-  { fg: ['--muted'], bg: ['--surface-2'], tipo: 'texto', que: 'meta en una fila resaltada' },
-  { fg: ['--muted'], bg: ['--ground'], tipo: 'texto', que: 'letra fina de una pantalla' },
-  { fg: ['--gold'], bg: ['--surface'], tipo: 'texto', que: 'acento de texto: kicker, enlace' },
-  { fg: ['--gold'], bg: ['--gold-bg'], tipo: 'texto', que: 'icono encendido sobre su tinte' },
-  {
-    fg: ['--on-mark', '#1B1405'],
-    bg: ['--mark', '--gold'],
-    tipo: 'texto',
-    que: 'texto del botón primario y del .send',
-  },
-  { fg: ['--on-mark', '#1B1405'], bg: ['--mark-strong'], tipo: 'texto', que: 'el mismo, con el ratón encima' },
-  { fg: ['--ok', '--teal'], bg: ['--surface'], tipo: 'texto', que: 'línea «ok» del registro' },
-  { fg: ['--danger', '--clay'], bg: ['--surface'], tipo: 'texto', que: 'aviso y error' },
-  { fg: ['--danger', '--clay'], bg: ['--danger-bg', '--clay-bg'], tipo: 'texto', que: 'fila de error del registro' },
-  {
-    fg: ['--hairline-strong', '--line'],
-    bg: ['--surface'],
-    tipo: 'control',
-    que: 'borde de input, select y textarea',
-  },
-  { fg: ['--hairline-strong', '--line-2'], bg: ['--ground'], tipo: 'control', que: 'borde del botón fantasma' },
-  {
-    fg: ['--mark', '--gold'],
-    bg: ['--surface'],
-    tipo: 'control',
-    temas: ['oscuro'],
-    que: 'relleno de la pastilla [n] y del faro',
-  },
-  {
-    fg: ['--hairline', '--line'],
-    bg: ['--surface'],
-    tipo: 'exenta',
-    que: 'filete entre filas: decorativo, no dibuja ningún control',
-  },
+  ...TEXTO.map((f) => par(f, 'texto')),
+  ...CONTROL.map((f) => par(f, 'control')),
+  ...EXENTOS.map((f) => par(f, 'exenta')),
 ]
 
-/**
- * El overlay, leído de sus PROPIAS reglas y no de una lista de colores: de cada
- * regla se saca el `color` y el `background` que tiene escritos, porque es justo
- * ahí donde estaba el fallo (un `color: #FFF7E8` sobre el ámbar profundo).
- */
-const OVERLAY_REGLAS = [
-  { regla: '.btn-primary', tipo: 'texto', que: 'botón del cartel, en reposo' },
-  { regla: '.btn-primary:hover', tipo: 'texto', que: 'botón del cartel, con el ratón encima' },
-  { regla: '.note-badge', tipo: 'texto', que: 'insignia [n] sobre la página' },
-  { regla: '.note-badge:hover', tipo: 'texto', que: 'insignia con el ratón encima' },
-  { regla: '.note-badge.active', tipo: 'texto', que: 'insignia de la observación que se está mirando' },
-]
-
-/** Y los dos textos del cartel, que sí salen de tokens y cambian con la página. */
-const OVERLAY_TOKENS = [
-  { fg: ['--faro-ink'], bg: ['--faro-paper'], tipo: 'texto', que: 'texto del cartel' },
-  { fg: ['--faro-muted'], bg: ['--faro-paper'], tipo: 'texto', que: 'texto secundario del cartel' },
-]
+/** Y el overlay: sus reglas con color+fondo escritos, y los dos textos del cartel. */
+const REGLAS = OVERLAY_REGLAS.map(([regla, que]) => ({ regla, que, tipo: 'texto' }))
+const TOKENS_OVERLAY = OVERLAY_TOKENS.map((f) => par(f, 'texto'))
 
 // ------------------------------------------------------------------- lectura
 
-/** Los dos bloques oscuros que puede haber, en orden de preferencia. */
-const SELECTORES_OSCUROS = [':root:not([data-theme="light"])', ':root[data-theme="dark"]']
+const OSCURO = ':root:not([data-theme="light"])'
+const OSCURO_FORZADO = ':root[data-theme="dark"]'
 
 /**
- * Los tokens del tema oscuro, venga como venga: los selectores de H4 primero y,
- * si no están, el `:root` de dentro del `@media (prefers-color-scheme: dark)`
- * que hay hoy. Un bloque de tema redefine sólo colores, así que el resultado se
- * funde sobre el claro.
+ * Los tokens del tema oscuro: el bloque que elige el sistema y, si por lo que
+ * sea no estuviera, el que fuerza el espejo del banco (los dos dicen lo mismo y
+ * panel-css.test.js lo pina). Un bloque de tema redefine sólo colores, así que
+ * el resultado se funde sobre el claro.
  */
 function tokensOscuros(css) {
-  for (const sel of SELECTORES_OSCUROS) {
+  for (const sel of [OSCURO, OSCURO_FORZADO]) {
     const vars = cssVarsOf(css, sel)
     if (Object.keys(vars).length) return { sel, vars }
-  }
-  const i = css.indexOf('prefers-color-scheme: dark')
-  if (i !== -1) {
-    const vars = cssVarsOf(css.slice(i), ':root')
-    if (Object.keys(vars).length) return { sel: '@media (prefers-color-scheme: dark) → :root', vars }
   }
   return { sel: '(sin bloque oscuro)', vars: {} }
 }
 
-/** El primer color de la cadena que exista de verdad; los literales valen tal cual. */
-function resolver(cadena, tokens) {
-  for (const nombre of cadena) {
-    if (!nombre.startsWith('--')) {
-      if (parseColor(nombre)) return { nombre, color: nombre }
-      continue
-    }
-    const valor = tokens[nombre]
-    if (valor !== undefined && parseColor(valor)) return { nombre, color: valor }
-  }
-  return null
+/** El color de un token, o null si ese token no existe o no se reconoce. */
+function resolver(nombre, tokens) {
+  const valor = tokens[nombre]
+  return valor !== undefined && parseColor(valor) ? { nombre, color: valor } : null
 }
 
 const ESCAPAR = /[.*+?^${}()|[\]\\]/g
@@ -179,18 +114,18 @@ function valorDeRegla(css, selector, prop, tokens) {
 
 // -------------------------------------------------------------------- medida
 
-/** Una fila de la tabla: ratio, veredicto y por qué. */
-function medir(par, tokens, fg, bg) {
+/** Una fila de la tabla: ratio, veredicto y por qué. Un color que falta es un fallo. */
+function medir(par, fg, bg) {
   const umbral = UMBRAL[par.tipo] ?? 0
   if (!fg || !bg) {
-    const falta = [!fg ? par.fg.join(' | ') : '', !bg ? par.bg.join(' | ') : ''].filter(Boolean).join(' y ')
-    return { salta: `sin ${falta} en este tema` }
+    const falta = [!fg ? par.fg : '', !bg ? par.bg : ''].filter(Boolean).join(' y ')
+    return { falta: `no existe ${falta}`, umbral }
   }
   const ratio = contrastRatio(fg.color, bg.color)
-  if (ratio === null) return { salta: 'algún color no se reconoce' }
+  if (ratio === null) return { falta: 'algún color no se reconoce', umbral }
   const cumple = par.tipo === 'exenta' || ratio >= umbral
   const nivel = par.tipo === 'exenta' ? 'exenta' : !cumple ? 'falla' : par.tipo === 'texto' && ratio >= AAA ? 'AAA' : 'AA'
-  return { ratio, nivel, cumple, cuenta: par.tipo !== 'exenta', fg, bg, umbral }
+  return { ratio, nivel, cumple, fg, bg, umbral }
 }
 
 function seccion(titulo, fuente, filas) {
@@ -198,8 +133,9 @@ function seccion(titulo, fuente, filas) {
   const cuerpo = []
 
   for (const f of filas) {
-    if (f.salta) {
-      cuerpo.push([{ t: '—', dim: true }, { t: '—', dim: true }, f.pareja, { t: f.salta, dim: true }, f.que])
+    if (f.falta) {
+      cuerpo.push([{ t: '—', color: RED }, { t: 'falta', color: RED }, f.pareja, { t: f.falta, color: RED }, f.que])
+      fallos.push(`${titulo} · ${f.pareja} (${f.falta}) · ${f.que}`)
       continue
     }
     const color = f.nivel === 'falla' ? RED : f.nivel === 'exenta' ? DIM : GREEN
@@ -220,14 +156,14 @@ function seccion(titulo, fuente, filas) {
   return fallos
 }
 
+/** `tema` es la clave con la que una pareja se acota a un tema: 'light' o 'dark'. */
 function filasDeTokens(pares, tokens, tema) {
   return pares
-    .filter((p) => !p.temas || p.temas.includes(tema))
+    .filter((p) => !p.tema || p.tema === tema)
     .map((p) => {
       const fg = resolver(p.fg, tokens)
       const bg = resolver(p.bg, tokens)
-      const nombres = `${(fg || { nombre: p.fg[0] }).nombre} sobre ${(bg || { nombre: p.bg[0] }).nombre}`
-      return { ...medir(p, tokens, fg, bg), pareja: nombres, que: p.que }
+      return { ...medir(p, fg, bg), pareja: `${p.fg} sobre ${p.bg}`, que: p.que }
     })
 }
 
@@ -238,7 +174,7 @@ function filasDeReglas(css, pares, tokens) {
     const fg = texto && parseColor(texto) ? { nombre: 'color', color: texto } : null
     const bg = fondo && parseColor(fondo) ? { nombre: 'background', color: fondo } : null
     return {
-      ...medir(p, tokens, fg, bg),
+      ...medir({ ...p, fg: `el color de ${p.regla}`, bg: `el background de ${p.regla}` }, fg, bg),
       pareja: `${p.regla} · color sobre background`,
       que: p.que,
     }
@@ -292,15 +228,15 @@ function main() {
 
   console.log(
     `${BOLD}Faro · contraste${OFF} ${DIM}(npm run contrast) · texto ≥ ${numero(UMBRAL.texto)}:1 (WCAG SC 1.4.3) · ` +
-      `control ≥ ${numero(UMBRAL.control)}:1 (SC 1.4.11)${OFF}`
+      `control ≥ ${numero(UMBRAL.control)}:1 (SC 1.4.11) · parejas de test/contrast-pairs.js${OFF}`
   )
 
   const fallos = [
-    ...seccion('PANEL · CLARO', 'src/panel/panel.css → :root', filasDeTokens(PANEL, claro, 'claro')),
+    ...seccion('PANEL · CLARO', 'src/panel/panel.css → :root', filasDeTokens(PANEL, claro, 'light')),
     ...seccion(
       'PANEL · OSCURO',
       `src/panel/panel.css → ${oscuro.sel}`,
-      filasDeTokens(PANEL, { ...claro, ...oscuro.vars }, 'oscuro')
+      filasDeTokens(PANEL, { ...claro, ...oscuro.vars }, 'dark')
     ),
   ]
 
@@ -308,12 +244,12 @@ function main() {
   const overlayOscuro = { ...overlayClaro, ...cssVarsOf(OVERLAY_CSS, ':host(.faro-dark)') }
   fallos.push(
     ...seccion('OVERLAY · CLARO', 'src/content/overlay/styles.js → :host', [
-      ...filasDeReglas(OVERLAY_CSS, OVERLAY_REGLAS, overlayClaro),
-      ...filasDeTokens(OVERLAY_TOKENS, overlayClaro, 'claro'),
+      ...filasDeReglas(OVERLAY_CSS, REGLAS, overlayClaro),
+      ...filasDeTokens(TOKENS_OVERLAY, overlayClaro, 'light'),
     ]),
     ...seccion('OVERLAY · OSCURO', 'src/content/overlay/styles.js → :host(.faro-dark)', [
-      ...filasDeReglas(OVERLAY_CSS, OVERLAY_REGLAS, overlayOscuro),
-      ...filasDeTokens(OVERLAY_TOKENS, overlayOscuro, 'oscuro'),
+      ...filasDeReglas(OVERLAY_CSS, REGLAS, overlayOscuro),
+      ...filasDeTokens(TOKENS_OVERLAY, overlayOscuro, 'dark'),
     ])
   )
 
@@ -321,8 +257,8 @@ function main() {
     `\n${DIM}El ámbar de relleno lleva texto encima, así que su pareja que cuenta es el texto (--on-mark), no su\n` +
       `borde sobre el fondo; por eso «relleno de la pastilla» sólo se mide en oscuro (anexo D). El overlay no se\n` +
       `mide más allá de sus rellenos con texto: no se rediseña y sus neutros siguen al tema de la PÁGINA, no al\n` +
-      `del panel (anexo D, descartado 2). Hoy --line hace dos papeles —filete decorativo y borde de control—: H4\n` +
-      `los separa en --hairline (exenta) y --hairline-strong (≥ ${numero(UMBRAL.control)}:1).${OFF}`
+      `del panel (anexo D, descartado 2). «exenta» es un borde que NO llega a ${numero(UMBRAL.control)}:1 y no tiene por qué:\n` +
+      `ninguno de los tres es lo único que identifica su control, y el test comprueba que siguen por debajo.${OFF}`
   )
 
   if (fallos.length) {

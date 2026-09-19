@@ -2,7 +2,15 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { test, eq, assert, near } from '../harness.js'
-import { parseColor, blendOver, relativeLuminance, contrastRatio, cssVarsOf, pxLiterals } from '../contrast.js'
+import {
+  parseColor,
+  blendOver,
+  relativeLuminance,
+  contrastRatio,
+  cssVarsOf,
+  pxLiterals,
+  durationLiterals,
+} from '../contrast.js'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
 
@@ -146,6 +154,45 @@ test('pxLiterals: los px de cada propiedad, fuera de los bloques de tokens', () 
 test('pxLiterals: lo que hay dentro de url(...) no es un tamaño', () => {
   const css = `.skill-select { background-image: url("data:image/svg+xml;utf8,<svg width='12px'/>"); padding: 8px; }`
   eq(pxLiterals(css, /padding|background-image/), [{ selector: '.skill-select', prop: 'padding', px: 8 }])
+})
+
+test('durationLiterals: las duraciones de animation y transition, fuera de los bloques de tokens', () => {
+  // Lo que sale de un token (`var(--dur-1)`) no es un literal y no aparece; lo
+  // escrito a mano sí, con su selector, para poder decir dónde está.
+  const css = `
+    :root { --dur-1: 120ms; --dur-2: 240ms; }
+    .icon-btn { transition: background var(--dur-1) ease, color 200ms ease; }
+    .beacon.busy::after { animation: blink 1.1s ease-in-out infinite; }
+    .typing i:nth-child(2) { animation-delay: .16s; }
+    .spinner { animation: spin .8s linear infinite; }
+    .msg { animation: rise var(--dur-2) var(--ease) both; }
+  `
+  eq(durationLiterals(css), [
+    { selector: '.icon-btn', prop: 'transition', value: '200ms', ms: 200 },
+    { selector: '.beacon.busy::after', prop: 'animation', value: '1.1s', ms: 1100 },
+    { selector: '.typing i:nth-child(2)', prop: 'animation-delay', value: '.16s', ms: 160 },
+    { selector: '.spinner', prop: 'animation', value: '.8s', ms: 800 },
+  ])
+})
+
+test('durationLiterals: ni un transform de keyframe ni una curva son duraciones', () => {
+  // `transform` no contiene «transition», el nombre de un keyframe no lleva
+  // número y una cubic-bezier no lleva unidad: si algo de esto colara, la lista
+  // de duraciones propias del panel se llenaría de ruido.
+  const css = `
+    @keyframes bob { 0%, 60%, 100% { opacity: .28; transform: translateY(0); } 30% { transform: translateY(-3px); } }
+    .msg { animation: rise 240ms cubic-bezier(.32,.72,0,1) both; }
+    .busy-bar i { animation-duration: .001MS !important; }
+  `
+  eq(durationLiterals(css), [
+    { selector: '.msg', prop: 'animation', value: '240ms', ms: 240 },
+    { selector: '.busy-bar i', prop: 'animation-duration', value: '.001MS', ms: 0.001 },
+  ])
+  eq(
+    durationLiterals(css, /animation-duration/),
+    [{ selector: '.busy-bar i', prop: 'animation-duration', value: '.001MS', ms: 0.001 }],
+    'la regex la elige quien llama'
+  )
 })
 
 test('contraste: humo sobre el panel real: el :root de hoy declara los tokens pinados', () => {

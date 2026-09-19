@@ -1,5 +1,5 @@
 /**
- * Contraste WCAG y escalas de píxeles del CSS, calculados en Node.
+ * Contraste WCAG y escalas (píxeles y duraciones) del CSS, calculados en Node.
  *
  * Por qué existe: la auditoría del 2026-09-13 midió el panel a mano y encontró
  * tres fallos reales de contraste —el texto del botón primario y del `.send`
@@ -290,6 +290,46 @@ export function cssVarsOf(css, selector) {
  * donde se define la escala. Pura.
  */
 export function pxLiterals(css, props = /font-size|padding|gap|margin|border-radius/) {
+  const out = []
+  for (const { selector, prop, value } of declaracionesDe(css, props)) {
+    for (const m of value.matchAll(/(-?\d*\.?\d+)px/g)) {
+      out.push({ selector, prop, px: Number(m[1]) })
+    }
+  }
+  return out
+}
+
+/**
+ * Cada duración literal (`s` o `ms`) de las propiedades que pida `props`, fuera
+ * de `:root`: `[{selector, prop, value, ms}]`, un elemento por número. `value`
+ * es el literal tal como está escrito («.8s») y `ms` su equivalente en
+ * milisegundos, para poder comparar duraciones escritas en unidades distintas.
+ *
+ * Gemela de `pxLiterals`, y por el mismo motivo: fuera de los tokens no debería
+ * haber tiempos a ojo. Las animaciones de espera (el latido del faro, los puntos
+ * de «pensando», la barra de «Trabajando…», el spinner) son la excepción —cada
+ * una tiene su propio ritmo y no es un token— y quien llama las declara con su
+ * motivo. Pura.
+ */
+export function durationLiterals(css, props = /animation|transition/) {
+  const out = []
+  for (const { selector, prop, value } of declaracionesDe(css, props)) {
+    for (const m of value.matchAll(/(-?\d*\.?\d+)(ms|s)\b/gi)) {
+      const n = Number(m[1])
+      // 0.16 * 1000 da 160.00000000000003 en coma flotante: se redondea a la
+      // millonésima de milisegundo para que «.16s» sea 160 y «.001ms» siga
+      // siendo 0,001.
+      out.push({ selector, prop, value: m[0], ms: m[2].toLowerCase() === 'ms' ? n : Math.round(n * 1e6) / 1e3 })
+    }
+  }
+  return out
+}
+
+/**
+ * Las declaraciones cuyo `prop` casa con `props`, de todos los bloques MENOS los
+ * de tokens (`:root`), que son justo donde se define la escala.
+ */
+function declaracionesDe(css, props) {
   // Una expresión regular global recuerda dónde iba entre llamadas a `test`, y
   // quien llama la escribe a mano: se copia sin la bandera. Una cadena también
   // vale, para que un `pxLiterals(css, 'height')` de paso no reviente.
@@ -300,10 +340,7 @@ export function pxLiterals(css, props = /font-size|padding|gap|margin|border-rad
   for (const b of bloques(css)) {
     if (b.selector.includes(':root')) continue
     for (const { prop, value } of declaraciones(b.body)) {
-      if (!re.test(prop)) continue
-      for (const m of value.matchAll(/(-?\d*\.?\d+)px/g)) {
-        out.push({ selector: b.selector, prop, px: Number(m[1]) })
-      }
+      if (re.test(prop)) out.push({ selector: b.selector, prop, value })
     }
   }
 

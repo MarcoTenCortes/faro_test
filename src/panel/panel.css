@@ -12,13 +12,19 @@
    con --on-mark #1B1405 encima (9,11:1), y --gold queda como acento de TEXTO
    (#7A4F08 en claro, 7,12:1). Por lo mismo la hairline se desdobla: --hairline
    separa filas y es decorativa, mientras --hairline-strong dibuja los bordes de
-   inputs, selects, textarea y botón fantasma, que con --line daban 1,30-1,44:1
-   cuando el borde es lo único que dibuja el control (A4, WCAG SC 1.4.11).
+   inputs, selects, textarea, botón fantasma y tarjeta de elección, que con
+   --line daban 1,30-1,44:1 cuando el borde es lo único que dibuja el control
+   (A4, WCAG SC 1.4.11). Y un token de borde NO vale como color de texto: su
+   umbral es 3, no el 4,5 de AA (panel-css.test.js lo pina).
 
-   Todo tamaño, espaciado, radio y duración sale de la escala de aquí abajo:
-   fuera de :root no hay números a ojo (panel-css.test.js los cuenta). Un color
-   nuevo entra con su pareja y su ratio en ese test; `npm run contrast` imprime
-   la tabla de los dos temas.
+   Espaciados, tipografía y radios salen de la escala de aquí abajo: fuera de
+   :root sólo se escriben a mano el 0, el 1 y el 2. La medida de una PIEZA (el
+   alto de una cabecera, el lado de un botón de icono) y el ritmo de una
+   animación de ESPERA no son escala: van con su motivo en las listas
+   EXCEPCIONES y DURACIONES_PROPIAS de panel-css.test.js, que falla tanto si
+   aparece un número sin motivo como si un motivo se queda sin número. Las
+   parejas de color viven en test/contrast-pairs.js, que es la lista que pina
+   ese test y la que imprime `npm run contrast`.
 
    Tres bloques de tema: el claro en :root, el oscuro por preferencia del
    sistema y el oscuro forzado por [data-theme="dark"] para el espejo del banco.
@@ -36,7 +42,14 @@
   --ink-2: #45424F;
   --muted: #66637A;
   --hairline: #E2E1EA;
-  --hairline-strong: #8E8C98;
+  /* El borde de un control vive sobre TRES fondos y el más apretado es
+     --surface-2 (los dos <select> del redactor y la pastilla apagada de una
+     observación sin pasaje), que nadie medía: con #8E8C98 se quedaba en 2,88:1
+     (hallazgo 6 de la revisión adversaria de H4). #8A8894 es el mismo matiz
+     violeta un paso más oscuro y el mínimo que llega a 3 en los tres:
+     3,48 sobre --surface, 3,20 sobre --ground, 3,04 sobre --surface-2. El paso
+     anterior, #8B8995, se queda en 2,9988. */
+  --hairline-strong: #8A8894;
   --gold: #7A4F08;
   --gold-bg: #FBF3E3;
   --gold-line: #E2C795;
@@ -118,9 +131,14 @@
 }
 
 /* El mismo bloque, forzado: la extensión nunca pone data-theme (sigue al
-   sistema); lo pone harness/panel-preview.html para poder mirar los dos temas
-   sin cambiar el del sistema. Tiene que decir lo MISMO que el de arriba, y por
-   eso el test compara los dos mapas enteros. */
+   sistema). Existe para que el espejo del banco pueda forzar el tema sin cambiar
+   el del sistema; hoy NADIE del repo pone data-theme —el espejo todavía inyecta
+   una hoja `:root{…}` que este bloque gana por especificidad, y por eso su botón
+   «Claro» quedó roto en H4—, así que de momento sólo lo leen `npm run contrast`
+   y panel-css.test.js. Lo cablea H5 (paso 7 del anexo D: poner
+   `documentElement.dataset.theme` y borrar el <style id="preview-theme">).
+   Tiene que decir lo MISMO que el de arriba, y por eso el test compara los dos
+   mapas enteros. */
 :root[data-theme="dark"] {
   --ground: #131218;
   --surface: #1B1A22;
@@ -351,7 +369,11 @@ body {
 .md-h { margin: 1.1em 0 .35em; font-size: var(--text-md); font-weight: 600; color: var(--ink); letter-spacing: -.005em; }
 .md-list { margin: 0 0 .7em; padding-left: 1.15em; color: var(--ink-2); }
 .md-list li { margin-bottom: .25em; }
-.md-list li::marker { color: var(--hairline-strong); }
+/* El número de una lista ordenada es TEXTO, así que su umbral es 4,5 y no el 3
+   de un borde: con --hairline-strong se quedaba en 3,04:1 en claro (hallazgo 1
+   de la revisión adversaria de H4). --muted es el gris de letra fina y ya está
+   medido sobre este fondo (5,32 en claro, 6,24 en oscuro). */
+.md-list li::marker { color: var(--muted); }
 .md-quote {
   margin: 0 0 .7em;
   padding: var(--s1) var(--s3);
@@ -649,16 +671,23 @@ button.small { font-size: var(--text-xs); padding: var(--s1) var(--s2); }
 
 .link-like { color: var(--gold); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
 
+/* Las tres tarjetas de la pantalla de contexto son CONTROLES (el panel las pinta
+   con role="button" y tabindex="0"), y su único borde era --hairline: 1,30:1, y
+   el relleno contra el fondo 1,09, así que no había nada que las dibujara
+   (hallazgo 5 de la revisión adversaria de H4). El borde es --hairline-strong en
+   reposo —con el ratón encima y sin él, porque un control no puede depender del
+   hover para verse—, el hover cambia sólo el fondo y el foco es el anillo
+   general `outline: 2px solid var(--mark)`. */
 .choice {
   background: var(--surface);
-  border: 1px solid var(--hairline);
+  border: 1px solid var(--hairline-strong);
   border-radius: var(--r-lg);
   padding: var(--s3);
   margin-bottom: var(--s2);
   cursor: pointer;
-  transition: background var(--dur-1) ease, border-color var(--dur-1) ease;
+  transition: background var(--dur-1) ease;
 }
-.choice:hover, .choice:focus-visible { background: var(--surface-2); border-color: var(--hairline-strong); }
+.choice:hover { background: var(--surface-2); }
 .choice-title { font-weight: 600; margin-bottom: 2px; }
 .choice-text { font-size: var(--text-sm); color: var(--muted); }
 
@@ -960,8 +989,9 @@ html.faro-still .busy-bar i { animation: none; width: 100%; }
 .note-row:disabled { cursor: default; opacity: .7; }
 
 /* Sin pasaje que marcar: la pastilla se apaga, y su gris sobre --surface-2
-   sigue leyéndose (5,05:1). El texto no va sobre --hairline-strong, que daría
-   1,77. */
+   sigue leyéndose (5,05:1). El texto no va sobre --hairline-strong, que se
+   quedaría en 1,66 (1,77 en oscuro): ése es el BORDE, medido contra --surface-2
+   como el de los <select> del redactor. */
 .note-row.missing .note-num {
   background: var(--surface-2);
   color: var(--muted);
