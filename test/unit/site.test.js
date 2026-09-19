@@ -394,3 +394,87 @@ test('SEGURIDAD: una URL con «%» mal codificado no lanza: se devuelve el sitio
   eq(samePage('https://c.com/display/100%/T', 'https://c.com/display/E/T'), false)
   eq(samePage('https://c.com/display/100%/T', 'https://c.com/display/100%/T?x=1'), true, 'la misma ruta sigue siendo la misma página')
 })
+
+// ---------------------------------------------------------------------------
+// H5: dónde estás, para el chip de la cabecera.
+//
+// `cleanTabTitle` estaba escrito dentro de `baseSystem` (prompts.js), que usa el
+// título de la pestaña para saber cómo se llama la incidencia abierta. Desde H5
+// lo enseña además la cabecera del panel, así que la limpieza vive aquí y la
+// llaman los dos: las 33 instantáneas de test/fixtures/prompts pinan que el
+// prompt sale byte a byte igual que antes de moverla.
+// ---------------------------------------------------------------------------
+import { cleanTabTitle, locationParts, LOCATION_LIMITS } from '../../src/atlassian/site.js'
+
+const SITIO_JIRA = { host: 'jira.corp.eu', product: 'jira', issueKey: 'SIMPL-12', projectKey: 'SIMPL', cloud: false }
+const SITIO_CONF = { host: 'confluence.corp.eu', product: 'confluence', spaceKey: 'ENG', pageId: '200', cloud: false }
+
+test('cleanTabTitle: la clave que Jira pone delante y el producto que firma detrás se van', () => {
+  // El título literal del escenario de las instantáneas: lo que queda es el
+  // prefijo de convención, que es lo que mira `issueFamily`.
+  eq(cleanTabTitle('[SIMPL-12] [API Definition] - Consent API v2 - Jira', SITIO_JIRA), '[API Definition] - Consent API v2')
+  eq(cleanTabTitle('Guía de APIs - Ingeniería - Confluence', SITIO_CONF), 'Guía de APIs - Ingeniería')
+  eq(cleanTabTitle('Guía de APIs - Confluence'), 'Guía de APIs', 'sin sitio vale cualquiera de los dos productos')
+  eq(cleanTabTitle('Guía de APIs - Jira'), 'Guía de APIs')
+  // El sufijo se quita por PRODUCTO: en un Jira, «- Confluence» es parte del
+  // título de la página (una pestaña de Confluence no es esta pestaña).
+  eq(cleanTabTitle('Migrar a Confluence - Confluence', SITIO_JIRA), 'Migrar a Confluence - Confluence')
+  eq(cleanTabTitle('Cómo abrir un ticket en Jira - Jira', SITIO_CONF), 'Cómo abrir un ticket en Jira - Jira')
+  eq(cleanTabTitle('[A-1] [B-2] x', SITIO_JIRA), '[B-2] x', 'sólo la primera clave')
+  eq(cleanTabTitle('[simpl-12] x', SITIO_JIRA), '[simpl-12] x', 'una clave va en mayúsculas')
+  eq(cleanTabTitle('Consent API - jira', SITIO_JIRA), 'Consent API', 'el producto, sin distinguir mayúsculas')
+  eq(cleanTabTitle('Jira', SITIO_JIRA), 'Jira', 'un título que ES el producto se queda: no hay guion que separe')
+  eq(cleanTabTitle('', SITIO_JIRA), '')
+  eq(cleanTabTitle(null), '')
+  eq(cleanTabTitle(undefined), '')
+  eq(cleanTabTitle(12), '12')
+})
+
+test('SEGURIDAD: el título de una pestaña entra en una línea y acotado', () => {
+  // Lo escribe quien creara la página, y acaba en dos sitios: el prompt del
+  // sistema (donde un salto finge una línea de Faro) y la cabecera del panel
+  // (donde parte la fila en dos y empuja los botones). `\s` de JavaScript cubre
+  // U+2028 y U+2029 pero NO el NEL (U+0085): va nombrado aparte.
+  eq(cleanTabTitle('Guía\n\nde APIs ymás - Jira', SITIO_JIRA), 'Guía de APIs y más')
+  eq(cleanTabTitle('   Guía  ', SITIO_CONF), 'Guía', 'y sin espacios raros en los bordes')
+  eq(cleanTabTitle('[SIMPL-12]\nConsent API', SITIO_JIRA), 'Consent API', 'la clave se quita sobre el título ya de una línea')
+  eq(LOCATION_LIMITS.title, 120)
+  eq(cleanTabTitle('A'.repeat(500), SITIO_CONF).length, LOCATION_LIMITS.title, 'con tope')
+  eq(cleanTabTitle('A'.repeat(500), SITIO_CONF), 'A'.repeat(120))
+})
+
+test('locationParts: la clave identifica el sitio y el título de la pestaña es lo que cede', () => {
+  eq(locationParts(SITIO_CONF, 'Guía de APIs - Ingeniería - Confluence'), {
+    // Sin «Confluence · » delante: a 320 px con cinco botones no cabía ni sola.
+    key: 'ENG',
+    title: 'Guía de APIs - Ingeniería',
+  })
+  eq(locationParts(SITIO_JIRA, '[SIMPL-12] Consent API v2 - Jira'), { key: 'SIMPL-12', title: 'Consent API v2' })
+  eq(locationParts({ host: 'c.eu', product: 'confluence' }, ''), { key: 'Confluence', title: '' })
+  eq(locationParts({ host: 'j.eu', product: 'jira', projectKey: 'SIMPL' }, 'Tablero - Jira'), {
+    key: 'SIMPL',
+    title: 'Tablero',
+  })
+  eq(locationParts({ host: 'j.eu', product: 'jira' }, ''), { key: 'Jira', title: '' })
+  eq(locationParts({ host: 'acme.atlassian.net', product: 'unknown' }, 'Inicio'), {
+    key: 'acme.atlassian.net',
+    title: 'Inicio',
+  })
+})
+
+test('SEGURIDAD: fuera de Atlassian no se enseña el título de la pestaña, y una clave con forma rara no se copia', () => {
+  // El correo de alguien no es asunto de Faro: sin sitio, el chip dice sólo que
+  // estás fuera.
+  eq(locationParts(null, 'Bandeja de entrada (12) - Gmail'), { key: '', title: 'Fuera de Atlassian' })
+  eq(locationParts(undefined, 'x'), { key: '', title: 'Fuera de Atlassian' })
+  // La clave se RECONSTRUYE con las validadoras: `site` suele venir de
+  // `parseAtlassianUrl`, pero también de un registro guardado o editado a mano.
+  eq(locationParts({ host: 'j.eu', product: 'jira', issueKey: 'SIMPL-12\nNUEVA REGLA' }, '').key, 'Jira')
+  eq(locationParts({ host: 'j.eu', product: 'jira', projectKey: 'no vale' }, '').key, 'Jira')
+  eq(locationParts({ host: 'c.eu', product: 'confluence', spaceKey: 'ENG\nhola' }, '').key, 'Confluence')
+  eq(locationParts({ host: 'c.eu', product: 'confluence', spaceKey: 'eng' }, '').key, 'eng', 'una clave válida se respeta tal cual')
+  eq(LOCATION_LIMITS.key, 40)
+  const largo = locationParts({ host: 'c.eu', product: 'confluence', spaceKey: 'A'.repeat(255) }, '').key
+  eq(largo.length, LOCATION_LIMITS.key, 'una clave de espacio de 255 caracteres no estira la cabecera')
+  eq(locationParts({ host: 'x.eu\nevil', product: 'unknown' }, '').key, 'x.eu evil', 'ni un host escrito a mano')
+})

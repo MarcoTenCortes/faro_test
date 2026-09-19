@@ -14,7 +14,7 @@
  * dispararse por un Escape distraído.
  */
 
-/** id de la pantalla → id del botón que la cierra (el mismo que pulsa «Listo»). */
+/** id de la pantalla → id del botón que la cierra (desde H5, la flecha de su cabecera). */
 export const ESCAPE_CLOSES = Object.freeze({
   'screen-memory': 'btn-memory-close',
   'screen-log': 'btn-log-close',
@@ -24,7 +24,8 @@ export const ESCAPE_CLOSES = Object.freeze({
 /**
  * Pantallas que Escape cierra SIN pulsar su botón.
  *
- * El «Listo» de Ajustes no cierra: guarda todos los campos —la contraseña y la
+ * El botón de Ajustes («Guardar y volver» desde H5; antes «Listo») no cierra
+ * sin más: guarda todos los campos —la contraseña y la
  * URL del servidor incluidas— y rearranca el panel, lo que de paso cancela el
  * turno en vuelo. Con Escape mapeado a ese botón, un Escape distraído aplicaba
  * unos ajustes a medio escribir (revisión adversaria de H2, 2026-09-14). Aquí

@@ -1,95 +1,220 @@
 <!doctype html>
-<html lang="es">
+<html lang="es" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Vista previa del panel · Faro</title>
+
+<!--
+  El espejo del panel.
+
+  Carga el panel REAL en un iframe y lo rellena a mano: aquí no hay `chrome.*`,
+  así que panel.js muere en `getSettings` y nada de lo que se ve es interactivo
+  de verdad. Sirve para MIRAR: composición, contraste y estados, sin arrancar
+  Chrome ni opencode.
+
+  Dos cosas que no se negocian, y que pina panel-wiring.test.js:
+
+  1. La paleta NO se copia aquí, y el test lo comprueba buscando los nombres de
+     token con un color escrito detrás. Hasta H4 este fichero inyectaba un
+     bloque `:root` con la paleta clara escrita a mano para poder ver el tema
+     claro, y se quedó atrás en cuanto panel.css cambió de tokens: el botón
+     «Claro» enseñaba una paleta que ya no existía. El tema se fuerza poniendo
+     `dataset.theme` en el <html> del iframe (y en el de esta página), que es
+     para lo único que existe `:root[data-theme="dark"]` en panel.css. La
+     extensión nunca pone data-theme: sigue a prefers-color-scheme.
+  2. Esta página enlaza el panel.css real, así que la barra lateral se pinta
+     con los mismos tokens que el panel y no hay un segundo juego de colores
+     que mantener. Sus estilos propios van debajo del <link>, y sólo son
+     disposición.
+
+  `window.faroPreview.check()` mide lo que hay que mirar en cada captura
+  (desbordamiento, alto de la cabecera, alto de la fila del redactor, cabeceras
+  de pantalla a la vista, sugerencias del estado vacío) y deja el resultado en
+  la barra lateral. Los mandos también son API: setTheme, setWidth, setStatus,
+  setChat, setScreen, setPick, setSources, setFifth.
+
+  Cómo se acepta el rediseño (paso 8 del anexo D, CLAUDE.md §2): con el Browser
+  pane VISIBLE a 1280×900, cuatro capturas —320 y 420 px × claro y oscuro— y
+  `faroPreview.check()` en verde en cada una y en cada pantalla. `setFifth(true)`
+  mete un quinto `icon-btn` del tamaño que tendrá «Qué mirar hoy» (H11) para ver
+  la cabecera estrecha con los cinco: es un hueco, no ese botón, y el espejo no
+  se adelanta a su id.
+-->
+
+<link rel="stylesheet" href="/src/panel/panel.css">
 <style>
-  :root { color-scheme: light dark; }
+  /* Sólo disposición: el color, el texto y los radios salen de panel.css. */
   body {
-    margin: 0; min-height: 100vh;
-    display: flex; align-items: flex-start; justify-content: center; gap: 28px;
-    padding: 28px;
-    background: #0E0D12;
-    color: #EDECF2;
-    font-family: ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
-    font-size: 13.5px;
+    height: auto;
+    min-height: 100vh;
+    flex-direction: row;
+    align-items: flex-start;
+    justify-content: center;
+    gap: var(--s6);
+    padding: var(--s6);
+    overflow: auto;
   }
-  .side { width: 250px; position: sticky; top: 28px; }
-  h1 { font-size: 16px; margin: 0 0 4px; letter-spacing: -.01em; }
-  p { color: #918EA1; font-size: 12.5px; line-height: 1.5; margin: 0 0 16px; }
-  .grp { margin-bottom: 16px; }
+  /* Con los grupos de H5 la barra pasa de largo de los 900 px del Browser pane,
+     así que se desplaza ella: pegada arriba y con su propio scroll, para que
+     «Tema» y «Medidas» sigan alcanzables sin mover el panel de sitio. */
+  .side {
+    width: 250px; flex: none;
+    position: sticky; top: var(--s6);
+    max-height: calc(100vh - var(--s6) - var(--s6));
+    overflow-y: auto;
+    padding-right: var(--s1);
+  }
+  /* Los grupos de tres o menos caben en una fila y ahorran alto. */
+  .fila { display: flex; gap: 2px; }
+  .fila .rig { flex: 1; text-align: center; margin-bottom: 0; }
+  .side h1 { font-size: var(--text-lg); font-weight: 600; margin: 0 0 var(--s1); letter-spacing: -.01em; }
+  .side > p { color: var(--muted); font-size: var(--text-xs); margin: 0 0 var(--s4); }
+  .grp { margin-bottom: var(--s4); }
   .grp-title {
-    font-size: 9.5px; letter-spacing: .12em; text-transform: uppercase;
-    color: #6F6C7E; margin-bottom: 6px;
+    font-size: var(--text-2xs); letter-spacing: .1em; text-transform: uppercase;
+    color: var(--muted); margin-bottom: var(--s1);
   }
-  button {
+  .rig {
     display: block; width: 100%; text-align: left;
-    font: inherit; font-size: 12px;
-    background: #1B1A22; color: #EDECF2;
-    border: 1px solid #2C2A36; border-radius: 7px;
-    padding: 6px 10px; margin-bottom: 5px; cursor: pointer;
-    transition: border-color .15s ease;
+    font: inherit; font-size: var(--text-xs);
+    background: var(--surface); color: var(--ink);
+    border: 1px solid var(--hairline); border-radius: var(--r-sm);
+    padding: var(--s1) var(--s2); margin-bottom: 2px; cursor: pointer;
+    transition: background var(--dur-1) ease, border-color var(--dur-1) ease;
   }
-  button:hover { border-color: #57536A; }
-  button.on { border-color: #E9AC4A; color: #E9AC4A; }
+  .rig:hover { background: var(--surface-2); border-color: var(--hairline-strong); }
+  .rig.on { color: var(--gold); background: var(--gold-bg); border-color: var(--gold-line); }
+  .medidas {
+    border: 1px solid var(--hairline);
+    border-radius: var(--r-md);
+    background: var(--surface);
+    font-size: var(--text-xs);
+    overflow: hidden;
+    margin-bottom: var(--s2);
+  }
   .frame {
-    width: 400px; height: 780px; flex: none;
-    border: 1px solid #2C2A36; border-radius: 14px; overflow: hidden;
-    box-shadow: 0 24px 60px -24px rgba(0,0,0,.9);
-    background: #131218;
+    width: 360px; height: 780px; flex: none;
+    border: 1px solid var(--hairline-strong);
+    border-radius: var(--r-lg);
+    overflow: hidden;
+    background: var(--ground);
   }
   iframe { width: 100%; height: 100%; border: 0; display: block; }
-  .note { font-size: 11.5px; color: #6F6C7E; line-height: 1.5; }
 </style>
 </head>
 <body>
 
 <div class="side">
   <h1>Vista previa del panel</h1>
-  <p>El panel real, con su CSS real, relleno con una conversación de ejemplo. No hay <code>chrome.*</code> aquí, así que sólo se ve: no funciona.</p>
+  <p>El panel real, con su CSS real, relleno con dos conversaciones de ejemplo.
+    No hay <code>chrome.*</code> aquí, así que sólo se ve: no funciona.</p>
+
+  <div class="grp">
+    <div class="grp-title">Conversación</div>
+    <button class="rig on" data-chat="confluence">Confluence · ADR-014</button>
+    <button class="rig" data-chat="jira">Jira · SIMPL-1234</button>
+    <button class="rig" data-chat="empty">Chat vacío</button>
+  </div>
+
+  <div class="grp">
+    <div class="grp-title">Estado</div>
+    <div class="fila">
+      <button class="rig on" data-status="ok" title="opencode conectado">Conectado</button>
+      <button class="rig" data-status="bad" title="opencode no responde">Caído</button>
+      <button class="rig" data-status="busy" title="un turno en vuelo">Respondiendo</button>
+    </div>
+  </div>
 
   <div class="grp">
     <div class="grp-title">Pantallas</div>
-    <button data-screen="" class="on">Conversación</button>
-    <button data-screen="screen-connect">opencode no responde</button>
-    <button data-screen="screen-setup">Configurar claves</button>
-    <button data-manual="1">Claves · paso manual</button>
-    <button data-screen="screen-context">Primera vez · contexto</button>
-    <button data-screen="screen-settings">Ajustes</button>
-    <button data-screen="screen-memory">Memoria</button>
-    <button data-screen="screen-sources">Páginas base del análisis</button>
-    <button data-screen="screen-log">Registro</button>
-    <button data-busy="1">Indexando…</button>
+    <button class="rig on" data-screen="">Ninguna</button>
+    <button class="rig" data-screen="screen-connect">opencode no responde</button>
+    <button class="rig" data-screen="screen-setup">Configurar claves</button>
+    <button class="rig" data-screen="setup-manual">Claves · paso manual</button>
+    <button class="rig" data-screen="screen-context">Primera vez · contexto</button>
+    <button class="rig" data-screen="screen-settings">Ajustes</button>
+    <button class="rig" data-screen="screen-memory">Memoria</button>
+    <button class="rig" data-screen="screen-sources">Páginas base del análisis</button>
+    <button class="rig" data-screen="screen-log">Registro</button>
+    <button class="rig" data-screen="busy">Indexando…</button>
   </div>
 
   <div class="grp">
     <div class="grp-title">Barra inferior</div>
-    <button data-pick="off" class="on">Sin selección</button>
-    <button data-pick="chip">Con algo señalado</button>
-    <button data-pick="on">Señalando en la página</button>
-    <button data-sources="off" class="on">Sin páginas base</button>
-    <button data-sources="on">Con páginas base</button>
+    <button class="rig on" data-pick="off">Sin selección</button>
+    <button class="rig" data-pick="chip">Con algo señalado</button>
+    <button class="rig" data-pick="on">Señalando en la página</button>
+    <button class="rig on" data-sources="off">Sin páginas base</button>
+    <button class="rig" data-sources="on">Con páginas base</button>
+  </div>
+
+  <div class="grp">
+    <div class="grp-title">Anchura</div>
+    <div class="fila">
+      <button class="rig" data-width="320">320</button>
+      <button class="rig on" data-width="360">360</button>
+      <button class="rig" data-width="420">420</button>
+    </div>
   </div>
 
   <div class="grp">
     <div class="grp-title">Tema</div>
-    <button data-theme="dark" class="on">Oscuro</button>
-    <button data-theme="light">Claro</button>
+    <div class="fila">
+      <button class="rig on" data-theme="dark">Oscuro</button>
+      <button class="rig" data-theme="light">Claro</button>
+    </div>
   </div>
 
-  <p class="note">El tema real lo decide el sistema; aquí se fuerza para poder mirar los dos.</p>
+  <div class="grp">
+    <div class="grp-title">Cabecera</div>
+    <button class="rig" data-fifth="1" title="Un bulto del tamaño de «Qué mirar hoy», que crea H11">Quinto botón (hueco de H11)</button>
+  </div>
+
+  <div class="grp">
+    <div class="grp-title">Medidas</div>
+    <div class="medidas" id="medidas"></div>
+    <button class="rig" id="btn-check">Comprobar otra vez</button>
+  </div>
+
+  <p class="fine">El tema real lo decide el sistema; aquí se fuerza con
+    <code>data-theme</code> para poder mirar los dos.</p>
 </div>
 
-<div class="frame"><iframe id="panel" src="/src/panel/panel.html"></iframe></div>
+<div class="frame" id="frame"><iframe id="panel" title="Panel de Faro" src="/src/panel/panel.html"></iframe></div>
 
 <script type="module">
 const frame = document.getElementById('panel')
+const marco = document.getElementById('frame')
+const cajaMedidas = document.getElementById('medidas')
 
-frame.addEventListener('load', async () => {
+// El iframe puede haber terminado de cargar ANTES de que corra este módulo
+// (es diferido): sin esta rama, abrir la página desde la caché dejaba el
+// espejo vacío y sin explicación. Y «complete» a secas no basta: antes de
+// navegar, el iframe tiene un about:blank que ya está «complete», y arrancar
+// sobre él reventaba en el primer $('id') (visto en el Browser pane al cerrar
+// H5: `faroPreview` no llegaba a definirse). Se arranca ya sólo si lo cargado
+// es el panel.
+if (frame.contentDocument?.readyState === 'complete' && frame.contentDocument.getElementById('app')) arrancar()
+else frame.addEventListener('load', arrancar, { once: true })
+
+async function arrancar() {
   const doc = frame.contentDocument
   const win = frame.contentWindow
-  const { renderMarkdown } = await import('/src/panel/markdown.js')
+
+  // Todo lo que se puede leer del código real se lee del código real: las
+  // Skills, las opciones de la tarjeta de navegación, la etiqueta de lo
+  // señalado, las etiquetas de las páginas base y las sugerencias del vacío.
+  // Lo demás son textos de ejemplo.
+  const [{ renderMarkdown }, { SKILLS }, { pickLabel, buildTextPick }, { navOptions }, { sourcesLabel, sourcesNote }, { suggestionsFor }] =
+    await Promise.all([
+      import('/src/panel/markdown.js'),
+      import('/src/panel/skills.js'),
+      import('/src/content/pick-payload.js'),
+      import('/src/nav/options.js'),
+      import('/src/panel/sources.js'),
+      import('/src/panel/suggestions.js'),
+    ])
 
   const $ = (id) => doc.getElementById(id)
   const mk = (tag, cls, text) => {
@@ -98,26 +223,119 @@ frame.addEventListener('load', async () => {
     if (text != null) e.textContent = text
     return e
   }
+  const svgIcon = (d) => {
+    const svg = doc.createElementNS('http://www.w3.org/2000/svg', 'svg')
+    svg.setAttribute('viewBox', '0 0 16 16')
+    svg.setAttribute('aria-hidden', 'true')
+    const p = doc.createElementNS('http://www.w3.org/2000/svg', 'path')
+    p.setAttribute('d', d)
+    p.setAttribute('fill', 'none')
+    p.setAttribute('stroke', 'currentColor')
+    p.setAttribute('stroke-width', '1.4')
+    p.setAttribute('stroke-linecap', 'round')
+    p.setAttribute('stroke-linejoin', 'round')
+    svg.appendChild(p)
+    return svg
+  }
 
-  // ---- cabecera
-  $('location-text').textContent = 'Confluence · ENG · página 200'
-  $('status-dot').className = 'dot ok'
-  $('status-text').textContent = 'conectado'
-  $('btn-memory-toggle').classList.add('on')
-  $('memory-label').textContent = 'Memoria activa'
+  const chat = $('chat')
+
+  // Los dos sitios de ejemplo. `sources` tiene la forma de `normalizeSources`,
+  // que es lo que leen sourcesLabel/sourcesNote/suggestionsFor.
+  const SITIOS = {
+    confluence: {
+      product: 'confluence',
+      host: 'confluence.simplprogramme.eu',
+      clave: 'ENG',
+      titulo: 'ADR-014 Rotación de tokens de servicio',
+    },
+    jira: {
+      product: 'jira',
+      host: 'jira.simplprogramme.eu',
+      clave: 'SIMPL-1234',
+      titulo: 'Definición de la API de federación entre proveedores',
+    },
+  }
+  const PAGINAS_BASE = {
+    mode: 'exclusive',
+    pages: [
+      { id: '200', title: 'ADR-014 Rotación de tokens de servicio', path: '/spaces/ENG/pages/200/ADR-014', spaceKey: 'ENG' },
+      { id: '300', title: 'Guía de estilo de la documentación', path: '/spaces/ENG/pages/300/Guia', spaceKey: 'ENG' },
+    ],
+  }
+  const SIN_BASE = { mode: 'open', pages: [] }
+
+  const estado = { chat: 'confluence', pantalla: '', status: 'ok', pick: 'off', sources: 'off', ancho: 360, tema: 'dark', quinto: false }
+  const sitio = () => SITIOS[estado.chat === 'jira' ? 'jira' : 'confluence']
+  const paginasBase = () => (estado.sources === 'on' ? PAGINAS_BASE : SIN_BASE)
+
+  // ------------------------------------------------------------- cabecera
+
+  function pintarCabecera() {
+    const s = sitio()
+    // Las dos piezas del chip: la clave no cede, el título sí. Mientras se
+    // responde, el hueco del título lo ocupa lo que está pasando, como hace
+    // `paintLocation` con `state.statusLine` (decisión 4 de docs/PLAN.md).
+    $('location-key').textContent = s.clave
+    $('location-key').classList.remove('hidden')
+    $('location-title').textContent = estado.status === 'busy' ? 'pensando…' : s.titulo
+    $('location-chip').title = `${s.host} · ${s.titulo}`
+
+    const como = { ok: 'conectado', bad: 'sin conexión', busy: 'pensando…' }[estado.status]
+    $('status-dot').className = 'beacon ' + estado.status
+    $('status-dot').title = `opencode: ${como}`
+    $('status-text').textContent = como
+
+    // La memoria entre sesiones se enciende en SU pantalla; en la cabecera sólo
+    // se ve que está activa.
+    $('btn-memory').classList.add('on')
+    $('btn-memory').title = 'Memoria entre sesiones: activa'
+  }
+
+  /**
+   * El hueco del quinto botón de la cabecera: «Qué mirar hoy» lo crea H11, así
+   * que aquí sólo se puede poner un bulto del mismo tamaño para comprobar que
+   * a 320 px la fila sigue siendo una y el chip cede antes que las acciones.
+   * No lleva el id real (#btn-today) a propósito: el botón no existe todavía.
+   */
+  function pintarQuinto() {
+    const zona = doc.querySelector('.top-actions')
+    const puesto = zona.querySelector('[data-hueco]')
+    if (!estado.quinto) {
+      puesto?.remove()
+      return
+    }
+    if (puesto) return
+    const b = mk('button', 'icon-btn')
+    b.type = 'button'
+    b.dataset.hueco = '1'
+    b.title = 'Hueco del quinto botón: «Qué mirar hoy» (lo crea H11)'
+    b.setAttribute('aria-label', 'Hueco de «Qué mirar hoy»')
+    b.appendChild(svgIcon('M8 2.7a5.3 5.3 0 1 1 0 10.6 5.3 5.3 0 0 1 0-10.6zM8 5.3v3l2 1.2'))
+    zona.appendChild(b)
+  }
+
+  // ------------------------------------------------------------- redactor
 
   const sel = $('model')
-  const og = doc.createElement('optgroup')
-  og.label = 'github-copilot'
-  for (const n of ['claude-sonnet-5', 'claude-opus-5', 'gpt-5.4']) {
-    const o = doc.createElement('option')
-    o.textContent = n
-    og.appendChild(o)
+  for (const [proveedor, modelos] of [
+    ['github-copilot', ['gpt-5.6-luna', 'claude-sonnet-4.6', 'claude-opus-5']],
+    // El nombre más largo de la lista es el caso peor de la fila del redactor:
+    // con él elegido se comprueba que la barra no se parte en dos a 320 px.
+    ['opencode', ['ling-3.0-flash-fin-free', 'big-pickle']],
+  ]) {
+    const og = doc.createElement('optgroup')
+    og.label = proveedor
+    for (const n of modelos) {
+      const o = doc.createElement('option')
+      o.textContent = n
+      og.appendChild(o)
+    }
+    sel.appendChild(og)
   }
-  sel.appendChild(og)
+  sel.value = 'ling-3.0-flash-fin-free'
 
   // El selector de Skill sale de la lista REAL: si se añade una, aparece aquí.
-  const { SKILLS } = await import('/src/panel/skills.js')
   const skillSel = $('skill')
   for (const s of SKILLS) {
     const o = doc.createElement('option')
@@ -129,26 +347,198 @@ frame.addEventListener('load', async () => {
   skillSel.value = 'analisis'
 
   // Y el chip de lo señalado en la página, con la etiqueta real.
-  const { pickLabel, buildTextPick } = await import('/src/content/pick-payload.js')
   $('pick-chip-text').textContent = pickLabel(
     buildTextPick({ text: 'Por política de seguridad el token expira a los 90 días naturales' })
   )
 
-  // ---- conversación
-  const chat = $('chat')
-  chat.textContent = ''
-  chat.appendChild(mk('div', 'msg user', '¿Dónde está documentada la rotación de tokens de servicio?'))
+  /** Lo mismo que `paintSourcesUi`: el botón siempre en Análisis, el resto según haya páginas. */
+  function pintarPaginasBase() {
+    const s = paginasBase()
+    const product = sitio().product
+    const etiqueta = sourcesLabel(s, { product })
+    $('btn-sources').classList.remove('hidden')
+    $('btn-sources').classList.toggle('on', estado.sources === 'on')
+    $('btn-sources').title = etiqueta || 'Páginas base del análisis'
+    $('sources-count').textContent = s.pages.length ? String(s.pages.length) : ''
+    $('sources-count').classList.toggle('hidden', !s.pages.length)
+    $('sources-chip').classList.toggle('hidden', !etiqueta)
+    $('sources-chip-text').textContent = etiqueta
+  }
 
-  const bubble = mk('div', 'msg assistant')
-  const tools = mk('div', 'tools')
-  const row = mk('div', 'tool done')
-  row.append(mk('span', 'tdot'), mk('span', null, '3 consultas a Atlassian'))
-  tools.appendChild(row)
+  function pintarSeleccion() {
+    $('pick-chip').classList.toggle('hidden', estado.pick !== 'chip')
+    $('btn-pick').classList.toggle('picking', estado.pick === 'on')
+  }
 
-  const body = doc.createElement('div')
-  body.appendChild(
-    renderMarkdown(
-      [
+  /** Lo que hace `setStreaming`: enviar/parar, Skill y sesión nueva, y `aria-busy`. */
+  function pintarEnvio() {
+    const respondiendo = estado.status === 'busy'
+    $('btn-send').classList.toggle('hidden', respondiendo)
+    $('btn-stop').classList.toggle('hidden', !respondiendo)
+    $('skill').disabled = respondiendo
+    $('btn-new-session').disabled = respondiendo
+    chat.setAttribute('aria-busy', respondiendo ? 'true' : 'false')
+  }
+
+  // ------------------------------------------------------- piezas del chat
+
+  /** Una fila de herramienta: con punto verde si terminó, ámbar si sigue. */
+  const filaTool = (texto, hecha = true) => {
+    const row = mk('div', 'tool' + (hecha ? ' done' : ''))
+    row.append(mk('span', 'tdot'), mk('span', null, texto))
+    return row
+  }
+
+  /**
+   * La actividad de herramientas al terminar el turno: plegada en un <details>
+   * cerrado, con el resumen fuera y las filas dentro (paintTurn, final).
+   */
+  function toolsFold(filas) {
+    const caja = mk('div', 'tools')
+    const fold = doc.createElement('details')
+    fold.className = 'tools-fold'
+    const summary = doc.createElement('summary')
+    summary.className = 'tool done'
+    summary.append(mk('span', 'tdot'), mk('span', null, `${filas.length} consultas a Atlassian`))
+    fold.appendChild(summary)
+    for (const [texto, hecha] of filas) fold.appendChild(filaTool(texto, hecha))
+    caja.appendChild(fold)
+    return caja
+  }
+
+  const burbujaUsuario = (texto, nota) => {
+    const d = mk('div', 'msg user', texto)
+    if (nota) {
+      const tag = mk('div', 'fine', nota)
+      tag.style.marginTop = '4px'
+      d.appendChild(tag)
+    }
+    return d
+  }
+
+  const prosa = (lineas, conMarcas = false) => {
+    const cuerpo = doc.createElement('div')
+    cuerpo.appendChild(
+      renderMarkdown(lineas.join('\n'), conMarcas ? { onNote: (n) => console.log('ir a la observación', n) } : {})
+    )
+    return cuerpo
+  }
+
+  /** Una fila de la tarjeta de análisis, con su clase y su cita. */
+  function filaNota({ n, titulo, clase, cita, puesta = true, sinAncla = false, activa = false }) {
+    const row = doc.createElement('button')
+    row.className = 'note-row' + (puesta ? '' : ' missing') + (sinAncla ? ' unanchored' : '') + (activa ? ' active' : '')
+    row.type = 'button'
+    row.disabled = !puesta
+    const cuerpo = mk('span', 'note-body')
+    cuerpo.appendChild(mk('span', 'note-title', titulo))
+    const meta = mk('span', 'note-meta')
+    if (clase) meta.appendChild(mk('span', 'note-kind', clase))
+    meta.appendChild(mk('span', 'note-quote', cita))
+    cuerpo.appendChild(meta)
+    row.append(mk('span', 'note-num', String(n)), cuerpo)
+    return row
+  }
+
+  /** Copiar de verdad, como `copyToClipboard`: lo dice el propio botón. */
+  async function copiar(texto, boton) {
+    const original = boton.textContent
+    try {
+      await win.navigator.clipboard.writeText(texto)
+      boton.textContent = 'Copiado'
+    } catch {
+      boton.textContent = 'No se pudo'
+    }
+    setTimeout(() => (boton.textContent = original), 1400)
+  }
+
+  /** La tarjeta viva de un análisis: lista con separadores y dos acciones. */
+  function tarjetaNotas({ kicker, titulo, avisos, filas, prosaCopiable }) {
+    const card = mk('div', 'nav-card notes-card')
+    card.appendChild(mk('div', 'nav-kicker', kicker))
+    card.appendChild(mk('div', 'nav-title', titulo))
+    if (avisos) card.appendChild(mk('div', 'nav-text', avisos))
+
+    const lista = mk('div', 'note-list')
+    for (const f of filas) lista.appendChild(filaNota(f))
+    card.appendChild(lista)
+
+    const acciones = mk('div', 'nav-actions')
+    const quitar = mk('button', 'ghost small', 'Quitar las marcas')
+    quitar.type = 'button'
+    acciones.appendChild(quitar)
+    if (prosaCopiable) {
+      const copia = mk('button', 'ghost small', 'Copiar observaciones')
+      copia.type = 'button'
+      copia.addEventListener('click', () => copiar(prosaCopiable, copia))
+      acciones.appendChild(copia)
+    }
+    card.appendChild(acciones)
+    return card
+  }
+
+  /** La tarjeta atenuada de un análisis anterior: sólo títulos, y un botón. */
+  function tarjetaVieja(filas) {
+    const card = mk('div', 'nav-card notes-card stale')
+    card.appendChild(mk('div', 'nav-kicker', 'Análisis anterior'))
+    card.appendChild(mk('div', 'nav-title', 'Las marcas eran de la página donde se hizo'))
+    const lista = mk('div', 'note-list')
+    for (const [n, titulo] of filas) {
+      const row = doc.createElement('button')
+      row.className = 'note-row missing'
+      row.type = 'button'
+      row.disabled = true
+      const cuerpo = mk('span', 'note-body')
+      cuerpo.appendChild(mk('span', 'note-title', titulo))
+      row.append(mk('span', 'note-num', String(n)), cuerpo)
+      lista.appendChild(row)
+    }
+    card.appendChild(lista)
+    const acciones = mk('div', 'nav-actions')
+    const volver = mk('button', 'primary', 'Volver a marcar en esta página')
+    volver.type = 'button'
+    acciones.appendChild(volver)
+    card.appendChild(acciones)
+    return card
+  }
+
+  const aviso = (texto, malo = false) => mk('div', 'notice' + (malo ? ' bad' : ''), texto)
+
+  /** La tarjeta de «Falta un permiso», que cuelga del chat y no de una burbuja. */
+  function tarjetaPermiso(host) {
+    const card = mk('div', 'nav-card perm-card')
+    card.appendChild(mk('div', 'nav-kicker', 'Falta un permiso'))
+    card.appendChild(mk('div', 'nav-title', `Actuar dentro de ${host}`))
+    card.appendChild(
+      mk(
+        'div',
+        'nav-text',
+        'Puedo consultar y responder, pero para tocar la página —resaltar un fragmento, marcar las observaciones de un análisis o guiarte paso a paso— necesito permiso sobre este dominio. No está en el manifest porque es tuyo, no de Atlassian.'
+      )
+    )
+    const acciones = mk('div', 'nav-actions')
+    const dar = mk('button', 'primary', 'Dar permiso')
+    dar.type = 'button'
+    acciones.appendChild(dar)
+    card.appendChild(acciones)
+    return card
+  }
+
+  // ------------------------------------------------- las dos conversaciones
+
+  function conversacionConfluence() {
+    chat.appendChild(burbujaUsuario('¿Dónde está documentada la rotación de tokens de servicio?'))
+
+    const b1 = mk('div', 'msg assistant')
+    b1.appendChild(
+      toolsFold([
+        ['Confluence: search', true],
+        ['Confluence: get page', true],
+        ['Confluence: get page children', true],
+      ])
+    )
+    b1.appendChild(
+      prosa([
         'Está en **ADR-014 Rotación de tokens de servicio**, dentro del espacio de Ingeniería.',
         '',
         'La política, en corto:',
@@ -158,93 +548,236 @@ frame.addEventListener('load', async () => {
         '- El exportador de métricas heredado queda como excepción documentada en el runbook.',
         '',
         '> El cumplimiento se revisa cada trimestre.',
-      ].join('\n')
+      ])
     )
-  )
-  bubble.append(tools, body)
 
-  const card = mk('div', 'nav-card')
-  card.appendChild(mk('div', 'nav-kicker', 'Puedo llevarte'))
-  card.appendChild(mk('div', 'nav-title', 'ADR-014 Rotación de tokens de servicio'))
-  card.appendChild(mk('div', 'nav-text', 'Te dejo en el apartado de Decisión, con la frase de la caducidad marcada.'))
-  const steps = mk('div', 'nav-steps')
-  ;['Espacio Ingeniería', 'Arquitectura', 'ADR-014'].forEach((s, i) => {
-    if (i) steps.appendChild(mk('b', null, '›'))
-    steps.appendChild(mk('span', null, s))
-  })
-  card.appendChild(steps)
-  // Los botones salen de la logica REAL, con un plan en modo "direct": el
-  // ajuste (guiada) manda sobre la recomendacion del modelo.
-  const { navOptions } = await import('/src/nav/options.js')
-  const acts = mk('div', 'nav-actions')
-  const planDemo = { mode: 'direct', steps: [{ id: 'ENG' }, { id: '100' }, { id: '200' }] }
-  for (const o of navOptions(planDemo, { navMode: 'guided' })) {
-    acts.appendChild(mk('button', o.kind, o.label))
-  }
-  card.appendChild(acts)
-  bubble.appendChild(card)
-  chat.appendChild(bubble)
+    const card = mk('div', 'nav-card')
+    card.appendChild(mk('div', 'nav-kicker', 'Puedo llevarte'))
+    card.appendChild(mk('div', 'nav-title', 'ADR-014 Rotación de tokens de servicio'))
+    card.appendChild(mk('div', 'nav-text', 'Te dejo en el apartado de Decisión, con la frase de la caducidad marcada.'))
+    const pasos = mk('div', 'nav-steps')
+    ;['Espacio Ingeniería', 'Arquitectura', 'ADR-014'].forEach((s, i) => {
+      if (i) pasos.appendChild(mk('b', null, '›'))
+      pasos.appendChild(mk('span', null, s))
+    })
+    card.appendChild(pasos)
+    // Los botones salen de la lógica REAL, con un plan en modo «direct»: el
+    // ajuste (guiada) manda sobre la recomendación del modelo.
+    const acts = mk('div', 'nav-actions')
+    const planDemo = { mode: 'direct', steps: [{ id: 'ENG' }, { id: '100' }, { id: '200' }] }
+    for (const o of navOptions(planDemo, { navMode: 'guided' })) acts.appendChild(mk('button', o.kind, o.label))
+    card.appendChild(acts)
+    b1.appendChild(card)
+    chat.appendChild(b1)
 
-  // ---- un análisis con sus observaciones numeradas
-  chat.appendChild(mk('div', 'msg user', 'Ahora analízala a fondo.'))
+    // Un análisis de la página, con sus tres observaciones subrayadas. La nota
+    // bajo la pregunta cuenta el turno que se MANDÓ (aquí, sin páginas base);
+    // el chip del redactor habla del siguiente, y de ése manda el grupo
+    // «Barra inferior».
+    chat.appendChild(burbujaUsuario('Ahora analízala a fondo.', 'con el texto de la página (33 bloques)'))
 
-  const bAnalisis = mk('div', 'msg assistant')
-  const cuerpo = doc.createElement('div')
-  cuerpo.appendChild(
-    renderMarkdown(
-      [
-        'Tres cosas, de más a menos importante:',
-        '',
-        '[1] La caducidad de 90 días se presenta como política, pero no se dice de dónde sale ni contra qué se calibró.',
-        '[2] La ventana de solape de 48 horas no está medida contra la duración real de un despliegue.',
-        '[3] La excepción del exportador de métricas no tiene fecha firme: «el próximo trimestre» no es una fecha.',
-      ].join('\n'),
-      { onNote: (n) => console.log('ir a la observación', n) }
+    const texto = [
+      'Tres cosas, de más a menos importante:',
+      '',
+      '[1] La caducidad de 90 días se presenta como política, pero no se dice de dónde sale ni contra qué se calibró.',
+      '[2] La ventana de solape de 48 horas no está medida contra la duración real de un despliegue.',
+      '[3] La excepción del exportador de métricas no tiene fecha firme: «el próximo trimestre» no es una fecha.',
+    ]
+    const b2 = mk('div', 'msg assistant')
+    b2.appendChild(prosa(texto, true))
+    b2.appendChild(
+      tarjetaNotas({
+        kicker: 'Marcado en la página',
+        titulo: '3 observaciones subrayadas',
+        avisos: '',
+        prosaCopiable: texto.join('\n'),
+        filas: [
+          {
+            n: 1,
+            titulo: 'La caducidad no se justifica',
+            clase: 'supuesto',
+            cita: '«el token expira a los 90 días naturales»',
+            activa: true,
+          },
+          {
+            n: 2,
+            titulo: 'Ventana de solape sin medir',
+            clase: 'hueco',
+            cita: 'bloque entero: «La rotación se solapa: durante las últimas 48 horas conviven el token viejo y el nuevo, de modo que»',
+          },
+          {
+            n: 3,
+            titulo: 'Excepción sin fecha firme',
+            clase: 'riesgo',
+            cita: '«previsto para el próximo trimestre» · aproximada',
+          },
+        ],
+      })
     )
-  )
-  bAnalisis.appendChild(cuerpo)
-
-  // Las filas, con las tres formas en que se marca hoy una observación: la cita
-  // literal dentro de su bloque, el bloque entero cuando la cita no estaba tal
-  // cual, y la que habla de la página en general, que no se marca.
-  const notas = [
-    [1, 'La caducidad no se justifica', '«el token expira a los 90 días naturales»', true],
-    [2, 'Ventana de solape sin medir', 'bloque entero: «La rotación se solapa: durante las últimas 48 horas conviven el token viejo y el nuevo, de modo que»', true],
-    [3, 'Excepción sin fecha firme', '«previsto para el próximo trimestre» · aproximada', true],
-    [4, 'Falta un diagrama de despliegue', 'habla de la página en general; no hay pasaje que marcar', false],
-  ]
-
-  const notesCard = mk('div', 'nav-card notes-card')
-  notesCard.appendChild(mk('div', 'nav-kicker', 'Marcado en la página'))
-  notesCard.appendChild(mk('div', 'nav-title', '3 observaciones subrayadas'))
-  notesCard.appendChild(
-    mk('div', 'nav-text', 'Una no la he sabido situar en la página; la dejo sin marcar antes que marcarla mal.')
-  )
-
-  const lista = mk('div', 'note-list')
-  for (const [n, titulo, cita, puesta] of notas) {
-    const row = doc.createElement('button')
-    row.className = 'note-row' + (puesta ? '' : ' missing')
-    row.type = 'button'
-    row.disabled = !puesta
-    if (n === 1) row.classList.add('active')
-    const num = mk('span', 'note-num', String(n))
-    const body = mk('span', 'note-body')
-    body.append(mk('span', 'note-title', titulo))
-    body.append(mk('span', 'note-quote', cita))
-    row.append(num, body)
-    lista.appendChild(row)
+    chat.appendChild(b2)
   }
-  notesCard.appendChild(lista)
 
-  const accionesNotas = mk('div', 'nav-actions')
-  accionesNotas.appendChild(mk('button', 'ghost', 'Quitar las marcas'))
-  notesCard.appendChild(accionesNotas)
-  bAnalisis.appendChild(notesCard)
-  chat.appendChild(bAnalisis)
+  function conversacionJira() {
+    // Primero un análisis viejo, restaurado: sus marcas ya no están puestas.
+    chat.appendChild(burbujaUsuario('Analiza esta incidencia', 'con el texto de la incidencia (41 bloques)'))
+    const b0 = mk('div', 'msg assistant')
+    b0.appendChild(
+      prosa(
+        [
+          'Tres cosas que no cuadran en la definición:',
+          '',
+          '[1] El contrato no declara versión.',
+          '[2] La lista de respuestas salta del 400 al 401.',
+          '[3] La descripción y el comentario del 3 de septiembre dan timeouts distintos.',
+        ],
+        true
+      )
+    )
+    b0.appendChild(
+      tarjetaVieja([
+        [1, 'Contrato sin versión declarada'],
+        [2, 'Respuestas incompletas'],
+        [3, 'Timeout contradictorio'],
+      ])
+    )
+    chat.appendChild(b0)
+    chat.appendChild(aviso('Esas marcas eran de otra página: no he marcado nada.', true))
 
-  // ---- relleno de las pantallas
-  $('connect-cmd').textContent = 'opencode serve --port 4096 --cors chrome-extension://ickohiffpicdfeameogbihbcanbjibmk'
+    // Y el análisis de ahora, que sí se mandó con las dos páginas base: de ahí
+    // el aviso del alcance de más abajo. La etiqueta la escribe `sourcesNote`.
+    chat.appendChild(
+      burbujaUsuario(
+        'He reescrito la descripción y he añadido los criterios. Vuelve a analizarla.',
+        `con el texto de la incidencia (41 bloques) · ${sourcesNote(PAGINAS_BASE, { product: 'jira' })}`
+      )
+    )
+
+    const texto = [
+      'He revisado la definición y sus páginas base. Ocho cosas, de más a menos importante:',
+      '',
+      '[1] El contrato no declara versión: el YAML abre con `openapi: 3.0.3` y `info.version` no aparece, y la guía del sitio la exige antes de publicar.',
+      '[2] No se dice qué devuelve el endpoint cuando el recurso ya existe: la lista de respuestas salta del `400` al `401`.',
+      '[3] Se da por hecho que el consumidor ya tiene token del proveedor de identidad; no se dice quién lo emite ni con qué caducidad.',
+      '[4] La descripción habla de un timeout de 30 s y el comentario del 3 de septiembre, de 10 s. Uno de los dos está viejo.',
+      '[5] Los criterios de aceptación no dicen nada de compatibilidad hacia atrás, y esta API ya tiene dos consumidores.',
+      '[6] Falta la versión del CDM contra la que se valida el esquema.',
+      '[7] Nada sobre el entorno de pruebas: ni datos, ni quién lo levanta, ni contra qué se compara.',
+      '[8] La dependencia del servicio de identidad no tiene fecha: «pendiente de que el equipo de IdP confirme».',
+    ]
+
+    const b1 = mk('div', 'msg assistant')
+    b1.appendChild(
+      toolsFold([
+        ['Jira: get issue', true],
+        ['Jira: get comments', true],
+        ['Confluence: get page', true],
+        ['Confluence: get page', true],
+        ['Jira: search', true],
+        // Una que no llegó a terminar: plegadas, no borradas, es lo primero que
+        // se mira cuando la respuesta no cuadra.
+        ['Jira: get issue link types', false],
+      ])
+    )
+    b1.appendChild(prosa(texto, true))
+    b1.appendChild(
+      tarjetaNotas({
+        kicker: 'Marcado en la incidencia',
+        titulo: '6 observaciones subrayadas',
+        avisos:
+          'Una no la he sabido situar en esta incidencia; la dejo sin marcar antes que marcarla mal. ' +
+          'Una no apunta a un pasaje de esta incidencia: habla de ella en general o de una página base.',
+        prosaCopiable: texto.join('\n'),
+        filas: [
+          { n: 1, titulo: 'Contrato sin versión declarada', clase: 'dato', cita: '«openapi: 3.0.3»', activa: true },
+          { n: 2, titulo: 'Falta el caso del recurso repetido', clase: 'hueco', cita: 'bloque entero: «Respuestas: 200 OK, 400 Bad Request, 401 Unauthorized»' },
+          { n: 3, titulo: 'Da por hecho que el consumidor ya está registrado', clase: 'supuesto', cita: '«el consumidor obtiene su token del proveedor de identidad»' },
+          { n: 4, titulo: 'La descripción y el comentario no dicen lo mismo', clase: 'contradicción', cita: '«timeout de 30 s» · aproximada' },
+          { n: 5, titulo: 'Sin criterio de compatibilidad hacia atrás', clase: 'riesgo', cita: 'bloque entero: «Criterios de aceptación»' },
+          { n: 6, titulo: 'Falta la versión del CDM', clase: 'dato', cita: 'no la he encontrado en la página', puesta: false },
+          {
+            n: 7,
+            titulo: 'Nada sobre el entorno de pruebas',
+            clase: 'hueco',
+            cita: 'no apunta a un pasaje de esta página (habla de ella en general o de una página base)',
+            puesta: false,
+            sinAncla: true,
+          },
+          { n: 8, titulo: 'Dependencia del IdP sin fecha', clase: 'riesgo', cita: '«pendiente de que el equipo de IdP confirme»' },
+        ],
+      })
+    )
+    b1.appendChild(
+      aviso(
+        'El alcance era sólo esta incidencia y las páginas base, pero el modelo consultó además la página 98830281. ' +
+          'Tenlo en cuenta al leer la respuesta: el alcance se le pide, no se le impone, y otro modelo suele respetarlo mejor.'
+      )
+    )
+    chat.appendChild(b1)
+
+    chat.appendChild(tarjetaPermiso(SITIOS.jira.host))
+  }
+
+  /**
+   * El chat vacío, como lo pinta `showWelcome`: el faro grande, la explicación,
+   * el hueco de «Qué mirar hoy» (H8), las tres sugerencias reales y el de los
+   * chips de búsqueda al instante (H11). Los dos huecos van vacíos y ocultos,
+   * igual que en el panel: están para que el sitio esté decidido y el
+   * presupuesto del estado vacío se pueda medir antes de que exista lo que los
+   * llena.
+   */
+  function estadoVacio() {
+    const s = sitio()
+    const wrap = mk('div', 'empty')
+    wrap.appendChild(mk('span', 'beacon big live'))
+    wrap.appendChild(mk('h2', null, '215 cosas indexadas aquí'))
+    wrap.appendChild(
+      mk(
+        'p',
+        null,
+        s.product === 'jira'
+          ? 'Pregúntame sobre el proyecto SIMPL. Si la respuesta está en algún sitio, te llevo.'
+          : 'Pregúntame sobre el espacio ENG. Si la respuesta está en algún sitio, te llevo.'
+      )
+    )
+    wrap.appendChild(mk('div', 'today hidden'))
+    const sugerencias = mk('div', 'suggestions')
+    for (const texto of suggestionsFor(s, $('skill').value, paginasBase())) {
+      const b = mk('button', 'suggestion', texto)
+      b.type = 'button'
+      sugerencias.appendChild(b)
+    }
+    wrap.appendChild(sugerencias)
+    wrap.appendChild(mk('div', 'search-chips hidden'))
+    chat.appendChild(wrap)
+  }
+
+  /** La burbuja que está llegando: sólo en «Respondiendo». */
+  function burbujaEnVuelo() {
+    const b = mk('div', 'msg assistant')
+    const caja = mk('div', 'tools')
+    caja.appendChild(filaTool('Jira: search', false))
+    b.appendChild(caja)
+    const cuerpo = doc.createElement('div')
+    const typing = mk('span', 'typing')
+    typing.append(doc.createElement('i'), doc.createElement('i'), doc.createElement('i'))
+    cuerpo.appendChild(typing)
+    b.appendChild(cuerpo)
+    return b
+  }
+
+  function pintarChat() {
+    chat.textContent = ''
+    if (estado.chat === 'empty') estadoVacio()
+    else if (estado.chat === 'jira') conversacionJira()
+    else conversacionConfluence()
+    if (estado.status === 'busy' && estado.chat !== 'empty') chat.appendChild(burbujaEnVuelo())
+    chat.scrollTop = chat.scrollHeight
+  }
+
+  // ------------------------------------------------- relleno de las pantallas
+
+  $('connect-cmd').textContent =
+    'opencode serve --port 4096 --cors chrome-extension://ickohiffpicdfeameogbihbcanbjibmk --print-logs --log-level INFO'
   $('server-url').value = 'http://127.0.0.1:4096'
   // La pantalla de claves, como en un Data Center: Confluence es el sitio
   // abierto y Jira vive en otro host, con su propio token.
@@ -262,40 +795,47 @@ frame.addEventListener('load', async () => {
   $('set-hl-spotlight').checked = true
   $('set-url').value = 'http://127.0.0.1:4096'
   $('setup-config-path').textContent = 'C:\\Users\\marco\\.config\\opencode\\opencode.json'
-  $('setup-snippet').textContent = JSON.stringify({
-    $schema: 'https://opencode.ai/config.json',
-    mcp: {
-      'atlassian-confluence-simplprogramme-eu': {
-        type: 'local',
-        command: ['uvx', 'mcp-atlassian'],
-        environment: {
-          JIRA_URL: 'https://jira.simplprogramme.eu',
-          JIRA_PERSONAL_TOKEN: 'tu-token-personal-de-jira',
-          CONFLUENCE_URL: 'https://confluence.simplprogramme.eu',
-          CONFLUENCE_PERSONAL_TOKEN: 'tu-token-personal-de-confluence',
-          READ_ONLY_MODE: 'true',
+  $('setup-snippet').textContent = JSON.stringify(
+    {
+      $schema: 'https://opencode.ai/config.json',
+      mcp: {
+        'atlassian-confluence-simplprogramme-eu': {
+          type: 'local',
+          command: ['uvx', 'mcp-atlassian'],
+          environment: {
+            JIRA_URL: 'https://jira.simplprogramme.eu',
+            JIRA_PERSONAL_TOKEN: 'tu-token-personal-de-jira',
+            CONFLUENCE_URL: 'https://confluence.simplprogramme.eu',
+            CONFLUENCE_PERSONAL_TOKEN: 'tu-token-personal-de-confluence',
+            READ_ONLY_MODE: 'true',
+          },
+          enabled: true,
+          timeout: 30000,
         },
-        enabled: true,
-        timeout: 30000,
       },
     },
-  }, null, 2)
+    null,
+    2
+  )
   $('busy-title').textContent = 'Levantando el mapa'
   $('busy-text').textContent = 'Recorriendo el espacio ENG…'
 
   const mem = $('memory-body')
-  for (const [when, text] of [
-    ['2026-08-24', 'Buscabas cómo se rotan los tokens de servicio. Lo encontramos en ADR-014; quedó pendiente mirar la excepción del exportador de métricas.'],
-    ['2026-08-21', 'Repaso de las convenciones de tickets del proyecto ENG: prefijo por área y etiqueta adr para las decisiones.'],
+  for (const [cuando, texto] of [
+    ['24/8/2026, 19:12:05', 'Buscabas cómo se rotan los tokens de servicio. Lo encontramos en ADR-014; quedó pendiente mirar la excepción del exportador de métricas.'],
+    ['21/8/2026, 10:41:22', 'Repaso de las convenciones de tickets del proyecto ENG: prefijo por área y etiqueta adr para las decisiones.'],
   ]) {
     const r = doc.createElement('div')
     r.style.marginBottom = '12px'
-    r.append(mk('div', 'fine', when), mk('div', null, text))
+    const borrar = mk('button', 'ghost small', 'Borrar')
+    borrar.type = 'button'
+    borrar.style.marginTop = '4px'
+    r.append(mk('div', 'fine', cuando), mk('div', null, texto), borrar)
     mem.appendChild(r)
   }
   $('mem-enabled').checked = true
 
-  // ---- páginas base del análisis: la pantalla a medio usar, con dos páginas ya
+  // Páginas base del análisis: la pantalla a medio usar, con dos páginas ya
   // elegidas y una búsqueda en marcha, para ver todas las piezas de una vez.
   const elegidas = $('sources-list')
   for (const [titulo, meta] of [
@@ -315,7 +855,7 @@ frame.addEventListener('load', async () => {
   sugerencias.classList.remove('hidden')
   for (const [titulo, meta, extra] of [
     ['ADR-014 Rotación de tokens de servicio', 'ENG · id 200 · en el índice', 'active'],
-    ['Rotación de credenciales del clúster de métricas', 'desde Confluence', ''],
+    ['Rotación de credenciales del clúster de métricas', 'desde confluence.simplprogramme.eu', ''],
     ['Añadir la página 98830281', 'por su id', 'add'],
   ]) {
     const fila = mk('button', 'suggest-row' + (extra ? ' ' + extra : ''))
@@ -329,34 +869,36 @@ frame.addEventListener('load', async () => {
   $('sources-query').setAttribute('aria-expanded', 'true')
   $('sources-mode-exclusive').checked = true
   $('sources-status').textContent = 'Buscando en Confluence…'
-  $('sources-count').textContent = '2'
-  $('sources-chip-text').textContent = 'Análisis sobre esta página y 2 páginas base (sólo estas)'
 
-  // registro de ejemplo
+  // Registro de ejemplo, con los cinco niveles a la vista: ok, info, warn,
+  // error y debug tienen cada uno su color, y sin una fila de cada no hay forma
+  // de mirarlos juntos en una captura.
   const logBox = $('log-body')
   for (const [t, lvl, m, d] of [
     ['19:42:11', 'ok', 'Stream de eventos abierto', ''],
-    ['19:42:11', 'debug', 'GET /config/providers', '200 · 186 ms'],
-    ['19:42:12', 'ok', 'MCP verificado', 'DestinE-PoC-EPIC-006'],
-    ['19:42:40', 'info', 'Turno enviado', 'github-copilot/claude-sonnet-4.6 · 52 caracteres'],
-    ['19:42:58', 'ok', 'Respuesta recibida', '1.412 caracteres · 2 herramientas'],
-    ['19:42:58', 'ok', 'Índice ampliado', '+3 · total 215'],
+    ['19:42:11', 'debug', 'GET /config', '200 · 186 ms'],
+    ['19:42:11', 'ok', 'Arranque del panel', '14,3 s · health 1 ms · modelos 61 ms · MCP 13,8 s · almacenamiento 60 ms · restaurar 420 ms'],
+    ['19:42:12', 'ok', 'MCP verificado', 'Jira: sí · Confluence: sí'],
+    ['19:42:40', 'info', 'Turno enviado', 'github-copilot/gpt-5.6-luna · 52 caracteres'],
+    ['19:42:58', 'ok', 'Respuesta recibida', '1.412 caracteres · 6 herramientas (18 KB) · 41,2 s'],
+    ['19:42:58', 'ok', 'Análisis marcado', '6 de 8 · 38 ms en la página'],
+    ['19:42:58', 'warn', 'Sin anclar', 'observaciones 6, 7'],
+    ['19:43:02', 'ok', 'Observaciones copiadas', '1.412 caracteres'],
     ['19:43:04', 'error', 'Turno fallido', 'APIError: Upstream request failed'],
   ]) {
-    const row = doc.createElement('div')
-    row.className = 'logrow ' + lvl
-    const tt = mk('span', 't', t)
+    const row = mk('div', 'logrow ' + lvl)
     const mm = mk('span', 'm', m)
     if (d) mm.appendChild(mk('span', 'd', ' — ' + d))
-    row.append(tt, mm)
+    row.append(mk('span', 't', t), mm)
     logBox.appendChild(row)
   }
+
   const stateBox = $('log-state')
   for (const [k, v, kind] of [
     ['servidor', 'http://127.0.0.1:4096', 'ok'],
-    ['sitio', 'confluence.simplprogramme.eu · confluence · data center', ''],
-    ['página', '83206087', ''],
-    ['modelo', 'github-copilot/claude-sonnet-4.6', ''],
+    ['sitio', 'jira.simplprogramme.eu · jira · data center', ''],
+    ['incidencia', 'SIMPL-1234', ''],
+    ['modelo', 'github-copilot/gpt-5.6-luna', ''],
     ['índice', '215 entradas', ''],
     ['MCP', 'atlassian-confluence-simplprogramme-eu · connected', 'ok'],
     // H3 (medir): las tres filas de medidas. La de almacenamiento va a
@@ -365,84 +907,296 @@ frame.addEventListener('load', async () => {
     ['tiempos (último turno)', '41,2 s · página 61 ms · sesión 3 ms · primer texto 3,1 s · fin 38,1 s · pintar 12 ms · índice 90 ms · marcas 210 ms', ''],
     ['almacenamiento', '8,4 MB de 10 MB', 'bad'],
   ]) {
-    const row = doc.createElement('div')
-    row.className = 'state-row'
+    const row = mk('div', 'state-row')
     row.append(mk('span', 'k', k), mk('span', 'v' + (kind ? ' ' + kind : ''), v))
     stateBox.appendChild(row)
   }
 
-  // ---- mandos
-  const show = (id) => {
+  // ----------------------------------------------------------- los mandos
+
+  function mostrarPantalla(id) {
+    estado.pantalla = id
     doc.querySelectorAll('.screen').forEach((s) => s.classList.add('hidden'))
     $('busy').classList.add('hidden')
-    $('setup-manual').classList.add('hidden')
     $('setup-main').classList.remove('hidden')
-    if (id) $(id)?.classList.remove('hidden')
+    $('setup-manual').classList.add('hidden')
+    if (id === 'busy') $('busy').classList.remove('hidden')
+    else if (id === 'setup-manual') {
+      $('screen-setup').classList.remove('hidden')
+      $('setup-main').classList.add('hidden')
+      $('setup-manual').classList.remove('hidden')
+    } else if (id) $(id).classList.remove('hidden')
+    // Como en el panel real: bajo una pantalla (o bajo el velo) la columna del
+    // chat queda inerte.
+    $('app').inert = !!id
   }
 
-  document.querySelectorAll('[data-screen]').forEach((b) => {
-    b.addEventListener('click', () => {
-      document.querySelectorAll('[data-screen],[data-busy]').forEach((x) => x.classList.remove('on'))
-      b.classList.add('on')
-      show(b.dataset.screen)
-    })
-  })
-  document.querySelector('[data-manual]').addEventListener('click', (ev) => {
-    document.querySelectorAll('[data-screen],[data-busy],[data-manual]').forEach((x) => x.classList.remove('on'))
-    ev.target.classList.add('on')
-    show('screen-setup')
-    $('setup-main').classList.add('hidden')
-    $('setup-manual').classList.remove('hidden')
-  })
+  // Los mandos se buscan SÓLO dentro de la barra lateral: el tema se fuerza
+  // poniendo `data-theme` en el <html> de esta página, así que una búsqueda de
+  // `[data-theme]` en todo el documento se llevaría por delante al propio <html>
+  // (encendiéndolo como si fuera un botón y oyendo todos los clics que burbujean).
+  const lado = document.querySelector('.side')
 
-  document.querySelector('[data-busy]').addEventListener('click', (ev) => {
-    document.querySelectorAll('[data-screen],[data-busy]').forEach((x) => x.classList.remove('on'))
-    ev.target.classList.add('on')
-    show('')
-    $('busy').classList.remove('hidden')
-  })
-  document.querySelectorAll('[data-pick]').forEach((b) => {
-    b.addEventListener('click', () => {
-      document.querySelectorAll('[data-pick]').forEach((x) => x.classList.remove('on'))
-      b.classList.add('on')
-      const modo = b.dataset.pick
-      $('pick-chip').classList.toggle('hidden', modo !== 'chip')
-      $('btn-pick').classList.toggle('picking', modo === 'on')
-    })
-  })
-  // Con páginas base: el botón encendido con su insignia y el chip sobre el cuadro.
-  document.querySelectorAll('[data-sources]').forEach((b) => {
-    b.addEventListener('click', () => {
-      document.querySelectorAll('[data-sources]').forEach((x) => x.classList.remove('on'))
-      b.classList.add('on')
-      const con = b.dataset.sources === 'on'
-      $('btn-sources').classList.toggle('hidden', !con)
-      $('btn-sources').classList.toggle('on', con)
-      $('sources-count').classList.toggle('hidden', !con)
-      $('sources-chip').classList.toggle('hidden', !con)
-    })
-  })
+  /** Marca el botón pulsado dentro de su grupo. */
+  function marcar(attr, valor) {
+    for (const b of lado.querySelectorAll(`[data-${attr}]`)) {
+      b.classList.toggle('on', b.dataset[attr] === String(valor))
+    }
+  }
 
-  document.querySelectorAll('[data-theme]').forEach((b) => {
+  lado.querySelectorAll('[data-chat]').forEach((b) =>
     b.addEventListener('click', () => {
-      document.querySelectorAll('[data-theme]').forEach((x) => x.classList.remove('on'))
-      b.classList.add('on')
-      // El panel usa prefers-color-scheme; para poder mirar los dos temas se
-      // fuerza aquí con una hoja añadida, sólo en la vista previa.
-      let s = doc.getElementById('preview-theme')
-      if (!s) {
-        s = doc.createElement('style')
-        s.id = 'preview-theme'
-        doc.head.appendChild(s)
-      }
-      s.textContent =
-        b.dataset.theme === 'light'
-          ? `:root{--ground:#F5F5F8;--surface:#FFF;--surface-2:#EFEFF4;--ink:#17161D;--ink-2:#45424F;--muted:#6B6879;--line:#E2E1EA;--line-2:#CFCDDA;--gold:#8A5A0A;--gold-bg:#F8EFDC;--gold-line:#E2C795;--teal:#0C6F62;--clay:#A63A32;--clay-bg:#F9E8E6}`
-          : ''
-      document.body.style.background = b.dataset.theme === 'light' ? '#E7E7EC' : '#0E0D12'
+      estado.chat = b.dataset.chat
+      marcar('chat', estado.chat)
+      pintarCabecera()
+      pintarPaginasBase()
+      pintarChat()
+      programarCheck()
     })
-  })
-})
+  )
+
+  lado.querySelectorAll('[data-screen]').forEach((b) =>
+    b.addEventListener('click', () => {
+      marcar('screen', b.dataset.screen)
+      mostrarPantalla(b.dataset.screen)
+      programarCheck()
+    })
+  )
+
+  lado.querySelectorAll('[data-status]').forEach((b) =>
+    b.addEventListener('click', () => {
+      estado.status = b.dataset.status
+      marcar('status', estado.status)
+      pintarCabecera()
+      pintarEnvio()
+      pintarChat()
+      programarCheck()
+    })
+  )
+
+  lado.querySelectorAll('[data-pick]').forEach((b) =>
+    b.addEventListener('click', () => {
+      estado.pick = b.dataset.pick
+      marcar('pick', estado.pick)
+      pintarSeleccion()
+      programarCheck()
+    })
+  )
+
+  lado.querySelectorAll('[data-sources]').forEach((b) =>
+    b.addEventListener('click', () => {
+      estado.sources = b.dataset.sources
+      marcar('sources', estado.sources)
+      pintarPaginasBase()
+      pintarChat()
+      programarCheck()
+    })
+  )
+
+  lado.querySelectorAll('[data-width]').forEach((b) =>
+    b.addEventListener('click', () => {
+      estado.ancho = Number(b.dataset.width)
+      marcar('width', estado.ancho)
+      marco.style.width = estado.ancho + 'px'
+      programarCheck()
+    })
+  )
+
+  lado.querySelectorAll('[data-fifth]').forEach((b) =>
+    b.addEventListener('click', () => {
+      estado.quinto = !estado.quinto
+      b.classList.toggle('on', estado.quinto)
+      pintarQuinto()
+      programarCheck()
+    })
+  )
+
+  lado.querySelectorAll('[data-theme]').forEach((b) =>
+    b.addEventListener('click', () => {
+      estado.tema = b.dataset.theme
+      marcar('theme', estado.tema)
+      aplicarTema(estado.tema)
+      programarCheck()
+    })
+  )
+
+  document.getElementById('btn-check').addEventListener('click', () => pintarMedidas())
+
+  /**
+   * El tema, en los dos documentos: el del panel (que es quien tiene el CSS
+   * con los tres bloques de tema) y el de esta página, que lo enlaza para no
+   * tener una segunda paleta que mantener.
+   */
+  function aplicarTema(t) {
+    doc.documentElement.dataset.theme = t
+    document.documentElement.dataset.theme = t
+  }
+
+  // ------------------------------------------------------------- medidas
+
+  /**
+   * Qué se mide del panel en cada captura, y por qué ese número:
+   *
+   * - `overflowX`: nada se sale a lo ancho. El documento no basta como medida:
+   *   `body` lleva `overflow: hidden`, así que lo que se desborda se RECORTA y
+   *   `scrollWidth` nunca pasa de `clientWidth`. Lo que de verdad delata que la
+   *   cabecera o el redactor no caben es que alguna de sus cajas —que no
+   *   declaran overflow— tenga más contenido del que enseña. Las que sí
+   *   desplazan a propósito (`.md-pre`, `.cmd code`) se quedan fuera de la lista.
+   * - `topHeight`: la cabecera sigue siendo UNA fila (44 px de diseño; ≤48).
+   * - `composerMetaHeight`: la fila del redactor tampoco se parte (≤36).
+   * - `screenHeadsVisible`: cada pantalla abierta tiene su cabecera dentro del
+   *   viewport (es sticky: si se fuera, el título y la flecha de volver se
+   *   perderían al desplazar).
+   * - `emptyStateRows`: cuántas sugerencias enseña el estado vacío (tope 3,
+   *   docs/PLAN.md §3.4). Sin estado vacío a la vista es 0.
+   */
+  const CAJAS = ['.top', '.brand', '.top-actions', '.composer', '.composer-meta', '.composer-row', '.chat']
+
+  function check() {
+    const raiz = doc.documentElement
+    const alto = (sel) => Math.round(doc.querySelector(sel)?.getBoundingClientRect().height ?? 0)
+    const apretadas = CAJAS.map((s) => [s, doc.querySelector(s)])
+      .filter(([, e]) => e && e.scrollWidth > e.clientWidth + 1)
+      .map(([s]) => s)
+    const overflowX = raiz.scrollWidth > raiz.clientWidth || apretadas.length > 0
+    if (apretadas.length) console.warn('[faroPreview] se sale a lo ancho:', apretadas.join(', '))
+
+    // El chip de ubicación NO entra en la cuenta: recortarse es su trabajo
+    // (panel.css lo dice: cede él antes que las acciones). Pero cuando lo que se
+    // recorta es la CLAVE —y no el título, que tiene elipsis— conviene saberlo,
+    // porque entonces el corte es seco y no unos puntos.
+    const chip = doc.querySelector('.chip')
+    if (chip && chip.scrollWidth > chip.clientWidth + 1) {
+      console.info('[faroPreview] el chip recorta: a esta anchura ya no cabe la clave entera')
+    }
+    const topHeight = alto('.top')
+    const composerMetaHeight = alto('.composer-meta')
+
+    const abiertas = [...doc.querySelectorAll('.screen:not(.hidden)')]
+    const screenHeadsVisible = abiertas.every((s) => {
+      const cabeceras = [...s.querySelectorAll('.screen-head')].filter((h) => h.getClientRects().length)
+      return (
+        cabeceras.length > 0 &&
+        cabeceras.every((h) => {
+          const r = h.getBoundingClientRect()
+          return r.height > 0 && r.top >= -1 && r.bottom <= win.innerHeight + 1
+        })
+      )
+    })
+
+    const emptyStateRows = doc.querySelectorAll('.empty .suggestion').length
+
+    const ok = !overflowX && topHeight <= 48 && composerMetaHeight <= 36 && screenHeadsVisible && emptyStateRows <= 3
+    return { ok, overflowX, topHeight, composerMetaHeight, screenHeadsVisible, emptyStateRows }
+  }
+
+  /** El resultado, a la vista en la barra lateral: se mira sin abrir la consola. */
+  function pintarMedidas() {
+    const r = check()
+    cajaMedidas.textContent = ''
+    const filas = [
+      ['veredicto', r.ok ? 'todo bien' : 'algo falla', r.ok],
+      ['desbordamiento', r.overflowX ? 'sí' : 'no', !r.overflowX],
+      ['cabecera', r.topHeight + ' px', r.topHeight <= 48],
+      ['redactor', r.composerMetaHeight + ' px', r.composerMetaHeight <= 36],
+      ['cabeceras de pantalla', r.screenHeadsVisible ? 'a la vista' : 'fuera', r.screenHeadsVisible],
+      ['sugerencias', String(r.emptyStateRows), r.emptyStateRows <= 3],
+    ]
+    for (const [k, v, bien] of filas) {
+      const row = document.createElement('div')
+      row.className = 'state-row'
+      const kk = document.createElement('span')
+      kk.className = 'k'
+      kk.textContent = k
+      const vv = document.createElement('span')
+      vv.className = 'v ' + (bien ? 'ok' : 'bad')
+      vv.textContent = v
+      row.append(kk, vv)
+      cajaMedidas.appendChild(row)
+    }
+    return r
+  }
+
+  let pendiente = 0
+  /** Medir después de que el navegador haya vuelto a componer, no antes. */
+  function programarCheck() {
+    clearTimeout(pendiente)
+    pendiente = setTimeout(pintarMedidas, 80)
+  }
+
+  // ------------------------------------------------------------- arranque
+
+  aplicarTema(estado.tema)
+  marco.style.width = estado.ancho + 'px'
+  pintarCabecera()
+  pintarQuinto()
+  pintarPaginasBase()
+  pintarSeleccion()
+  pintarEnvio()
+  pintarChat()
+  mostrarPantalla('')
+  pintarMedidas()
+
+  // Los mandos también son API: el orquestador hace las capturas sin pulsar, y
+  // cada uno devuelve las medidas de después, que es lo que va a la PR.
+  window.faroPreview = {
+    check,
+    estado,
+    setTheme(t) {
+      estado.tema = t
+      marcar('theme', t)
+      aplicarTema(t)
+      return pintarMedidas()
+    },
+    setWidth(n) {
+      estado.ancho = Number(n)
+      marcar('width', estado.ancho)
+      marco.style.width = estado.ancho + 'px'
+      return pintarMedidas()
+    },
+    setStatus(k) {
+      estado.status = k
+      marcar('status', k)
+      pintarCabecera()
+      pintarEnvio()
+      pintarChat()
+      return pintarMedidas()
+    },
+    setChat(k) {
+      estado.chat = k
+      marcar('chat', k)
+      pintarCabecera()
+      pintarPaginasBase()
+      pintarChat()
+      return pintarMedidas()
+    },
+    setScreen(id) {
+      marcar('screen', id || '')
+      mostrarPantalla(id || '')
+      return pintarMedidas()
+    },
+    setPick(m) {
+      estado.pick = m
+      marcar('pick', m)
+      pintarSeleccion()
+      return pintarMedidas()
+    },
+    setSources(on) {
+      estado.sources = on ? 'on' : 'off'
+      marcar('sources', estado.sources)
+      pintarPaginasBase()
+      pintarChat()
+      return pintarMedidas()
+    },
+    setFifth(on) {
+      estado.quinto = !!on
+      marcar('fifth', on ? '1' : '')
+      pintarQuinto()
+      return pintarMedidas()
+    },
+  }
+}
 </script>
 </body>
 </html>

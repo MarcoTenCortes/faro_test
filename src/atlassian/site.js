@@ -222,6 +222,98 @@ export function describeLocation(site) {
 }
 
 /**
+ * Cuánto cabe en el chip de la cabecera.
+ *
+ * El título de una pestaña lo escribe el sitio —y en Confluence, quien creara la
+ * página—, así que entra acotado y en una línea, como todo lo que viene de
+ * fuera: un título de mil caracteres con un salto dentro rompía la cabecera en
+ * dos filas y empujaba los botones.
+ */
+export const LOCATION_LIMITS = { key: 40, title: 120 }
+
+/**
+ * Lo que abre línea, para colapsarlo en un espacio.
+ *
+ * `\s` de JavaScript cubre U+2028 (separador de línea) y U+2029 (de párrafo),
+ * pero NO el NEL (U+0085), que también abre línea: va nombrado aparte, igual
+ * que en prompts.js (revisión adversaria de H2, 2026-09-14).
+ */
+const ESPACIOS = /[\s]+/g
+
+/** Una línea, sin espacios en los bordes. Pura. */
+function unaLinea(text) {
+  return String(text ?? '').replace(ESPACIOS, ' ').trim()
+}
+
+/**
+ * El «- Jira» / «- Confluence» con el que el producto firma el título de la
+ * pestaña. Las regex son las de `baseSystem` tal cual (`\s+-\s+`), aunque sobre
+ * un texto ya colapsado a una línea bastaría un espacio: lo que se extrajo aquí
+ * tiene que seguir dando el mismo prompt byte a byte.
+ */
+const TAB_SUFFIX = {
+  jira: /\s+-\s+Jira$/i,
+  confluence: /\s+-\s+Confluence$/i,
+  any: /\s+-\s+(?:Jira|Confluence)$/i,
+}
+
+/**
+ * El título de la pestaña, limpio: en una línea, sin la clave que Jira le pone
+ * delante («[SIMPL-12] Consent API v2 - Jira») ni el nombre del producto que va
+ * detrás, y con tope.
+ *
+ * Vivía dentro de `baseSystem` (prompts.js), que lo necesita para saber cómo se
+ * llama la incidencia abierta: ahí está el prefijo de convención («[API
+ * Definition] - …») con el que `issueFamily` decide de qué familia es. Desde H5
+ * lo necesita también la cabecera del panel, que enseña dónde estás, así que la
+ * limpieza vive aquí una sola vez y las dos la llaman. El sufijo se quita por
+ * PRODUCTO: en un sitio de Jira sólo «- Jira», en uno de Confluence sólo
+ * «- Confluence», y sin saber el producto cualquiera de los dos. Pura.
+ */
+export function cleanTabTitle(title, site = null) {
+  const sinClave = unaLinea(title).replace(/^\[[A-Z][A-Z0-9_]*-\d+\]\s*/, '')
+  const sufijo = TAB_SUFFIX[site?.product] || TAB_SUFFIX.any
+  return sinClave.replace(sufijo, '').trim().slice(0, LOCATION_LIMITS.title)
+}
+
+/**
+ * Dónde estás, en las dos piezas que pinta el chip de la cabecera: la CLAVE
+ * (lo MÁS CORTO que identifica el sitio: «SIMPL-1234», «ENG») y el TÍTULO de
+ * la pestaña, que es lo que cede con elipsis cuando el panel se estrecha
+ * (docs/PLAN.md §2.5 A6: el chip cede, la Skill no).
+ *
+ * La clave se RECONSTRUYE con las validadoras en vez de copiarse: `site` suele
+ * venir de `parseAtlassianUrl`, que ya valida, pero también puede salir de un
+ * registro guardado hace meses o editado a mano, y lo que la cabecera pinta
+ * tiene que ser una línea acotada igual que lo que va a un prompt. Fuera de
+ * Atlassian no se enseña el título de la pestaña: el correo de alguien no es
+ * asunto de Faro. Pura.
+ *
+ * @returns {{key:string, title:string}}
+ */
+export function locationParts(site, tabTitle = '') {
+  if (!site) return { key: '', title: 'Fuera de Atlassian' }
+  const title = cleanTabTitle(tabTitle, site)
+
+  // La clave es lo MÁS CORTO que identifica el sitio, sin el nombre del producto
+  // delante: a 320 px con cinco botones al chip le quedan ~80 px, y «Confluence ·
+  // ENG» (87 px) no cabía ni sola —se cortaba en seco y el título desaparecía—,
+  // mientras que «ENG» o «SIMPL-1234» sí. El producto ya lo dice la página que
+  // se tiene delante, y la ubicación entera (producto, espacio, id de página)
+  // sigue en el `title` del chip, que pinta `describeLocation`.
+  let key = ''
+  if (site.product === 'confluence') {
+    key = validSpaceKey(site.spaceKey) || 'Confluence'
+  } else if (site.product === 'jira') {
+    key = validIssueKey(site.issueKey) || validProjectKey(site.projectKey) || 'Jira'
+  } else {
+    key = unaLinea(site.host)
+  }
+
+  return { key: key.slice(0, LOCATION_LIMITS.key), title }
+}
+
+/**
  * ¿Estas dos direcciones son la misma página?
  *
  * Comparar las URLs como cadenas no vale: Confluence reescribe la suya sola

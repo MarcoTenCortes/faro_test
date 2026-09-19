@@ -89,7 +89,14 @@ la respuesta**.
   lo dice tal cual, sin tratarlo como un fallo. El panel y las marcas de la
   página comparten el mismo ámbar: la pastilla numerada que ves en el chat es,
   byte a byte, la que ves sobre el texto de la página (y hay un test que no
-  deja que se separen).
+  deja que se separen). La tarjeta del análisis dice además **de qué clase es
+  cada observación** —dato, supuesto, hueco, contradicción, riesgo— y deja
+  **copiarlas** tal como se leen, con sus números, para pegarlas en el
+  comentario de la incidencia o de la página.
+- **Lo que el modelo consultó no se tira**: al terminar un turno, las consultas
+  a Atlassian se pliegan en una línea («3 consultas a Atlassian») que se puede
+  desplegar para ver cuáles fueron y si alguna falló. Es lo primero que se mira
+  cuando la respuesta no cuadra.
 - **Páginas base del análisis**: junto al selector de Skill, en Análisis, un
   botón para decir **en base a qué páginas** se analiza la abierta: una guía,
   una decisión anterior, la página con la que hay que comparar. Se añaden
@@ -390,7 +397,7 @@ Trece decisiones que sostienen el diseño:
 ## Comprobaciones
 
 ```bash
-npm run check              # sintaxis + orden + manifest + 884 pruebas unitarias + docs
+npm run check              # sintaxis + orden + manifest + 904 pruebas unitarias + docs
 npm run check:docs         # sólo el paso docs: número de pruebas, títulos del registro, mensajes y ficheros del mapa
 npm run test:integration   # contra un opencode real que arranca la propia prueba
 npm run harness            # banco de pruebas visual en http://127.0.0.1:5175
@@ -404,12 +411,15 @@ Con el banco levantado hay dos páginas:
 
 - <http://127.0.0.1:5175/> — la Confluence de mentira, para ver el foco, el
   anillo, el cartel y el recorrido asistido funcionando de verdad.
-- <http://127.0.0.1:5175/harness/panel-preview.html> — el panel real con una
-  conversación de ejemplo, para recorrer sus seis pantallas sin tener que
-  instalar nada. Su botón «Claro» está temporalmente sin efecto sobre el panel
-  (el rediseño cambió cómo se declaran los temas y el espejo aún los fuerza a la
-  manera antigua): de momento, para ver el tema claro, cambia la preferencia del
-  sistema o emúlala en el navegador.
+- <http://127.0.0.1:5175/harness/panel-preview.html> — el panel real con dos
+  conversaciones de ejemplo (una de Confluence y una de Jira), para recorrer sus
+  nueve pantallas sin tener que instalar nada. Sus mandos cambian el tema
+  (claro/oscuro), la anchura (320, 360 y 420), el estado del faro y la pantalla
+  abierta, y `faroPreview.check()` mide en cada combinación lo que hay que mirar:
+  que nada se salga a lo ancho, que la cabecera y la fila del redactor quepan en
+  una línea y que el chat vacío no pase de tres sugerencias. El rediseño se
+  acepta mirando las cuatro capturas (320 y 420 × claro y oscuro) con esa medida
+  en verde.
 
 - **`npm run check`** no necesita nada instalado. Valida que todos los ficheros
   parsean, que **nada se usa antes de declararse**, que el manifest es MV3
@@ -640,12 +650,15 @@ tienes Faro.
 - **Foco.** Al abrir Ajustes, Memoria, Registro o Páginas base, el resto del
   panel queda inerte (Tab no llega a los controles tapados) y el foco va al
   título de la pantalla; al cerrarla vuelve a donde estaba, o al cuadro de
-  texto.
+  texto. Cada pantalla se cierra con la flecha de su cabecera, que se queda
+  arriba mientras lees: antes había que bajar hasta el final para encontrar un
+  «Listo».
 - **Escape.** Cierra esas pantallas (en Páginas base, primero vacía las
   sugerencias) y cancela el velo «Trabajando…», desde cualquier sitio del
   panel. En Ajustes cierra **sin guardar**: lo que hayas tecleado y no
-  guardado se pierde, porque su «Listo» guarda la contraseña y la dirección y
-  rearranca el panel. En la página, Escape es de Faro sólo mientras tiene algo
+  guardado se pierde, porque su flecha de volver guarda la contraseña y la
+  dirección y rearranca el panel, y por eso se llama «Guardar y volver». En la
+  página, Escape es de Faro sólo mientras tiene algo
   en marcha —el foco de un recorrido, el cartel, la barra de señalar— o
   mientras el único subrayado es el de una llegada por cita, que sí quita; con
   las marcas de un análisis puestas, la tecla llega a la página como siempre y
@@ -763,6 +776,7 @@ src/
     skills.js               General · Búsqueda · Resumen · Análisis; Búsqueda habla distinto en Jira (JQL) y en Confluence (árbol) (puro)
     setup.js                claves por producto → bloque MCP; hosts enlazados (puro salvo las llamadas a opencode)
     sources.js              páginas base del análisis: forma, alcance, autocompletado desde el índice, URL pegada, vigilancia del alcance (puro)
+    suggestions.js          las tres sugerencias del chat vacío, por producto y por Skill (puro)
     notes.js                observaciones numeradas: el bloque JSON de anclas, su validación, la segunda pasada (puro)
     issue-profile.js        qué ticket es: tipo y estado leídos de sus campos → qué comprobar en el análisis (puro)
     prompts.js              plantillas, incluido el bloque de lo señalado y la página en bloques

@@ -13,7 +13,7 @@
 import { OpencodeClient, OpencodeError } from '../opencode/client.js'
 import { suggestsAnotherModel, toolOutputSize } from '../opencode/turn.js'
 import { pickDefaultModel, pickAlternativeModel, pickPlannerModel, modelKey, parseModelKey } from '../shared/models.js'
-import { parseAtlassianUrl, describeLocation, defaultScope, samePage, wikiPrefix as wikiPrefixOf } from '../atlassian/site.js'
+import { parseAtlassianUrl, describeLocation, defaultScope, locationParts, samePage, wikiPrefix as wikiPrefixOf } from '../atlassian/site.js'
 import { mergeIndex, mergeIndexKeepingTree, indexSize, normalizeIndex, ancestryOf } from '../atlassian/index-store.js'
 import { CORS_ORIGIN, DEFAULT_SETTINGS, mcpNameForHost } from '../shared/config.js'
 import { MSG } from '../shared/messages.js'
@@ -62,6 +62,7 @@ import {
   sourcesSearchTarget,
   linkedSite,
 } from './sources.js'
+import { suggestionsFor } from './suggestions.js'
 import { normalizeIssueFields } from './issue-profile.js'
 import { searchPages, fetchAncestors } from '../shared/confluence-rest.js'
 import {
@@ -108,11 +109,11 @@ const el = {
   sourcesCount: $('sources-count'),
   sourcesChip: $('sources-chip'),
   sourcesChipText: $('sources-chip-text'),
-  locationText: $('location-text'),
+  locationChip: $('location-chip'),
+  locationKey: $('location-key'),
+  locationTitle: $('location-title'),
   statusDot: $('status-dot'),
   statusText: $('status-text'),
-  memoryToggle: $('btn-memory-toggle'),
-  memoryLabel: $('memory-label'),
   busy: $('busy'),
   busyTitle: $('busy-title'),
   busyText: $('busy-text'),
@@ -172,6 +173,12 @@ const state = {
   // El recorrido paso a paso en marcha: su tarjeta y su botón «Parar».
   navRun: null,
   defaults: {},
+  // Lo que está pasando ahora mismo («pensando…», «paso 2/5») mientras dura un
+  // turno o un recorrido, o '' si no pasa nada. Es la ÚNICA fuente de verdad
+  // del hueco del chip: lo escribe `setStatus` y lo pinta `paintLocation`, que
+  // en cuanto se vacía devuelve el título de la pestaña (decisión 4 de
+  // docs/PLAN.md: el texto de estado sigue viéndose, sin una pieza propia).
+  statusLine: '',
   streaming: false,
   lastQuestion: '',
   tabUrl: '',
@@ -367,7 +374,7 @@ async function refreshTab() {
   state.tabUrl = tab.url || ''
   state.tabTitle = tab.title || ''
 
-  el.locationText.textContent = site ? describeLocation(site) : 'Fuera de Atlassian'
+  paintLocation(site, tab.title)
 
   if (!site) {
     // Fuera de Atlassian el panel sólo dice dónde está: no se vacía nada, no
@@ -1004,9 +1011,20 @@ function showWelcome() {
     : 'Pregúntame lo que quieras sobre este sitio.'
   wrap.appendChild(p)
 
+  // El hueco de «Qué mirar hoy» (H8): hasta tres filas de lo que ha cambiado
+  // desde que lo miraste. Se crea vacío y oculto para que el sitio esté
+  // decidido AQUÍ —entre la explicación y las sugerencias— y el presupuesto del
+  // estado vacío (≤3 filas + 3 sugerencias + chips en una línea, docs/PLAN.md
+  // §3.4) se pueda medir en el espejo antes de que exista lo que lo llena.
+  const hoy = document.createElement('div')
+  hoy.className = 'today hidden'
+  wrap.appendChild(hoy)
+
+  // Las sugerencias son del producto Y de la Skill: en Análisis no se ofrece
+  // buscar nada, y con páginas base se ofrece contrastar con ellas.
   const suggestions = document.createElement('div')
   suggestions.className = 'suggestions'
-  for (const s of suggestionsFor(state.site)) {
+  for (const s of suggestionsFor(state.site, state.skill, state.sources)) {
     const b = document.createElement('button')
     b.className = 'suggestion'
     b.type = 'button'
@@ -1018,23 +1036,15 @@ function showWelcome() {
     suggestions.appendChild(b)
   }
   wrap.appendChild(suggestions)
+
+  // Y el de los chips de búsqueda al instante (H11), debajo: consultas
+  // deterministas que no pasan por el modelo. También vacío y oculto.
+  const chips = document.createElement('div')
+  chips.className = 'search-chips hidden'
+  wrap.appendChild(chips)
+
   el.chat.appendChild(wrap)
   announce(h.textContent)
-}
-
-function suggestionsFor(site) {
-  if (site?.product === 'confluence') {
-    return [
-      '¿De qué trata este espacio?',
-      '¿Dónde está documentado el proceso de despliegue?',
-      'Resume la página en la que estoy',
-    ]
-  }
-  return [
-    '¿En qué está trabajando el equipo este sprint?',
-    '¿Qué tipos de tickets hay y cómo se nombran?',
-    'Enséñame las incidencias abiertas más antiguas',
-  ]
 }
 
 /**
@@ -1331,15 +1341,22 @@ async function send() {
       stallMs: 90000,
       onUpdate: (t) => {
         // La primera palabra del modelo, una sola vez: hasta que llega, el
-        // usuario sólo ve los tres puntos. Medir aquí no cambia lo que se pinta.
+        // usuario sólo ve los tres puntos. Se mide al LLEGAR el texto, no al
+        // pintarlo: lo que se cronometra es el modelo, no el navegador.
         if (!primerTexto && t.text) {
           primerTexto = true
           cron.mark('primer texto')
         }
-        paintTurn(t, toolsBox, body)
+        paintTurnSoon(t, toolsBox, body)
       },
     })
     cron.mark('fin')
+    // El turno ha acabado: lo que quedara pedido para el frame siguiente pintaría
+    // una respuesta a medias ENCIMA de lo definitivo —o encima de «Turno
+    // cancelado», que es la salida que se toma justo aquí debajo—. Desde este
+    // punto hasta el pintado final no hay ningún `await`, así que no vuelve a
+    // pedirse ninguno.
+    cancelPaintSoon()
 
     const tracker = { ...turn, rawError: turn.rawError, model: turn.model }
 
@@ -1519,6 +1536,7 @@ async function send() {
 function paintTurn(tracker, toolsBox, body, final = false) {
   const tools = tracker.tools
   toolsBox.textContent = ''
+  const filas = []
   for (const t of tools) {
     const row = document.createElement('div')
     row.className = 'tool' + (t.status === 'completed' ? ' done' : '')
@@ -1527,19 +1545,29 @@ function paintTurn(tracker, toolsBox, body, final = false) {
     const label = document.createElement('span')
     label.textContent = t.title || prettyTool(t.tool)
     row.append(dot, label)
+    filas.push(row)
     toolsBox.appendChild(row)
   }
   if (final && tools.length) {
     // Al terminar, la actividad de herramientas se pliega a una línea sobria.
+    // Plegada, no borrada: hasta ahora las filas se tiraban y con ellas la única
+    // forma de saber QUÉ leyó el modelo —y de ver que una consulta falló—, que
+    // es lo primero que se mira cuando la respuesta no cuadra. Se crea siempre
+    // cerrado, y `restoreConversation` no recrea filas de herramientas, así que
+    // no hay ningún abierto que sobreviva a repintar el chat.
     toolsBox.textContent = ''
-    const row = document.createElement('div')
-    row.className = 'tool done'
+    const fold = document.createElement('details')
+    fold.className = 'tools-fold'
+    const summary = document.createElement('summary')
+    summary.className = 'tool done'
     const dot = document.createElement('span')
     dot.className = 'tdot'
     const label = document.createElement('span')
     label.textContent = `${tools.length} consulta${tools.length === 1 ? '' : 's'} a Atlassian`
-    row.append(dot, label)
-    toolsBox.appendChild(row)
+    summary.append(dot, label)
+    fold.appendChild(summary)
+    for (const row of filas) fold.appendChild(row)
+    toolsBox.appendChild(fold)
   }
 
   // El bloque JSON de anclas con el que cierra un análisis no se pinta: ni
@@ -1662,6 +1690,62 @@ function liveBubble(bubble) {
   const msgs = el.chat.querySelectorAll('.msg')
   const ultima = msgs[msgs.length - 1]
   return ultima?.classList.contains('assistant') ? ultima : null
+}
+
+/** Cuánto se espera para pintar cuando no hay frames: el panel está oculto. */
+const PAINT_HIDDEN_MS = 250
+
+/** El frame pedido y con qué pintarlo, o null si no hay ninguno en cola. */
+let pintadoPendiente = null
+
+/**
+ * El pintado planificado de un turno: un repintado por frame, no uno por trozo.
+ *
+ * `paintTurn` reconstruye la burbuja entera —markdown incluido— y el modelo
+ * manda deltas mucho más a menudo que la pantalla se refresca (docs/PLAN.md §2,
+ * P2): el trabajo de más no se ve, se nota. Aquí se guarda el ÚLTIMO tracker y
+ * se pinta una vez por frame; los trozos intermedios se tiran, que es
+ * exactamente lo que hacía el navegador con ellos.
+ *
+ * Con el panel oculto (otra pestaña, panel cerrado) Chrome no reparte frames y
+ * el rAF no llegaría nunca: ahí se pinta con un temporizador, para que al volver
+ * a mirar la respuesta esté donde tiene que estar y no congelada en la mitad.
+ *
+ * El pintado DEFINITIVO sigue siendo síncrono, y quien termina el turno cancela
+ * lo pendiente antes (`cancelPaintSoon` en `send()`, en cuanto `runTurn`
+ * vuelve): un frame que llegara después pintaría una respuesta a medias encima
+ * de la definitiva, o encima del aviso de «Turno cancelado».
+ */
+function paintTurnSoon(tracker, toolsBox, body) {
+  // Ya hay un frame pedido: se queda con el tracker más nuevo y no pide otro.
+  if (pintadoPendiente) {
+    pintadoPendiente.args = [tracker, toolsBox, body]
+    return
+  }
+
+  const pendiente = { args: [tracker, toolsBox, body], raf: 0, timer: 0 }
+  const pintar = () => {
+    pintadoPendiente = null
+    const [t, caja, cuerpo] = pendiente.args
+    // El chat ha podido repintarse entero entre el trozo y el frame
+    // (`restoreConversation` lo vacía): entonces esta burbuja está fuera del
+    // documento y pintarla no enseña nada. Lo definitivo va a la burbuja viva,
+    // que es cosa de `send()` (C7 de H2).
+    if (!cuerpo.isConnected) return
+    paintTurn(t, caja, cuerpo)
+  }
+
+  if (document.hidden) pendiente.timer = setTimeout(pintar, PAINT_HIDDEN_MS)
+  else pendiente.raf = requestAnimationFrame(pintar)
+  pintadoPendiente = pendiente
+}
+
+/** Olvida el frame pedido, si quedaba alguno. Idempotente. */
+function cancelPaintSoon() {
+  if (!pintadoPendiente) return
+  if (pintadoPendiente.raf) cancelAnimationFrame(pintadoPendiente.raf)
+  if (pintadoPendiente.timer) clearTimeout(pintadoPendiente.timer)
+  pintadoPendiente = null
 }
 
 function noticeNode(text, bad) {
@@ -2231,6 +2315,22 @@ async function offerNotes(
 }
 
 /**
+ * Cómo se lee cada `kind` de `NOTE_KINDS` (notes.js).
+ *
+ * Al modelo se le piden sin tilde —van en el `enum` de un esquema JSON— y al
+ * usuario se le enseñan escritas: la única que cambia es «contradicción». Lo
+ * que no esté aquí no se pinta (un kind vacío es lo normal: el modelo no está
+ * obligado a clasificar).
+ */
+const KIND_LABELS = {
+  dato: 'dato',
+  supuesto: 'supuesto',
+  hueco: 'hueco',
+  contradiccion: 'contradicción',
+  riesgo: 'riesgo',
+}
+
+/**
  * La lista numerada, para poder saltar de una observación a su subrayado.
  *
  * Con páginas base, una observación sin pasaje no habla necesariamente «de la
@@ -2317,7 +2417,22 @@ function notesCard(notes, placed, missed, detail = [], { conBase = false, produc
           ? 'no apunta a un pasaje de esta página (habla de ella en general o de una página base)'
           : 'habla de la página en general; no hay pasaje que marcar'
 
-    cuerpo.append(titulo, cita)
+    // De qué clase es la observación. El modelo ya lo dice y `validateNotes` ya
+    // lo valida contra `NOTE_KINDS`; hasta ahora la tarjeta lo tiraba, y un dato
+    // no se lee igual que un riesgo. Etiqueta de texto, sin color: un solo
+    // acento en el panel (docs/PLAN.md §3.4).
+    const meta = document.createElement('span')
+    meta.className = 'note-meta'
+    const etiqueta = KIND_LABELS[nota.kind]
+    if (etiqueta) {
+      const clase = document.createElement('span')
+      clase.className = 'note-kind'
+      clase.textContent = etiqueta
+      meta.appendChild(clase)
+    }
+    meta.appendChild(cita)
+
+    cuerpo.append(titulo, meta)
     row.append(num, cuerpo)
 
     if (puesta) row.addEventListener('click', () => focusNote(nota.n))
@@ -2330,14 +2445,47 @@ function notesCard(notes, placed, missed, detail = [], { conBase = false, produc
   const actions = document.createElement('div')
   actions.className = 'nav-actions'
   const quitar = document.createElement('button')
-  quitar.className = 'ghost'
+  quitar.className = 'ghost small'
   quitar.type = 'button'
   quitar.textContent = 'Quitar las marcas'
   quitar.addEventListener('click', () => clearNotes())
   actions.appendChild(quitar)
+
+  // El análisis acaba casi siempre en un comentario de la incidencia o de la
+  // página: la prosa numerada al portapapeles, tal como se lee en el chat.
+  // La prosa se captura AQUÍ, al pintar: quien llama acaba de dejarla en
+  // `state.notesResult` (los tres sitios lo hacen), y si después llega otro
+  // análisis, esta tarjeta —que sigue en el chat— copia lo que ella enseña y no
+  // lo último que haya pasado. Sin prosa no se ofrece el botón: uno que no
+  // hace nada al pulsarlo es el fallo silencioso de siempre.
+  const prosa = state.notesResult?.prose || ''
+  if (prosa) {
+    const copiar = document.createElement('button')
+    copiar.className = 'ghost small'
+    copiar.type = 'button'
+    copiar.textContent = 'Copiar observaciones'
+    copiar.addEventListener('click', () => copyNotes(prosa, copiar))
+    actions.appendChild(copiar)
+  }
+
   card.appendChild(actions)
 
   return card
+}
+
+/**
+ * Las observaciones al portapapeles: el Markdown tal cual, con sus «[n]».
+ *
+ * Es lo que se ve en el chat —incluida la numeración que Faro haya adaptado—,
+ * no una versión limpia: al pegarlo en un comentario, los números tienen que
+ * seguir casando con las marcas de la página. Si el portapapeles falla, lo dice
+ * el propio botón («No se pudo»), que es la contraparte visible (§8.14).
+ */
+async function copyNotes(prosa, boton) {
+  if (!prosa) return
+  const copiado = await copyToClipboard(prosa, boton)
+  if (copiado) log.ok('Observaciones copiadas', `${prosa.length} caracteres`)
+  announce(copiado ? 'Observaciones copiadas' : 'No se pudo copiar las observaciones')
 }
 
 /**
@@ -3577,16 +3725,29 @@ function paintSetupProducts() {
   }
 }
 
-async function copyToClipboard(text, buttonId) {
-  const btn = $(buttonId)
+/**
+ * Copia y lo dice en el propio botón.
+ *
+ * `button` puede ser el id de uno del HTML (los «Copiar» del comando, la ruta,
+ * el snippet y el registro) o el botón ya creado: la tarjeta de análisis se
+ * pinta con `createElement` y no tiene id, y darle uno la haría irrepetible.
+ *
+ * @returns {Promise<boolean>} si de verdad se copió: quien llama no debe
+ *          apuntar en el registro un «copiado» que no ha pasado.
+ */
+async function copyToClipboard(text, button) {
+  const btn = typeof button === 'string' ? $(button) : button || null
   const original = btn?.textContent
+  let ok = true
   try {
     await navigator.clipboard.writeText(text)
     if (btn) btn.textContent = 'Copiado'
   } catch {
+    ok = false
     if (btn) btn.textContent = 'No se pudo'
   }
   if (btn) setTimeout(() => (btn.textContent = original), 1400)
+  return ok
 }
 
 function showContextScreen() {
@@ -3784,9 +3945,41 @@ async function showSettingsScreen() {
 
 // ------------------------------------------------------------------ acción
 
+/**
+ * Cómo está opencode: el faro de la cabecera lo dibuja, su `title` lo cuenta y
+ * `#status-text` (sr-only) lo dice al lector de pantalla.
+ *
+ * El texto ya no tiene hueco propio —la cabecera lo necesitaba para las
+ * acciones—, pero no se pierde: mientras dura un turno o un recorrido (`busy`)
+ * se enseña en el chip de ubicación, que es donde el usuario ya está mirando, y
+ * al acabar el chip vuelve a decir dónde está (decisión 4 de docs/PLAN.md §3.4).
+ * Un `bad` no se queda ahí a propósito: taparía la ubicación durante horas, y de
+ * eso ya avisan el faro en rojo, su tooltip y la pantalla de conexión.
+ */
 function setStatus(kind, text) {
-  el.statusDot.className = 'dot ' + kind
+  el.statusDot.className = 'beacon ' + kind
+  el.statusDot.title = `opencode: ${text}`
   el.statusText.textContent = text
+  state.statusLine = kind === 'busy' ? text : ''
+  paintLocation(state.site, state.tabTitle)
+}
+
+/**
+ * El chip de la cabecera: la clave de dónde estás y el título de la pestaña.
+ *
+ * Las dos piezas las decide `locationParts` (site.js, pura y probada), que
+ * reconstruye la clave con las validadoras: lo que se pinta aquí sale de la URL
+ * de una pestaña y del título que escribió quien creara la página. El título es
+ * lo que cede con elipsis al estrecharse el panel; la clave, no (A6).
+ */
+function paintLocation(site, tabTitle = '') {
+  const { key, title } = locationParts(site, tabTitle)
+  el.locationKey.textContent = key
+  el.locationKey.classList.toggle('hidden', !key)
+  el.locationTitle.textContent = state.statusLine || title
+  // El tooltip dice la ubicación ENTERA, con lo que la clave corta deja fuera
+  // (el id de la página) y sin recortar el título.
+  el.locationChip.title = site ? [describeLocation(site), title].filter(Boolean).join(' · ') : 'Fuera de Atlassian'
 }
 
 function setStreaming(on) {
@@ -3849,8 +4042,14 @@ function autoGrow() {
 }
 
 function applySettingsToUi() {
-  el.memoryToggle.classList.toggle('on', !!state.settings.crossSessionMemory)
-  el.memoryLabel.textContent = state.settings.crossSessionMemory ? 'Memoria activa' : 'Memoria'
+  // La memoria entre sesiones se enciende y se apaga en SU pantalla; en la
+  // cabecera sólo se ve si está activa, en el botón que la abre. Antes había
+  // además una pastilla en el redactor que hacía las dos cosas: dos controles
+  // para un ajuste, y el que se veía siempre era el que ocupaba la fila donde
+  // se escribe.
+  const boton = $('btn-memory')
+  boton.classList.toggle('on', !!state.settings.crossSessionMemory)
+  boton.title = state.settings.crossSessionMemory ? 'Memoria entre sesiones: activa' : 'Memoria entre sesiones'
   // «Reducir animaciones» se leía y se guardaba desde H0, pero sólo lo aplicaba
   // el overlay sobre la página: el panel seguía deslizando burbujas y latiendo
   // (auditoría del 2026-09-13, docs/PLAN.md §2, A9). La clase es la misma que
@@ -3964,11 +4163,6 @@ function wireEvents() {
     }
   })
 
-  el.memoryToggle.addEventListener('click', async () => {
-    state.settings = await saveSettings({ crossSessionMemory: !state.settings.crossSessionMemory })
-    applySettingsToUi()
-  })
-
   $('btn-new-session').addEventListener('click', newSession)
   $('btn-memory').addEventListener('click', () => showMemoryScreen())
   $('btn-settings').addEventListener('click', () => showSettingsScreen())
@@ -4027,6 +4221,12 @@ function wireEvents() {
     state.mcpWait?.abort()
     $('setup-manual').classList.add('hidden')
     $('setup-main').classList.remove('hidden')
+    // La flecha con la que se vuelve está DENTRO de la parte que se acaba de
+    // esconder, así que el foco se quedaría en el aire (en el <body>): va al
+    // título de la parte que aparece, como hace `showScreen` al abrir.
+    const titulo = $('setup-title')
+    titulo.tabIndex = -1
+    titulo.focus()
   })
   $('btn-setup-later').addEventListener('click', async () => {
     state.mcpWait?.abort()
@@ -4191,6 +4391,14 @@ async function showManualStep(result) {
   paintSnippet()
   $('setup-main').classList.add('hidden')
   $('setup-manual').classList.remove('hidden')
+  // El botón que se acaba de pulsar («Conectar y comprobar») queda escondido con
+  // su mitad de la pantalla, así que el foco iría al <body>: va al título de la
+  // mitad que aparece, como al abrir una pantalla y como al volver con la flecha.
+  const titulo = $('setup-manual').querySelector('h1')
+  if (titulo) {
+    titulo.tabIndex = -1
+    titulo.focus()
+  }
 
   const waiting = $('setup-waiting')
   waiting.classList.remove('done')

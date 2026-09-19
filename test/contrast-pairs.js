@@ -59,13 +59,13 @@ export const TEXTO = [
  * Lo que dibuja un control: 3:1 (SC 1.4.11). `--hairline-strong` es el borde de
  * TODOS los campos y botones que sólo se distinguen por su borde, y vive sobre
  * tres fondos distintos: `--surface` (input, textarea, la tarjeta `.choice`),
- * `--ground` (el botón fantasma y el punto de estado apagado) y `--surface-2`
+ * `--ground` (el botón fantasma) y `--surface-2`
  * (los dos `<select>` del redactor y la pastilla apagada de una observación sin
  * pasaje). El de `--surface-2` es el más apretado de los tres y nadie lo medía
  * (hallazgo 6 de la revisión): en claro se quedaba en 2,88.
  */
 export const CONTROL = [
-  ['--hairline-strong', '--surface', 'borde de input y textarea, y punto de estado'],
+  ['--hairline-strong', '--surface', 'borde de input y textarea'],
   ['--hairline-strong', '--ground', 'borde del botón fantasma'],
   ['--hairline-strong', '--surface-2', 'borde de las pastillas-select del redactor'],
   ['--mark', '--surface', 'relleno de la pastilla [n] y del faro', 'dark'],
@@ -81,15 +81,16 @@ export const CONTROL = [
  *  - `--gold-line` enmarca el chip de lo señalado y el de páginas base
  *    (`.pick-chip`/`.sources-chip`): son botones con TEXTO, y quien los
  *    identifica es ese texto `--ink-2` sobre `--gold-bg` (8,87 en claro).
- *  - el mismo `--gold-line` es el borde de `.icon-btn.on`, `.icon-btn.picking`
- *    y `.pill.on` cuando se encienden: el estado lo llevan el icono `--gold`
- *    sobre `--gold-bg` (6,45) y el propio relleno, no el borde, y SC 1.4.11 no
- *    exige borde cuando el control se identifica sin él.
+ *  - el mismo `--gold-line` es el borde de `.icon-btn.on` (el botón de Memoria
+ *    cuando la memoria entre sesiones está activa), de `.icon-btn.picking` y de
+ *    `button.ghost.on`: el estado lo llevan el icono `--gold` sobre `--gold-bg`
+ *    (6,45) y el propio relleno, no el borde, y SC 1.4.11 no exige borde cuando
+ *    el control se identifica sin él.
  */
 export const EXENTOS = [
   ['--hairline', '--surface', 'filete entre filas y marco de tarjetas: decorativo'],
   ['--gold-line', '--surface', 'borde del chip de selección y del de páginas base, contra el fondo del redactor'],
-  ['--gold-line', '--gold-bg', 'el mismo borde contra su relleno, y el borde encendido de .icon-btn.on y .pill.on'],
+  ['--gold-line', '--gold-bg', 'el mismo borde contra su relleno, y el borde encendido de .icon-btn.on'],
 ]
 
 /**

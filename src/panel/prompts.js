@@ -6,6 +6,7 @@
  * porque es fácil borrarlas sin querer al reescribir una frase.
  */
 
+import { cleanTabTitle } from '../atlassian/site.js'
 import { INDEX_LIMITS } from '../shared/config.js'
 import { DEFAULT_SKILL, offersNavigation, skillSystem, MISSING_FROM_BLOCKS } from './skills.js'
 import { NOTHING_TO_SAY } from './notes.js'
@@ -130,10 +131,10 @@ export function baseSystem({ site, contextMd, memoryMd, page, skill, digest = nu
   const primerBloque = Array.isArray(digest?.blocks) ? digest.blocks[0] : null
   const pestana = String(page?.title || '')
   const pestanaDeEsta = !!site?.issueKey && pestana.toUpperCase().startsWith('[' + String(site.issueKey).toUpperCase() + ']')
-  const tituloPestana = pestana
-    .replace(/^\[[A-Z][A-Z0-9_]*-\d+\]\s*/, '')
-    .replace(/\s+-\s+Jira$/i, '')
-    .trim()
+  // La limpieza vive en site.js desde H5: la cabecera del panel enseña el mismo
+  // título en su chip de ubicación, y un título de pestaña limpio de dos
+  // maneras distintas es un título que se lee distinto en cada sitio.
+  const tituloPestana = cleanTabTitle(pestana, site)
   const tagPrimero = String(primerBloque?.tag || '')
   const issueTitle = !enJira
     ? ''

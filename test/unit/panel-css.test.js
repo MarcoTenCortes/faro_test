@@ -235,7 +235,7 @@ const TAMANOS = /^(?:width|height|min-width|min-height|max-width|max-height)$/
  */
 const EXCEPCIONES = new Map([
   [3, 'grosor de la barra de «Trabajando…»: un filete que se mueve, no un paso de la retícula'],
-  [5, 'diámetro del punto de una fila de herramienta y del de una pastilla — heredado de antes de H4: los demás puntos miden 6'],
+  [5, 'diámetro del punto de una fila de herramienta — heredado de antes de H4: los demás puntos miden 6'],
   [9, 'ancho de la barra de desplazamiento del chat: 3 de pulgar más el aire de su borde de 3 por lado'],
   [13, 'lado del spinner que espera al MCP — heredado de antes de H4'],
   [
@@ -246,7 +246,10 @@ const EXCEPCIONES = new Map([
   [26, 'lado del faro grande del estado vacío — heredado de antes de H4'],
   [28, 'lado del botón de icono'],
   [32, 'lado del botón de enviar, y alto reservado al texto del velo para que la tarjeta no salte al cambiarlo'],
-  [34, 'ancho mínimo de los dos <select> del redactor: lo que cabe sin comerse su flecha'],
+  // El `min-width: 34px` de los dos <select> del redactor se fue en H5 con la
+  // pastilla «Memoria» y el `.grow` que había detrás: ahora el modelo es el
+  // único que cede (`flex: 1 1 auto; min-width: 0`) y la Skill no cede nada
+  // (`flex: none`), así que no hay mínimo que escribir a mano.
   [44, 'alto de las cabeceras: la del panel y la de cada pantalla'],
   [92, 'ancho de la columna de claves del Registro, para que los valores queden alineados'],
   [160, 'cuánto crece el redactor antes de desplazarse'],

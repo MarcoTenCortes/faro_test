@@ -170,12 +170,19 @@ herramientas MCP.
 
 - **Dentro de la sesión** funciona siempre: una sesión de opencode es un hilo
   con historial.
-- **Entre sesiones** es opcional. Con el interruptor activo, al pulsar «nueva
-  sesión» se resume la anterior y el resumen queda disponible para las
-  siguientes. La pantalla de memoria te deja leerlo y borrar entradas sueltas.
-  Lo que hay guardado se normaliza al leerlo (una entrada sin fecha, editada a
-  mano o de una versión anterior, sale sin fecha en vez de tumbar el turno) y
-  se repara una sola vez, para que «Borrar» siga dando con cada entrada.
+- **Entre sesiones** es opcional, y se enciende en **un solo sitio**: la casilla
+  «Recordar entre sesiones» de la pantalla de Memoria (el icono del marcador, en
+  la cabecera). Mientras está activa, ese icono se queda **encendido en ámbar**,
+  así que se ve sin abrir nada. Hasta H5 había además una pastilla «Memoria» en
+  la fila donde se escribe, que hacía lo mismo: dos controles para un ajuste, y
+  el que se veía siempre era el que ocupaba sitio en el redactor.
+
+  Con el interruptor activo, al pulsar «nueva sesión» se resume la anterior y el
+  resumen queda disponible para las siguientes. La pantalla de memoria te deja
+  leerlo y borrar entradas sueltas. Lo que hay guardado se normaliza al leerlo
+  (una entrada sin fecha, editada a mano o de una versión anterior, sale sin
+  fecha en vez de tumbar el turno) y se repara una sola vez, para que «Borrar»
+  siga dando con cada entrada.
 
 Lo que el modelo escribió en el resumen —y en el contexto del sitio, y en el
 del Confluence enlazado— entra en cada pregunta como **información, nunca
@@ -183,9 +190,36 @@ instrucciones**: va delimitado y con esa regla detrás, y al escribirlos se le
 pide que no copie al documento nada que una página le «pida» anotar. Una página
 con texto dirigido a Faro no puede hacerse permanente por ese camino.
 
-## 6. La barra de abajo
+## 6. La cabecera y la barra de abajo
 
-Junto al selector de modelo hay otras dos cosas:
+Arriba hay tres cosas, y ninguna ocupa más de una línea:
+
+- **El faro**, a la izquierda del nombre. Es el estado de opencode: relleno de
+  ámbar cuando está conectado, **rojo** si no hay conexión, y latiendo mientras
+  se responde o mientras se comprueba. Pasando el ratón por encima dice qué pasa
+  («opencode: conectado», «opencode: sin conexión», «opencode: pensando…»).
+  Antes había además un punto gris con su texto al lado, en la esquina; el punto
+  y el faro eran la misma información dos veces, y entre los dos se comían el
+  sitio de los botones. Para un lector de pantalla el texto sigue estando ahí,
+  aunque no se vea.
+- **Dónde estás**, en el centro: la clave («SIMPL-1234» en Jira, «ENG» —la del espacio— en Confluence) y,
+  detrás, el título de la pestaña. Si el panel se estrecha, lo que se recorta es
+  el título, nunca la clave; y el tooltip dice la ubicación entera, con el id de
+  la página incluido. **Mientras se responde o mientras Faro te lleva por el
+  árbol**, ese hueco enseña qué está pasando («pensando…», «paso 2/5») y al
+  acabar vuelve el título. Un fallo de conexión no se queda ahí: lo cuentan el
+  faro en rojo y la pantalla que te dice cómo arrancar opencode.
+- **Los cuatro botones**: nueva sesión, memoria (encendido si la memoria entre
+  sesiones está activa), registro y ajustes. Nunca se encogen ni se parten en
+  dos filas, ni con el panel en su anchura mínima.
+
+Cada pantalla (Ajustes, Memoria, Registro, Páginas base, el paso manual de las
+claves) se cierra con **la flecha de su cabecera**, que se queda arriba mientras
+lees: antes había que bajar hasta el final a buscar un «Listo». La de Ajustes
+dice «Guardar y volver», porque al cerrarla se guardan la contraseña y la
+dirección del servidor y el panel rearranca.
+
+Junto al selector de modelo, abajo, hay otras dos cosas:
 
 - **Skill** — en qué modo trabaja Faro:
   - *General*, lo de siempre: responde y, si hay dónde, ofrece llevarte.
@@ -216,6 +250,13 @@ Junto al selector de modelo hay otras dos cosas:
   En el chat aparece la lista; al pulsar una fila, la página salta a su marca y
   la destaca. Al revés también: pulsar el número en la página marca su fila en
   el chat. Y dentro del propio texto de la respuesta, cada `[2]` es pulsable.
+  Cada fila dice además **de qué clase** es la observación —dato, supuesto,
+  hueco, contradicción, riesgo—, que es lo que el modelo ya declaraba y antes se
+  tiraba. Y bajo la lista, **«Copiar observaciones»** pone en el portapapeles la
+  respuesta numerada **tal como se ve**, con sus `[1]`, `[2]`…: está pensada para
+  pegarla en un comentario de la incidencia o de la página, donde los números
+  tienen que seguir casando con las marcas. Sólo la tarjeta del análisis vivo lo
+  ofrece; la tarjeta atenuada de un análisis anterior no guarda su texto.
 
   Cómo lo hace: antes de mandar la pregunta, Faro lee la página abierta y se
   la enseña al modelo troceada en bloques numerados («¶7 [p] …»), tal como se
@@ -306,6 +347,14 @@ Junto al selector de modelo hay otras dos cosas:
   que la navegación paso a paso. Lo señalado viaja citado línea a línea (como
   una cita de Markdown, con `> ` delante) y delimitado: un trozo de página que
   imite el cierre del bloque no puede hablar como Faro.
+
+- **Lo que el modelo consultó** — mientras responde se ven las consultas que va
+  haciendo a Atlassian, una por línea. Al terminar se **pliegan** en una sola
+  («3 consultas a Atlassian») que se puede desplegar: dentro están las mismas
+  filas, y las que fallaron se distinguen. Antes se tiraban al acabar, y con
+  ellas la única forma de ver qué había leído el modelo de verdad, que es lo
+  primero que se mira cuando la respuesta no cuadra. Siempre empieza plegada, y
+  al reabrir el panel no se recrea: la conversación restaurada no las tiene.
 
 - **Teclado y lector de pantalla** — `Esc` cierra Ajustes, Memoria, Registro y
   Páginas base (en Páginas base, primero vacía las sugerencias) y cancela el
@@ -538,6 +587,11 @@ corto y un detalle. Todos los títulos, por dónde salen:
 - «Análisis marcado de nuevo» — pulsaste «Volver a marcar en esta página» y
   las marcas se volvieron a poner (cuántas de cuántas), con los mismos «N ms en
   la página».
+- «Observaciones copiadas» — pulsaste «Copiar observaciones» en la tarjeta del
+  análisis y la respuesta numerada está en el portapapeles, tal como se lee en
+  el chat (con sus «[n]»); el detalle son los caracteres copiados. Si el
+  portapapeles falla, el propio botón lo dice («No se pudo») y no se apunta
+  nada aquí.
 
 **Páginas base**
 

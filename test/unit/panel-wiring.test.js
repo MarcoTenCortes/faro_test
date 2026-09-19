@@ -8,6 +8,7 @@
 import { test, eq, assert } from '../harness.js'
 import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
+import { NOTE_KINDS } from '../../src/panel/notes.js'
 
 const ROOT = join(import.meta.dirname, '..', '..')
 const HTML = readFileSync(join(ROOT, 'src/panel/panel.html'), 'utf8')
@@ -926,9 +927,15 @@ test('H3: «Respuesta recibida» dice lo que costó el turno, y el Registro guar
     'la marca de «pintar» va antes del índice, que es lo que separa'
   )
   assert(envio.indexOf('await growTreeFromPage()') < envio.indexOf("cron.mark('índice')"), 'y «índice» cierra tras el árbol')
-  // La primera palabra se marca UNA vez y sin tocar lo que se pinta.
+  // La primera palabra se marca UNA vez y sin tocar lo que se pinta. Desde H5 el
+  // trozo se pinta por `paintTurnSoon` (un frame), pero la marca sigue midiendo
+  // la LLEGADA del texto y no su pintado: va antes, y en el mismo sitio.
   assert(/if \(!primerTexto && t\.text\) \{/.test(envio), 'la primera palabra del modelo se detecta en el primer onUpdate con texto')
-  assert(/paintTurn\(t, toolsBox, body\)/.test(envio), 'y el pintado sigue siendo el de antes')
+  assert(/paintTurnSoon\(t, toolsBox, body\)/.test(envio), 'y el trozo se pinta por el planificador de frames')
+  assert(
+    envio.indexOf("cron.mark('primer texto')") < envio.indexOf('paintTurnSoon(t, toolsBox, body)'),
+    'el reloj mide al llegar el texto, no al pintarlo'
+  )
   assert(/toolOutputSize\(turn\.parts\)/.test(envio), 'se mide cuánto texto devolvieron las herramientas')
   assert(/timingLine\(cron\.done\(\), \{/.test(envio), 'y el reloj entra en la línea del registro')
   assert(/sistema \$\{peticion\.system\.length\} caracteres/.test(envio), 'con el peso del sistema, que es lo que viaja en cada turno')
@@ -1021,4 +1028,296 @@ test('H3: lo que tardó leer la página y marcarla lo dice la propia página', (
   const paraReloj = marcas.indexOf('const ms = transcurrido()')
   assert(paraReloj > marcas.indexOf('this.overlay.annotate(items)'), 'el reloj se para con las marcas ya puestas')
   assert(paraReloj > -1 && paraReloj < marcas.indexOf('scrollToRange('), 'y antes del desplazamiento suave')
+})
+
+// Composición de H5 (paso 4 del anexo D; docs/PLAN.md §3.4 y §2.5 A6).
+
+test('H5: la cabecera es el faro, el chip de ubicación y las acciones', () => {
+  // El faro ES el estado: era un punto gris aparte (1,57:1 sin conexión) con su
+  // texto al lado, y entre los dos se comían el hueco de las acciones.
+  assert(/<span class="beacon" id="status-dot"[^>]*>/.test(HTML), '#status-dot es el faro de la marca')
+  assert(/id="status-dot"[^>]*aria-hidden="true"/.test(HTML), 'y es decorativo: lo que se lee es #status-text')
+  assert(/<span class="sr-only" id="status-text"/.test(HTML), '#status-text sigue existiendo, sólo para el lector de pantalla')
+  assert(!/class="status"/.test(HTML) && !/class="dot"/.test(HTML), 'sin el bloque de estado ni su punto')
+  assert(!/^\.dot\b/m.test(CSS) && !/\n\.dot\b/.test(CSS), 'y el CSS no se queda con la regla del punto que ya no existe')
+
+  // El chip, en dos piezas dentro de #location-text: la clave y el título.
+  const chip = HTML.slice(HTML.indexOf('id="location-chip"'), HTML.indexOf('</button>', HTML.indexOf('id="location-chip"')))
+  assert(/id="location-text"/.test(chip), 'el envoltorio sigue siendo #location-text')
+  assert(chip.indexOf('id="location-key"') < chip.indexOf('id="location-title"'), 'la clave va delante del título')
+  assert(/class="loc-key[^"]*" id="location-key"/.test(chip), '#location-key lleva .loc-key')
+  assert(/class="loc-title" id="location-title"/.test(chip), '#location-title lleva .loc-title')
+  for (const c of ['loc-key', 'loc-title']) assert(new RegExp('\\.' + c + '\\s*\\{').test(CSS), 'clase sin estilo: ' + c)
+
+  // A6: quien cede es el chip, y dentro del chip el título. Las acciones no se
+  // encogen ni se parten en dos filas: hoy son cuatro y con el «Qué mirar hoy»
+  // de H11 serán cinco (5 × 28 + 4 × 2 = 148 px de los 320 del panel estrecho).
+  assert(/\.top-actions\s*\{[^}]*flex: none/.test(CSS), 'las acciones de la cabecera no ceden')
+  assert(/\.chip\s*\{[^}]*min-width: 0/.test(CSS), 'el chip sí, hasta la elipsis')
+  assert(/\.loc-key\s*\{[^}]*flex: none/.test(CSS), 'la clave no cede')
+  assert(/\.loc-title\s*\{[^}]*text-overflow: ellipsis/.test(CSS), 'el título es el que se recorta')
+
+  // Una sola fuente de verdad para el hueco del título: `state.statusLine`, que
+  // escribe setStatus y pinta paintLocation (decisión 4 del plan: el texto de
+  // estado se sigue viendo mientras dura un turno o un recorrido).
+  assert(/\n {2}statusLine: '',/.test(JS), 'el estado en curso vive en el estado del panel')
+  const estado = JS.slice(JS.indexOf('function setStatus(kind, text)'), JS.indexOf('function paintLocation'))
+  assert(/el\.statusDot\.className = 'beacon ' \+ kind/.test(estado), 'el faro se pinta con beacon + estado')
+  assert(/el\.statusDot\.title = /.test(estado) && /el\.statusText\.textContent = text/.test(estado), 'con su tooltip y su texto')
+  assert(/state\.statusLine = kind === 'busy' \? text : ''/.test(estado), 'sólo lo que está pasando ahora ocupa el chip')
+  assert(/paintLocation\(state\.site, state\.tabTitle\)/.test(estado), 'y se repinta el chip')
+  const pintar = JS.slice(JS.indexOf('function paintLocation'), JS.indexOf('function setStreaming'))
+  assert(/locationParts\(site, tabTitle\)/.test(pintar), 'las dos piezas las decide la función pura de site.js')
+  assert(/el\.locationTitle\.textContent = state\.statusLine \|\| title/.test(pintar), 'y al acabar vuelve el título de la pestaña')
+  assert(/classList\.toggle\('hidden', !key\)/.test(pintar), 'sin clave no queda un hueco vacío')
+
+  const refresco = JS.slice(JS.indexOf('async function refreshTab'), JS.indexOf('async function bootForSite'))
+  assert(/paintLocation\(site, tab\.title\)/.test(refresco), 'refreshTab pinta la ubicación con el título de la pestaña')
+  assert(!/el\.locationText/.test(JS), 'ya nadie escribe el chip de una pieza')
+})
+
+test('H5: cada pantalla lleva su cabecera, y el botón de cerrar vive dentro de ella', () => {
+  // Los «Listo» estaban al final de una pantalla que se desplaza: había que
+  // bajar hasta el fondo para volver. Ahora es una flecha en la cabecera, que se
+  // queda arriba; es el MISMO botón (mismo id, mismo manejador), movido.
+  eq(
+    (HTML.match(/class="screen-inner/g) || []).length,
+    (HTML.match(/class="screen-head"/g) || []).length,
+    'cada .screen-inner lleva su cabecera'
+  )
+  for (const cabecera of HTML.match(/<div class="screen-head">[\s\S]*?<\/div>/g) || []) {
+    assert(/<h1/.test(cabecera), 'una cabecera de pantalla lleva su h1: ' + cabecera.slice(0, 60))
+  }
+
+  const cierres = {
+    'screen-settings': ['btn-settings-close', 'Guardar y volver'],
+    'screen-memory': ['btn-memory-close', 'Volver al chat'],
+    'screen-sources': ['btn-sources-close', 'Volver al chat'],
+    'screen-log': ['btn-log-close', 'Volver al chat'],
+    'setup-manual': ['btn-setup-back', 'Volver a las claves'],
+  }
+  for (const [pantalla, [btn, etiqueta]] of Object.entries(cierres)) {
+    const desde = HTML.indexOf(`id="${pantalla}"`)
+    assert(desde > 0, 'no existe ' + pantalla)
+    const cabecera = HTML.slice(HTML.indexOf('<div class="screen-head">', desde), HTML.indexOf('</h1>', desde))
+    assert(cabecera.includes(`id="${btn}"`), `${btn} tiene que estar en la cabecera de ${pantalla}, antes de su h1`)
+    assert(new RegExp(`class="icon-btn back" id="${btn}"`).test(HTML), `${btn} es la flecha de volver`)
+    assert(new RegExp(`id="${btn}"[^>]*aria-label="${etiqueta}"`).test(HTML), `${btn} dice qué hace: ${etiqueta}`)
+    assert(JS.includes(`$('${btn}').addEventListener`), `${btn} sigue cableado`)
+  }
+  // Ajustes GUARDA al cerrar (contraseña y dirección del servidor incluidas), y
+  // por eso su etiqueta no dice «Volver» a secas y Escape no lo pulsa.
+  assert(/id="btn-settings-close"[^>]*title="Guardar y volver"/.test(HTML))
+
+  // Salir de estas tres es decidir algo (conectar, dar las claves, elegir qué
+  // hacer con el contexto): su cabecera lleva sólo el título, y «Ahora no» sigue
+  // siendo un botón con texto.
+  for (const pantalla of ['screen-connect', 'screen-context', 'setup-main']) {
+    const desde = HTML.indexOf(`id="${pantalla}"`)
+    const cabecera = HTML.slice(HTML.indexOf('<div class="screen-head">', desde), HTML.indexOf('</h1>', desde))
+    assert(!/<button/.test(cabecera), `${pantalla} no tiene a dónde volver: su cabecera es sólo el título`)
+  }
+  assert(/id="btn-setup-skip"[^>]*>Ahora no</.test(HTML), '«Ahora no» se lee, no es un icono')
+  assert(/\.screen-head\s*\{[^}]*position: sticky/.test(CSS), 'la cabecera de una pantalla se queda arriba al desplazar')
+  // Y el título sigue siendo lo que enfoca showScreen (A1): el h1 de la parte
+  // VISIBLE, que en la pantalla de claves son dos.
+  assert(HTML.indexOf('<div class="screen-head">', HTML.indexOf('id="setup-manual"')) > HTML.indexOf('id="setup-manual"'))
+  assert(/const titulo = \[\.\.\.\(screen\?\.querySelectorAll\('h1'\) \|\| \[\]\)\]\.find\(\(h\) => !h\.closest\('\.hidden'\)\)/.test(JS))
+
+  // Las dos mitades de la pantalla de claves se turnan sin pasar por
+  // `showScreen`, y el botón que las cambia se esconde con la suya: el foco lo
+  // mueven ellas, al título de la mitad que aparece, o se quedaba en el <body>.
+  const manual = JS.slice(JS.indexOf('async function showManualStep'), JS.indexOf("const waiting = $('setup-waiting')"))
+  assert(/querySelector\('h1'\)/.test(manual) && /titulo\.focus\(\)/.test(manual), 'ir al paso manual lleva el foco a su título')
+  const volver = JS.slice(JS.indexOf("$('btn-setup-back').addEventListener"), JS.indexOf("$('btn-setup-later').addEventListener"))
+  assert(/\$\('setup-title'\)/.test(volver) && /titulo\.focus\(\)/.test(volver), 'y volver con la flecha, al de las claves')
+})
+
+test('H5: la memoria entre sesiones se enciende en su pantalla y se ve en su botón', () => {
+  // Había dos controles para un ajuste: la casilla de la pantalla de Memoria y
+  // una pastilla en el redactor, justo en la fila donde se escribe. Queda la
+  // casilla; el botón de la cabecera sólo DICE si está activa.
+  assert(!/btn-memory-toggle|memory-label/.test(HTML), 'la pastilla del redactor se fue del HTML')
+  assert(!/memoryToggle|memoryLabel/.test(JS), 'y su cableado del JS')
+  assert(!/\.pill\b/.test(CSS), 'y su estilo del CSS: nadie más la usaba')
+  const aplica = /function applySettingsToUi\(\)\s*\{[\s\S]*?\n\}/.exec(JS)
+  assert(aplica, 'applySettingsToUi sigue existiendo')
+  assert(/\$\('btn-memory'\)/.test(aplica[0]), 'el estado va al botón que abre la pantalla')
+  assert(/classList\.toggle\('on', !!state\.settings\.crossSessionMemory\)/.test(aplica[0]), 'encendido si la memoria está activa')
+  assert(/\.icon-btn\.on\b/.test(CSS), 'y encendido se ve')
+  const eventos = JS.slice(JS.indexOf('function wireEvents'), JS.indexOf('async function saveKeys'))
+  assert(/\$\('mem-enabled'\)\.addEventListener/.test(eventos) && /applySettingsToUi\(\)/.test(eventos), 'la casilla de la pantalla lo cambia y repinta el botón')
+})
+
+test('H5: la fila del redactor es una línea, y quien cede es el nombre del modelo', () => {
+  // Con la pastilla «Memoria» y su `.grow` fuera, el reparto lo hace flex: el
+  // modelo (43 nombres, algunos larguísimos) se encoge; la Skill, que dice cómo
+  // va a trabajar Faro, no; los botones tampoco, porque apretados parten su
+  // contenido en dos líneas y la barra crece de alto.
+  assert(!/class="grow"/.test(HTML.slice(HTML.indexOf('id="composer"'), HTML.indexOf('</footer>'))), 'sin separadores en el redactor')
+  assert(/\.model-select\s*\{[^}]*flex: 1 1 auto/.test(CSS) && /\.model-select\s*\{[^}]*min-width: 0/.test(CSS))
+  assert(/\.skill-select\s*\{[^}]*flex: none/.test(CSS), 'la Skill no cede')
+  assert(/\.composer-meta \.icon-btn\s*\{[^}]*flex: none/.test(CSS), 'ni los botones')
+  assert(!/max-width: (?:46|34)%/.test(CSS), 'y ya no hacen falta los topes en % que sostenían la fila vieja')
+})
+
+// Tarjeta de análisis, estado vacío y herramientas plegadas (pasos 5 y 6 del
+// anexo D) + el pintado por frames del anexo E, que toca el mismo `paintTurn`.
+
+test('H5: cada observación dice de qué clase es, y la tarjeta viva se puede copiar', () => {
+  const tarjeta = JS.slice(JS.indexOf('function notesCard'), JS.indexOf('async function copyNotes'))
+
+  // El `kind` lo pide el prompt, lo valida `validateNotes` y hasta H5 la tarjeta
+  // lo TIRABA: un dato no se lee igual que un riesgo.
+  assert(/'note-meta'/.test(tarjeta), 'la clase y la cita comparten una línea')
+  assert(/'note-kind'/.test(tarjeta), 'la clase de la observación se pinta')
+  assert(/KIND_LABELS\[nota\.kind\]/.test(tarjeta), 'desde nota.kind, por la tabla de etiquetas')
+  assert(/if \(etiqueta\) \{/.test(tarjeta), 'un kind vacío no deja una etiqueta vacía')
+  const etiquetas = /const KIND_LABELS = \{[\s\S]*?\n\}/.exec(JS)
+  assert(etiquetas, 'las etiquetas viven en una tabla')
+  for (const kind of NOTE_KINDS) {
+    assert(new RegExp('\\b' + kind + ':').test(etiquetas[0]), 'falta la etiqueta de ' + kind)
+  }
+  assert(/contradiccion: 'contradicción'/.test(etiquetas[0]), 'al usuario se le escribe con tilde; al modelo se le pide sin ella')
+  for (const clase of ['note-meta', 'note-kind']) {
+    assert(new RegExp('\\.' + clase + '\\s*\\{').test(CSS), 'clase sin estilo: ' + clase)
+  }
+  // Una etiqueta, no un color: un solo acento en el panel (decisión del plan).
+  assert(/\.note-kind\s*\{[^}]*color: var\(--muted\)/.test(CSS), '.note-kind no se colorea por tipo')
+  assert(!/\.note-kind\.(?:dato|supuesto|hueco|contradiccion|riesgo)/.test(CSS), 'ni una regla por kind')
+
+  // «Copiar observaciones»: la prosa numerada tal cual, para pegarla en el
+  // comentario de la incidencia o de la página.
+  assert(/'Copiar observaciones'/.test(tarjeta), 'la tarjeta viva ofrece copiar')
+  assert(/copyNotes\(prosa, copiar\)/.test(tarjeta), 'por copyNotes, con su prosa y su propio botón')
+  assert(/const prosa = state\.notesResult\?\.prose \|\| ''/.test(tarjeta), 'la prosa se captura al pintar, no al pulsar')
+  assert(tarjeta.indexOf('const prosa =') < tarjeta.indexOf("'Copiar observaciones'"), 'antes de crear el botón')
+  assert(/if \(prosa\) \{/.test(tarjeta), 'sin prosa no hay botón que no haga nada')
+  const copiar = JS.slice(JS.indexOf('async function copyNotes'), JS.indexOf('function quoteLabel'))
+  assert(/copyToClipboard\(prosa, boton\)/.test(copiar), 'y pasa el botón, no un id')
+  assert(/'Observaciones copiadas'/.test(copiar) && /log\.ok\(/.test(copiar), 'y queda en el registro')
+  assert(/if \(copiado\)/.test(copiar), 'sólo si se copió de verdad')
+  assert(/announce\(/.test(copiar), 'y se anuncia al lector de pantalla')
+
+  // La tarjeta de un análisis ANTERIOR no ofrece copiar: su prosa no está en
+  // `state.notesResult` (la pasada que trocea no se persiste, §4.4).
+  const vieja = JS.slice(JS.indexOf('function staleNotesCard'), JS.indexOf('async function remarkFromAnchors'))
+  assert(!/Copiar observaciones|copyNotes\(/.test(vieja), 'staleNotesCard no puede copiar lo que no guardó')
+
+  // Y `copyToClipboard` admite las dos formas, porque la tarjeta se pinta con
+  // createElement y no tiene id que buscar.
+  const portapapeles = JS.slice(JS.indexOf('async function copyToClipboard'), JS.indexOf('function showContextScreen'))
+  assert(/typeof button === 'string' \? \$\(button\) : button/.test(portapapeles), 'id o elemento')
+  assert(/return ok/.test(portapapeles), 'y dice si se copió')
+})
+
+test('H5: el chat vacío sugiere según el producto Y la Skill, y reserva el sitio de lo que viene', () => {
+  assert(/import \{ suggestionsFor \} from '\.\/suggestions\.js'/.test(JS), 'la rama es pura y vive aparte')
+  const vacio = JS.slice(JS.indexOf('function showWelcome'), JS.indexOf('function addUserMessage'))
+  assert(/suggestionsFor\(state\.site, state\.skill, state\.sources\)/.test(vacio), 'con el sitio, la Skill y las páginas base')
+  eq((vacio.match(/'suggestion'/g) || []).length, 1, 'y una sola fábrica de filas')
+  assert(!/suggestionsFor\(site\)/.test(JS) && !/function suggestionsFor/.test(JS), 'la lista ya no se escribe dentro del panel')
+
+  // El presupuesto del estado vacío se decide aquí (docs/PLAN.md §3.4): las
+  // filas de «hoy» (H8) van entre la explicación y las sugerencias, y los chips
+  // (H11) debajo. Vacíos y ocultos hasta que exista quien los llene.
+  assert(/'today hidden'/.test(vacio), 'el hueco de «Qué mirar hoy», oculto')
+  assert(/'search-chips hidden'/.test(vacio), 'y el de los chips de búsqueda, oculto')
+  assert(
+    vacio.indexOf("'today hidden'") < vacio.indexOf("'suggestions'") &&
+      vacio.indexOf("'suggestions'") < vacio.indexOf("'search-chips hidden'"),
+    'en ese orden: hoy, las tres sugerencias, los chips'
+  )
+})
+
+test('H5: las consultas a Atlassian se pliegan al terminar en vez de borrarse', () => {
+  const pintar = JS.slice(JS.indexOf('function paintTurn('), JS.indexOf('async function readPageDigest('))
+  assert(/if \(final && tools\.length\) \{/.test(pintar), 'sólo al terminar y sólo si hubo herramientas')
+  assert(/createElement\('details'\)/.test(pintar) && /'tools-fold'/.test(pintar), 'las filas se pliegan en un details')
+  assert(/createElement\('summary'\)/.test(pintar), 'con el resumen de siempre como summary')
+  assert(/consulta\$\{tools\.length === 1 \? '' : 's'\} a Atlassian/.test(pintar), 'que sigue diciendo cuántas fueron')
+  assert(/for \(const row of filas\) fold\.appendChild\(row\)/.test(pintar), 'y las filas van dentro, no a la basura')
+  assert(!/\.open = true|setAttribute\('open'/.test(pintar), 'siempre cerrado: restaurar el chat no recrea filas que abrir')
+  assert(/\.tools-fold\b/.test(CSS) && /\.tools-fold > summary\b/.test(CSS), 'con su estilo')
+  // Y el pintado sigue sin enseñar el bloque de anclas: el pin de H1 vale igual.
+  assert(/splitAnchorsBlock\(tracker\.text,\s*\{\s*final\s*\}\)/.test(pintar), 'el bloque de anclas nunca se pinta')
+})
+
+test('H5: la respuesta se repinta una vez por frame, y el pintado final cancela lo pendiente', () => {
+  // `paintTurn` reconstruye la burbuja entera por cada delta y el modelo manda
+  // muchos más deltas que frames hay (docs/PLAN.md §2, P2).
+  const plan = JS.slice(JS.indexOf('function paintTurnSoon('), JS.indexOf('function noticeNode('))
+  assert(/requestAnimationFrame\(pintar\)/.test(plan), 'un frame por tanda')
+  assert(/if \(pintadoPendiente\) \{/.test(plan) && /pintadoPendiente\.args = /.test(plan), 'y el tracker más nuevo gana')
+  assert(/document\.hidden/.test(plan) && /setTimeout\(pintar, PAINT_HIDDEN_MS\)/.test(plan), 'con el panel oculto no hay frames: respaldo por temporizador')
+  assert(/cancelAnimationFrame\(/.test(plan) && /clearTimeout\(/.test(plan), 'y lo pendiente se puede cancelar')
+  // C7 de H2: entre el trozo y el frame el chat puede haberse repintado entero.
+  assert(/if \(!cuerpo\.isConnected\) return/.test(plan), 'un frame no pinta en una burbuja que ya no está en el documento')
+
+  // `paintTurnSoon` se define FUERA de los trozos que vigilan las demás pruebas
+  // (anexo-critica.md:171): después de `readPageDigest`, no entre send y paintTurn.
+  assert(JS.indexOf('function paintTurnSoon(') > JS.indexOf('async function readPageDigest('), 'fuera de los slices de send y paintTurn')
+
+  // El pintado definitivo es síncrono y va detrás de la cancelación: un frame
+  // que llegara después pintaría una respuesta a medias encima de la buena, o
+  // encima del aviso de «Turno cancelado».
+  const envio = JS.slice(JS.indexOf('async function send('), JS.indexOf('function paintTurn('))
+  assert(/cancelPaintSoon\(\)/.test(envio), 'el turno cancela lo pendiente al acabar')
+  assert(
+    envio.indexOf('cancelPaintSoon()') > envio.indexOf('onUpdate: (t) => {') &&
+      envio.indexOf('cancelPaintSoon()') < envio.indexOf("cuerpo.appendChild(noticeNode('Turno cancelado.'))"),
+    'en cuanto runTurn vuelve, antes de cualquier salida del turno'
+  )
+  assert(envio.indexOf('cancelPaintSoon()') < envio.indexOf('paintTurn(turn, toolsBox, cuerpo, true)'), 'y antes del pintado final')
+})
+
+test('H5: el espejo del panel no copia la paleta, fuerza el tema con data-theme y mide lo que enseña', () => {
+  const espejo = readFileSync(join(ROOT, 'harness/panel-preview.html'), 'utf8')
+
+  // EL CAMBIO: hasta H4 el espejo llevaba la paleta clara escrita a mano para
+  // poder mirar el tema claro, y se quedó atrás en cuanto panel.css cambió de
+  // tokens (su botón «Claro» enseñaba colores que ya no existían). Ahora enlaza
+  // el panel.css real y el tema se fuerza con `data-theme`, que es lo único para
+  // lo que existe `:root[data-theme="dark"]`.
+  assert(!/--ground:\s*#/.test(espejo), 'el espejo no declara la paleta: ningún color de fondo escrito a mano')
+  assert(!/--gold:\s*#/.test(espejo), 'ni el dorado')
+  assert(espejo.includes('href="/src/panel/panel.css"'), 'el espejo enlaza el CSS real del panel')
+  assert(espejo.includes('dataset.theme'), 'el tema se fuerza poniendo data-theme')
+  assert(/:root\[data-theme="dark"\]/.test(CSS), 'y panel.css tiene ese bloque para que gane en las dos direcciones')
+
+  // `faroPreview` es la única de las tres verificaciones del rediseño que MIDE
+  // algo: lo que hay que comprobar en cada captura, con su nombre, para que la
+  // PR diga números y no impresiones.
+  assert(espejo.includes('window.faroPreview = {'), 'los mandos del espejo son API')
+  const medida = espejo.slice(espejo.indexOf('function check() {'), espejo.indexOf('function pintarMedidas('))
+  for (const clave of ['ok', 'overflowX', 'topHeight', 'composerMetaHeight', 'screenHeadsVisible', 'emptyStateRows']) {
+    assert(new RegExp('\\b' + clave + '\\b').test(medida), `check() mide ${clave}`)
+  }
+  assert(
+    /const ok = !overflowX && topHeight <= 48 && composerMetaHeight <= 36 && screenHeadsVisible && emptyStateRows <= 3/.test(medida),
+    'y el veredicto son los cinco a la vez'
+  )
+
+  // Las dos conversaciones: la de Confluence de siempre y la de Jira, que es la
+  // que enseña las ocho observaciones con su clase, la que no se pudo situar, la
+  // que habla de la incidencia en general, el aviso rojo y la tarjeta atenuada.
+  assert(espejo.includes('SIMPL-1234'), 'la segunda conversación es una incidencia de Jira')
+  for (const pieza of [
+    'note-kind',
+    "' unanchored'",
+    "' missing'",
+    'Copiar observaciones',
+    "'notice' + (malo ? ' bad' : '')",
+    'nav-card perm-card',
+    'nav-card notes-card stale',
+    "'tools-fold'",
+    "'today hidden'",
+  ]) {
+    assert(espejo.includes(pieza), `el espejo enseña ${pieza}`)
+  }
+  // El quinto botón de la cabecera es un HUECO: lo crea H11, así que el espejo
+  // pone un bulto del mismo tamaño y NO se adelanta a su id.
+  assert(espejo.includes("b.dataset.hueco = '1'"), 'el hueco del quinto botón se marca con data-hueco')
+  assert(!/['"]btn-today['"]/.test(espejo), 'y el espejo no se adelanta al id del botón de H11')
+  assert(!htmlIds.has('btn-today'), 'que tampoco está en panel.html')
 })

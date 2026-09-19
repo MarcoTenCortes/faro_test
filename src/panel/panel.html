@@ -18,12 +18,26 @@
 <div id="app">
 <header class="top">
   <div class="brand">
-    <span class="beacon" aria-hidden="true"></span>
+    <!-- El faro ES el estado de opencode: sin clase es el de la marca, y
+         .ok/.busy/.bad dicen cómo está el servidor (lo pone setStatus, con el
+         detalle en su title). El texto sigue existiendo para el lector de
+         pantalla; lo que pasa mientras dura un turno o un recorrido se lee
+         además en el chip (decisión 4 de docs/PLAN.md). -->
+    <span class="beacon" id="status-dot" title="Estado de opencode" aria-hidden="true"></span>
     <span class="wordmark">Faro</span>
+    <span class="sr-only" id="status-text">…</span>
   </div>
+  <!-- Dónde estás, en dos piezas: la clave («SIMPL-1234», «ENG»)
+       y el título de la pestaña, que es el que cede con elipsis cuando el
+       panel se estrecha. El chip entero es lo que cede en la cabecera: las
+       acciones no se mueven. -->
   <button class="chip" id="location-chip" type="button" title="Dónde estás ahora mismo">
-    <span id="location-text">Buscando…</span>
+    <span class="loc" id="location-text">
+      <span class="loc-key hidden" id="location-key"></span>
+      <span class="loc-title" id="location-title">Buscando…</span>
+    </span>
   </button>
+  <!-- Cabe un quinto botón: «Qué mirar hoy» (#btn-today), que crea H11. -->
   <div class="top-actions">
     <button class="icon-btn" id="btn-new-session" type="button" title="Empezar una sesión nueva" aria-label="Nueva sesión">
       <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
@@ -37,10 +51,6 @@
     <button class="icon-btn" id="btn-settings" type="button" title="Ajustes" aria-label="Ajustes">
       <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="2.2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 1.6v1.7M8 12.7v1.7M14.4 8h-1.7M3.3 8H1.6M12.5 3.5l-1.2 1.2M4.7 11.3l-1.2 1.2M12.5 12.5l-1.2-1.2M4.7 4.7L3.5 3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
     </button>
-  </div>
-  <div class="status" id="status" title="Estado de opencode">
-    <span class="dot" id="status-dot"></span>
-    <span id="status-text">…</span>
   </div>
 </header>
 
@@ -65,10 +75,6 @@
         <path d="M10.4 2.2l3.4 3.4-6.1 6.1H4.3V8.3z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
         <path d="M2.5 14.2h11" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
       </svg>
-    </button>
-    <span class="grow"></span>
-    <button class="pill" id="btn-memory-toggle" type="button" title="Recordar entre sesiones">
-      <span class="pill-dot"></span><span id="memory-label">Memoria</span>
     </button>
   </div>
   <!-- Las páginas base se enseñan mientras estén activas: mandar contexto que no se ve
@@ -101,7 +107,10 @@
 <section class="screen hidden" id="screen-connect" aria-labelledby="connect-title">
   <div class="screen-inner">
     <span class="beacon big" aria-hidden="true"></span>
-    <h1 id="connect-title">opencode no responde</h1>
+    <!-- Sin cierre: de aquí no se sale volviendo, se sale conectando. -->
+    <div class="screen-head">
+      <h1 id="connect-title">opencode no responde</h1>
+    </div>
     <p>Faro habla con el opencode que ya tienes instalado. Arráncalo en una terminal y déjalo abierto:</p>
     <div class="cmd">
       <code id="connect-cmd"></code>
@@ -127,7 +136,10 @@
 
 <section class="screen hidden" id="screen-setup" aria-labelledby="setup-title">
   <div class="screen-inner" id="setup-main">
-    <h1 id="setup-title">Conectar con <span id="setup-host"></span></h1>
+    <!-- Sin cierre: salir de aquí es decidir algo, y para eso está «Ahora no». -->
+    <div class="screen-head">
+      <h1 id="setup-title">Conectar con <span id="setup-host"></span></h1>
+    </div>
     <p>Este sitio todavía no tiene claves configuradas. Se guardan en tu opencode local, no en el navegador.
       Jira y Confluence llevan cada uno su dirección y su token; un solo MCP sirve a los dos, y si viven en
       hosts distintos el otro queda enlazado a éste y no volverá a pedirlas.</p>
@@ -187,7 +199,12 @@
   </div>
 
   <div class="screen-inner hidden" id="setup-manual">
-    <h1>Un paso más, y solo esta vez</h1>
+    <div class="screen-head">
+      <button class="icon-btn back" id="btn-setup-back" type="button" title="Volver a las claves" aria-label="Volver a las claves">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M9.5 3.5L5 8l4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <h1>Un paso más, y solo esta vez</h1>
+    </div>
     <p>Tu versión de opencode sólo carga los servidores MCP al arrancar, así que
       hay que dejar esto escrito en su configuración. Es el motivo por el que
       tus claves no acaban en el navegador.</p>
@@ -218,7 +235,6 @@
     </div>
 
     <div class="row">
-      <button class="ghost" id="btn-setup-back" type="button">Volver a las claves</button>
       <button class="ghost" id="btn-setup-later" type="button">Seguir sin esto</button>
       <span class="grow"></span>
     </div>
@@ -227,7 +243,10 @@
 
 <section class="screen hidden" id="screen-context" aria-labelledby="context-title">
   <div class="screen-inner">
-    <h1 id="context-title">Primera vez en <span id="context-scope"></span></h1>
+    <!-- Sin cierre: las tres tarjetas son la salida. -->
+    <div class="screen-head">
+      <h1 id="context-title">Primera vez en <span id="context-scope"></span></h1>
+    </div>
     <p>Faro puede recorrer esta zona una vez y escribir un fichero de contexto: de qué va, cómo se organiza y dónde está cada cosa. Luego se va enriqueciendo solo con el uso.</p>
 
     <div class="choice" id="choice-generate" tabindex="0" role="button">
@@ -250,7 +269,15 @@
 
 <section class="screen hidden" id="screen-settings" aria-labelledby="settings-title">
   <div class="screen-inner">
-    <h1 id="settings-title">Ajustes</h1>
+    <!-- El cierre GUARDA (contraseña y dirección del servidor incluidas) y
+         rearranca el panel: su etiqueta lo dice, y por eso Escape no lo pulsa
+         (ESCAPE_DISMISSES en screens.js). -->
+    <div class="screen-head">
+      <button class="icon-btn back" id="btn-settings-close" type="button" title="Guardar y volver" aria-label="Guardar y volver">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M9.5 3.5L5 8l4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <h1 id="settings-title">Ajustes</h1>
+    </div>
 
     <h2>Navegación</h2>
     <fieldset class="field">
@@ -292,23 +319,23 @@
       estructura ha encontrado. Es lo que hay que mirar cuando la navegación paso a paso no
       despliega el árbol de tu Confluence.</p>
 
-    <div class="row">
-      <button class="primary" id="btn-settings-close" type="button">Listo</button>
-      <span class="grow"></span>
-      <span class="fine" id="settings-status"></span>
-    </div>
+    <p class="fine" id="settings-status"></p>
   </div>
 </section>
 
 <section class="screen hidden" id="screen-memory" aria-labelledby="memory-title">
   <div class="screen-inner">
-    <h1 id="memory-title">Memoria entre sesiones</h1>
+    <div class="screen-head">
+      <button class="icon-btn back" id="btn-memory-close" type="button" title="Volver al chat" aria-label="Volver al chat">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M9.5 3.5L5 8l4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <h1 id="memory-title">Memoria entre sesiones</h1>
+    </div>
     <p>Al cerrar una sesión, Faro puede resumirla y guardar el resumen para que la siguiente sepa por dónde ibas.</p>
     <label class="check strong"><input type="checkbox" id="mem-enabled"> Recordar entre sesiones</label>
     <p class="fine">Un resumen puede arrastrar algo confidencial de un ticket. Aquí puedes leerlo y borrar lo que no quieras.</p>
     <div class="memory-body" id="memory-body"></div>
     <div class="row">
-      <button class="primary" id="btn-memory-close" type="button">Listo</button>
       <button class="ghost danger" id="btn-memory-clear" type="button">Borrar toda la memoria</button>
       <span class="grow"></span>
     </div>
@@ -320,7 +347,12 @@
      tiene por qué saber cuál de las tres cosas tiene a mano. -->
 <section class="screen hidden" id="screen-sources" aria-labelledby="sources-title">
   <div class="screen-inner">
-    <h1 id="sources-title">Páginas base del análisis</h1>
+    <div class="screen-head">
+      <button class="icon-btn back" id="btn-sources-close" type="button" title="Volver al chat" aria-label="Volver al chat">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M9.5 3.5L5 8l4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <h1 id="sources-title">Páginas base del análisis</h1>
+    </div>
     <p>Además de la página abierta, el análisis puede apoyarse en otras páginas de este Confluence: una guía, una decisión anterior, la página con la que hay que comparar. El modelo las lee enteras por el MCP antes de responder. Se recuerdan por sitio.</p>
 
     <div class="field">
@@ -345,7 +377,6 @@
     <p class="fine hidden" id="sources-mcp">Este sitio no tiene el MCP conectado: el modelo no podrá leer las páginas base. Configúralo en Ajustes → Cambiar las claves.</p>
 
     <div class="row">
-      <button class="primary" id="btn-sources-close" type="button">Listo</button>
       <button class="ghost" id="btn-sources-clear" type="button">Quitar las páginas</button>
       <span class="grow"></span>
     </div>
@@ -354,7 +385,12 @@
 
 <section class="screen hidden" id="screen-log" aria-labelledby="log-title">
   <div class="screen-inner">
-    <h1 id="log-title">Registro</h1>
+    <div class="screen-head">
+      <button class="icon-btn back" id="btn-log-close" type="button" title="Volver al chat" aria-label="Volver al chat">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M9.5 3.5L5 8l4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <h1 id="log-title">Registro</h1>
+    </div>
     <p>Todo lo que Faro le pide a opencode, con su resultado y su duración. Los
       cuerpos de las peticiones no se guardan: por ahí pasan tus claves.</p>
 
@@ -372,7 +408,6 @@
     <div class="logbox" id="log-state"></div>
 
     <div class="row">
-      <button class="primary" id="btn-log-close" type="button">Listo</button>
       <button class="ghost" id="btn-log-refresh" type="button">Comprobar de nuevo</button>
       <span class="grow"></span>
     </div>
