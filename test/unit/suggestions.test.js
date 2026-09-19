@@ -97,8 +97,14 @@ test('nada de esto lanza con lo que puede llegar del estado del panel', () => {
   // `state.site` es null fuera de Atlassian, `state.sources` puede venir a
   // medias de un registro guardado, y la Skill de un sitio viejo puede ser una
   // que ya no exista: la bienvenida se pinta igual.
+  // Las tres cadenas que existen en TODO objeto literal van en la lista desde la
+  // revisión adversaria de H5: con `POR_SKILL[skill]` a secas, «__proto__» daba
+  // `Object.prototype` y «constructor»/«toString» daban una función —las tres
+  // verdaderas—, y el `[...rama[producto]]` de la línea siguiente LANZABA. La
+  // cabecera promete que esto nunca lanza, y `state.skill` sale de un registro
+  // guardado que se puede editar a mano.
   for (const site of [null, undefined, {}, { product: '' }, { product: 'JIRA' }, 'jira']) {
-    for (const skill of [undefined, null, '', 'analisis', 'inventada', 42]) {
+    for (const skill of [undefined, null, '', 'analisis', 'inventada', 42, '__proto__', 'constructor', 'toString', 'hasOwnProperty']) {
       for (const sources of [null, undefined, {}, [], 'abc', { pages: null }, { pages: [{}] }]) {
         const lista = suggestionsFor(site, skill, sources)
         eq(lista.length, 3, `sin tres sugerencias con site=${JSON.stringify(site)} skill=${skill}`)
@@ -108,8 +114,13 @@ test('nada de esto lanza con lo que puede llegar del estado del panel', () => {
   // Sin sitio, las de Jira: es lo que hacía el panel (el fallback de hoy).
   eq(suggestionsFor(null, 'general'), suggestionsFor(JIRA, 'general'))
   eq(suggestionsFor(undefined, 'analisis'), suggestionsFor(JIRA, 'analisis'))
-  // Una Skill desconocida cae en general, con la que arranca el panel.
+  // Una Skill desconocida cae en general, con la que arranca el panel. Y una
+  // heredada del prototipo es tan desconocida como cualquier otra.
   eq(suggestionsFor(JIRA, 'inventada'), suggestionsFor(JIRA, 'general'))
+  for (const heredada of ['__proto__', 'constructor', 'toString', 'valueOf']) {
+    eq(suggestionsFor(JIRA, heredada), suggestionsFor(JIRA, 'general'), heredada + ' no es una Skill')
+    eq(suggestionsFor(CONFLUENCE, heredada), suggestionsFor(CONFLUENCE, 'general'))
+  }
   // Y la lista que se devuelve es una copia: quien la pinte no puede estropear
   // la siguiente bienvenida.
   const lista = suggestionsFor(JIRA, 'general')

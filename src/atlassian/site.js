@@ -235,14 +235,51 @@ export const LOCATION_LIMITS = { key: 40, title: 120 }
  * Lo que abre línea, para colapsarlo en un espacio.
  *
  * `\s` de JavaScript cubre U+2028 (separador de línea) y U+2029 (de párrafo),
- * pero NO el NEL (U+0085), que también abre línea: va nombrado aparte, igual
- * que en prompts.js (revisión adversaria de H2, 2026-09-14).
+ * pero NO el NEL (U+0085), que también abre línea: va nombrado aparte y CON
+ * ESCAPE, igual que en prompts.js (revisión adversaria de H2, 2026-09-14).
+ * Escrito crudo dentro de la clase —como estuvo hasta la revisión adversaria de
+ * H5— la regex llevaba dentro un carácter invisible: no se podía leer ni
+ * revisar, y cualquier editor que «limpie» el fichero se la lleva sin que se
+ * note.
  */
-const ESPACIOS = /[\s]+/g
+const ESPACIOS = new RegExp('[\\s\\u0085]+', 'g')
 
-/** Una línea, sin espacios en los bordes. Pura. */
+/**
+ * Lo que no es texto y no se ve. Se BORRA, no se colapsa: los controles C0 que
+ * no son espacio ni salto (U+0000-U+0008 y U+000E-U+001F; el tabulador, el
+ * salto, la tabulación vertical, el avance de página y el retorno se quedan
+ * para que los colapse `ESPACIOS`), el DEL (U+007F), el espacio de ancho cero
+ * y las marcas de dirección (U+200B-U+200F), los embebidos y el OVERRIDE bidi
+ * (U+202A-U+202E), los unidores invisibles (U+2060-U+2064), los aislantes
+ * (U+2066-U+2069) y el BOM (U+FEFF).
+ *
+ * El título de una pestaña lo escribe quien creó la página, y de aquí sale al
+ * chip de la cabecera, a su `title` y a la línea «Título de la pestaña: …»
+ * del prompt. Con un U+202E (RLO) dentro, lo que sigue se LEE AL REVÉS: el chip
+ * dice estar en una página que no es la que se tiene delante, y ni el usuario ni
+ * el modelo tienen forma de notarlo. Un ESC o un SOH tampoco se ven y ensucian
+ * el tooltip (revisión adversaria de H5, 2026-09-19). Se borran ANTES de
+ * colapsar: al revés, un invisible entre dos espacios dejaría dos espacios
+ * seguidos.
+ */
+const INVISIBLES = new RegExp(
+  '[\\u0000-\\u0008\\u000E-\\u001F\\u007F\\u200B-\\u200F\\u202A-\\u202E\\u2060-\\u2064\\u2066-\\u2069\\uFEFF]',
+  'g'
+)
+
+/**
+ * El texto sin esos caracteres. Se exporta para que la línea «Título de la
+ * pestaña: …» de `currentPageBlock` (prompts.js) no copie la regex: una lista
+ * de caracteres prohibidos repartida en dos sitios es una lista que se queda a
+ * medias en cuanto alguien añade uno. Pura.
+ */
+export function sinInvisibles(text) {
+  return String(text ?? '').replace(INVISIBLES, '')
+}
+
+/** Una línea, sin invisibles y sin espacios en los bordes. Pura. */
 function unaLinea(text) {
-  return String(text ?? '').replace(ESPACIOS, ' ').trim()
+  return sinInvisibles(text).replace(ESPACIOS, ' ').trim()
 }
 
 /**

@@ -27,6 +27,15 @@ function sinComentarios(src) {
   return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '')
 }
 
+/**
+ * El CSS sin sus comentarios, y es el que miran TODAS las aserciones de estilo
+ * de este fichero. Pasó de verdad (revisión adversaria de H5): el pin «la clave
+ * no cede» buscaba `flex: none` dentro del bloque `.loc-key` y lo encontraba…
+ * en el comentario que explica por qué la clave NO lleva `flex: none`. El pin
+ * daba verde sobre una declaración que dice lo contrario.
+ */
+const CSS_LIMPIO = sinComentarios(CSS)
+
 function jsIds() {
   const ids = new Set()
   for (const m of JS.matchAll(/\$\('([^']+)'\)/g)) ids.add(m[1])
@@ -83,16 +92,16 @@ test('estilo: las clases que pinta el JS están definidas en el CSS', () => {
     'msg', 'user', 'assistant', 'empty', 'notice', 'tools', 'tool',
     'typing', 'nav-card', 'nav-actions', 'suggestion', 'screen', 'busy',
   ]
-  const faltan = necesarias.filter((c) => !new RegExp('\\.' + c + '\\b').test(CSS))
+  const faltan = necesarias.filter((c) => !new RegExp('\\.' + c + '\\b').test(CSS_LIMPIO))
   eq(faltan, [], 'clases usadas en JS sin estilo')
 })
 
 test('estilo: el panel define ambos temas con variables', () => {
-  assert(/prefers-color-scheme:\s*dark/.test(CSS), 'falta el tema oscuro')
-  const varsClaras = new Set([...CSS.matchAll(/--([a-z0-9-]+):/g)].map((m) => m[1]))
+  assert(/prefers-color-scheme:\s*dark/.test(CSS_LIMPIO), 'falta el tema oscuro')
+  const varsClaras = new Set([...CSS_LIMPIO.matchAll(/--([a-z0-9-]+):/g)].map((m) => m[1]))
   assert(varsClaras.has('gold') && varsClaras.has('ink') && varsClaras.has('ground'), 'faltan tokens base')
   // El fondo del body debe salir de un token, no heredarse del anfitrión.
-  assert(/body\s*\{[^}]*background:\s*var\(--ground\)/s.test(CSS), 'el body debe pintar su propio fondo')
+  assert(/body\s*\{[^}]*background:\s*var\(--ground\)/s.test(CSS_LIMPIO), 'el body debe pintar su propio fondo')
 })
 
 test('estilo: lo que el JS enciende o pinta se ve', () => {
@@ -100,9 +109,9 @@ test('estilo: lo que el JS enciende o pinta se ve', () => {
   // (auditoría del 2026-09-13, docs/PLAN.md §2, A8): la tarjeta de «Dar
   // permiso» salía como una tarjeta de navegación cualquiera y el filtro
   // encendido del Registro no se distinguía del apagado.
-  assert(/\.perm-card\b/.test(CSS), 'clase sin estilo: perm-card')
-  assert(/button\.ghost\.on\b/.test(CSS), 'un filtro encendido tiene que verse encendido')
-  assert(/\.beacon\.(ok|bad|busy)\b/.test(CSS), 'el faro tiene los tres estados listos para H5')
+  assert(/\.perm-card\b/.test(CSS_LIMPIO), 'clase sin estilo: perm-card')
+  assert(/button\.ghost\.on\b/.test(CSS_LIMPIO), 'un filtro encendido tiene que verse encendido')
+  assert(/\.beacon\.(ok|bad|busy)\b/.test(CSS_LIMPIO), 'el faro tiene los tres estados listos para H5')
 
   // Y el ajuste «Reducir animaciones», que se guardaba y sólo llegaba al
   // overlay: el panel seguía animándose (A9).
@@ -112,7 +121,7 @@ test('estilo: lo que el JS enciende o pinta se ve', () => {
     /document\.documentElement\.classList\.toggle\('faro-still', !!state\.settings\.reduceMotion\)/.test(aplica[0]),
     'applySettingsToUi cuelga faro-still del <html> del panel'
   )
-  assert(/html\.faro-still\b/.test(CSS), 'y el CSS la atiende')
+  assert(/html\.faro-still\b/.test(CSS_LIMPIO), 'y el CSS la atiende')
 })
 
 test('el comando que se enseña arranca opencode con registro', () => {
@@ -288,7 +297,7 @@ test('EL CAMBIO: las páginas base del análisis viajan con el turno, se ven y s
   }
   assert(HTML.indexOf('id="skill"') < HTML.indexOf('id="btn-sources"'), 'el botón va junto al selector de Skill')
   for (const c of ['suggest', 'suggest-row', 'source-list', 'source-row', 'badge', 'sources-chip']) {
-    assert(new RegExp('\\.' + c + '\\b').test(CSS), 'clase sin estilo: ' + c)
+    assert(new RegExp('\\.' + c + '\\b').test(CSS_LIMPIO), 'clase sin estilo: ' + c)
   }
   assert(/showScreen\('screen-sources'\)/.test(JS))
 })
@@ -302,7 +311,7 @@ test('EL CAMBIO: claves por producto, host enlazado y contexto de Confluence des
     }
   }
   assert(!htmlIds.has('setup-token') && !htmlIds.has('setup-email'), 'el token único ya no existe')
-  assert(/\.product-keys\b/.test(CSS), 'clase sin estilo: product-keys')
+  assert(/\.product-keys\b/.test(CSS_LIMPIO), 'clase sin estilo: product-keys')
 
   const claves = JS.slice(JS.indexOf('async function saveKeys'), JS.indexOf('async function showManualStep'))
   assert(/setup-\$\{product\}-token/.test(claves), 'cada producto lee su token')
@@ -616,7 +625,7 @@ test('H2 A1: abrir una pantalla deja inerte el resto y mueve el foco; cerrarla l
   assert(app < HTML.indexOf('id="chat"') && HTML.indexOf('id="chat"') < HTML.indexOf('id="composer"'), '#app envuelve #chat y #composer')
   assert(HTML.indexOf('id="composer"') < HTML.indexOf('<section class="screen'), 'y las pantallas quedan fuera de #app')
   assert(/<\/footer>\s*<\/div>/.test(HTML), '#app se cierra tras el redactor')
-  assert(/#app\s*\{/.test(CSS), '#app tiene su sitio en el CSS (el cuerpo es una columna flex)')
+  assert(/#app\s*\{/.test(CSS_LIMPIO), '#app tiene su sitio en el CSS (el cuerpo es una columna flex)')
 
   const abrir = JS.slice(JS.indexOf('function showScreen'), JS.indexOf('function hideScreens'))
   assert(/\.inert = true/.test(abrir), 'lo de detrás queda inerte')
@@ -630,7 +639,7 @@ test('H2 A1: abrir una pantalla deja inerte el resto y mueve el foco; cerrarla l
 test('H2 A2: el chat no es una región viva que se reanuncie con cada trozo; hay un anunciador aparte', () => {
   assert(!/id="chat"[^>]*aria-live/.test(HTML), 'SEGURIDAD de lectura: #chat sin aria-live (cada delta reanunciaba la respuesta entera)')
   assert(/id="announcer"[^>]*aria-live="polite"/.test(HTML), 'el anunciador es una región viva aparte')
-  assert(/id="announcer"[^>]*class="sr-only"/.test(HTML) && /\.sr-only\s*\{/.test(CSS), 'sólo para el lector de pantalla')
+  assert(/id="announcer"[^>]*class="sr-only"/.test(HTML) && /\.sr-only\s*\{/.test(CSS_LIMPIO), 'sólo para el lector de pantalla')
   const streaming = JS.slice(JS.indexOf('function setStreaming'), JS.indexOf('function showBusy'))
   assert(/aria-busy/.test(streaming), 'mientras llega la respuesta el chat está ocupado')
   const pintar = JS.slice(JS.indexOf('function paintTurn('), JS.indexOf('async function readPageDigest('))
@@ -1039,7 +1048,7 @@ test('H5: la cabecera es el faro, el chip de ubicación y las acciones', () => {
   assert(/id="status-dot"[^>]*aria-hidden="true"/.test(HTML), 'y es decorativo: lo que se lee es #status-text')
   assert(/<span class="sr-only" id="status-text"/.test(HTML), '#status-text sigue existiendo, sólo para el lector de pantalla')
   assert(!/class="status"/.test(HTML) && !/class="dot"/.test(HTML), 'sin el bloque de estado ni su punto')
-  assert(!/^\.dot\b/m.test(CSS) && !/\n\.dot\b/.test(CSS), 'y el CSS no se queda con la regla del punto que ya no existe')
+  assert(!/^\.dot\b/m.test(CSS_LIMPIO) && !/\n\.dot\b/.test(CSS_LIMPIO), 'y el CSS no se queda con la regla del punto que ya no existe')
 
   // El chip, en dos piezas dentro de #location-text: la clave y el título.
   const chip = HTML.slice(HTML.indexOf('id="location-chip"'), HTML.indexOf('</button>', HTML.indexOf('id="location-chip"')))
@@ -1047,15 +1056,22 @@ test('H5: la cabecera es el faro, el chip de ubicación y las acciones', () => {
   assert(chip.indexOf('id="location-key"') < chip.indexOf('id="location-title"'), 'la clave va delante del título')
   assert(/class="loc-key[^"]*" id="location-key"/.test(chip), '#location-key lleva .loc-key')
   assert(/class="loc-title" id="location-title"/.test(chip), '#location-title lleva .loc-title')
-  for (const c of ['loc-key', 'loc-title']) assert(new RegExp('\\.' + c + '\\s*\\{').test(CSS), 'clase sin estilo: ' + c)
+  for (const c of ['loc-key', 'loc-title']) assert(new RegExp('\\.' + c + '\\s*\\{').test(CSS_LIMPIO), 'clase sin estilo: ' + c)
 
   // A6: quien cede es el chip, y dentro del chip el título. Las acciones no se
   // encogen ni se parten en dos filas: hoy son cuatro y con el «Qué mirar hoy»
   // de H11 serán cinco (5 × 28 + 4 × 2 = 148 px de los 320 del panel estrecho).
-  assert(/\.top-actions\s*\{[^}]*flex: none/.test(CSS), 'las acciones de la cabecera no ceden')
-  assert(/\.chip\s*\{[^}]*min-width: 0/.test(CSS), 'el chip sí, hasta la elipsis')
-  assert(/\.loc-key\s*\{[^}]*flex: none/.test(CSS), 'la clave no cede')
-  assert(/\.loc-title\s*\{[^}]*text-overflow: ellipsis/.test(CSS), 'el título es el que se recorta')
+  assert(/\.top-actions\s*\{[^}]*flex: none/.test(CSS_LIMPIO), 'las acciones de la cabecera no ceden')
+  assert(/\.chip\s*\{[^}]*min-width: 0/.test(CSS_LIMPIO), 'el chip sí, hasta la elipsis')
+  // Dentro del chip ceden los dos, pero por turnos: el título mil veces antes
+  // (`flex-shrink: 1000`) y la clave la última, y cuando cede lo hace con
+  // elipsis. Con `flex: none` la clave se cortaba EN SECO contra el borde del
+  // chip a 320 px con el quinto botón de H11 («Confluence · El», visto en el
+  // espejo al cerrar H5).
+  assert(/\.loc-key\s*\{[^}]*flex: 0 1 auto/.test(CSS_LIMPIO), 'la clave cede, pero la última')
+  assert(/\.loc-key\s*\{[^}]*text-overflow: ellipsis/.test(CSS_LIMPIO), 'y cuando cede, con elipsis, no en seco')
+  assert(/\.loc-title\s*\{[^}]*flex: 0 1000 auto/.test(CSS_LIMPIO), 'el título es el primero en recortarse')
+  assert(/\.loc-title\s*\{[^}]*text-overflow: ellipsis/.test(CSS_LIMPIO), 'también con elipsis')
 
   // Una sola fuente de verdad para el hueco del título: `state.statusLine`, que
   // escribe setStatus y pinta paintLocation (decisión 4 del plan: el texto de
@@ -1118,7 +1134,7 @@ test('H5: cada pantalla lleva su cabecera, y el botón de cerrar vive dentro de 
     assert(!/<button/.test(cabecera), `${pantalla} no tiene a dónde volver: su cabecera es sólo el título`)
   }
   assert(/id="btn-setup-skip"[^>]*>Ahora no</.test(HTML), '«Ahora no» se lee, no es un icono')
-  assert(/\.screen-head\s*\{[^}]*position: sticky/.test(CSS), 'la cabecera de una pantalla se queda arriba al desplazar')
+  assert(/\.screen-head\s*\{[^}]*position: sticky/.test(CSS_LIMPIO), 'la cabecera de una pantalla se queda arriba al desplazar')
   // Y el título sigue siendo lo que enfoca showScreen (A1): el h1 de la parte
   // VISIBLE, que en la pantalla de claves son dos.
   assert(HTML.indexOf('<div class="screen-head">', HTML.indexOf('id="setup-manual"')) > HTML.indexOf('id="setup-manual"'))
@@ -1139,14 +1155,45 @@ test('H5: la memoria entre sesiones se enciende en su pantalla y se ve en su bot
   // casilla; el botón de la cabecera sólo DICE si está activa.
   assert(!/btn-memory-toggle|memory-label/.test(HTML), 'la pastilla del redactor se fue del HTML')
   assert(!/memoryToggle|memoryLabel/.test(JS), 'y su cableado del JS')
-  assert(!/\.pill\b/.test(CSS), 'y su estilo del CSS: nadie más la usaba')
+  assert(!/\.pill\b/.test(CSS_LIMPIO), 'y su estilo del CSS: nadie más la usaba')
   const aplica = /function applySettingsToUi\(\)\s*\{[\s\S]*?\n\}/.exec(JS)
   assert(aplica, 'applySettingsToUi sigue existiendo')
   assert(/\$\('btn-memory'\)/.test(aplica[0]), 'el estado va al botón que abre la pantalla')
   assert(/classList\.toggle\('on', !!state\.settings\.crossSessionMemory\)/.test(aplica[0]), 'encendido si la memoria está activa')
-  assert(/\.icon-btn\.on\b/.test(CSS), 'y encendido se ve')
+  assert(/\.icon-btn\.on\b/.test(CSS_LIMPIO), 'y encendido se ve')
+
+  // Y se LEE. Hasta H5 el estado viajaba en el texto de la pastilla («Memoria
+  // activa»); con la pastilla fuera se quedó en la clase `.on` y en el `title`,
+  // que un `aria-label` fijo («Memoria») tapa: un lector de pantalla no tenía
+  // forma de saber si estaba encendida (revisión adversaria de H5). `#btn-memory`
+  // ABRE la pantalla y no conmuta nada, así que su semántica no es
+  // `aria-pressed`: lo que cambia es su NOMBRE, y dice lo mismo que el tooltip.
+  assert(/setAttribute\('aria-label', nombre\)/.test(aplica[0]), 'el nombre del botón dice el estado')
+  assert(/boton\.title = nombre/.test(aplica[0]), 'y el tooltip dice exactamente lo mismo')
+  for (const texto of ['Memoria entre sesiones: activa', 'Memoria entre sesiones: desactivada']) {
+    assert(aplica[0].includes(texto), 'falta el nombre: ' + texto)
+  }
+  assert(
+    /id="btn-memory"[^>]*aria-label="Memoria entre sesiones: desactivada"/.test(HTML),
+    'y el HTML arranca diciendo que está apagada, que es como arranca el ajuste'
+  )
+  assert(!/id="btn-memory"[^>]*aria-label="Memoria"/.test(HTML), 'nunca un «Memoria» a secas: taparía el title')
+  const espejoMemoria = readFileSync(join(ROOT, 'harness/panel-preview.html'), 'utf8')
+  assert(
+    !/\$\('btn-memory'\)\.title = /.test(espejoMemoria) ||
+      /\$\('btn-memory'\)\.setAttribute\('aria-label', 'Memoria entre sesiones: activa'\)/.test(espejoMemoria),
+    'el espejo pinta ese botón encendido: tiene que poner el mismo aria-label'
+  )
+  // Recortado al MANEJADOR, no a `wireEvents` entera: `applySettingsToUi()` se
+  // llama también al cerrar Ajustes, así que las dos regex unidas contra el
+  // trozo grande daban verde aunque la casilla no repintara nada (revisión
+  // adversaria de H5).
   const eventos = JS.slice(JS.indexOf('function wireEvents'), JS.indexOf('async function saveKeys'))
-  assert(/\$\('mem-enabled'\)\.addEventListener/.test(eventos) && /applySettingsToUi\(\)/.test(eventos), 'la casilla de la pantalla lo cambia y repinta el botón')
+  const desdeCasilla = eventos.slice(eventos.indexOf("$('mem-enabled').addEventListener"))
+  assert(desdeCasilla.startsWith("$('mem-enabled').addEventListener"), 'la casilla de la pantalla sigue cableada')
+  const casilla = desdeCasilla.slice(0, desdeCasilla.indexOf('\n  })') + 5)
+  assert(/saveSettings\(\{ crossSessionMemory:/.test(casilla), 'y guarda el ajuste')
+  assert(/applySettingsToUi\(\)/.test(casilla), 'y repinta el botón de la cabecera desde ESE manejador')
 })
 
 test('H5: la fila del redactor es una línea, y quien cede es el nombre del modelo', () => {
@@ -1155,10 +1202,10 @@ test('H5: la fila del redactor es una línea, y quien cede es el nombre del mode
   // va a trabajar Faro, no; los botones tampoco, porque apretados parten su
   // contenido en dos líneas y la barra crece de alto.
   assert(!/class="grow"/.test(HTML.slice(HTML.indexOf('id="composer"'), HTML.indexOf('</footer>'))), 'sin separadores en el redactor')
-  assert(/\.model-select\s*\{[^}]*flex: 1 1 auto/.test(CSS) && /\.model-select\s*\{[^}]*min-width: 0/.test(CSS))
-  assert(/\.skill-select\s*\{[^}]*flex: none/.test(CSS), 'la Skill no cede')
-  assert(/\.composer-meta \.icon-btn\s*\{[^}]*flex: none/.test(CSS), 'ni los botones')
-  assert(!/max-width: (?:46|34)%/.test(CSS), 'y ya no hacen falta los topes en % que sostenían la fila vieja')
+  assert(/\.model-select\s*\{[^}]*flex: 1 1 auto/.test(CSS_LIMPIO) && /\.model-select\s*\{[^}]*min-width: 0/.test(CSS_LIMPIO))
+  assert(/\.skill-select\s*\{[^}]*flex: none/.test(CSS_LIMPIO), 'la Skill no cede')
+  assert(/\.composer-meta \.icon-btn\s*\{[^}]*flex: none/.test(CSS_LIMPIO), 'ni los botones')
+  assert(!/max-width: (?:46|34)%/.test(CSS_LIMPIO), 'y ya no hacen falta los topes en % que sostenían la fila vieja')
 })
 
 // Tarjeta de análisis, estado vacío y herramientas plegadas (pasos 5 y 6 del
@@ -1180,11 +1227,11 @@ test('H5: cada observación dice de qué clase es, y la tarjeta viva se puede co
   }
   assert(/contradiccion: 'contradicción'/.test(etiquetas[0]), 'al usuario se le escribe con tilde; al modelo se le pide sin ella')
   for (const clase of ['note-meta', 'note-kind']) {
-    assert(new RegExp('\\.' + clase + '\\s*\\{').test(CSS), 'clase sin estilo: ' + clase)
+    assert(new RegExp('\\.' + clase + '\\s*\\{').test(CSS_LIMPIO), 'clase sin estilo: ' + clase)
   }
   // Una etiqueta, no un color: un solo acento en el panel (decisión del plan).
-  assert(/\.note-kind\s*\{[^}]*color: var\(--muted\)/.test(CSS), '.note-kind no se colorea por tipo')
-  assert(!/\.note-kind\.(?:dato|supuesto|hueco|contradiccion|riesgo)/.test(CSS), 'ni una regla por kind')
+  assert(/\.note-kind\s*\{[^}]*color: var\(--muted\)/.test(CSS_LIMPIO), '.note-kind no se colorea por tipo')
+  assert(!/\.note-kind\.(?:dato|supuesto|hueco|contradiccion|riesgo)/.test(CSS_LIMPIO), 'ni una regla por kind')
 
   // «Copiar observaciones»: la prosa numerada tal cual, para pegarla en el
   // comentario de la incidencia o de la página.
@@ -1238,7 +1285,7 @@ test('H5: las consultas a Atlassian se pliegan al terminar en vez de borrarse', 
   assert(/consulta\$\{tools\.length === 1 \? '' : 's'\} a Atlassian/.test(pintar), 'que sigue diciendo cuántas fueron')
   assert(/for \(const row of filas\) fold\.appendChild\(row\)/.test(pintar), 'y las filas van dentro, no a la basura')
   assert(!/\.open = true|setAttribute\('open'/.test(pintar), 'siempre cerrado: restaurar el chat no recrea filas que abrir')
-  assert(/\.tools-fold\b/.test(CSS) && /\.tools-fold > summary\b/.test(CSS), 'con su estilo')
+  assert(/\.tools-fold\b/.test(CSS_LIMPIO) && /\.tools-fold > summary\b/.test(CSS_LIMPIO), 'con su estilo')
   // Y el pintado sigue sin enseñar el bloque de anclas: el pin de H1 vale igual.
   assert(/splitAnchorsBlock\(tracker\.text,\s*\{\s*final\s*\}\)/.test(pintar), 'el bloque de anclas nunca se pinta')
 })
@@ -1279,11 +1326,21 @@ test('H5: el espejo del panel no copia la paleta, fuerza el tema con data-theme 
   // tokens (su botón «Claro» enseñaba colores que ya no existían). Ahora enlaza
   // el panel.css real y el tema se fuerza con `data-theme`, que es lo único para
   // lo que existe `:root[data-theme="dark"]`.
-  assert(!/--ground:\s*#/.test(espejo), 'el espejo no declara la paleta: ningún color de fondo escrito a mano')
-  assert(!/--gold:\s*#/.test(espejo), 'ni el dorado')
+  // La comprobación se hace contra la LISTA REAL de tokens de panel.css y contra
+  // el `--nombre:` a secas, no contra «--ground:#»: el pin viejo sólo miraba dos
+  // nombres y sólo en hexadecimal, así que una paleta copiada en `rgb()`, en
+  // `hsl()` o con cualquier otro token pasaba de largo (revisión adversaria de
+  // H5). Usar los tokens con `var(--x)` sí vale: es justo lo que el espejo hace.
+  const estilos = [...espejo.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)].map((m) => m[1]).join('\n')
+  const tokens = [...(/:root\s*\{([\s\S]*?)\n\}/.exec(CSS_LIMPIO)?.[1] || '').matchAll(/(--[a-z0-9-]+)\s*:/g)].map((m) => m[1])
+  for (const obligatorio of ['--ground', '--surface', '--surface-2', '--ink', '--ink-2', '--muted', '--hairline', '--hairline-strong', '--gold', '--gold-bg', '--gold-line', '--mark', '--mark-strong', '--on-mark', '--ok', '--danger', '--danger-bg', '--line', '--line-2', '--teal', '--clay', '--clay-bg']) {
+    assert(tokens.includes(obligatorio), 'la lista sale del :root de panel.css y ahí falta ' + obligatorio)
+  }
+  const copiados = tokens.filter((t) => new RegExp(t + '\\s*:').test(estilos))
+  eq(copiados, [], 'el espejo no DECLARA ningún token del panel; los usa con var()')
   assert(espejo.includes('href="/src/panel/panel.css"'), 'el espejo enlaza el CSS real del panel')
   assert(espejo.includes('dataset.theme'), 'el tema se fuerza poniendo data-theme')
-  assert(/:root\[data-theme="dark"\]/.test(CSS), 'y panel.css tiene ese bloque para que gane en las dos direcciones')
+  assert(/:root\[data-theme="dark"\]/.test(CSS_LIMPIO), 'y panel.css tiene ese bloque para que gane en las dos direcciones')
 
   // `faroPreview` es la única de las tres verificaciones del rediseño que MIDE
   // algo: lo que hay que comprobar en cada captura, con su nombre, para que la
@@ -1294,9 +1351,16 @@ test('H5: el espejo del panel no copia la paleta, fuerza el tema con data-theme 
     assert(new RegExp('\\b' + clave + '\\b').test(medida), `check() mide ${clave}`)
   }
   assert(
-    /const ok = !overflowX && topHeight <= 48 && composerMetaHeight <= 36 && screenHeadsVisible && emptyStateRows <= 3/.test(medida),
-    'y el veredicto son los cinco a la vez'
+    /const ok = presente && !overflowX && topHeight <= 48 && composerMetaHeight <= 36 && screenHeadsVisible && emptyStateRows <= 3/.test(medida),
+    'y el veredicto son los cinco a la vez, y que haya panel'
   )
+
+  // Que haya panel es lo PRIMERO: un selector que no casa medía 0 px y 0 ≤ 48,
+  // así que el espejo sobre un documento vacío —el fallo que H5 tuvo de
+  // verdad— devolvía `ok: true` sin nada que medir (revisión adversaria de H5).
+  assert(/\['#app', '\.top', '\.composer-meta'\]\.filter\(\(s\) => !doc\.querySelector\(s\)\)/.test(medida), 'las tres piezas tienen que existir')
+  assert(/topHeight < 1 \|\| composerMetaHeight < 1/.test(medida), 'y medir algo: un 0 px no es «cabe de sobra»')
+  assert(/const presente = !motivo/.test(medida) && /return \{ ok, motivo,/.test(medida), 'y la ausencia sale con su motivo en el resultado')
 
   // Las dos conversaciones: la de Confluence de siempre y la de Jira, que es la
   // que enseña las ocho observaciones con su clase, la que no se pudo situar, la

@@ -416,10 +416,13 @@ Con el banco levantado hay dos páginas:
   nueve pantallas sin tener que instalar nada. Sus mandos cambian el tema
   (claro/oscuro), la anchura (320, 360 y 420), el estado del faro y la pantalla
   abierta, y `faroPreview.check()` mide en cada combinación lo que hay que mirar:
-  que nada se salga a lo ancho, que la cabecera y la fila del redactor quepan en
-  una línea y que el chat vacío no pase de tres sugerencias. El rediseño se
-  acepta mirando las cuatro capturas (320 y 420 × claro y oscuro) con esa medida
-  en verde.
+  que haya panel que medir, que nada se salga a lo ancho, que la cabecera y la
+  fila del redactor quepan en una línea y que el chat vacío no pase de tres
+  sugerencias. Lo primero no sobra: un selector que no casa mide 0 px, y 0 cabe
+  de sobra en cualquier tope, así que sobre una página vacía la medida decía que
+  todo estaba bien. Si falta el panel, ahora lo dice con su motivo. El rediseño
+  se acepta mirando las cuatro capturas (320 y 420 × claro y oscuro) con esa
+  medida en verde.
 
 - **`npm run check`** no necesita nada instalado. Valida que todos los ficheros
   parsean, que **nada se usa antes de declararse**, que el manifest es MV3

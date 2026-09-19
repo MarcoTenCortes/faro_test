@@ -100,7 +100,13 @@ const CON_BASE = {
  */
 export function suggestionsFor(site, skill = 'general', sources = null) {
   const producto = site?.product === 'confluence' ? 'confluence' : 'jira'
-  const rama = POR_SKILL[skill] || POR_SKILL.general
+  // `Object.hasOwn` y no `POR_SKILL[skill] ||`: en un objeto literal, las claves
+  // «__proto__», «constructor» y «toString» dan algo VERDADERO que viene del
+  // prototipo, y el `[...rama[producto]]` de abajo lanzaba sobre un `undefined`
+  // (revisión adversaria de H5). `state.skill` sale de un registro guardado, que
+  // se puede editar a mano. `producto` no necesita guarda: es una de las dos
+  // cadenas literales de la línea de arriba, nunca lo que llegue de fuera.
+  const rama = Object.hasOwn(POR_SKILL, skill) ? POR_SKILL[skill] : POR_SKILL.general
   const lista = [...rama[producto]]
   if (rama === POR_SKILL.analisis && hasSources(sources)) {
     lista[SUGGESTION_COUNT - 1] = CON_BASE[producto]

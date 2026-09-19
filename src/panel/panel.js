@@ -4047,9 +4047,18 @@ function applySettingsToUi() {
   // además una pastilla en el redactor que hacía las dos cosas: dos controles
   // para un ajuste, y el que se veía siempre era el que ocupaba la fila donde
   // se escribe.
+  // El estado NO puede vivir sólo en la clase `.on` y en el `title`: el botón
+  // lleva `aria-label`, que tapa al `title`, así que un lector de pantalla oía
+  // «Memoria» encendida y apagada (regresión de H5, que se llevó la pastilla
+  // «Memoria activa» donde antes se leía). No es `aria-pressed`: este botón
+  // ABRE la pantalla, no conmuta el ajuste. Lo que cambia es su NOMBRE.
   const boton = $('btn-memory')
+  const nombre = state.settings.crossSessionMemory
+    ? 'Memoria entre sesiones: activa'
+    : 'Memoria entre sesiones: desactivada'
   boton.classList.toggle('on', !!state.settings.crossSessionMemory)
-  boton.title = state.settings.crossSessionMemory ? 'Memoria entre sesiones: activa' : 'Memoria entre sesiones'
+  boton.title = nombre
+  boton.setAttribute('aria-label', nombre)
   // «Reducir animaciones» se leía y se guardaba desde H0, pero sólo lo aplicaba
   // el overlay sobre la página: el panel seguía deslizando burbujas y latiendo
   // (auditoría del 2026-09-13, docs/PLAN.md §2, A9). La clase es la misma que

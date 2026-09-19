@@ -203,15 +203,20 @@ Arriba hay tres cosas, y ninguna ocupa más de una línea:
   sitio de los botones. Para un lector de pantalla el texto sigue estando ahí,
   aunque no se vea.
 - **Dónde estás**, en el centro: la clave («SIMPL-1234» en Jira, «ENG» —la del espacio— en Confluence) y,
-  detrás, el título de la pestaña. Si el panel se estrecha, lo que se recorta es
-  el título, nunca la clave; y el tooltip dice la ubicación entera, con el id de
+  detrás, el título de la pestaña. Si el panel se estrecha, el primero en
+  recortarse es el título, y sólo cuando ya no queda título se recorta la clave,
+  siempre con puntos suspensivos y nunca a hachazos contra el borde del chip; y
+  el tooltip dice la ubicación entera, con el id de
   la página incluido. **Mientras se responde o mientras Faro te lleva por el
   árbol**, ese hueco enseña qué está pasando («pensando…», «paso 2/5») y al
   acabar vuelve el título. Un fallo de conexión no se queda ahí: lo cuentan el
   faro en rojo y la pantalla que te dice cómo arrancar opencode.
 - **Los cuatro botones**: nueva sesión, memoria (encendido si la memoria entre
   sesiones está activa), registro y ajustes. Nunca se encogen ni se parten en
-  dos filas, ni con el panel en su anchura mínima.
+  dos filas, ni con el panel en su anchura mínima. El de memoria dice en qué
+  estado está también por escrito —«Memoria entre sesiones: activa» o
+  «: desactivada», en el tooltip y en el nombre que lee un lector de pantalla—,
+  porque el color encendido no se oye.
 
 Cada pantalla (Ajustes, Memoria, Registro, Páginas base, el paso manual de las
 claves) se cierra con **la flecha de su cabecera**, que se queda arriba mientras

@@ -287,8 +287,10 @@ body {
   cursor: default;
   flex: 0 1 auto;
 }
-/* Dónde estás, en dos piezas: la clave («SIMPL-1234», «Confluence · ENG») y el
-   título de la pestaña, que es lo que cede cuando el panel se estrecha. */
+/* Dónde estás, en dos piezas: la clave («SIMPL-1234» en Jira, «ENG» en
+   Confluence: lo MÁS CORTO que identifica el sitio, sin el nombre del producto
+   delante) y el título de la pestaña, que es lo primero que cede cuando el
+   panel se estrecha. */
 .loc { display: flex; align-items: baseline; gap: var(--s1); min-width: 0; }
 .loc-key {
   font-size: var(--text-xs);

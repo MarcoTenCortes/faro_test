@@ -6,7 +6,7 @@
  * porque es fácil borrarlas sin querer al reescribir una frase.
  */
 
-import { cleanTabTitle } from '../atlassian/site.js'
+import { cleanTabTitle, sinInvisibles } from '../atlassian/site.js'
 import { INDEX_LIMITS } from '../shared/config.js'
 import { DEFAULT_SKILL, offersNavigation, skillSystem, MISSING_FROM_BLOCKS } from './skills.js'
 import { NOTHING_TO_SAY } from './notes.js'
@@ -496,8 +496,12 @@ function currentPageBlock(site, page, conPagina = false, exclusivo = false) {
   // El título de la pestaña es texto de Confluence: una línea, sin saltos
   // raros (un U+2028 abriría línea) y con tope, como el título del digest.
   // `\s` cubre U+2028 y U+2029, pero NO U+0085 (NEL), que también abre línea:
-  // va nombrado aparte (revisión adversaria de H2, 2026-09-14).
-  const titulo = String(page?.title || '')
+  // va nombrado aparte (revisión adversaria de H2, 2026-09-14). Y antes de
+  // colapsar se van los caracteres que no son texto y no se ven —controles C0,
+  // marcas bidi, espacios de ancho cero—: la lista es la de site.js, importada
+  // y no copiada, porque el mismo título alimenta el chip de la cabecera
+  // (revisión adversaria de H5, 2026-09-19).
+  const titulo = sinInvisibles(page?.title || '')
     .replace(ESPACIOS, ' ')
     .trim()
     .slice(0, 200)

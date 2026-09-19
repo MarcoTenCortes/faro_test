@@ -404,7 +404,7 @@ test('SEGURIDAD: una URL con «%» mal codificado no lanza: se devuelve el sitio
 // llaman los dos: las 33 instantáneas de test/fixtures/prompts pinan que el
 // prompt sale byte a byte igual que antes de moverla.
 // ---------------------------------------------------------------------------
-import { cleanTabTitle, locationParts, LOCATION_LIMITS } from '../../src/atlassian/site.js'
+import { cleanTabTitle, locationParts, LOCATION_LIMITS, sinInvisibles } from '../../src/atlassian/site.js'
 
 const SITIO_JIRA = { host: 'jira.corp.eu', product: 'jira', issueKey: 'SIMPL-12', projectKey: 'SIMPL', cloud: false }
 const SITIO_CONF = { host: 'confluence.corp.eu', product: 'confluence', spaceKey: 'ENG', pageId: '200', cloud: false }
@@ -430,17 +430,37 @@ test('cleanTabTitle: la clave que Jira pone delante y el producto que firma detr
   eq(cleanTabTitle(12), '12')
 })
 
-test('SEGURIDAD: el título de una pestaña entra en una línea y acotado', () => {
+test('SEGURIDAD: el título de una pestaña entra en una línea, acotado y sin caracteres invisibles', () => {
   // Lo escribe quien creara la página, y acaba en dos sitios: el prompt del
   // sistema (donde un salto finge una línea de Faro) y la cabecera del panel
   // (donde parte la fila en dos y empuja los botones). `\s` de JavaScript cubre
-  // U+2028 y U+2029 pero NO el NEL (U+0085): va nombrado aparte.
-  eq(cleanTabTitle('Guía\n\nde APIs ymás - Jira', SITIO_JIRA), 'Guía de APIs y más')
-  eq(cleanTabTitle('   Guía  ', SITIO_CONF), 'Guía', 'y sin espacios raros en los bordes')
+  // U+2028 y U+2029 pero NO el NEL (U+0085): va nombrado aparte. Los tres van
+  // aquí CON ESCAPE: escritos crudos no se leen, y el literal parecía decir otra
+  // cosa (revisión adversaria de H5).
+  eq(cleanTabTitle('Guía\n\nde\u2028APIs\u2029y\u0085más - Jira', SITIO_JIRA), 'Guía de APIs y más')
+  eq(cleanTabTitle('  \u0085 Guía  ', SITIO_CONF), 'Guía', 'y sin espacios raros en los bordes')
   eq(cleanTabTitle('[SIMPL-12]\nConsent API', SITIO_JIRA), 'Consent API', 'la clave se quita sobre el título ya de una línea')
   eq(LOCATION_LIMITS.title, 120)
   eq(cleanTabTitle('A'.repeat(500), SITIO_CONF).length, LOCATION_LIMITS.title, 'con tope')
   eq(cleanTabTitle('A'.repeat(500), SITIO_CONF), 'A'.repeat(120))
+
+  // Y lo que no es texto y NO SE VE: un RLO (U+202E) da la vuelta a lo que
+  // sigue, así que el chip diría estar en una página que no es la de delante;
+  // un ESC, un SOH, un espacio de ancho cero o un BOM ensucian el tooltip sin
+  // verse. Se borran, no se colapsan (revisión adversaria de H5, 2026-09-19).
+  eq(cleanTabTitle('Gu\u202Eía de APIs', SITIO_CONF), 'Guía de APIs', 'el RLO se va')
+  eq(cleanTabTitle('Gu\u001Bía\u0001 de APIs', SITIO_CONF), 'Guía de APIs', 'el ESC y el SOH también')
+  eq(cleanTabTitle('Guía\u200B de\uFEFF APIs', SITIO_CONF), 'Guía de APIs', 'el espacio de ancho cero y el BOM, fuera')
+  eq(cleanTabTitle('a\u200B b', SITIO_CONF), 'a b', 'y se van ANTES de colapsar: no queda un espacio doble')
+  eq(cleanTabTitle('\u202Eabc', SITIO_JIRA), 'abc', 'también si abre el título')
+  // Lo que SÍ es texto se queda entero: acentos, emoji, rayas y comillas.
+  eq(cleanTabTitle('Guía de APIs ✅ — «v2»', SITIO_CONF), 'Guía de APIs ✅ — «v2»', 'un emoji no es un carácter de control')
+  eq(sinInvisibles('Guía de APIs ✅ — «v2»'), 'Guía de APIs ✅ — «v2»')
+  eq(sinInvisibles(null), '', 'y aguanta lo que no es texto')
+  eq(sinInvisibles(12), '12')
+
+  // La misma limpieza llega al prompt, que es de donde salió esta función.
+  eq(locationParts(SITIO_CONF, 'Gu\u202Eía de APIs - Ingeniería - Confluence').title, 'Guía de APIs - Ingeniería')
 })
 
 test('locationParts: la clave identifica el sitio y el título de la pestaña es lo que cede', () => {
