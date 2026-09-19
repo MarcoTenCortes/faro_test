@@ -480,8 +480,9 @@ corto y un detalle. Todos los títulos, por dónde salen:
   contexto y memoria, en una sola lectura— y la sesión abierta, las tres cosas
   pedidas a la vez, así que la fase mide lo que tarde la más lenta), «MCP» (las
   dos consultas a opencode: `GET /mcp` y `GET /config`), «enlazado» (adoptar el
-  MCP si hacía falta y, desde Jira, leer el contexto del Confluence enlazado,
-  que es de otro host) y «restaurar» (repintar la conversación).
+  MCP si hacía falta y, desde Jira, leer lo del Confluence enlazado —contexto,
+  índice y prefijo del wiki, también en una sola lectura—, que es otro sitio y
+  no cabe en lo del propio) y «restaurar» (repintar la conversación).
   Sale también cuando el arranque acaba en la pantalla de claves o en la de
   contexto, sin las fases que no llegó a hacer. Si opencode no contesta NO sale
   nada (sería un arranque verde que no hubo) y la fila «tiempos (arranque)» del
@@ -648,6 +649,13 @@ corto y un detalle. Todos los títulos, por dónde salen:
   sitio (y, desde un Jira, del Confluence enlazado): las URLs de otros hosts se
   descartan antes de mirar nada, y una sigla con forma de clave («UTF-8»,
   «ISO-8601») sólo cuenta si su proyecto es conocido o viene en `/browse/`.
+- «Índice sin ampliar» — el turno terminó con el panel ya en otro sitio (o en
+  otra sesión), así que lo que devolvieron las herramientas no se cosechó ni se
+  leyó el árbol de la barra lateral: el índice de aquel sitio se queda como
+  estaba y la siguiente pregunta allí vuelve a intentarlo. El detalle dice con
+  qué sitio se preguntó. Pasa cuando cambias de pestaña a mitad de una respuesta
+  larga: entre que el modelo contesta y que se cosecha el índice está el marcado
+  de las observaciones, que puede durar otro turno entero.
 - «Árbol leído de la página» — tras la respuesta se leyó del DOM la parte
   desplegada del árbol lateral: relaciones nuevas y filas leídas.
 - «Índice guardado» — la ÚNICA escritura del índice de este turno, con cuántas

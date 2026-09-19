@@ -145,6 +145,11 @@ test('P7: resolveBlockQuote acepta el ámbito ya calculado y lo usa en los tres 
     'el ámbito entra por opciones, con valor por defecto para quien no lo pase'
   )
   eq(cuenta(fn, 'digestScope()'), 1, 'como mucho una llamada, y sólo si no llegó el ámbito')
+  // Y el que llega es el que se usa. Sin este pin, cambiar la inicialización a
+  // `let ambito = null` dejaba las 943 pruebas en verde con el ámbito recibido
+  // tirado a la basura: cada observación volvía a calcularlo, que es justo lo
+  // que P7 quitó (revisión adversaria de H6).
+  assert(fn.includes('let ambito = scope'), 'la variable perezosa arranca con el ámbito RECIBIDO, no vacía')
   assert(/const elAmbito = \(\) =>/.test(fn), 'y perezosa: con `digest` y `scope` dados no se calcula nada')
   assert(fn.includes('pageDigest({ scope: elAmbito() })'), 'leer la página usa ese ámbito')
   assert(fn.includes('blockBoundary(elAmbito())'), 'la frontera del texto del bloque, también')

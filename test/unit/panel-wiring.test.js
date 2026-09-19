@@ -394,7 +394,7 @@ test('EL CAMBIO: el análisis en Jira lee la incidencia, permite leerla en el al
 
   // Las páginas base desde Jira: el índice y el host del Confluence enlazado.
   const enlazado = JS.slice(JS.indexOf('async function loadLinkedContext'), JS.indexOf('async function ensureContentAccess'))
-  assert(/const \{ index \} = await getIndex\(host\)/.test(enlazado), 'el índice del Confluence enlazado se carga con su contexto')
+  assert(/const index = bundle\.index/.test(enlazado), 'el índice del Confluence enlazado se carga con su contexto')
   assert(!/saveIndex\(/.test(enlazado), 'y nunca se guarda desde Jira')
   assert(/function sourcesIndex\(\)/.test(JS) && /function linkedHost\(\)/.test(JS))
   const entrada = JS.slice(JS.indexOf('function onSourcesInput'), JS.indexOf('function refReasonText'))
@@ -451,7 +451,14 @@ test('EL CAMBIO: desde un Jira Data Center el panel pregunta al Confluence enlaz
   const alta = JS.slice(JS.indexOf('async function addSource('), JS.indexOf('async function removeSource'))
   assert(/if \(from === 'confluence'\) await mergePagesIntoIndex/.test(alta), 'y tampoco al elegir una sugerencia suya')
   const enlazado = JS.slice(JS.indexOf('async function loadLinkedContext'), JS.indexOf('async function ensureContentAccess'))
-  assert(/await getSite\(host\)/.test(enlazado) && /wikiPrefix/.test(enlazado), 'el prefijo del wiki enlazado, si se observó')
+  assert(/bundle\.site\?\.wikiPrefix/.test(enlazado) && /wikiPrefix/.test(enlazado), 'el prefijo del wiki enlazado, si se observó')
+  // Y todo eso en UNA lectura, como el sitio propio (P4): el contexto, el
+  // índice y el prefijo iban en tres lecturas encadenadas del almacén, cada una
+  // releyendo su mapa entero (revisión adversaria de H6).
+  const enlazadoCodigo = sinComentarios(enlazado)
+  assert(/const bundle = await getSiteBundle\(host\)/.test(enlazadoCodigo), 'un solo paquete para el Confluence enlazado')
+  eq(enlazadoCodigo.split('await ').length - 1, 1, 'y una sola espera al almacén')
+  assert(!/getIndex\(|getSite\(|getContextMd\(/.test(enlazadoCodigo), 'ninguna de las tres lecturas sueltas de antes')
   // El permiso se pide sobre el dominio que toca, desde la pantalla, y sin inyectar en la pestaña de Jira.
   assert(/async function requestSourcesPermission\(\)/.test(JS))
   assert(/requestHostPermission\(\{ origin: target\.site\.origin, host: target\.site\.host, tabId: null \}\)/.test(JS))
@@ -1013,7 +1020,7 @@ test('H3: «Respuesta recibida» dice lo que costó el turno, y el Registro guar
     assert(envio.includes(`cron.mark('${fase}')`), `falta la fase ${fase}`)
   }
   assert(
-    envio.indexOf("cron.mark('pintar')") < envio.indexOf('await growIndex(turn.parts)'),
+    envio.indexOf("cron.mark('pintar')") < envio.indexOf('await growIndex(turn.parts,'),
     'la marca de «pintar» va antes del índice, que es lo que separa'
   )
   assert(envio.indexOf('await growTreeFromPage()') < envio.indexOf("cron.mark('índice')"), 'y «índice» cierra tras el árbol')
@@ -1513,7 +1520,7 @@ test('H6 P6b: la conversación se restaura por ventana, y el chat dice cuándo l
   // «.older-turns» y dejaría la fila sin estilo con el pin en verde.
   assert(/'older-turns'/.test(fila) && /\.older-turns\s*\{/.test(CSS_LIMPIO), 'con su clase y su estilo')
   assert(/'btn-older-turns'/.test(fila) && /'Ver toda la conversación'/.test(fila), 'y su botón')
-  assert(/'ghost small'/.test(fila), 'que es secundario: la conversación ya está ahí')
+  assert(/'ghost small ' \+ NEEDS_IDLE/.test(fila), 'que es secundario: la conversación ya está ahí')
   assert(/restoreConversation\(state\.bootToken, \{ all: true \}\)/.test(fila), 'que vuelve a pedirla entera')
   assert(/RESTORE_LIMITS\.messages/.test(fila), 'y dice cuántos mensajes se están enseñando, sin escribir el número a mano')
   // El botón se crea con el chat, que se vacía en cada restauración: no puede
@@ -1586,6 +1593,13 @@ test('H6 P6b: el panel sabe lo que arrastra la conversación y lo dice una vez',
   assert(/clearSessionWeight\(state\.site\.host\)/.test(nueva), 'se borra también del almacén')
   assert(/state\.sessionToolChars = 0/.test(nueva) && /state\.heavyWarned = false/.test(nueva))
 
+  // Y olvidar el sitio lo borra igual: su sesión se cierra ahí mismo
+  // (`clearSessionId`) y dejar el peso contaría la conversación de antes contra
+  // la de después (revisión adversaria de H6).
+  const olvidar = sinComentarios(JS.slice(JS.indexOf("$('btn-forget')"), JS.indexOf('// --- memoria')))
+  assert(/clearSessionWeight\(state\.site\.host\)/.test(olvidar), 'olvidar el sitio borra también lo que pesaba su sesión')
+  assert(/state\.sessionToolChars = 0/.test(olvidar) && /state\.heavyWarned = false/.test(olvidar))
+
   // Y al cambiar de sitio, como los tiempos: el peso es de la sesión de ESE host.
   const refresco = JS.slice(JS.indexOf('async function refreshTab'), JS.indexOf('async function bootForSite'))
   const cambio = refresco.slice(refresco.indexOf('if (changedHost) {'), refresco.indexOf('state.site = site'))
@@ -1644,16 +1658,16 @@ test('H6 P3: el índice se escribe UNA vez por turno y bajo el host que lo apren
   // lo que el usuario está esperando. `offerNotes` no hace nada en los demás
   // modos, así que la tarjeta de navegación sigue yendo detrás del índice, que es
   // lo único que necesita que esté crecido.
-  assert(envio.indexOf('await offerNotes(') < envio.indexOf('await growIndex(turn.parts)'), 'las marcas, antes del índice')
-  assert(envio.indexOf('await growIndex(turn.parts)') < envio.indexOf('await offerNavigation('), 'la navegación, detrás')
+  assert(envio.indexOf('await offerNotes(') < envio.indexOf('await growIndex(turn.parts,'), 'las marcas, antes del índice')
+  assert(envio.indexOf('await growIndex(turn.parts,') < envio.indexOf('await offerNavigation('), 'la navegación, detrás')
   // Y las fases siguen midiendo lo que dicen: «marcas» es offerNotes y «índice»
   // lo que crece, cada una cerrada donde acaba su trabajo (H3).
-  assert(envio.indexOf("cron.mark('marcas')") < envio.indexOf('await growIndex(turn.parts)'), '«marcas» cierra en offerNotes')
+  assert(envio.indexOf("cron.mark('marcas')") < envio.indexOf('await growIndex(turn.parts,'), '«marcas» cierra en offerNotes')
   assert(envio.indexOf("cron.mark('pintar')") < envio.indexOf('await offerNotes('), 'y «pintar» sigue cerrando antes')
 
   // Los tres sitios que hacen crecer el índice sólo lo APUNTAN.
   const cosecha = sinComentarios(JS.slice(JS.indexOf('async function growIndex'), JS.indexOf('async function growTreeFromPage')))
-  assert(/markIndexDirty\(index\)/.test(cosecha) && !/saveIndex\(/.test(cosecha), 'lo que devolvieron las herramientas se apunta, no se escribe')
+  assert(/markIndexDirty\(index, site\.host\)/.test(cosecha) && !/saveIndex\(/.test(cosecha), 'lo que devolvieron las herramientas se apunta, no se escribe')
   const arbol = sinComentarios(JS.slice(JS.indexOf('async function growTreeFromPage'), JS.indexOf('function markIndexDirty')))
   assert(/markIndexDirty\(merged\)/.test(arbol) && !/saveIndex\(/.test(arbol), 'el árbol de la barra lateral, igual')
   const nav = sinComentarios(JS.slice(JS.indexOf('async function offerNavigation'), JS.indexOf('async function learnAncestry')))
@@ -1664,12 +1678,12 @@ test('H6 P3: el índice se escribe UNA vez por turno y bajo el host que lo apren
   // planificador y una segunda pasada de notas, y en ese hueco el panel puede
   // haberse ido a otro sitio (C2 de H2).
   const apuntar = sinComentarios(JS.slice(JS.indexOf('function markIndexDirty'), JS.indexOf('async function persistIndex')))
-  assert(/const host = state\.site\?\.host \?\? state\.lastHost/.test(apuntar), 'el host se captura al apuntar')
+  assert(/function markIndexDirty\(index, host = state\.site\?\.host \?\? state\.lastHost\)/.test(apuntar), 'el host se captura al apuntar, o lo pone quien lo sabe')
   assert(/state\.indexDirty = \{ host, index \}/.test(apuntar), 'junto al índice que se aprendió')
   const escribir = sinComentarios(JS.slice(JS.indexOf('async function persistIndex'), JS.indexOf('function warnAboutSources')))
   assert(/const pendiente = state\.indexDirty/.test(escribir) && /state\.indexDirty = null/.test(escribir), 'y se consume al escribir')
-  assert(/await saveIndex\(host, index\)/.test(escribir), 'se guarda bajo el host apuntado')
-  assert(!/state\.site/.test(escribir), 'nunca bajo el de ahora: es lo único que impide escribir el índice de un sitio en la clave de otro')
+  assert(/await saveIndex\(host, aGuardar\)/.test(escribir), 'se guarda bajo el host apuntado')
+  assert(!/saveIndex\(state\./.test(escribir), 'nunca bajo el de ahora: es lo único que impide escribir el índice de un sitio en la clave de otro')
   assert(/'Índice guardado'/.test(escribir), 'y queda en el registro, una vez por turno')
   assert(/'Índice sin guardar'/.test(escribir) && /state\.indexDirty = state\.indexDirty \|\| pendiente/.test(escribir), 'un fallo de cuota se dice y se vuelve a apuntar, no tapa la respuesta')
   assert(/indexDirty: null/.test(JS), 'el apunte vive en el estado, no en disco')
@@ -1724,4 +1738,155 @@ test('H6 P8: el Registro mete la línea nueva arriba en vez de repintar las dosc
   assert(/box\.textContent = ''/.test(entero) && /entries\.slice\(-LOG_ROWS\)\.reverse\(\)/.test(entero), 'el repintado entero se queda para abrir la pantalla y cambiar el filtro')
   assert(/box\.appendChild\(logRow\(e\)\)/.test(entero), 'con la misma fábrica de filas que la inserción')
   assert(/state\.logOnlyProblems = false; paintLog\(\)/.test(JS) && /state\.logOnlyProblems = true; paintLog\(\)/.test(JS), 'y los dos botones del filtro repintan entero: son dos listas distintas')
+
+  // Y la lista incremental no se queda con filas que el registro ya olvidó: el
+  // tope de 200 filas no se dispara nunca con «sólo problemas» puesto —cinco
+  // avisos entre seiscientas entradas siguen siendo cinco filas—, así que a
+  // partir de las 400 entradas del Logger la pantalla enseñaba líneas que
+  // `paintLog()` ya no pintaría (revisión adversaria de H6).
+  assert(/row\.dataset\.id = e\.id/.test(sinComentarios(JS.slice(JS.indexOf('function logRow('), JS.indexOf('async function paintState(')))), 'cada fila lleva el id de su entrada')
+  assert(/const vivas = log\.oldestId/.test(nueva), 'y la inserción pregunta cuál es la más vieja que el registro conserva')
+  assert(
+    /while \(box\.lastElementChild && Number\(box\.lastElementChild\.dataset\.id\) < vivas\) box\.lastElementChild\.remove\(\)/.test(nueva),
+    'las filas cuya entrada ya no está en el registro se quitan por abajo'
+  )
+  assert(
+    nueva.indexOf('const vivas = log.oldestId') < nueva.indexOf('state.logOnlyProblems &&'),
+    'y esa poda va antes del filtro: una entrada que no se pinta empuja igual el tope del registro'
+  )
+})
+
+// --- Revisión adversaria de H6: doce hallazgos verificados ------------------
+
+test('H6 revisión: un botón que cuelga del chat y necesita el turno parado nace desactivado y vuelve al acabar', () => {
+  // Los dos se pintan DENTRO del turno (`heavySessionNotice` cuelga de la
+  // respuesta que destapó el peso), con `state.streaming` todavía en true, y su
+  // manejador empieza por «si se está respondiendo, nada»: nacían muertos y sin
+  // decirlo, durante segundos o minutos (`offerNotes` puede lanzar una pasada
+  // entera del modelo).
+  assert(/const NEEDS_IDLE = 'needs-idle'/.test(JS), 'la clase gancho vive en una constante')
+
+  const aviso = sinComentarios(JS.slice(JS.indexOf('function heavySessionNotice('), JS.indexOf('async function growIndex')))
+  assert(/btn\.className = 'primary ' \+ NEEDS_IDLE/.test(aviso), 'el «Sesión nueva» del aviso lleva la clase')
+  assert(/btn\.disabled = state\.streaming/.test(aviso), 'y nace desactivado si el turno sigue en vuelo')
+  assert(/if \(state\.streaming\) return/.test(aviso), 'la guarda del manejador se queda: el botón puede pulsarse en el cambio')
+
+  const fila = sinComentarios(JS.slice(JS.indexOf('function olderTurnsRow('), JS.indexOf('async function restoreConversation')))
+  assert(/btn\.className = 'ghost small ' \+ NEEDS_IDLE/.test(fila), '«Ver toda la conversación», igual')
+  assert(/btn\.disabled = state\.streaming/.test(fila))
+
+  // Y quien los reactiva es el mismo que reactiva «Sesión nueva» de la cabecera.
+  const streaming = sinComentarios(JS.slice(JS.indexOf('function setStreaming('), JS.indexOf('function showBusy(')))
+  assert(/\$\('btn-new-session'\)\.disabled = on/.test(streaming), 'el de la cabecera sigue igual')
+  assert(
+    /for \(const b of el\.chat\.querySelectorAll\('\.' \+ NEEDS_IDLE\)\) b\.disabled = on/.test(streaming),
+    'y los del chat se desactivan y se reactivan con él'
+  )
+})
+
+test('H6 revisión: «Ver toda la conversación» no pisa un turno en vuelo, ni una sesión que ya no es', () => {
+  // `restoreConversation` vacía el chat: a mitad de respuesta la burbuja viva
+  // se quedaba fuera del documento (con sus consultas plegadas dentro) y el
+  // turno seguía pintando en el vacío.
+  const fila = sinComentarios(JS.slice(JS.indexOf('function olderTurnsRow('), JS.indexOf('async function restoreConversation')))
+  assert(/if \(state\.streaming\) \{/.test(fila), 'el clic que llegue en el cambio tampoco pasa')
+  assert(/showNotice\('Espera a que termine la respuesta\.', false, \{ force: true \}\)/.test(fila), 'y se dice, con `force`: el aviso contesta a un clic')
+  assert(fila.indexOf('if (state.streaming) {') < fila.indexOf('restoreConversation('), 'antes de pedir nada')
+
+  // Y si mientras se descarga la conversación entera se abre una sesión nueva,
+  // lo que ha llegado es la conversación VIEJA: pintarla sería resucitarla.
+  const restaurar = sinComentarios(JS.slice(JS.indexOf('async function restoreConversation'), JS.indexOf('function showWelcome')))
+  assert(/const sesion = state\.sessionID/.test(restaurar), 'la sesión se captura antes de pedir los mensajes')
+  assert(restaurar.indexOf('const sesion = state.sessionID') < restaurar.indexOf('listMessages('), 'antes del await')
+  assert(/if \(leyo && state\.sessionID !== sesion\) return/.test(restaurar), 'y al volver se abandona si ya es otra')
+  assert(
+    restaurar.indexOf('if (leyo && state.sessionID !== sesion) return') < restaurar.indexOf("el.chat.textContent = ''"),
+    'sin tocar el chat: la comprobación va ANTES de vaciarlo'
+  )
+  assert(/leyo = false/.test(restaurar), 'y una lectura que falla —que olvida la sesión ella misma— no cuenta como cambio')
+})
+
+test('H6 revisión: pedir lo anterior no devuelve al usuario al fondo del chat', () => {
+  // Con `all` el chat se repinta entero y acababa en `scrollChat({ force: true })`:
+  // se pedía ver lo de arriba y la vista saltaba justo a donde ya estaba.
+  const restaurar = sinComentarios(JS.slice(JS.indexOf('async function restoreConversation'), JS.indexOf('function showWelcome')))
+  assert(/const previas = all \? el\.chat\.querySelectorAll\('\.msg'\)\.length : 0/.test(restaurar), 'se cuenta lo que había pintado al pulsar')
+  assert(restaurar.indexOf('const previas = all') < restaurar.indexOf('listMessages('), 'antes de pedir nada, que es cuando se pulsó')
+  assert(/const ancla = msgs\[msgs\.length - previas\]/.test(restaurar), 'y la vista se ancla al primero de ellos')
+  assert(/ancla\.scrollIntoView\(\{ block: 'start' \}\)/.test(restaurar), 'sin animación: es una restauración, no un movimiento')
+  assert(/state\.chatPinned = false/.test(restaurar), 'y el chat deja de estar pegado al fondo')
+  assert(/scrollChat\(\{ force: true \}\)/.test(restaurar), 'sin `all`, como siempre')
+})
+
+test('H6 revisión: saltarse la pantalla de contexto apaga el arranque que la estaba decidiendo', () => {
+  // `bootForSite` decide la pantalla de contexto con el `onboarded` que leyó al
+  // EMPEZAR (P4), y el `GET /mcp` en frío tarda segundos: «Omitir» lo escribía
+  // sin rearrancar, y el arranque lento volvía a enseñar la pantalla recién
+  // saltada. Un testigo nuevo lo apaga y el chat se pinta UNA sola vez.
+  const eventos = JS.slice(JS.indexOf('function wireEvents'), JS.indexOf('async function saveKeys'))
+  const omitir = sinComentarios(eventos.slice(eventos.indexOf("$('choice-skip')"), eventos.indexOf("$('context-file').addEventListener")))
+  assert(/saveSite\(state\.site\.host, \{ onboarded: true \}\)/.test(omitir), 'sigue escribiendo onboarded')
+  assert(/state\.bootToken = \{\}/.test(omitir), 'y apaga el arranque en curso con un testigo nuevo')
+  assert(omitir.indexOf('state.bootToken = {}') < omitir.indexOf('restoreConversation()'), 'antes de repintar: si no, el arranque viejo repintaría encima')
+  assert(!/bootForSite\(\)/.test(omitir), 'y no rearranca: eso pintaría el chat dos veces')
+
+  // Lo mismo el contexto que se sube a mano, que escribe el mismo `onboarded`.
+  const subir = sinComentarios(JS.slice(JS.indexOf('async function uploadContext'), JS.indexOf('async function newSession')))
+  assert(/state\.bootToken = \{\}/.test(subir), 'subir un contexto también apaga el arranque que lo decidiría al revés')
+
+  // Y el comentario de bootForSite ya no promete que nada lo cambie a mitad.
+  const arranque = JS.slice(JS.indexOf('async function bootForSite'), JS.indexOf('async function loadLinkedContext'))
+  assert(!/durante el arranque no hay nada que lo cambie/.test(arranque), 'el comentario decía algo que no era verdad')
+  assert(/apagan este arranque/.test(arranque), 'y ahora dice qué pasa de verdad')
+})
+
+test('H6 revisión: lo que se cosecha al final del turno se cosecha con el sitio que preguntó', () => {
+  // H6 (P3) movió el índice DETRÁS de `offerNotes`, que puede durar un turno
+  // entero del modelo: en ese hueco el panel puede irse a otro sitio, y
+  // `growIndex`/`markIndexDirty` leían el sitio VIVO (§8.22).
+  const envio = sinComentarios(JS.slice(JS.indexOf('async function send('), JS.indexOf('function paintTurn(')))
+  assert(/const sitioAlPedir = state\.site/.test(envio), 'el sitio entero se captura al mandar')
+  assert(envio.indexOf('const sitioAlPedir = state.site') < envio.indexOf('runTurn('), 'antes de mandar nada')
+  assert(
+    /if \(\(state\.site\?\.host \?\? state\.lastHost\) === hostAlPedir && state\.sessionID === sesionAlPedir\) \{/.test(
+      envio.slice(envio.indexOf("cron.mark('marcas')"))
+    ),
+    'y antes de cosechar se vuelve a preguntar si el panel sigue ahí'
+  )
+  assert(/await growIndex\(turn\.parts, \{ site: sitioAlPedir \}\)/.test(envio), 'la cosecha usa ese sitio')
+  assert(/'Índice sin ampliar'/.test(envio), 'y si ya no lo está, se dice y no se cosecha')
+  const fuera = envio.slice(envio.indexOf("log.info('Índice sin ampliar'"), envio.indexOf("cron.mark('índice')"))
+  assert(!/growIndex\(|growTreeFromPage\(/.test(fuera), 'ni el árbol')
+  // El orden y las fases no cambian.
+  assert(envio.indexOf('await offerNotes(') < envio.indexOf('await growIndex('), 'las marcas siguen yendo antes')
+  assert(envio.indexOf("cron.mark('índice')") < envio.indexOf('await offerNavigation('), 'y la fase cierra donde cerraba')
+
+  const cosecha = sinComentarios(JS.slice(JS.indexOf('async function growIndex'), JS.indexOf('async function growTreeFromPage')))
+  assert(/async function growIndex\(parts, \{ site = state\.site \} = \{\}\)/.test(cosecha), 'el sitio entra por opciones, con el de ahora por defecto')
+  assert(/if \(!site\) return/.test(cosecha) && /site,\n/.test(cosecha), 'y es el que se le pasa a harvestIndex')
+  assert(/markIndexDirty\(index, site\.host\)/.test(cosecha), 'y el apunte va bajo SU host, no bajo el de ahora')
+  const apuntar = sinComentarios(JS.slice(JS.indexOf('function markIndexDirty'), JS.indexOf('async function persistIndex')))
+  assert(/function markIndexDirty\(index, host = state\.site\?\.host \?\? state\.lastHost\)/.test(apuntar), 'markIndexDirty acepta el host y cae en el de ahora')
+})
+
+test('H6 revisión: una escritura tardía del índice no pisa un contexto recién construido', () => {
+  // Desde H6 (P3) pasan minutos entre apuntar el índice y escribirlo: si en ese
+  // hueco termina un `generateContext` del MISMO host, `persistIndex` escribía
+  // el objeto viejo encima del índice recién construido y se perdía ENTERO.
+  const contexto = sinComentarios(JS.slice(JS.indexOf('async function generateContext'), JS.indexOf('async function uploadContext')))
+  assert(/const apuntado = state\.indexDirty\?\.host === host \? state\.indexDirty\.index : null/.test(contexto), 'lo apuntado de ESTE host se recoge')
+  assert(/const base = apuntado && apuntado !== previo \? mergeIndex\(previo, apuntado\) : previo/.test(contexto), 'y se funde en lo que se guarda')
+  assert(
+    /if \(apuntado && state\.indexDirty\?\.index === apuntado\) state\.indexDirty = null/.test(contexto),
+    'y se consume —si sigue siendo el mismo— para que no quede nada viejo que escribir después'
+  )
+  assert(contexto.indexOf('const apuntado =') < contexto.indexOf('await saveIndex(host,'), 'se recoge antes de guardar')
+  assert(contexto.indexOf('await saveIndex(host,') < contexto.indexOf('state.indexDirty = null'), 'y se suelta después: una escritura que falla no puede perderlo')
+
+  const escribir = sinComentarios(JS.slice(JS.indexOf('async function persistIndex'), JS.indexOf('function warnAboutSources')))
+  assert(/const \{ host, index \} = pendiente/.test(escribir), 'el HOST sigue saliendo de lo apuntado')
+  assert(/const sigueAqui = \(state\.site\?\.host \?\? state\.lastHost\) === host/.test(escribir), 'y si el panel sigue en ese host…')
+  assert(/const aGuardar = sigueAqui && state\.index \? state\.index : index/.test(escribir), '…manda lo que el panel tiene ahora, que nunca es más viejo')
+  assert(/await saveIndex\(host, aGuardar\)/.test(escribir))
+  assert(!/saveIndex\(state\./.test(escribir), 'nunca bajo el host de ahora: el host es el apuntado, pase lo que pase')
 })

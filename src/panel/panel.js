@@ -583,8 +583,13 @@ async function bootForSite() {
   cron.mark('enlazado')
 
   // `onboarded` sale de lo leído al empezar (o de la relectura tras adoptar el
-  // MCP): durante el arranque no hay nada que lo cambie, y el único que lo
-  // escribe —`generateContext`— repinta el chat él mismo al terminar.
+  // MCP), y entre esa lectura y aquí hay segundos: el `GET /mcp` en frío tarda
+  // de 2,8 a 13,8 s. Antes el comentario decía que durante el arranque nada lo
+  // cambia, y no era verdad: «Omitir» de esta misma pantalla lo escribía sin
+  // rearrancar y un arranque lento volvía a enseñarla (revisión adversaria de
+  // H6). Ahora, quien lo escribe en ese hueco —«Omitir» y el contexto que se
+  // sube a mano— apagan este arranque con un testigo nuevo y repintan ellos el
+  // chat, así que aquí sólo se llega con un arranque que sigue mandando.
   if (!saved?.onboarded) {
     hideScreens()
     showContextScreen()
@@ -613,14 +618,20 @@ async function bootForSite() {
 async function loadLinkedContext(saved) {
   if (state.site?.product !== 'jira' || !saved?.confluenceHost) return null
   const host = saved.confluenceHost
-  const contextMd = await memory.getContextMd(host)
-  // Y su índice: es donde se buscan las páginas base de un análisis desde
-  // Jira, que son páginas de ESE Confluence. Nunca se guarda desde aquí.
-  const { index } = await getIndex(host)
+  // Todo lo suyo en UNA lectura, como el sitio propio (P4): el contexto, el
+  // índice y el prefijo del wiki iban en tres lecturas encadenadas del almacén
+  // —y `getSite` relee el mapa entero de `faro:sites`—, así que el arranque de
+  // un Jira con Confluence enlazado nunca tuvo el «un solo await» que P4
+  // presumía (revisión adversaria de H6).
+  const bundle = await getSiteBundle(host)
+  const contextMd = bundle.contextMd
+  // Su índice: es donde se buscan las páginas base de un análisis desde Jira,
+  // que son páginas de ESE Confluence. Nunca se guarda desde aquí, y su
+  // `stale` tampoco se anuncia: el índice de ese host lo reconstruye su panel.
+  const index = bundle.index
   // Y el prefijo de su wiki, si se observó al visitarlo: su API cuelga de ahí
   // (`/confluence/rest/api/…` en un Data Center con ruta de contexto).
-  const suyo = await getSite(host)
-  const wikiPrefix = typeof suyo?.wikiPrefix === 'string' ? suyo.wikiPrefix : ''
+  const wikiPrefix = typeof bundle.site?.wikiPrefix === 'string' ? bundle.site.wikiPrefix : ''
   // El enlace es un hecho del sitio guardado, no de que ya haya contexto: sin
   // esto, una URL de ese Confluence pegada en las páginas base se rechazaba
   // como «otro sitio» justo antes de indexarlo, que es cuando más falta hace.
@@ -882,6 +893,20 @@ function fillModels(models, selected) {
 // ------------------------------------------------------------------- chat
 
 /**
+ * La clase de un botón del chat que sólo tiene sentido con el turno parado.
+ *
+ * Lo que cuelga de una respuesta se pinta DENTRO del `try` de `send()`, con
+ * `state.streaming` todavía en true: el «Sesión nueva» del aviso de
+ * conversación pesada nacía con su manejador diciendo «si se está respondiendo,
+ * nada» y sin decirlo por ninguna parte, así que durante segundos —o minutos,
+ * si `offerNotes` lanza la pasada que trocea— era un botón que no hacía nada
+ * (revisión adversaria de H6). Con esta clase nacen desactivados y
+ * `setStreaming` los devuelve a la vez que el «Sesión nueva» de la cabecera:
+ * un solo sitio decide cuándo vuelven.
+ */
+const NEEDS_IDLE = 'needs-idle'
+
+/**
  * La fila que corona una conversación recortada.
  *
  * No se pide la sesión entera al abrir el panel (`RESTORE_LIMITS.messages`), así
@@ -900,10 +925,21 @@ function olderTurnsRow() {
 
   const btn = document.createElement('button')
   btn.id = 'btn-older-turns'
-  btn.className = 'ghost small'
+  btn.className = 'ghost small ' + NEEDS_IDLE
   btn.type = 'button'
   btn.textContent = 'Ver toda la conversación'
+  // Con un turno en vuelo, no: `restoreConversation` vacía el chat y la burbuja
+  // viva se quedaría fuera del documento, con las consultas plegadas dentro,
+  // mientras el turno sigue pintando en el vacío. Nace desactivado si se
+  // restauró a mitad de respuesta, y `setStreaming(false)` lo devuelve.
+  btn.disabled = state.streaming
   btn.addEventListener('click', () => {
+    // Y el clic que llegue justo en el cambio tampoco pasa: callarse aquí
+    // sería el botón muerto de antes.
+    if (state.streaming) {
+      showNotice('Espera a que termine la respuesta.', false, { force: true })
+      return
+    }
     btn.disabled = true
     // El mismo testigo que el arranque vigente: si mientras se descarga la
     // conversación entera se cambia de sitio, lo que se pinte será del suyo.
@@ -934,6 +970,17 @@ async function restoreConversation(testigo = state.bootToken, { all = false } = 
   // El peso de la sesión es de este host, como la sesión misma.
   const host = state.site?.host ?? state.lastHost
   let pesoGuardado = 0
+  // Cuántas burbujas hay pintadas AHORA, que es cuando se ha pulsado: con
+  // `all` la vista se ancla a la primera de ellas, que es por donde el usuario
+  // estaba leyendo. Sin `all` no hace falta: el chat se va al final.
+  const previas = all ? el.chat.querySelectorAll('.msg').length : 0
+  // Y con qué sesión se piden los mensajes. Traer la conversación entera tarda
+  // lo que tarde opencode, y si en ese hueco se abre una sesión nueva —que
+  // vacía el chat— pintar lo que ha llegado sería resucitar la que se acaba de
+  // cerrar. Si la lectura FALLA, la sesión la olvidamos aquí mismo: ese cambio
+  // es nuestro y no cuenta como que sea otra (revisión adversaria de H6).
+  const sesion = state.sessionID
+  let leyo = true
   if (state.sessionID) {
     try {
       // Sin `limit` esto bajaba la sesión entera —las salidas de herramientas
@@ -956,11 +1003,13 @@ async function restoreConversation(testigo = state.bootToken, { all = false } = 
       pesoGuardado = peso
     } catch {
       state.sessionID = null
+      leyo = false
     }
   }
   // El chat se vacía DESPUÉS de leer la sesión y de comprobar el testigo:
   // dos arranques solapados vaciaban y rellenaban por turnos (C3).
   if (state.bootToken !== testigo) return
+  if (leyo && state.sessionID !== sesion) return
   el.chat.textContent = ''
   state.turns = []
   // Lo que la conversación arrastra: lo guardado de la sesión y lo que se ve en
@@ -1101,6 +1150,19 @@ async function restoreConversation(testigo = state.bootToken, { all = false } = 
 
   if (!el.chat.children.length) showWelcome()
   state.restoring = false
+  if (all) {
+    // Se ha pedido ver lo ANTERIOR: irse al fondo devolvería al usuario justo a
+    // donde ya estaba, con lo que acaba de traer fuera de la pantalla. La vista
+    // se ancla al primer mensaje que ya estaba pintado —el que coronaba el chat
+    // al pulsar—, sin animación, y a partir de ahí el chat deja de estar pegado
+    // al fondo: lo que llegue luego no lo arrastra (A7).
+    const msgs = el.chat.querySelectorAll('.msg')
+    const ancla = msgs[msgs.length - previas]
+    state.chatPinned = false
+    if (ancla) ancla.scrollIntoView({ block: 'start' })
+    else scrollChat({ force: true })
+    return
+  }
   // Un chat recién pintado empieza por el final, esté donde esté el scroll.
   scrollChat({ force: true })
 }
@@ -1333,6 +1395,10 @@ async function send() {
   // Y el host: si al terminar el panel está en OTRO sitio, la respuesta no
   // entra en su chat ni en su índice (queda en la sesión de opencode de éste).
   const hostAlPedir = state.site.host
+  // Y el sitio entero, para cosechar el índice con el que preguntó y no con el
+  // que haya en la pestaña al acabar: `state.site` se queda en null en cuanto
+  // se mira el correo, y desde H6 el índice va detrás de `offerNotes` (§8.22).
+  const sitioAlPedir = state.site
 
   // Ocupado desde ya: leer la página en bloques tarda, y en ese hueco un
   // segundo clic abría otro turno y otra sesión. Con testigo, para que el
@@ -1660,12 +1726,23 @@ async function send() {
     // debajo de una etiqueta que no es la suya.
     if (skill === 'analisis') cron.mark('marcas')
 
-    // Enriquecer el índice con lo que las herramientas acaban de devolver.
-    await growIndex(turn.parts)
+    // ¿Sigue el panel donde pidió el turno? Entre la respuesta y aquí está
+    // `offerNotes`, que puede durar un turno entero del modelo (la pasada que
+    // trocea), y en ese hueco el usuario puede haberse ido a otro sitio: los
+    // tres que cosechan leían el sitio VIVO, así que lo aprendido aquí se
+    // habría cosechado con el sitio de allá y apuntado bajo su host (§8.22,
+    // revisión adversaria de H6). La misma pregunta que `mismoSitio`.
+    if ((state.site?.host ?? state.lastHost) === hostAlPedir && state.sessionID === sesionAlPedir) {
+      // Enriquecer el índice con lo que las herramientas acaban de devolver,
+      // con el sitio que preguntó.
+      await growIndex(turn.parts, { site: sitioAlPedir })
 
-    // Y con la estructura del árbol que se ve en la barra lateral: es exacta,
-    // es gratis, y es justo por donde va a ir la navegación asistida.
-    await growTreeFromPage()
+      // Y con la estructura del árbol que se ve en la barra lateral: es exacta,
+      // es gratis, y es justo por donde va a ir la navegación asistida.
+      await growTreeFromPage()
+    } else {
+      log.info('Índice sin ampliar', `el panel ya no está en ${hostAlPedir}: lo que devolvieron las herramientas se queda sin cosechar`)
+    }
     cron.mark('índice')
 
     // Y, si procede, ofrecer llevar al usuario allí (necesita el índice de
@@ -2046,9 +2123,14 @@ function heavySessionNotice() {
   const row = document.createElement('div')
   row.className = 'nav-actions'
   const btn = document.createElement('button')
-  btn.className = 'primary'
+  btn.className = 'primary ' + NEEDS_IDLE
   btn.type = 'button'
   btn.textContent = 'Sesión nueva'
+  // Este aviso cuelga de la respuesta que destapó el peso, o sea que se pinta
+  // con el turno todavía en vuelo: nace desactivado y `setStreaming(false)` lo
+  // devuelve al acabar. La guarda de abajo se queda para el clic que llegue
+  // justo en el cambio.
+  btn.disabled = state.streaming
   btn.addEventListener('click', () => {
     if (state.streaming) return
     btn.disabled = true
@@ -2064,20 +2146,30 @@ function heavySessionNotice() {
   return wrap
 }
 
-async function growIndex(parts) {
-  if (!state.site) return
+/**
+ * Lo que las herramientas acaban de devolver, al índice.
+ *
+ * @param {Array} parts partes del turno
+ * @param {{site?: object|null}} [opts] el sitio con el que se pidió el turno.
+ *        Lo pasa `send()`: `state.site` es null con la pestaña fuera de
+ *        Atlassian, y lo que se cosecha es de quien preguntó, no de la pestaña
+ *        de ahora (§8.22). Quien no lo pase —una llamada suelta— sigue con el
+ *        de ahora, como siempre.
+ */
+async function growIndex(parts, { site = state.site } = {}) {
+  if (!site) return
   // harvestIndex blanquea toda URL absoluta de otro host antes de mirar nada
   // (S6, auditoría del 2026-09-13): el Confluence enlazado de un Jira DC es el
   // único host ajeno que cuenta como propio (sus páginas siguen fuera por
   // producto, pero una incidencia citada dentro de una URL suya sí entra).
   const { index, added } = harvestIndex(parts || [], {
-    site: state.site,
+    site,
     index: state.index,
     allowedHosts: linkedHost() ? [linkedHost()] : [],
   })
   if (added > 0) {
     state.index = index
-    markIndexDirty(index)
+    markIndexDirty(index, site.host)
     log.ok('Índice ampliado', `+${added} · total ${indexSize(index)}`)
   }
 }
@@ -2127,9 +2219,13 @@ async function growTreeFromPage() {
  * un turno del planificador o una segunda pasada de notas, y en ese hueco el
  * panel puede haberse ido a otro sitio (C2 de H2): lo aprendido se guarda bajo el
  * host que lo aprendió, nunca bajo el de ahora.
+ *
+ * @param {object} index el índice aprendido
+ * @param {string} [host] quién lo aprendió, cuando quien llama lo sabe mejor
+ *        que el estado de ahora (`growIndex` con el sitio capturado al mandar);
+ *        si no, el del panel.
  */
-function markIndexDirty(index) {
-  const host = state.site?.host ?? state.lastHost
+function markIndexDirty(index, host = state.site?.host ?? state.lastHost) {
   if (!host || !index) return
   state.indexDirty = { host, index }
 }
@@ -2148,8 +2244,18 @@ async function persistIndex() {
   state.indexDirty = null
   if (!pendiente) return
   const { host, index } = pendiente
+  // Qué objeto se escribe. El HOST no se discute: sale de lo apuntado, pase lo
+  // que pase. El objeto sí: entre apuntar y guardar pasan minutos (P3), y si en
+  // ese hueco termina un `generateContext` de ESTE mismo host, `state.index` es
+  // ya el índice recién construido —que incluye lo apuntado, porque
+  // `generateContext` lo funde— y escribir el viejo lo pisaría entero. Si el
+  // panel sigue aquí, manda lo que el panel tiene ahora, que nunca es más viejo
+  // que el apunte; si ya está en otro sitio, `state.index` es de aquél y lo
+  // único que vale es lo apuntado (revisión adversaria de H6).
+  const sigueAqui = (state.site?.host ?? state.lastHost) === host
+  const aGuardar = sigueAqui && state.index ? state.index : index
   try {
-    await saveIndex(host, index)
+    await saveIndex(host, aGuardar)
   } catch (err) {
     // Vuelve a quedar apuntado —salvo que algo más nuevo lo esté ya— para que el
     // turno siguiente lo intente otra vez.
@@ -2159,8 +2265,8 @@ async function persistIndex() {
   }
   log.ok(
     'Índice guardado',
-    `${Object.keys(index.pages || {}).length} páginas · ${Object.keys(index.issues || {}).length} incidencias · ` +
-      `total ${indexSize(index)} · ${host}`
+    `${Object.keys(aGuardar.pages || {}).length} páginas · ${Object.keys(aGuardar.issues || {}).length} incidencias · ` +
+      `total ${indexSize(aGuardar)} · ${host}`
   )
 }
 
@@ -4173,13 +4279,27 @@ function paintLog() {
  *
  * El filtro se aplica aquí igual que en `paintLog` —y con la misma tabla de
  * niveles, `LEVELS` de log.js, para que «sólo problemas» signifique lo mismo en
- * los dos sitios— y la lista se recorta por abajo: sin eso, un panel abierto
- * durante horas acumularía filas que el registro ya ha olvidado (su tope son 400
- * entradas).
+ * los dos sitios— y la lista se recorta por abajo de DOS maneras: por el tope
+ * de filas de la pantalla y por las entradas que el registro ya ha olvidado.
+ *
+ * La segunda hacía falta: el tope de 200 filas no se dispara nunca con «sólo
+ * problemas» puesto —unos pocos avisos entre seiscientas entradas siguen siendo
+ * unas pocas filas—, mientras el Logger sí va tirando las viejas por delante
+ * (su tope son 400). A partir de ahí la pantalla enseñaba líneas que
+ * `paintLog()` ya no pintaría (revisión adversaria de H6). Por eso cada fila
+ * lleva el id de su entrada: los ids crecen y no se reutilizan, así que la de
+ * abajo —la más vieja— sobra en cuanto su id queda por detrás del primero que
+ * el registro conserva.
  */
 function appendLogRow(e) {
-  if (state.logOnlyProblems && (LEVELS[e.level] ?? 0) < LEVELS.warn) return
   const box = $('log-body')
+  // La poda por entrada olvidada va PRIMERO y sin mirar el filtro: con «sólo
+  // problemas» puesto, una entrada que no se pinta empuja igual el tope del
+  // registro, y si sólo se podara al pintar la lista se quedaría atrás hasta el
+  // siguiente aviso.
+  const vivas = log.oldestId
+  while (box.lastElementChild && Number(box.lastElementChild.dataset.id) < vivas) box.lastElementChild.remove()
+  if (state.logOnlyProblems && (LEVELS[e.level] ?? 0) < LEVELS.warn) return
   box.prepend(logRow(e))
   while (box.childElementCount > LOG_ROWS) box.lastElementChild.remove()
 }
@@ -4188,6 +4308,9 @@ function appendLogRow(e) {
 function logRow(e) {
   const row = document.createElement('div')
   row.className = 'logrow ' + e.level
+  // Qué entrada es: lo mira `appendLogRow` para quitar las filas cuya entrada
+  // el registro ya ha olvidado. Un número, nunca texto del modelo.
+  row.dataset.id = e.id
 
   const t = document.createElement('span')
   t.className = 't'
@@ -4365,6 +4488,11 @@ function setStreaming(on) {
   el.skill.disabled = on
   // Ni sesión nueva encima de un turno en vuelo: primero Parar (C4).
   $('btn-new-session').disabled = on
+  // Y lo mismo los botones que cuelgan del chat y piden el turno parado (el
+  // «Sesión nueva» del aviso de conversación pesada, «Ver toda la
+  // conversación»): nacen desactivados dentro del turno que los pintó y vuelven
+  // aquí, con el de la cabecera.
+  for (const b of el.chat.querySelectorAll('.' + NEEDS_IDLE)) b.disabled = on
   // El lector de pantalla: mientras llega la respuesta a trozos, el chat está
   // «ocupado»; lo que hay que decir se dice una vez al final (A2).
   el.chat.setAttribute('aria-busy', on ? 'true' : 'false')
@@ -4625,6 +4753,12 @@ function wireEvents() {
   $('choice-upload').addEventListener('click', () => $('context-file').click())
   $('choice-skip').addEventListener('click', async () => {
     await saveSite(state.site.host, { onboarded: true })
+    // Y el arranque que siga en marcha deja de mandar: decide la pantalla de
+    // contexto con el `onboarded` que leyó al EMPEZAR (P4) y el `GET /mcp` en
+    // frío tarda segundos, así que un arranque lento volvía a enseñar la
+    // pantalla recién saltada. Un testigo nuevo lo apaga en su siguiente await;
+    // rearrancar también, pero pintaría el chat dos veces.
+    state.bootToken = {}
     hideScreens()
     await restoreConversation()
   })
@@ -4679,6 +4813,12 @@ function wireEvents() {
     await memory.clearMemory(state.site.host)
     await memory.saveContextMd(state.site.host, '')
     await clearSessionId(state.site.host)
+    // Y con la sesión, lo que arrastraba: dejar el contador puesto sumaría la
+    // conversación de antes a la de después y el aviso de pesada saldría con un
+    // número que no es de nadie (revisión adversaria de H6).
+    await clearSessionWeight(state.site.host)
+    state.sessionToolChars = 0
+    state.heavyWarned = false
     state.index = null
     // Y lo que estuviera apuntado para guardar: olvidar el sitio no puede dejar
     // un índice pendiente que el turno siguiente vuelva a escribir (P3).
@@ -4970,9 +5110,22 @@ async function generateContext({ keepContext = false } = {}) {
       await memory.saveContextMd(host, contextMd)
       if (sigueAqui()) state.contextMd = contextMd
     }
-    const base = sigueAqui() ? state.index : (await getIndex(host)).index
+    const previo = sigueAqui() ? state.index : (await getIndex(host)).index
+    // Y lo que un turno dejara APUNTADO de este host y todavía sin escribir:
+    // desde H6 (P3) `markIndexDirty` apunta y `persistIndex` escribe minutos
+    // después, así que esa escritura tardía caería encima de lo que se acaba de
+    // construir y se lo llevaría entero. Fundiéndolo aquí y soltando el apunte,
+    // el turno siguiente ya no tiene nada viejo que escribir (revisión
+    // adversaria de H6).
+    const apuntado = state.indexDirty?.host === host ? state.indexDirty.index : null
+    const base = apuntado && apuntado !== previo ? mergeIndex(previo, apuntado) : previo
     const fundido = mergeIndex(base, index)
     await saveIndex(host, fundido)
+    // El apunte se suelta DESPUÉS de guardar —si la escritura falla, lo que
+    // había apuntado sigue haciendo falta— y sólo si sigue siendo el mismo: en
+    // el hueco del `await` puede haber terminado un turno y apuntado otro más
+    // nuevo, que no es éste y no se puede tirar.
+    if (apuntado && state.indexDirty?.index === apuntado) state.indexDirty = null
     await saveSite(host, { onboarded: true, indexedAt: Date.now() })
 
     hideBusy()
@@ -5020,6 +5173,9 @@ async function uploadContext(ev) {
   state.contextMd = text
   await memory.saveContextMd(state.site.host, text)
   await saveSite(state.site.host, { onboarded: true })
+  // Escribe el mismo `onboarded` que «Omitir», así que apaga igual el arranque
+  // que podría volver a enseñar la pantalla de contexto encima de esto.
+  state.bootToken = {}
 
   hideScreens()
   await restoreConversation()

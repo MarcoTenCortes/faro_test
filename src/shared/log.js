@@ -58,6 +58,22 @@ export class Logger {
     }
   }
 
+  /**
+   * El id de la entrada más vieja que el registro conserva, o 0 si no conserva
+   * ninguna.
+   *
+   * Lo pregunta la pantalla del Registro, que desde H6 P8 mete la línea nueva
+   * arriba sin repintar la lista: una fila cuyo id sea menor que éste habla de
+   * una entrada que el tope ya se llevó, y `paintLog()` no la pintaría. Con
+   * «sólo problemas» puesto el recorte por número de filas no se dispara nunca
+   * —unos pocos avisos entre seiscientas entradas siguen siendo unas pocas
+   * filas—, así que sin esto la pantalla se iba separando de lo que de verdad
+   * hay guardado (revisión adversaria de H6).
+   */
+  get oldestId() {
+    return this.entries[0]?.id || 0
+  }
+
   subscribe(fn) {
     this.listeners.add(fn)
     return () => this.listeners.delete(fn)

@@ -2140,6 +2140,38 @@ const actions = {
     )
     main41.style.maxWidth = anchoAntes41
     if (!main41.getAttribute('style')) main41.removeAttribute('style')
+    window.dispatchEvent(new Event('resize'))
+    await frame()
+    await frame()
+
+    //     Y cuando una pasada trae MENOS observaciones, los nodos que sobran se
+    //     quitan de verdad. Desde P1 las capas ya no se vacían, así que la poda
+    //     de `_syncNodes` es lo ÚNICO que borra una marca de la pantalla: sin
+    //     ella, los rectángulos y las insignias de la pasada anterior se quedan
+    //     encima del texto (y borrarla dejaba las pruebas en verde: revisión
+    //     adversaria de H6). `annotate` se llama directo, que es lo que hace
+    //     `focusNote` al re-resolver un Range muerto; `applyNotes` pasa antes
+    //     por `clearNotes()` y ahí no habría nada que podar.
+    const antesPoda41 = capa41.children.length
+    const insigniasAntes41 = runner.overlay.el.noteLayer.children.length
+    const menos41 = runner.overlay.notes.slice(0, 1)
+    runner.overlay.resetStats()
+    runner.overlay.annotate(menos41)
+    await frame()
+    await frame()
+    const statsPoda41 = runner.overlay.stats
+    const esperados41 = runner.overlay._measureGroups().reduce((n, m) => n + m.rects.length, 0)
+    ok(
+      'una pasada con menos observaciones quita de la pantalla los nodos que sobran',
+      statsPoda41.removed > 0 &&
+        statsPoda41.created === 0 &&
+        capa41.children.length === esperados41 &&
+        capa41.children.length < antesPoda41 &&
+        runner.overlay.el.noteLayer.children.length === menos41.length,
+      `rectángulos ${antesPoda41} → ${capa41.children.length} (esperados ${esperados41}) · ` +
+        `insignias ${insigniasAntes41} → ${runner.overlay.el.noteLayer.children.length} · ` +
+        `quitados ${statsPoda41.removed} · creados ${statsPoda41.created}`
+    )
     runner.clearNotes()
 
     // 42. Una página larga de verdad: 347 bloques en vez de los veinte de un
@@ -2213,6 +2245,32 @@ const actions = {
         ' · sin ámbito ' +
         sinAmbito43.map((r) => r.strategy).join(' ')
     )
+
+    //     Y que el ámbito compartido sirva de algo: `rootIndex` memoriza el
+    //     índice de texto de cada raíz EN el ámbito (`scope._indices`), que es
+    //     lo que evita recorrer la incidencia entera una vez por observación en
+    //     el peldaño global. Con el ámbito compartido hay un índice por RAÍZ
+    //     visitada, no uno por llamada: una segunda cita global no construye
+    //     ninguno nuevo. Sin ámbito, cada llamada trae el suyo y no memoriza
+    //     nada entre observaciones.
+    const memoria43 = ambito43._indices
+    const antesMemo43 = memoria43 ? memoria43.size : 0
+    const otraGlobal43 = resolveBlockQuote(
+      { kind: 'block-quote', block: 998, hint: 'un bloque que no existe', exact: 'no admite recarga en caliente' },
+      { digest: digest43, scope: ambito43 }
+    )
+    const despuesMemo43 = ambito43._indices ? ambito43._indices.size : 0
+    const raices43 = (ambito43.roots || []).length
+    ok(
+      'el indice de texto de cada raiz se memoriza en el ambito: una segunda cita global no reconstruye ninguno',
+      antesMemo43 > 0 &&
+        antesMemo43 <= raices43 &&
+        despuesMemo43 === antesMemo43 &&
+        otraGlobal43.ok &&
+        otraGlobal43.strategy.startsWith('global+'),
+      `${antesMemo43} indice(s) memorizado(s) para ${raices43} raices · tras la segunda cita ${despuesMemo43} · ${otraGlobal43.strategy}`
+    )
+
     renderPage('page:200')
     await wait(320)
 

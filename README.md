@@ -408,12 +408,18 @@ Trece decisiones que sostienen el diseño:
    - **Volver a una conversación** descargaba la sesión entera, salidas de
      herramientas incluidas (megabytes), para pintar sólo el texto. Ahora pide
      los últimos 60 mensajes y, si recorta, lo dice con un botón **Ver toda la
-     conversación**. Y cuando lo que la conversación arrastra pasa de cierto
-     tamaño, Faro te avisa una vez, explica que opencode ya poda las salidas
-     viejas y te ofrece empezar una sesión nueva ahí mismo.
+     conversación**, que trae el resto y te deja donde estabas leyendo —en el
+     primer mensaje que ya había— en vez de saltar al fondo. Ese botón no se
+     puede pulsar mientras llega una respuesta. Y cuando lo que la conversación
+     arrastra pasa de cierto tamaño, Faro te avisa una vez, explica que opencode
+     ya poda las salidas viejas y te ofrece empezar una sesión nueva ahí mismo
+     (con el botón en gris hasta que la respuesta termina).
    - **El índice del sitio** se escribía entero hasta tres veces por turno para
      dejar lo mismo en disco. Ahora se apunta lo aprendido y se escribe una sola
-     vez al final, bajo el sitio que lo aprendió.
+     vez al final, bajo el sitio que lo aprendió —y con el sitio al que
+     preguntaste, no con el que tengas abierto al acabar: si te fuiste a otro
+     mientras respondía, el registro lo dice («Índice sin ampliar») y el índice
+     de aquél se queda como estaba—.
    - **Las marcas del análisis parpadeaban al hacer scroll**: el overlay
      recreaba cada rectángulo en cada evento, y un rectángulo nace transparente
      y aparece con una transición. Ahora una ráfaga de scroll se junta en un
@@ -427,7 +433,7 @@ Trece decisiones que sostienen el diseño:
 ## Comprobaciones
 
 ```bash
-npm run check              # sintaxis + orden + manifest + 943 pruebas unitarias + docs
+npm run check              # sintaxis + orden + manifest + 953 pruebas unitarias + docs
 npm run check:docs         # sólo el paso docs: número de pruebas, títulos del registro, mensajes y ficheros del mapa
 npm run test:integration   # contra un opencode real que arranca la propia prueba
 npm run harness            # banco de pruebas visual en http://127.0.0.1:5175

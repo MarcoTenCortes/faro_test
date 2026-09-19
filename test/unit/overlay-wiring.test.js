@@ -137,6 +137,14 @@ test('P1: las capas reutilizan sus nodos en vez de vaciarse y volver a crearlos'
   assert(sync.includes('this.stats.created++'), '_syncNodes cuenta los nodos que crea')
   assert(sync.includes('this.stats.reused++'), 'y los que reutiliza (es lo que mide el banco)')
   assert(sync.includes('crear(') && sync.includes('pintar('), 'crea sólo lo que falta y pinta todos')
+
+  // La poda: desde que las capas no se vacían, este bucle es lo ÚNICO que
+  // borra una marca de la pantalla. Borrarlo dejaba las 943 pruebas en verde
+  // con los rectángulos y las insignias de la pasada anterior encima del texto
+  // (revisión adversaria de H6).
+  assert(sync.includes('while (hijos.length > items.length)'), 'lo que sobra se quita por el final')
+  assert(sync.includes('layer.lastElementChild.remove()'), 'del documento, no sólo de la cuenta')
+  assert(sync.includes('this.stats.removed++'), 'y se cuenta, que es como lo mira el banco')
 })
 
 test('P1: la clase «on» se pone al instante salvo en el primer pintado con barrido', () => {
