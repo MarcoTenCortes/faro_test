@@ -753,6 +753,19 @@ debajo del mega («512 KB de 10 MB») y en MB con un decimal a partir de ahí
 («8,4 MB de 10 MB»); se pone en rojo a partir de 8 MB, y a partir de ahí conviene
 «Descartar índice» en un sitio que ya no uses.
 
+**El panel se ve claro (u oscuro) y yo quería lo otro**
+Faro no tiene ajuste de tema: sigue al del sistema, como la propia página de
+Jira o Confluence que tienes al lado. Si cambias el tema de Windows (o el de
+Chrome), el panel cambia con él; no hace falta recargar la extensión.
+
+**Los textos se ven apagados o los bordes de los campos no se distinguen**
+Desde el rediseño los colores del panel están medidos, no elegidos a ojo: todo
+el texto llega a 4,5:1 y el borde de un campo o de un botón fantasma a 3:1, en
+los dos temas. Si algo se ve peor que eso, es del tema del sistema o del brillo
+de la pantalla, no del panel. Quien quiera la tabla con la que se comprueba:
+`npm run contrast` la imprime pareja por pareja, y `npm run check` no pasa si
+alguna baja de su umbral.
+
 **El panel tarda en abrirse la primera vez tras arrancar opencode**
 Es `GET /mcp`: opencode arranca sus servidores MCP en la primera consulta, y el
 panel la espera. Mira «Arranque del panel» en el registro: si «MCP» dice

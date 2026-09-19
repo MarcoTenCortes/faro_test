@@ -3360,7 +3360,11 @@ function onRuntimeMessage(msg) {
     // Han pulsado el número en la página: se marca la fila del chat y se sube
     // hasta ella. Los dos sentidos, con el mismo número.
     markNoteRow(msg.n)
-    state.noteRows.get(msg.n)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+    // Un `behavior: 'smooth'` explícito manda sobre el `scroll-behavior` del
+    // CSS, así que «Reducir animaciones» no llegaría hasta aquí si no se
+    // preguntase (A9).
+    const suave = state.settings.reduceMotion ? 'auto' : 'smooth'
+    state.noteRows.get(msg.n)?.scrollIntoView({ block: 'nearest', behavior: suave })
     return
   }
 
@@ -3847,6 +3851,11 @@ function autoGrow() {
 function applySettingsToUi() {
   el.memoryToggle.classList.toggle('on', !!state.settings.crossSessionMemory)
   el.memoryLabel.textContent = state.settings.crossSessionMemory ? 'Memoria activa' : 'Memoria'
+  // «Reducir animaciones» se leía y se guardaba desde H0, pero sólo lo aplicaba
+  // el overlay sobre la página: el panel seguía deslizando burbujas y latiendo
+  // (auditoría del 2026-09-13, docs/PLAN.md §2, A9). La clase es la misma que
+  // usa el overlay, y el CSS le cuelga lo mismo que a prefers-reduced-motion.
+  document.documentElement.classList.toggle('faro-still', !!state.settings.reduceMotion)
 }
 
 // ------------------------------------------------------------------ eventos

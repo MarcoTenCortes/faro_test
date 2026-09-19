@@ -86,7 +86,10 @@ la respuesta**.
   números en ningún sitio, trocea la prosa en observaciones en una pasada
   aparte; y si tampoco, un botón vuelve a pedirlo numerado. Cuando de verdad
   no hay nada que observar, el modelo cierra con «Sin observaciones.» y Faro
-  lo dice tal cual, sin tratarlo como un fallo.
+  lo dice tal cual, sin tratarlo como un fallo. El panel y las marcas de la
+  página comparten el mismo ámbar: la pastilla numerada que ves en el chat es,
+  byte a byte, la que ves sobre el texto de la página (y hay un test que no
+  deja que se separen).
 - **Páginas base del análisis**: junto al selector de Skill, en Análisis, un
   botón para decir **en base a qué páginas** se analiza la abierta: una guía,
   una decisión anterior, la página con la que hay que comparar. Se añaden
@@ -387,12 +390,13 @@ Trece decisiones que sostienen el diseño:
 ## Comprobaciones
 
 ```bash
-npm run check              # sintaxis + orden + manifest + 852 pruebas unitarias + docs
+npm run check              # sintaxis + orden + manifest + 879 pruebas unitarias + docs
 npm run check:docs         # sólo el paso docs: número de pruebas, títulos del registro, mensajes y ficheros del mapa
 npm run test:integration   # contra un opencode real que arranca la propia prueba
 npm run harness            # banco de pruebas visual en http://127.0.0.1:5175
 npm run turn -- --n 1      # el último turno real (pregunta, sistema, herramientas, respuesta) desde una copia de opencode.db
 npm run bench              # el metro: cuánto pesa el system de cada escenario y cuánto tardan los módulos puros
+npm run contrast           # el contraste de cada pareja de colores, por tema: informa, y falla si alguna baja de 4,5 (texto) o 3 (control)
 npm run snapshots          # regenera las instantáneas de los prompts (test/fixtures/prompts) cuando un cambio de prompt es intencionado
 ```
 
@@ -401,8 +405,11 @@ Con el banco levantado hay dos páginas:
 - <http://127.0.0.1:5175/> — la Confluence de mentira, para ver el foco, el
   anillo, el cartel y el recorrido asistido funcionando de verdad.
 - <http://127.0.0.1:5175/harness/panel-preview.html> — el panel real con una
-  conversación de ejemplo, para recorrer sus seis pantallas y los dos temas sin
-  tener que instalar nada.
+  conversación de ejemplo, para recorrer sus seis pantallas sin tener que
+  instalar nada. Su botón «Claro» está temporalmente sin efecto sobre el panel
+  (el rediseño cambió cómo se declaran los temas y el espejo aún los fuerza a la
+  manera antigua): de momento, para ver el tema claro, cambia la preferencia del
+  sistema o emúlala en el navegador.
 
 - **`npm run check`** no necesita nada instalado. Valida que todos los ficheros
   parsean, que **nada se usa antes de declararse**, que el manifest es MV3
@@ -537,6 +544,16 @@ Con el banco levantado hay dos páginas:
   sirven para comparar dos ejecuciones de la MISMA máquina antes y después de un
   cambio. Hoy el `system` va de 2 767 a 29 159 caracteres (mediana 8 127) y
   ningún módulo puro pasa de 5 ms.
+
+- **`npm run contrast`** imprime la tabla de contraste del panel y del overlay,
+  tema a tema: ratio, nivel (AA/AAA) y qué dibuja cada pareja de colores. No
+  genera nada; sólo dice qué mide el CSS de hoy, con la fórmula de WCAG 2.1.
+  Como el metro, queda fuera de `npm run check`; a diferencia de él, sale con 1
+  si alguna pareja baja de su umbral: 4,5:1 el texto y 3:1 lo que dibuja un
+  control (el borde de un campo, cuando el borde es lo único que lo dibuja).
+  Los filetes decorativos entre filas salen marcados «exenta» con su número.
+  Lo que tiene que seguir cumpliéndose está pinado en `panel-css.test.js`, que
+  sí corre en `npm run check`.
 
 - **`npm run snapshots`** reescribe `test/fixtures/prompts/*.txt` con los
   prompts que el código produce hoy para 33 escenarios fijos (Confluence y Jira
@@ -775,6 +792,7 @@ tools/                      generación de iconos, clave del manifest, servidor 
   check-docs.mjs            el paso «docs» de npm run check (npm run check:docs suelto)
   last-turn.mjs             el último turno real desde una copia de opencode.db (npm run turn)
   bench.mjs                 el metro: tamaño del system por escenario y tiempos de los módulos puros (npm run bench)
+  contrast-report.mjs       la tabla de contraste del panel y del overlay, por tema (npm run contrast)
   prompt-snapshots.mjs      comprobar o regenerar (--update) las instantáneas de los prompts (npm run snapshots)
 AGENTS.md                   puntero a CLAUDE.md, que es el mapa del proyecto para una sesión nueva
 ```

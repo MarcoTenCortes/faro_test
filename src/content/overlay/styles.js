@@ -187,7 +187,11 @@ button:focus-visible { outline: 2px solid var(--faro-gold); outline-offset: 2px;
   color: #1B1405;
   border-color: var(--faro-gold-deep);
 }
-.btn-primary:hover { background: var(--faro-gold-deep); color: #FFF7E8; }
+/* El texto se queda oscuro al pasar el ratón: el crema de antes (#FFF7E8) daba
+   2,76:1 sobre el ámbar profundo, por debajo del 4,5 de AA. Medido en la
+   auditoría del 2026-09-13 (docs/PLAN.md §2, A8); con #1B1405 da 6,22:1, y es
+   el mismo texto que ya lleva el botón en reposo. */
+.btn-primary:hover { background: var(--faro-gold-deep); color: #1B1405; }
 .btn-ghost {
   background: transparent;
   color: var(--faro-muted);
@@ -325,10 +329,13 @@ button:focus-visible { outline: 2px solid var(--faro-gold); outline-offset: 2px;
   transition: opacity .3s ease, transform .3s var(--faro-ease), box-shadow .16s ease, background .16s ease;
 }
 .note-badge.on { opacity: 1; transform: translateY(0); }
-.note-badge:hover { background: var(--faro-gold-deep); color: #FFF7E8; }
+/* Igual que el botón del cartel: sobre el ámbar profundo el texto sigue siendo
+   #1B1405 (6,22:1). Con el crema de antes la insignia que estabas mirando era
+   justo la menos legible de la página (2,76:1). */
+.note-badge:hover { background: var(--faro-gold-deep); color: #1B1405; }
 .note-badge.active {
   background: var(--faro-gold-deep);
-  color: #FFF7E8;
+  color: #1B1405;
   box-shadow: 0 0 0 3px rgba(233, 172, 74, .38);
 }
 

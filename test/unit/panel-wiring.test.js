@@ -94,6 +94,26 @@ test('estilo: el panel define ambos temas con variables', () => {
   assert(/body\s*\{[^}]*background:\s*var\(--ground\)/s.test(CSS), 'el body debe pintar su propio fondo')
 })
 
+test('estilo: lo que el JS enciende o pinta se ve', () => {
+  // Dos clases que panel.js ponía desde siempre y que no existían en el CSS
+  // (auditoría del 2026-09-13, docs/PLAN.md §2, A8): la tarjeta de «Dar
+  // permiso» salía como una tarjeta de navegación cualquiera y el filtro
+  // encendido del Registro no se distinguía del apagado.
+  assert(/\.perm-card\b/.test(CSS), 'clase sin estilo: perm-card')
+  assert(/button\.ghost\.on\b/.test(CSS), 'un filtro encendido tiene que verse encendido')
+  assert(/\.beacon\.(ok|bad|busy)\b/.test(CSS), 'el faro tiene los tres estados listos para H5')
+
+  // Y el ajuste «Reducir animaciones», que se guardaba y sólo llegaba al
+  // overlay: el panel seguía animándose (A9).
+  const aplica = /function applySettingsToUi\(\)\s*\{[\s\S]*?\n\}/.exec(JS)
+  assert(aplica, 'applySettingsToUi sigue existiendo')
+  assert(
+    /document\.documentElement\.classList\.toggle\('faro-still', !!state\.settings\.reduceMotion\)/.test(aplica[0]),
+    'applySettingsToUi cuelga faro-still del <html> del panel'
+  )
+  assert(/html\.faro-still\b/.test(CSS), 'y el CSS la atiende')
+})
+
 test('el comando que se enseña arranca opencode con registro', () => {
   // Sin --print-logs, cuando algo falla del lado de opencode no hay nada que
   // mirar: el servidor se queda mudo.
