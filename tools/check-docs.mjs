@@ -74,8 +74,9 @@ export const MSG_SIN_EMISOR_HASTA = {
   // JQL_SEARCH y FAVOURITE_FILTERS salieron al cablearlos H8: la lista de la
   // tarjeta de búsqueda manda el primero desde `attachJqlResults` y los chips
   // del chat vacío el segundo desde `loadSearchChipSources` (src/panel/panel.js).
-  // Así es como encoge.
-  SPACE_PAGES: 'H9',
+  // SPACE_PAGES salió al cablearlo H9: lo manda `restIndexFor` para leer el
+  // árbol del espacio de la API antes de gastar un turno del modelo. Así es
+  // como encoge.
   RECENT_ISSUES: 'H11',
   RECENT_PAGES: 'H11',
 }

@@ -114,6 +114,31 @@ test('EL CAMBIO: en Jira, Búsqueda busca con JQL y lo que se ofrece es la búsq
   assert(!/no hay árbol/i.test(cloud))
 })
 
+test('H9: con los datos del proyecto delante, Búsqueda copia los nombres exactos en el JQL', () => {
+  // Un nombre de estado que no existe no da error: da cero resultados, y eso
+  // parece «no hay nada». El CONTEXTO DE ESTE SITIO es prosa que escribió un
+  // modelo hace semanas; el perfil lo contó la extensión de la API de ese Jira.
+  const perfil = { version: 1, projectKey: 'SIMPL', types: [{ name: 'Story', count: 3 }], statuses: [] }
+  const s = skillSystem('busqueda', { product: 'jira', projectKey: 'SIMPL', profile: perfil })
+  assert(/DATOS DEL PROYECTO de más abajo/.test(s), 'se le dice dónde están')
+  assert(/los leyó la extensión de la API de este Jira, no un modelo/.test(s), 'y de dónde salieron')
+  assert(/EXACTOS/.test(s) && /no te inventes ni traduzcas ninguno/.test(s))
+  assert(/CONTEXTO DE ESTE SITIO/.test(s), 'la viñeta del contexto sigue: no lo sustituye, lo completa')
+  assert(s.indexOf('CONTEXTO DE ESTE SITIO') < s.indexOf('DATOS DEL PROYECTO'), 'y el orden es el mismo que el de los bloques')
+
+  // Sin perfil, letra a letra el de siempre. Quién decide que hay bloque es
+  // `baseSystem`, que es quien lo pone: una viñeta que mande mirar unos datos
+  // que no están abajo sería peor que no tener perfil.
+  eq(skillSystem('busqueda', { product: 'jira', projectKey: 'SIMPL', profile: null }), skillSystem('busqueda', { product: 'jira', projectKey: 'SIMPL' }))
+  assert(!/DATOS DEL PROYECTO/.test(skillSystem('busqueda', { product: 'jira', projectKey: 'SIMPL' })), 'sin perfil no se manda mirar un bloque que no existe')
+  // Y en Confluence no hay proyecto de Jira del que hablar, llegue lo que llegue.
+  eq(skillSystem('busqueda', { product: 'confluence', profile: perfil }), skillSystem('busqueda'))
+  // Los demás modos no la nombran: el perfil sólo lo usa Búsqueda.
+  for (const id of ['general', 'resumen', 'analisis']) {
+    eq(skillSystem(id, { product: 'jira', digest: true, profile: perfil }), skillSystem(id, { product: 'jira', digest: true }), id)
+  }
+})
+
 test('en Confluence —o sin producto— Búsqueda dice lo de siempre, letra a letra', () => {
   eq(skillSystem('busqueda', { product: 'confluence' }), skillSystem('busqueda'))
   eq(skillSystem('busqueda', { product: 'confluence', projectKey: 'ENG' }), skillSystem('busqueda'))

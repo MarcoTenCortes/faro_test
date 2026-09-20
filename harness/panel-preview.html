@@ -1047,6 +1047,17 @@ async function arrancar() {
   $('setup-jira-email-field').classList.add('hidden')
   $('setup-confluence-email-field').classList.add('hidden')
   $('context-scope').textContent = 'el espacio ENG'
+  // La pantalla de contexto dice lo que de verdad va a pasar, y desde H9 eso
+  // depende de las lecturas REST: con ellas, el árbol lo lee la extensión de la
+  // API y el modelo sólo escribe la prosa. El texto se copia porque
+  // `showContextScreen` lo compone en línea (no sale de un módulo puro que se
+  // pueda llamar desde aquí); el test exige que el panel diga lo mismo.
+  $('context-generate-text').textContent =
+    'Lee el árbol del espacio de la API de Confluence con tu sesión —exacto y en segundos, sin gastar tokens— y el modelo ' +
+    'escribe con él el documento. Con tope, progreso visible y botón de cancelar.'
+  // Y la casilla que lo decide, aquí y no con el resto de Ajustes: las dos
+  // pantallas tienen que contar lo mismo en la misma captura.
+  $('set-rest-tools').checked = true
   $('settings-site-info').textContent = 'acme.atlassian.net · 212 entradas indexadas · con contexto'
   $('delay-value').textContent = '900'
   $('set-delay').value = 900
@@ -1138,6 +1149,12 @@ async function arrancar() {
     ['19:42:11', 'debug', 'GET /config', '200 · 186 ms'],
     ['19:42:11', 'ok', 'Arranque del panel', '14,3 s · health 1 ms · modelos 61 ms · MCP 13,8 s · almacenamiento 60 ms · restaurar 420 ms'],
     ['19:42:12', 'ok', 'MCP verificado', 'Jira: sí · Confluence: sí'],
+    // H9: lo que la API del propio sitio da exacto antes de gastar un turno. Van
+    // las dos juntas aunque en un sitio de verdad sólo saldría una (el árbol es
+    // de Confluence y la muestra de Jira): lo que se viene a mirar aquí es cómo
+    // se leen sus dos líneas de detalle, que son las que dicen cuánto se ahorró.
+    ['19:42:13', 'ok', 'Índice leído de la API', 'confluence.simplprogramme.eu · 214 entradas · 3 petición(es) · 240 ms'],
+    ['19:42:14', 'ok', 'Perfil del proyecto', 'jira.simplprogramme.eu · muestra de 30 incidencias · 7 tipos · 6 estados · 180 ms'],
     ['19:42:40', 'info', 'Turno enviado', 'github-copilot/gpt-5.6-luna · 52 caracteres'],
     ['19:42:58', 'ok', 'Respuesta recibida', '1.412 caracteres · 6 herramientas (18 KB) · 41,2 s'],
     ['19:42:58', 'ok', 'Análisis marcado', '6 de 8 · 38 ms en la página'],

@@ -6,15 +6,31 @@
  * el uso. Sale en dos fases porque cada una quiere una forma distinta:
  *   1. Explorar y escribir prosa  -> el fichero de contexto, para el modelo.
  *   2. Volcar el índice como datos -> la fuente de verdad de la navegación.
+ *
+ * Desde H9, cuando el árbol del espacio se puede leer de la API del propio
+ * Confluence (`restIndex`), las fases 2 y 3 NO se le piden al modelo: la lista
+ * paginada dice exacto qué páginas hay y de quién cuelga cada una, en
+ * milisegundos y sin gastar un token (§8.19). Lo que el modelo sigue haciendo
+ * es lo único que sólo él puede hacer: escribir la prosa del contexto. Si la
+ * API no contesta —o el usuario apagó las lecturas REST—, `restIndex` llega
+ * null y esto es, letra a letra, lo de siempre.
  */
 
 import { normalizeIndex, mergeIndex, mergeIndexKeepingTree, indexSize } from '../atlassian/index-store.js'
-import { canonicalPagePath, canonicalSpacePath, isRealSpaceKey, validIssueKey, validProjectKey } from '../atlassian/site.js'
+import {
+  canonicalPagePath,
+  canonicalSpacePath,
+  isRealSpaceKey,
+  validIssueKey,
+  validProjectKey,
+  validSpaceKey,
+} from '../atlassian/site.js'
 import {
   indexExploreSystem,
   indexExplorePrompt,
   indexEmitPrompt,
   indexTreePrompt,
+  treeTitles,
   INDEX_SCHEMA,
   TREE_SCHEMA,
 } from './prompts.js'
@@ -23,11 +39,22 @@ import { prettyTool } from '../shared/format.js'
 
 /**
  * @param {object} client OpencodeClient
- * @param {{scope:object, site:object, model:object, onProgress:Function, signal:AbortSignal}} opts
+ * @param {{scope:object, site:object, model:object, onProgress:Function,
+ *          signal:AbortSignal, linkedContext?:object|null,
+ *          restIndex?:object|null, profile?:object|null}} opts
+ *        `restIndex` es el índice ya leído de la API (H9): con él no se piden
+ *        las fases 2 y 3. `profile` es la muestra del proyecto ya contada
+ *        (sólo Jira), que va delimitada en el `system` del indexador.
  * @returns {Promise<{contextMd:string, index:object}>}
  */
-export async function buildContext(client, { scope, site, model, onProgress, signal, linkedContext = null }) {
+export async function buildContext(
+  client,
+  { scope, site, model, onProgress, signal, linkedContext = null, restIndex = null, profile = null }
+) {
   const report = (text) => onProgress?.(text)
+  // Sólo cuenta un índice con páginas: uno vacío no ahorra ninguna fase y
+  // dejaría el sitio sin índice creyendo que ya lo tiene.
+  const leido = restIndex && typeof restIndex === 'object' && Object.keys(restIndex.pages || {}).length ? restIndex : null
 
   report('Abriendo una sesión de indexado…')
   const session = await client.createSession({ title: `Faro · índice de ${site.host}` })
@@ -36,7 +63,15 @@ export async function buildContext(client, { scope, site, model, onProgress, sig
     report(`Recorriendo ${scope?.label || 'la zona actual'}. Esto puede tardar un par de minutos.`)
     const explore = await client.runTurn(
       session.id,
-      { text: indexExplorePrompt(scope), model, system: indexExploreSystem(scope, site, { linkedContext }) },
+      {
+        // Con el árbol ya leído, la fase 1 lo recibe hecho: así la prosa habla
+        // del sitio real desde la primera línea en vez de de lo que el modelo
+        // alcanzara a recorrer. Sin él, `treeTitles` devuelve [] y el mensaje
+        // es el de siempre, byte a byte (lo pina indexer.test.js).
+        text: indexExplorePrompt(scope, { treeTitles: treeTitles(leido) }),
+        model,
+        system: indexExploreSystem(scope, site, { linkedContext, profile }),
+      },
       {
         signal,
         stallMs: 120000,
@@ -60,6 +95,15 @@ export async function buildContext(client, { scope, site, model, onProgress, sig
 
     const contextMd = explore.text.trim()
     if (!contextMd) throw new Error('El indexador no devolvió ningún documento de contexto.')
+
+    // Con el árbol leído de la API no hay nada que preguntarle al modelo sobre
+    // la estructura: lo que devolvió la lista es exacto y ya trae el padre de
+    // cada página, que es lo único que la fase 3 venía a conseguir. Dos turnos
+    // de modelo menos por indexado, y sin la parte que más se inventaba.
+    if (leido) {
+      report(`Listo: ${indexSize(leido)} entradas, leídas de la API.`)
+      return { contextMd, index: leido }
+    }
 
     report('Volcando el índice de navegación…')
     const raw = await client.promptStructured(
@@ -101,6 +145,66 @@ export async function buildContext(client, { scope, site, model, onProgress, sig
     // La sesión de indexado no debe ensuciar tu historial de opencode.
     client.deleteSession(session.id).catch(() => {})
   }
+}
+
+/**
+ * El árbol de un espacio leído de la API, convertido en índice. Pura.
+ *
+ * Lo que llega es lo que devuelve `fetchSpacePages` (confluence-rest.js) a
+ * través de la pestaña: páginas con su id, su título, su ruta y el id de su
+ * padre. Aquí no se valida menos que lo que escribe un modelo: pasa por el
+ * MISMO `normalizeIndex` —rutas relativas por `toSafePath`, mismo host, ids
+ * numéricos, prefijo del wiki corregido— y por el MISMO tope de páginas
+ * (`INDEX_LIMITS.maxPages`, el que ya aplica `fetchSpacePages`; es la misma
+ * constante, no un segundo tope). Lo que cruza un mensaje desde una pestaña es
+ * dato, aunque el content script sea nuestro.
+ *
+ * LA PORTADA no es una rama de la barra lateral, y por eso sus hijas quedan sin
+ * padre: es lo mismo que hace `finish` con la cadena de antepasados leída por
+ * la API (confluence-rest.js) y lo que el prompt de la fase 3 le pedía al
+ * modelo («la raíz del espacio no tiene padre»). Si se dejara como padre, el
+ * recorrido paso a paso empezaría por un peldaño que no se puede desplegar.
+ * La portada sigue en el índice como una página más: es un destino legítimo.
+ *
+ * @param {Array<{id:string,title:string,parentId:string|null,url:string,spaceKey:string|null}>} pages
+ * @param {{site:object, scope?:object|null, homeId?:string}} opts
+ * @returns {object|null} el índice normalizado, o null si no queda ninguna página
+ */
+export function indexFromSpacePages(pages, { site, scope = null, homeId = '' } = {}) {
+  if (!site?.host) return null
+  const portada = /^\d+$/.test(String(homeId || '')) ? String(homeId) : ''
+  const paginas = []
+  const claves = new Set()
+  const delAmbito = scope?.kind === 'space' ? validSpaceKey(scope.key) : ''
+  if (delAmbito) claves.add(delAmbito)
+
+  for (const p of Array.isArray(pages) ? pages.slice(0, INDEX_LIMITS.maxPages) : []) {
+    if (!p || typeof p !== 'object') continue
+    const id = String(p.id ?? '')
+    if (!/^\d+$/.test(id)) continue
+    const clave = validSpaceKey(p.spaceKey)
+    if (clave && isRealSpaceKey(clave)) claves.add(clave)
+    const padre = String(p.parentId ?? '')
+    paginas.push({
+      id,
+      title: p.title,
+      spaceKey: clave || delAmbito,
+      parentId: padre && padre !== portada ? padre : '',
+      url: p.url,
+    })
+  }
+  if (!paginas.length) return null
+
+  return normalizeIndex(
+    {
+      pages: paginas,
+      spaces: [...claves].map((key) => ({ key, name: key })),
+      updated: Date.now(),
+    },
+    site.host,
+    scope,
+    { cloud: site.cloud, wikiPrefix: site.wikiPrefix }
+  )
 }
 
 /**

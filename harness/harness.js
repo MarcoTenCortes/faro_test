@@ -1033,6 +1033,67 @@ const actions = {
     }
   },
 
+  /**
+   * Lo que H9 adelanta antes de gastar un turno del modelo: el árbol del espacio
+   * leído de la API y convertido en índice, comparado con el que se lee de la
+   * barra lateral, y la muestra del proyecto contada.
+   *
+   * Es la acción que enseña de un vistazo por qué el indexado dejó de pedirle al
+   * modelo el volcado del índice y la jerarquía: lo que aquí sale en
+   * milisegundos eran dos turnos y una jerarquía adivinada a trozos.
+   */
+  async 'rest-index'() {
+    setSidebar('clasica')
+    renderPage('page:200')
+    await wait(320)
+    const confRest = await import('/src/shared/confluence-rest.js')
+    const jiraRest = await import('/src/shared/jira-rest.js')
+    const { snapshotTree } = await import('/src/content/tree-scan.js')
+    const { indexFromSpacePages } = await import('/src/panel/indexer.js')
+    const { searchChips } = await import('/src/panel/search-chips.js')
+    const pide = (u, o) => fetch(u, o)
+    const sitioConf = { origin: location.origin, wikiPrefix: '/wiki', cloud: false }
+    const sitioJira = { origin: location.origin, jiraPrefix: '', cloud: false }
+
+    const arbol = await confRest.fetchSpacePages(pide, sitioConf, 'ENG', { limit: 8 })
+    if (!arbol.ok) return say(`sin árbol: ${arbol.reason}`, 'bad')
+    const indice = indexFromSpacePages(arbol.pages, {
+      site: { host: location.hostname, cloud: false, wikiPrefix: '/wiki' },
+      scope: { kind: 'space', key: 'ENG' },
+      homeId: arbol.homeId,
+    })
+    const entradas = Object.keys(indice?.pages || {}).length
+    say(`índice del espacio ENG por la API: ${entradas} páginas en ${arbol.requests} peticiones · ${arbol.ms} ms`, entradas ? 'ok' : 'bad')
+    for (const id of Object.keys(indice?.pages || {}).slice(0, 5)) {
+      const p = indice.pages[id]
+      say(`  ${id} ← ${p.parentId ?? 'raíz'} · ${p.title}`)
+    }
+
+    // Lo mismo que el usuario ve: si las dos versiones no dicen el mismo padre,
+    // el recorrido paso a paso abriría una rama que no lleva a ninguna parte.
+    const deLaBarra = snapshotTree().pages
+    const comunes = deLaBarra.filter((p) => indice?.pages?.[p.id])
+    const distintas = comunes.filter((p) => (indice.pages[p.id].parentId || null) !== (p.parentId || null))
+    say(
+      `contra el árbol lateral: ${comunes.length} de ${deLaBarra.length} páginas en las dos · ${distintas.length} con otro padre`,
+      comunes.length === deLaBarra.length && !distintas.length ? 'ok' : 'bad'
+    )
+    for (const p of distintas) say(`  ${p.id}: la API dice ${indice.pages[p.id].parentId ?? 'raíz'} y el árbol ${p.parentId ?? 'raíz'}`, 'bad')
+
+    const muestra = await jiraRest.searchIssues(pide, sitioJira, jiraRest.sampleQuery('ENG'), {
+      limit: jiraRest.JIRA_REST_LIMITS.maxResults,
+      fields: jiraRest.SAMPLE_FIELDS,
+    })
+    if (!muestra.ok) return say(`sin muestra: ${muestra.reason}`, 'bad')
+    const perfil = jiraRest.profileFromSample(muestra.issues, { projectKey: 'ENG' })
+    say(`perfil de ENG contado de ${perfil.sampled} incidencias (de ${muestra.total}) en ${muestra.ms} ms`, 'ok')
+    say(`  tipos: ${perfil.types.map((t) => `${t.name} ${t.count}`).join(' · ')}`)
+    say(`  estados: ${perfil.statuses.map((s) => `${s.name} ${s.count} (${s.category})`).join(' · ')}`)
+    say(`  convenciones: ${perfil.prefixes.map((p) => `${p.pattern} ${p.count} (p. ej. ${p.examples[0]?.key})`).join(' · ')}`)
+    const chips = searchChips({ product: 'jira', cloud: false, projectKey: 'ENG' }, { profile: perfil })
+    say(`  chips que salen del perfil: ${chips.map((c) => c.label).join(' · ') || 'ninguno'}`)
+  },
+
   unsafe() {
     const del = [...document.querySelectorAll('.tb-btn')].find((b) => /elimin/i.test(b.textContent))
     const r = isSafeToClick(del, ORIGIN)
@@ -2586,6 +2647,124 @@ const actions = {
       `run=${conPlugin50?.run} · ${rechazada50.reason} · ${(rechazada50.messages || []).join(' | ')}`
     )
 
+    // ------------------------------------------------------------------
+    // 51-52: el mapa que se levanta sin gastar un turno (H9). Levantar el
+    // contexto de un espacio eran TRES turnos del modelo —explorar, volcar el
+    // índice y levantar el árbol—; el árbol lo dice exacto la lista paginada de
+    // Confluence, y en Jira lo que hacía falta no era un árbol sino los nombres
+    // de verdad del proyecto, que salen de contar una muestra.
+    // No se pinta nada en la página ni se depende de un frame, como en 44-50, y
+    // el panel no aparece; pero el 51 sí LEE la barra lateral, porque lo que hay
+    // que comprobar es que el árbol que da la API sea el MISMO que el usuario
+    // tiene delante: es por donde Faro le va a llevar, y eso no se puede
+    // comprobar en Node.
+    // ------------------------------------------------------------------
+
+    // 51. El árbol del espacio leído de la API y pasado por las mismas
+    //     validadoras que el índice del modelo dice de quién cuelga cada página
+    //     lo mismo que se lee de la barra lateral. Nada está escrito a mano: los
+    //     dos lados se leen al vuelo y se comparan entre sí.
+    setSidebar('clasica')
+    renderPage('page:200')
+    await wait(320)
+    // Con otro nombre porque `snapshotTree` ya está declarado arriba (tramo 15);
+    // así este tramo no depende de que aquél siga existiendo.
+    const { snapshotTree: leerBarra51 } = await import('/src/content/tree-scan.js')
+    const { indexFromSpacePages } = await import('/src/panel/indexer.js')
+    const arbol51 = await confRest.fetchSpacePages(pideApi, sitioConf, 'ENG', { limit: 8 })
+    const indice51 = indexFromSpacePages(arbol51.pages, {
+      site: { host: location.hostname, cloud: false, wikiPrefix: '/wiki' },
+      scope: { kind: 'space', key: 'ENG' },
+      homeId: arbol51.homeId,
+    })
+    const deLaBarra51 = leerBarra51().pages
+    const comunes51 = deLaBarra51.filter((p) => indice51?.pages?.[p.id])
+    const otroPadre51 = comunes51.filter((p) => (indice51.pages[p.id].parentId || null) !== (p.parentId || null))
+    ok(
+      'el árbol que da la API dice de quién cuelga cada página lo mismo que la barra lateral, página a página',
+      !!indice51 &&
+        deLaBarra51.length > 10 &&
+        comunes51.length === deLaBarra51.length &&
+        otroPadre51.length === 0 &&
+        arbol51.requests === Math.ceil(arbol51.pages.length / 8) &&
+        !arbol51.truncated,
+      `${comunes51.length} de ${deLaBarra51.length} páginas del árbol lateral · ${otroPadre51.length} con otro padre · ` +
+        `${arbol51.pages.length} de la API en ${arbol51.requests} peticiones`
+    )
+    // La portada del espacio está por encima de todo en la API y NO es una rama
+    // que se despliegue en la barra lateral: tiene que quedar como destino y no
+    // como peldaño, o el paso a paso empezaría por algo que no se puede abrir.
+    const hijasDeLaPortada51 = Object.values(indice51?.pages || {}).filter((p) => p.parentId === arbol51.homeId)
+    const otraRuta51 = comunes51.filter((p) => indice51.pages[p.id].path !== p.url)
+    ok(
+      'la portada del espacio queda como destino pero no como peldaño, y la ruta de cada página es a la que enlaza el árbol',
+      !!indice51?.pages?.[arbol51.homeId] &&
+        indice51.pages[arbol51.homeId].parentId === null &&
+        hijasDeLaPortada51.length === 0 &&
+        otraRuta51.length === 0,
+      `portada ${arbol51.homeId} · ${hijasDeLaPortada51.length} páginas colgadas de ella · ${otraRuta51.length} rutas distintas de las del árbol`
+    )
+
+    // 52. La muestra del proyecto, contada. Es lo que sustituye el «pregúntale
+    //     al modelo qué tipos y estados hay»: se cuenta dos veces y da lo mismo,
+    //     porque un perfil que cambiara solo no valdría para escribir consultas.
+    const opciones52 = { limit: jiraRest.JIRA_REST_LIMITS.maxResults, fields: jiraRest.SAMPLE_FIELDS }
+    const muestra52 = await jiraRest.searchIssues(pideApi, sitioJira, jiraRest.sampleQuery('ENG'), opciones52)
+    const otraVez52 = await jiraRest.searchIssues(pideApi, sitioJira, jiraRest.sampleQuery('ENG'), opciones52)
+    // El reloj se inyecta distinto a propósito: `at` es lo ÚNICO que puede
+    // cambiar entre dos conteos de la misma muestra.
+    const perfil52 = jiraRest.profileFromSample(muestra52.issues, { projectKey: 'ENG', now: 1 })
+    const perfil52b = jiraRest.profileFromSample(otraVez52.issues, { projectKey: 'ENG', now: 2 })
+    const sinFecha52 = (p) => JSON.stringify({ ...p, at: 0 })
+    const deENG52 = FIX.issues.filter((i) => i.key.startsWith('ENG-'))
+    ok(
+      'contar la misma muestra dos veces da el mismo perfil, y lo contado cuadra con la fixture',
+      muestra52.ok &&
+        perfil52.sampled === deENG52.length &&
+        sinFecha52(perfil52) === sinFecha52(perfil52b) &&
+        perfil52.at !== perfil52b.at &&
+        perfil52.types.reduce((n, t) => n + t.count, 0) === perfil52.sampled &&
+        perfil52.statuses.every((s) => s.category) &&
+        sinFecha52(jiraRest.normalizeProfile(perfil52)) === sinFecha52(perfil52),
+      `${perfil52.sampled} incidencias · ${perfil52.types.length} tipos · ${perfil52.statuses.length} estados · ` +
+        `convenciones ${perfil52.prefixes.map((p) => p.pattern).join(' ')}`
+    )
+    // SIN PERSONAS: el perfil es lo único de todo esto que acaba dentro de un
+    // `system`, y la muestra ni siquiera pide quién es quién.
+    const gente52 = Object.values(FIX.people || {})
+    const enElPerfil52 = gente52.filter((quien) => JSON.stringify(perfil52).includes(quien))
+    ok(
+      'ni la muestra pide personas ni el perfil las lleva',
+      !jiraRest.SAMPLE_FIELDS.includes('assignee') &&
+        !jiraRest.SAMPLE_FIELDS.includes('reporter') &&
+        muestra52.issues.every((i) => !i.assignee && !i.reporter) &&
+        gente52.length > 0 &&
+        enElPerfil52.length === 0,
+      `${gente52.length} personas en la fixture, ${enElPerfil52.length} en el perfil · campos ${jiraRest.SAMPLE_FIELDS.join(',')}`
+    )
+    // Y con el perfil contado, los chips de estado que H8 dejó previstos tienen
+    // por fin qué ofrecer: los nombres EXACTOS del flujo de este proyecto, no
+    // los que el modelo supondría. Se ejecutan contra la API y cuadran con lo
+    // que el perfil contó, porque la muestra cubre el proyecto entero.
+    const chips52 = chipsDe({ product: 'jira', cloud: false, projectKey: 'ENG' }, { profile: perfil52 })
+    const porEstado52 = chips52.filter((c) => c.kind === 'estado')
+    const abiertos52 = perfil52.statuses.filter((s) => s.category !== 'done').slice(0, 2)
+    const corridas52 = []
+    for (const chip of porEstado52) {
+      corridas52.push({ chip, r: await jiraRest.searchIssues(pideApi, sitioJira, chip.jql, { limit: 5 }) })
+    }
+    ok(
+      'con el perfil contado, los chips de estado llevan los nombres exactos del proyecto y la API devuelve justo lo que el perfil contó',
+      porEstado52.length === abiertos52.length &&
+        abiertos52.every((s) => porEstado52.some((c) => c.jql.includes('"' + s.name + '"'))) &&
+        perfil52.sampled === muestra52.total &&
+        corridas52.length > 0 &&
+        corridas52.every(({ chip, r }) => chip.run && r.ok) &&
+        corridas52.every(({ chip, r }) => r.total === abiertos52.find((s) => chip.jql.includes('"' + s.name + '"'))?.count),
+      corridas52.map(({ chip, r }) => `${chip.label} → ${r.ok ? r.total : 'FALLO ' + r.reason}`).join(' · ') ||
+        'ningún chip de estado'
+    )
+
     renderPage('page:200')
     await wait(320)
 
@@ -2644,5 +2823,12 @@ window.faroHarness = {
   // probar en el banco (panel.js necesita `chrome.*`), pero QUÉ consultas
   // produce la pantalla y si son ejecutables, sí.
   searchChips: () => import('/src/panel/search-chips.js'),
+  // Y de H9, el índice que se monta con lo que devuelve la API. Se expone por lo
+  // mismo que los anteriores y por una razón más: en H7 la corrida completa se
+  // quedó parada en un tramo que espera un frame y hubo que ejecutar SÓLO el
+  // trozo REST a mano; con esto, el tramo 51 se puede repetir desde fuera sin
+  // pasar por los cuarenta de antes.
+  indexer: () => import('/src/panel/indexer.js'),
+  treeScan: () => import('/src/content/tree-scan.js'),
 }
 say('banco listo')

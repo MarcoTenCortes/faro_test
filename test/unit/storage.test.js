@@ -16,10 +16,14 @@
 import { test, eq, assert } from '../harness.js'
 import { STORAGE_KEYS } from '../../src/shared/config.js'
 import { INDEX_VERSION } from '../../src/atlassian/index-store.js'
+import { PROFILE_VERSION } from '../../src/shared/jira-rest.js'
 import {
   getIndex,
   getSite,
   getSiteBundle,
+  getProfile,
+  saveProfile,
+  forgetSite,
   bundleKeys,
   BUNDLE_EXTRA_KEYS,
   getSessionWeight,
@@ -56,7 +60,9 @@ async function conChrome(inicial, fn) {
         },
         remove: async (k) => {
           diario.removed.push(k)
-          delete local[k]
+          // `chrome.storage.local.remove` acepta una clave o una lista, y
+          // `forgetSite` borra dos de golpe: el índice y el perfil.
+          for (const clave of Array.isArray(k) ? k : [k]) delete local[clave]
         },
       },
     },
@@ -74,20 +80,18 @@ const INDICE = { version: INDEX_VERSION, host: HOST, pages: {}, spaces: {}, proj
 
 // ---- las claves que se leen -------------------------------------------------
 
-test('bundle: las claves del paquete son las cuatro de siempre, sin repetir', () => {
+test('bundle: las claves del paquete son las cuatro de siempre más el perfil, sin repetir', () => {
   eq(bundleKeys(HOST), [
     'faro:sites',
     `faro:index:${HOST}`,
     `faro:context:${HOST}`,
     `faro:memory:${HOST}`,
+    `faro:profile:${HOST}`,
   ])
-  eq(new Set(bundleKeys(HOST)).size, 4, 'ninguna clave se pide dos veces')
+  eq(new Set(bundleKeys(HOST)).size, 5, 'ninguna clave se pide dos veces')
 })
 
-test('bundle: las claves previstas de H9-H11 entran por su nombre, y una que no existe se ignora', () => {
-  // Hoy no hay ninguna, así que el mecanismo se ejercita con una clave que sí
-  // existe (`session`): sin esto, la lista vacía dejaría el camino sin probar y
-  // el hito que añada la primera se encontraría con que no funciona.
+test('H9: el perfil viaja en el paquete, y una clave que no existe se ignora', () => {
   eq(bundleKeys(HOST, ['session']), [
     'faro:sites',
     `faro:index:${HOST}`,
@@ -100,7 +104,7 @@ test('bundle: las claves previstas de H9-H11 entran por su nombre, y una que no 
   // La regla para quien añada la suya: el nombre tiene que existir y tiene que
   // ser por host (STORAGE_KEYS.sites es una cadena, no vale).
   assert(Array.isArray(BUNDLE_EXTRA_KEYS), 'BUNDLE_EXTRA_KEYS es una lista')
-  eq(BUNDLE_EXTRA_KEYS, [], 'hoy ninguna: H9 (perfil), H10 (historial y referencias) y H11 (actividad) las añaden')
+  eq(BUNDLE_EXTRA_KEYS, ['profile'], 'la primera es la de H9; H10 (historial y referencias) y H11 (actividad) añaden las suyas')
   for (const name of BUNDLE_EXTRA_KEYS) {
     eq(typeof STORAGE_KEYS[name], 'function', `STORAGE_KEYS.${name} tiene que ser una clave por host`)
   }
@@ -126,7 +130,7 @@ test('bundle: todo lo del sitio sale de UNA lectura, con claves exactas', async 
       eq(bundle.stale, false)
       eq(bundle.contextMd, '# Contexto')
       eq(bundle.memoryRaw, { entries: [{ at: 1, text: 'algo' }] }, 'la memoria sale tal cual: la normaliza quien la usa')
-      eq(bundle.extras, {})
+      eq(bundle.extras, { profile: null })
       eq(diario.sets, [], 'leer no escribe nada')
     }
   )
@@ -135,7 +139,7 @@ test('bundle: todo lo del sitio sale de UNA lectura, con claves exactas', async 
 test('bundle: sin nada guardado no hay sitio, ni índice, ni contexto, ni memoria', async () => {
   await conChrome({}, async (diario) => {
     const bundle = await getSiteBundle(HOST)
-    eq(bundle, { site: null, index: null, stale: false, contextMd: '', memoryRaw: null, extras: {} })
+    eq(bundle, { site: null, index: null, stale: false, contextMd: '', memoryRaw: null, extras: { profile: null } })
     eq(diario.removed, [], 'y no se borra nada')
   })
 })
@@ -148,7 +152,7 @@ test('bundle: el sitio es el de ESTE host, no el mapa entero', async () => {
       stale: false,
       contextMd: '',
       memoryRaw: null,
-      extras: {},
+      extras: { profile: null },
     })
     const bundle = await getSiteBundle(OTRO)
     eq(bundle.site, { host: OTRO, configured: true })
@@ -176,8 +180,10 @@ test('bundle: un índice de una versión anterior se tira y se avisa, igual que 
 })
 
 test('bundle: una clave prevista viaja en la MISMA lectura y su valor sale sin tocar', async () => {
-  // El día que H9 añada `profile` a BUNDLE_EXTRA_KEYS, esto es lo que tiene que
-  // pasar: una lectura, el valor crudo en `extras` y su hito normalizándolo.
+  // Lo que H9 estrenó con `profile` y lo que H10 y H11 repetirán con las suyas:
+  // una lectura, el valor CRUDO en `extras` y su hito normalizándolo (aquí no se
+  // decide la forma de nada). Se ejercita con `session` para probar el mecanismo
+  // por separado de la lista de por defecto.
   const guardado = { version: 1, projectKey: 'SIMPL', raro: { onclick: 'x' } }
   await conChrome({ [`faro:session:${HOST}`]: guardado }, async (diario) => {
     const bundle = await getSiteBundle(HOST, { extra: ['session'] })
@@ -190,6 +196,86 @@ test('bundle: una clave prevista viaja en la MISMA lectura y su valor sale sin t
     const bundle = await getSiteBundle(HOST, { extra: ['session'] })
     eq(bundle.extras, { session: null }, 'sin nada guardado, la clave prevista es null, no undefined')
   })
+})
+
+// ---- el perfil del proyecto (H9) --------------------------------------------
+
+const PERFIL = {
+  version: PROFILE_VERSION,
+  projectKey: 'SIMPL',
+  sampled: 40,
+  at: 1757664000000,
+  types: [{ name: 'Story', count: 30 }],
+  statuses: [{ name: 'Done', count: 12, category: 'done' }],
+  components: [],
+  labels: [],
+  prefixes: [],
+}
+const CLAVE_PERFIL = `faro:profile:${HOST}`
+
+test('H9: el perfil entra y sale por normalizeProfile, y el de otra versión no se sirve', async () => {
+  // De aquí sale texto que entra DELIMITADO en un `system` (profileBlock), así
+  // que lo guardado se reconstruye con claves blancas al leerlo: un perfil
+  // editado a mano no puede colar una clave de más ni un tipo raro.
+  await conChrome({ [CLAVE_PERFIL]: PERFIL }, async (diario) => {
+    eq(await getProfile(HOST), PERFIL)
+    eq(diario.gets, [CLAVE_PERFIL], 'se pide exactamente su clave')
+    eq(await getProfile(OTRO), null, 'el perfil es de ESTE host')
+    eq(diario.sets, [], 'leer no escribe')
+  })
+  await conChrome({ [CLAVE_PERFIL]: { ...PERFIL, onclick: 'x', types: [{ name: 'Story', count: 30, extra: 1 }] } }, async () => {
+    const p = await getProfile(HOST)
+    eq(Object.keys(p).sort(), ['at', 'components', 'labels', 'prefixes', 'projectKey', 'sampled', 'statuses', 'types', 'version'])
+    eq(p.types, [{ name: 'Story', count: 30 }], 'y cada entrada también')
+  })
+  // Otra versión: null, y se vuelve a contar. NO se borra del almacén, a
+  // diferencia del índice: un índice viejo lleva a un 404 y hay que tirarlo en
+  // el acto; un perfil es un conteo que se escribe encima.
+  await conChrome({ [CLAVE_PERFIL]: { ...PERFIL, version: PROFILE_VERSION + 1 } }, async (diario, local) => {
+    eq(await getProfile(HOST), null)
+    eq(diario.removed, [], 'leer no borra')
+    assert(CLAVE_PERFIL in local)
+  })
+  for (const malo of [null, 'abc', 7, [], {}]) {
+    await conChrome({ [CLAVE_PERFIL]: malo }, async () => {
+      eq(await getProfile(HOST), null, JSON.stringify(malo) ?? String(malo))
+    })
+  }
+})
+
+test('H9: guardar el perfil lo normaliza antes, y guardar nada quita la clave', async () => {
+  await conChrome({}, async (diario, local) => {
+    const guardado = await saveProfile(HOST, { ...PERFIL, onclick: 'x' })
+    eq(guardado, PERFIL, 'devuelve lo que quedó guardado')
+    eq(local[CLAVE_PERFIL], PERFIL, 'y en el almacén no hay ni una clave de más')
+    eq(diario.sets, [[CLAVE_PERFIL]], 'una sola escritura, bajo la clave del host')
+    eq(await getProfile(HOST), PERFIL, 'leerlo devuelve lo mismo')
+  })
+  await conChrome({ [CLAVE_PERFIL]: PERFIL }, async (diario, local) => {
+    eq(await saveProfile(HOST, { version: PROFILE_VERSION + 1 }), null)
+    eq(CLAVE_PERFIL in local, false, 'un perfil que no vale no se queda guardado')
+    eq(diario.removed, [CLAVE_PERFIL])
+    eq(diario.sets, [], 'y no se escribe nada')
+  })
+})
+
+test('H9: «Olvidar este sitio» se lleva también el perfil', async () => {
+  // Si no, el turno siguiente en ese host volvería a meter en el prompt los
+  // tipos y estados de un sitio que el usuario acaba de tirar.
+  await conChrome(
+    { 'faro:sites': { [HOST]: SITIO, [OTRO]: { host: OTRO } }, [`faro:index:${HOST}`]: INDICE, [CLAVE_PERFIL]: PERFIL, [`faro:profile:${OTRO}`]: PERFIL },
+    async (diario, local) => {
+      await forgetSite(HOST)
+      eq(HOST in local['faro:sites'], false)
+      eq(`faro:index:${HOST}` in local, false)
+      eq(CLAVE_PERFIL in local, false)
+      eq(`faro:profile:${OTRO}` in local, true, 'el de otro host no se toca')
+      assert(
+        diario.removed.flat().includes(CLAVE_PERFIL),
+        'el perfil se borra junto al índice: ' + JSON.stringify(diario.removed)
+      )
+    }
+  )
 })
 
 // ---- el peso de la sesión ---------------------------------------------------

@@ -145,6 +145,23 @@ export const RESTORE_LIMITS = { messages: 60 }
  */
 export const SESSION_LIMITS = { heavyToolChars: 200000 }
 
+/**
+ * El perfil de un proyecto de Jira guardado por host (H9).
+ *
+ * Su FORMA —cuántos tipos, cuántos prefijos, cuántos ejemplos y cuánto mide
+ * cada nombre— la decide `JIRA_REST_LIMITS` en el módulo que lo cuenta
+ * (`jira-rest.js`, donde vive `profileFromSample`): aquí sólo está lo que es de
+ * ALMACENAMIENTO, para no acabar con dos topes de lo mismo diciendo cosas
+ * distintas.
+ *
+ * `ttlMs`: cuánto vale un perfil guardado antes de volver a contarlo. Un flujo
+ * de trabajo gana estados, componentes o convenciones de nombre cada semanas,
+ * no cada hora, y recontarlo cuesta una petición con la sesión del usuario que
+ * sólo se hace cuando ya hay permiso sobre el dominio (§8.22: nunca en el
+ * camino crítico del arranque).
+ */
+export const PROFILE_LIMITS = { ttlMs: 24 * 60 * 60 * 1000 }
+
 export const STORAGE_KEYS = {
   settings: 'faro:settings',
   sites: 'faro:sites',
@@ -155,6 +172,10 @@ export const STORAGE_KEYS = {
   sessionWeight: (host) => `faro:session-weight:${host}`,
   context: (host) => `faro:context:${host}`,
   memory: (host) => `faro:memory:${host}`,
+  // Lo que la extensión contó de una muestra del proyecto de ese Jira (tipos,
+  // estados, componentes, etiquetas y convenciones de nombre). Es la PRIMERA
+  // clave por host que viaja en el paquete del sitio (`BUNDLE_EXTRA_KEYS`).
+  profile: (host) => `faro:profile:${host}`,
 }
 
 /**

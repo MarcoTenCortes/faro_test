@@ -2,6 +2,7 @@
 
 import { DEFAULT_SETTINGS, STORAGE_KEYS, migrateSettings } from './config.js'
 import { INDEX_VERSION } from '../atlassian/index-store.js'
+import { normalizeProfile } from './jira-rest.js'
 
 export async function getSettings() {
   const got = await chrome.storage.local.get(STORAGE_KEYS.settings)
@@ -40,7 +41,10 @@ export async function forgetSite(host) {
   const sites = await getSites()
   delete sites[host]
   await chrome.storage.local.set({ [STORAGE_KEYS.sites]: sites })
-  await chrome.storage.local.remove(STORAGE_KEYS.index(host))
+  // Lo que se aprendió de ese sitio se va con él: el índice y el perfil de su
+  // proyecto. «Olvidar este sitio» no puede dejar detrás una lista de tipos y
+  // estados que el turno siguiente volvería a meter en el prompt.
+  await chrome.storage.local.remove([STORAGE_KEYS.index(host), STORAGE_KEYS.profile(host)])
 }
 
 /** El índice de contenido, cacheado en local para que navegar sea inmediato. */
@@ -78,14 +82,15 @@ async function takeIndex(host, index) {
  * Las claves POR HOST que el paquete del sitio trae ADEMÁS de las de siempre
  * (el mapa de sitios, el índice, el contexto y la memoria).
  *
- * Hoy ninguna. Lo que viene (docs/PLAN.md §3.5) —el perfil del proyecto (H9),
- * las referencias y el historial de páginas base (H10), la actividad (H11)—
- * entra aquí con el NOMBRE de su clave en `STORAGE_KEYS` y su valor sale en
+ * Hoy el perfil del proyecto (H9). Lo que viene (docs/PLAN.md §3.5) —las
+ * referencias y el historial de páginas base (H10), la actividad (H11)— entra
+ * aquí con el NOMBRE de su clave en `STORAGE_KEYS` y su valor sale en
  * `bundle.extras` SIN TOCAR: la forma de cada una la decide su hito con sus
- * propias claves blancas, no este módulo. Añadir el nombre aquí es todo lo que
- * hace falta para que su lectura viaje en la misma petición al almacén.
+ * propias claves blancas, no este módulo (el perfil, por `normalizeProfile`, que
+ * es lo que hace `getProfile`). Añadir el nombre aquí es todo lo que hace falta
+ * para que su lectura viaje en la misma petición al almacén.
  */
-export const BUNDLE_EXTRA_KEYS = []
+export const BUNDLE_EXTRA_KEYS = ['profile']
 
 /**
  * Las claves de almacenamiento que lee `getSiteBundle` para un host. Pura.
@@ -143,6 +148,39 @@ export async function getSiteBundle(host, { extra = BUNDLE_EXTRA_KEYS } = {}) {
 
 export async function saveIndex(host, index) {
   await chrome.storage.local.set({ [STORAGE_KEYS.index(host)]: index })
+}
+
+/**
+ * El perfil del proyecto de un Jira: lo que la extensión contó de una muestra
+ * (tipos, estados con su categoría, componentes, etiquetas y convenciones de
+ * nombre). De aquí sale texto que entra DELIMITADO en un `system`, así que
+ * entra y sale por `normalizeProfile`, que lo reconstruye con claves blancas y
+ * devuelve null si es de otra versión (CLAUDE.md §9).
+ *
+ * Un perfil de otra versión NO se borra del almacén al leerlo, a diferencia del
+ * índice: el índice viejo trae rutas que llevan a un 404 y por eso se tira en el
+ * acto, mientras que un perfil es sólo un conteo que se vuelve a hacer y a
+ * escribir encima. Borrarlo sería una escritura dentro de una lectura para nada.
+ */
+export async function getProfile(host) {
+  const key = STORAGE_KEYS.profile(host)
+  const got = await chrome.storage.local.get(key)
+  return normalizeProfile(got[key])
+}
+
+/**
+ * Guarda el perfil ya normalizado, o quita la clave si no hay nada que guardar.
+ * Como `saveMemory`: por aquí no pasa nada sin reconstruir, para que lo que se
+ * lea mañana sea lo que este módulo promete. Devuelve lo que quedó guardado.
+ */
+export async function saveProfile(host, profile) {
+  const limpio = normalizeProfile(profile)
+  if (!limpio) {
+    await chrome.storage.local.remove(STORAGE_KEYS.profile(host))
+    return null
+  }
+  await chrome.storage.local.set({ [STORAGE_KEYS.profile(host)]: limpio })
+  return limpio
 }
 
 /** La sesión activa por sitio. En storage.session: se va al cerrar Chrome. */

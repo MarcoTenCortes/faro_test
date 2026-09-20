@@ -11,7 +11,9 @@ la respuesta**.
   detectarlo; las claves van a tu opencode, no al navegador.
 - Un mapa del sitio construido la primera vez —**incluido el árbol de páginas
   completo**, que es lo que permite enseñarte el camino— y que se enriquece con
-  el uso.
+  el uso. En Confluence ese árbol se lee de la API de tu propio sitio con tu
+  sesión: exacto, en segundos y sin gastar un token, y si no se puede, se
+  recorre con el modelo como siempre.
 - Memoria dentro de la sesión, y opcionalmente entre sesiones.
 - Un **registro** de todo lo que se le pide a opencode, con resultado y
   duración, para saber qué pasó cuando algo falla.
@@ -447,6 +449,14 @@ Trece decisiones que sostienen el diseño:
      tu sitio en el momento y sin un token. Pulsar una fila te lleva a esa
      incidencia por el mismo camino que cualquier destino: la clave entra en el
      índice y se valida antes de abrir nada, no se pega una URL a mano.
+   - **El mapa del sitio se levanta en un turno, no en tres.** El árbol de un
+     espacio lo dice la API de tu Confluence en milisegundos, así que al modelo
+     sólo se le pide la prosa del contexto, no que vuelque el índice ni que
+     adivine la jerarquía. Y en un Jira propio, los nombres de verdad del
+     proyecto —tipos, estados, componentes, etiquetas y las convenciones de los
+     resúmenes— salen de contar una muestra, no de que el modelo los recuerde:
+     con ellos delante escribe el JQL con los nombres exactos, que es donde una
+     búsqueda falla en silencio. Sin personas, y se borra con el sitio.
    - **El chat vacío ofrece hasta cuatro búsquedas al instante.** «Misma épica
      ENG-1», «Mis abiertas de ENG», «Filtro: API en revisión»… Las tres
      sugerencias de al lado son preguntas para el modelo; estas no pasan por él.
@@ -467,7 +477,7 @@ Trece decisiones que sostienen el diseño:
 ## Comprobaciones
 
 ```bash
-npm run check              # sintaxis + orden + manifest + 1074 pruebas unitarias + docs
+npm run check              # sintaxis + orden + manifest + 1099 pruebas unitarias + docs
 npm run check:docs         # sólo el paso docs: número de pruebas, títulos del registro, mensajes y ficheros del mapa
 npm run test:integration   # contra un opencode real que arranca la propia prueba
 npm run harness            # banco de pruebas visual en http://127.0.0.1:5175

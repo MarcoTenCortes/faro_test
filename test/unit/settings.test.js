@@ -14,6 +14,7 @@ import {
   SESSION_LIMITS,
   STORAGE_KEYS,
   INDEX_LIMITS,
+  PROFILE_LIMITS,
   SAFE_PERMISSIONS as DESDE_CONFIG,
 } from '../../src/shared/config.js'
 import { SAFE_PERMISSIONS } from '../../src/shared/permissions.js'
@@ -89,6 +90,28 @@ test('H7: el árbol leído de la API tiene tope de peticiones, y las páginas si
   )
   eq(INDEX_LIMITS.maxPages, 300, 'el tope de páginas del índice no cambia por leerlo de la API')
   assert(!('restMaxPages' in INDEX_LIMITS), 'un segundo tope de páginas acabaría diciendo otra cosa que maxPages')
+})
+
+// ------------------------------------------------------------------ H9
+
+test('H9: el perfil del proyecto tiene su clave POR HOST, distinta de las demás', () => {
+  eq(typeof STORAGE_KEYS.profile, 'function', 'es una clave por host, como el índice o la memoria')
+  eq(STORAGE_KEYS.profile('jira.simplprogramme.eu'), 'faro:profile:jira.simplprogramme.eu')
+  const host = 'x.eu'
+  const otras = [STORAGE_KEYS.index(host), STORAGE_KEYS.context(host), STORAGE_KEYS.memory(host), STORAGE_KEYS.session(host), STORAGE_KEYS.sessionWeight(host)]
+  assert(!otras.includes(STORAGE_KEYS.profile(host)), 'y no pisa ninguna de las que ya había')
+})
+
+test('H9: del perfil guardado, aquí sólo vive lo que es de almacenamiento', () => {
+  // La FORMA (cuántos tipos, cuántos prefijos, cuánto mide un nombre) la decide
+  // `JIRA_REST_LIMITS` en el módulo que lo cuenta: dos topes de lo mismo en dos
+  // sitios acabarían diciendo cosas distintas (CLAUDE.md §9).
+  eq(Object.keys(PROFILE_LIMITS).sort(), ['ttlMs'])
+  assert(Number.isInteger(PROFILE_LIMITS.ttlMs) && PROFILE_LIMITS.ttlMs > 0)
+  assert(PROFILE_LIMITS.ttlMs >= 60 * 60 * 1000, 'recontar cuesta una petición: no se hace cada hora')
+  for (const k of ['profileList', 'profilePrefixes', 'profileExamples', 'maxPages', 'list', 'prefixes']) {
+    assert(!(k in PROFILE_LIMITS), `${k} no es un tope de almacenamiento: vive donde se cuenta el perfil`)
+  }
 })
 
 // ------------------------------------------------------------------ H6 (P6b)

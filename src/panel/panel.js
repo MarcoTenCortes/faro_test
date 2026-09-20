@@ -15,14 +15,22 @@ import { suggestsAnotherModel, sortMessages, dropOrphans, toolOutputSize } from 
 import { pickDefaultModel, pickAlternativeModel, pickPlannerModel, modelKey, parseModelKey } from '../shared/models.js'
 import { parseAtlassianUrl, describeLocation, defaultScope, locationParts, samePage, wikiPrefix as wikiPrefixOf } from '../atlassian/site.js'
 import { mergeIndex, mergeIndexKeepingTree, indexSize, normalizeIndex, ancestryOf } from '../atlassian/index-store.js'
-import { CORS_ORIGIN, DEFAULT_SETTINGS, RESTORE_LIMITS, SESSION_LIMITS, mcpNameForHost } from '../shared/config.js'
+import { CORS_ORIGIN, DEFAULT_SETTINGS, INDEX_LIMITS, PROFILE_LIMITS, RESTORE_LIMITS, SESSION_LIMITS, mcpNameForHost } from '../shared/config.js'
 import { MSG } from '../shared/messages.js'
-import { JIRA_REST_LIMITS, normalizeRecentJql, rememberJql } from '../shared/jira-rest.js'
+import {
+  JIRA_REST_LIMITS,
+  SAMPLE_FIELDS,
+  normalizeProfile,
+  normalizeRecentJql,
+  profileFromSample,
+  rememberJql,
+  sampleQuery,
+} from '../shared/jira-rest.js'
 import { navOptions } from '../nav/options.js'
 import { validatePlan } from '../nav/validate.js'
 import {
   getSettings, saveSettings, getSite, saveSite, forgetSite, getSiteBundle,
-  getIndex, saveIndex, getSessionId, setSessionId, clearSessionId,
+  getIndex, saveIndex, saveProfile, getSessionId, setSessionId, clearSessionId,
   getSessionWeight, setSessionWeight, clearSessionWeight,
 } from '../shared/storage.js'
 import { renderMarkdown } from './markdown.js'
@@ -44,7 +52,7 @@ import {
   chosenMcpName,
   PRODUCTS,
 } from './setup.js'
-import { buildContext, harvestIndex, harvestFromSearch, countWithParent } from './indexer.js'
+import { buildContext, harvestIndex, harvestFromSearch, indexFromSpacePages, countWithParent } from './indexer.js'
 import { planNavigation, shouldPlan, currentPageId, jqlDestination, jqlLink, jqlPlan } from './planner.js'
 import {
   SOURCE_LIMITS,
@@ -255,6 +263,13 @@ const state = {
   // normalizadas (`normalizeRecentJql`). Se guardan en el registro del sitio,
   // así que sobreviven al panel; es la única memoria de búsquedas que hay.
   recentJql: [],
+  // Lo que la extensión contó de una muestra del proyecto de este Jira
+  // (`normalizeProfile`): los nombres EXACTOS de tipo, estado, componente y
+  // etiqueta, y cómo se nombran los tickets aquí. De ahí salen los chips de
+  // estado y el bloque DATOS DEL PROYECTO del prompt de Búsqueda. Se carga con
+  // el paquete del sitio, se vuelve a contar cuando envejece y `refreshTab` lo
+  // vacía al cambiar de host: es de ESTE proyecto. null en Confluence.
+  profile: null,
 }
 
 // -------------------------------------------------------------------- init
@@ -422,10 +437,11 @@ async function refreshTab() {
     state.sessionToolChars = 0
     state.heavyWarned = false
     // Y lo que alimenta los chips de búsqueda, que es de ESTE Jira: los filtros
-    // favoritos vuelven a quedar por pedir y las últimas consultas las carga
-    // `bootForSite` del registro del sitio nuevo.
+    // favoritos vuelven a quedar por pedir y las últimas consultas y el perfil
+    // contado del proyecto los carga `bootForSite` del sitio nuevo.
     state.favouriteFilters = null
     state.recentJql = []
+    state.profile = null
     paintSourcesUi()
   }
   state.site = site
@@ -601,6 +617,12 @@ async function bootForSite() {
   // reconstruyen al leer, como las páginas base, porque son consultas que
   // acabarán dentro de una URL.
   state.recentJql = normalizeRecentJql(saved?.recentJql)
+  // Y el perfil contado del proyecto, que viaja en el MISMO paquete del sitio
+  // (`BUNDLE_EXTRA_KEYS`, H9): no cuesta ninguna lectura más y se reconstruye
+  // con claves blancas al leerlo, como todo lo que sale del almacén. Volver a
+  // contarlo es una petición con la sesión del usuario y eso NO va aquí: se
+  // hace al final, en segundo plano (P4 dejó el arranque en una sola lectura).
+  state.profile = normalizeProfile(bundle.extras?.profile)
   paintSourcesUi()
 
   if (!status.connected && !saved?.skippedKeys) {
@@ -651,6 +673,94 @@ async function bootForSite() {
   // Sin ruido: si falta el permiso, se avisa cuando de verdad hace falta
   // (al ofrecer navegación), no nada más abrir el panel.
   await ensureContentAccess({ announce: false })
+
+  // Y, con el chat ya puesto, volver a contar el perfil del proyecto si el
+  // guardado ha envejecido. Va detrás del arranque y sin await a propósito: es
+  // una petición a la API del sitio y el chat no puede esperarla (§8.22 y P4 de
+  // H6, que dejó el arranque en una sola lectura del almacén).
+  refreshProfileSoon(testigo)
+}
+
+/**
+ * Vuelve a contar el perfil del proyecto, sin que el arranque lo espere.
+ *
+ * Se llama sin `await` a propósito: lo que devuelva llega al estado cuando
+ * llegue, y hasta entonces vale el perfil guardado (o ninguno). Un fallo aquí
+ * no puede tumbar el arranque, así que se recoge y se apunta en el Registro.
+ */
+function refreshProfileSoon(testigo) {
+  refreshProfile(testigo).catch((err) => log.info('Perfil del proyecto', 'no se pudo refrescar: ' + String(err?.message || err)))
+}
+
+/**
+ * ¿Hace falta volver a contar la muestra de este proyecto?
+ *
+ * Un flujo de trabajo gana estados, componentes o convenciones de nombre cada
+ * semanas, no cada hora: con un perfil de este mismo proyecto y más nuevo que
+ * `PROFILE_LIMITS.ttlMs` no se pide nada. Y sólo en un Jira Data Center: en
+ * Cloud la REST de Jira está retirada (§8.19) y en Confluence no hay proyecto
+ * que contar.
+ */
+async function refreshProfile(testigo) {
+  if (!state.settings.restTools) return
+  // El sitio y la pestaña con los que se pide, capturados juntos (§8.22): entre
+  // esto y la respuesta hay dos await y el usuario puede cambiar de pestaña.
+  const sitio = state.site
+  const tabId = state.tabId
+  if (sitio?.product !== 'jira' || sitio.cloud || tabId == null) return
+  const scope = defaultScope(sitio)
+  if (scope?.kind !== 'project') return
+  const vigente =
+    state.profile && state.profile.projectKey === scope.key && Date.now() - state.profile.at < PROFILE_LIMITS.ttlMs
+  if (vigente) return
+  // Con permiso YA concedido y nada más: un refresco en segundo plano no puede
+  // abrir un diálogo de permisos que el usuario no ha pedido. Sin permiso, el
+  // perfil se cuenta cuando se reconstruye el contexto, que sí es un gesto suyo.
+  if (!(await hasHostPermission(sitio.origin))) return
+  if (state.bootToken !== testigo) return
+
+  const r = await countProfile(sitio, scope, { tabId })
+  if (!r.ok) {
+    log.info('Perfil del proyecto', `${sitio.host} · no se pudo contar la muestra · ${r.reason}`)
+    return
+  }
+  // Lo capturado al pedir manda al volver (§8.22): la muestra tarda lo que
+  // tarde y el panel puede estar ya en otro sitio, o en otro arranque.
+  if (state.bootToken !== testigo || (state.site?.host ?? state.lastHost) !== sitio.host) return
+  state.profile = r.profile
+}
+
+/**
+ * La muestra del proyecto, contada y guardada.
+ *
+ * Una sola petición con la sesión del navegador: la plantilla fija
+ * `sampleQuery` (§8.12) y los campos de la muestra, que NO incluyen personas.
+ * El mensaje se manda desde aquí y no desde los dos sitios que necesitan el
+ * perfil —el refresco del arranque y la reconstrucción del contexto—, para que
+ * la petición y lo que se guarda estén escritos una vez.
+ *
+ * Escribe bajo el host que se le pasa, nunca bajo el de ahora; quien llama
+ * decide si lo que vuelve entra en `state` (§8.22).
+ *
+ * @returns {Promise<{ok:true, profile:object, ms:number}|{ok:false, reason:string, detail:string}>}
+ */
+async function countProfile(sitio, scope, { tabId = state.tabId } = {}) {
+  const jql = sampleQuery(scope?.kind === 'project' ? scope.key : '')
+  if (!jql) return { ok: false, reason: 'ámbito', detail: 'aquí no hay un proyecto del que contar una muestra' }
+
+  const r = await chrome.tabs
+    .sendMessage(tabId, { type: MSG.JQL_SEARCH, jql, limit: JIRA_REST_LIMITS.maxResults, fields: SAMPLE_FIELDS, cloud: sitio.cloud })
+    .catch(() => null)
+  if (!r?.ok) return { ok: false, reason: r?.reason || 'sin respuesta', detail: jqlFailText(r, sitio.host) }
+
+  const profile = profileFromSample(r.issues, { projectKey: scope.key })
+  await saveProfile(sitio.host, profile)
+  log.ok(
+    'Perfil del proyecto',
+    `${sitio.host} · muestra de ${profile.sampled} incidencias · ${profile.types.length} tipos · ${profile.statuses.length} estados` +
+      `${Number.isFinite(r.ms) ? ` · ${r.ms} ms` : ''}`
+  )
+  return { ok: true, profile, ms: r.ms }
 }
 
 /**
@@ -1295,6 +1405,11 @@ function paintSearchChips(box) {
         // Sólo los campos de la página que hay DELANTE: la misma regla con la que
         // `readIssueFieldsQuick` decide si los que tiene le valen.
         issueFields: state.issueFields && samePage(state.issueFields.url, state.tabUrl) ? state.issueFields.fields : null,
+        // Los dos estados más usados salen del perfil contado (H9): con él, el
+        // grupo «estado» que H8 dejó hecho en `search-chips.js` ya tiene qué
+        // ofrecer. Sin perfil, `suggestedQueries` no saca ninguno y los chips
+        // son exactamente los de antes.
+        profile: state.profile,
         favouriteFilters: state.favouriteFilters || [],
         recentJql: state.recentJql,
       })
@@ -1755,6 +1870,9 @@ async function send() {
         digest,
         // Desde Jira, el contexto del Confluence enlazado; null si no lo hay.
         linkedContext: state.linkedContext,
+        // Y lo que la extensión contó del proyecto (H9): sólo lo usa Búsqueda
+        // en Jira, y lo decide `baseSystem`, que es quien pone el bloque.
+        profile: state.profile,
         sources,
       }),
     }
@@ -4656,11 +4774,20 @@ function showContextScreen() {
   $('context-scope').textContent = scope?.label || state.site.host
   $('context-status').textContent = ''
   // Lo que se recorre no es lo mismo en un proyecto de Jira que en un espacio
-  // de Confluence: en Jira no hay árbol, hay tipos, estados y nombres.
+  // de Confluence: en Jira no hay árbol, hay tipos, estados y nombres. Y desde
+  // H9 tampoco es lo mismo con las lecturas REST encendidas que sin ellas: con
+  // ellas, el árbol y la muestra los lee la extensión de la API y el modelo
+  // sólo escribe la prosa. La pantalla dice lo que de verdad va a pasar.
+  const porLaApi = !!state.settings.restTools && !(state.site?.product === 'jira' && state.site?.cloud)
   $('context-generate-text').textContent =
     state.site?.product === 'jira'
-      ? 'Recorre los tipos de incidencia, los estados del flujo y una muestra de tickets para sacar las convenciones de nombre; y busca en Confluence si están documentadas. Con tope, progreso visible y botón de cancelar.'
-      : 'Recorre el árbol, los títulos y las etiquetas. Con tope, progreso visible y botón de cancelar.'
+      ? (porLaApi
+          ? 'Cuenta una muestra de tickets con tu sesión —tipos, estados y convenciones de nombre exactos, sin gastar tokens— y el modelo escribe con ellos el documento; además busca en Confluence si están documentadas. '
+          : 'Recorre los tipos de incidencia, los estados del flujo y una muestra de tickets para sacar las convenciones de nombre; y busca en Confluence si están documentadas. ') +
+        'Con tope, progreso visible y botón de cancelar.'
+      : (porLaApi
+          ? 'Lee el árbol del espacio de la API de Confluence con tu sesión —exacto y en segundos, sin gastar tokens— y el modelo escribe con él el documento. '
+          : 'Recorre el árbol, los títulos y las etiquetas. ') + 'Con tope, progreso visible y botón de cancelar.'
   showScreen('screen-context')
 }
 
@@ -5293,9 +5420,12 @@ function wireEvents() {
     state.sources = emptySources()
     // Y las búsquedas que se recordaban de aquí: `forgetSite` ya borró el
     // registro del sitio, así que dejarlas en memoria las volvería a guardar en
-    // cuanto se ejecutara la siguiente.
+    // cuanto se ejecutara la siguiente. Con el perfil contado, lo mismo:
+    // `forgetSite` borra su clave y dejarlo en memoria lo metería en el prompt
+    // del turno siguiente como si no se hubiera olvidado nada.
     state.recentJql = []
     state.favouriteFilters = null
+    state.profile = null
     paintSourcesUi()
     hideScreens()
     await bootForSite()
@@ -5531,6 +5661,98 @@ function paintSnippet() {
 }
 
 /**
+ * Lo que se puede leer de la API del propio sitio antes de gastar un turno.
+ *
+ * POR QUÉ EXISTE: levantar el mapa de un espacio eran TRES turnos del modelo
+ * —explorar y escribir la prosa, volcar el índice y levantar el árbol—, minutos
+ * de espera y una jerarquía que el modelo se inventaba a trozos. El árbol lo
+ * dice exacto la lista paginada de Confluence (`fetchSpacePages`), y en Jira lo
+ * que hacía falta no es un árbol sino los nombres de verdad del proyecto, que
+ * salen de contar una muestra (`profileFromSample`). Las dos cosas van con la
+ * sesión del navegador, cuestan milisegundos y cero tokens (§8.19).
+ *
+ * REGLA DE ORO: esto sólo ADELANTA trabajo. Si la API no contesta, si el
+ * usuario apagó las lecturas REST, si falta el permiso o si esto es Jira Cloud,
+ * se devuelve lo que se sepa y el camino de siempre sigue entero: `buildContext`
+ * con sus tres fases por el modelo. Lo único que cambia es que se dice —en el
+ * velo mientras pasa y en el Registro para después—.
+ *
+ * @param {object} scope el ámbito que se va a indexar (`defaultScope`)
+ * @param {{sitio:object, report?:Function, tabId?:number|null}} opts el sitio
+ *        CAPTURADO al empezar, nunca el de la pestaña de ahora (§8.22)
+ * @returns {Promise<{index:object|null, profile:object|null, aviso:string}>}
+ */
+async function restIndexFor(scope, { sitio, report = () => {}, tabId = state.tabId } = {}) {
+  // El perfil que ya hubiera contado sigue valiendo aunque hoy no se pueda
+  // contar otro: es un conteo, no una lectura de ahora mismo.
+  const guardado = sitio && (state.site?.host ?? state.lastHost) === sitio.host ? state.profile : null
+  const nada = { index: null, profile: guardado, aviso: '' }
+  // El interruptor maestro. Apagado no es un fallo —lo eligió el usuario en
+  // Ajustes—, así que no se avisa de nada ni se apunta nada: el indexado va por
+  // las tres fases de siempre, que es exactamente lo que la casilla promete.
+  if (!state.settings.restTools || !sitio) return nada
+
+  const host = sitio.host
+  const falla = (motivo, texto) => {
+    log.warn('Índice por la API no disponible', `${host} · ${motivo} · ${texto}`)
+    report(texto + ' Lo recorro con el modelo, como siempre.')
+    return { ...nada, aviso: texto }
+  }
+
+  if (sitio.product === 'confluence') {
+    if (scope?.kind !== 'space' || !scope.key) {
+      return falla('ámbito', 'Por la API sólo puedo leer el árbol de UN espacio, y aquí el ámbito es todo Confluence.')
+    }
+    if (tabId == null || !(await ensureContentAccess({ announce: false }))) {
+      return falla('permiso', `No puedo leer el árbol sin permiso sobre ${host}.`)
+    }
+    // `scope.label` ya trae su artículo («el espacio ENG», «todo Confluence»): con
+    // «de» delante salía «el árbol de el espacio ENG».
+    report(`Leyendo ${scope.label} en la API de Confluence: el árbol de páginas…`)
+    // Quien pide es el content script, que vive en el origen del sitio; los
+    // topes (páginas y peticiones) los pone el módulo y no viajan en el mensaje.
+    const r = await chrome.tabs
+      .sendMessage(tabId, { type: MSG.SPACE_PAGES, spaceKey: scope.key, wikiPrefix: wikiPrefixOf(sitio), cloud: sitio.cloud })
+      .catch(() => null)
+    if (!r?.ok) {
+      return falla(r?.reason || 'sin respuesta', `No he podido leer el árbol de ${host} por su API: ${r?.reason || 'la pestaña no contestó'}.`)
+    }
+    const index = indexFromSpacePages(r.pages, { site: sitio, scope, homeId: r.homeId })
+    if (!index) return falla('vacío', `La API de ${host} no devuelve ninguna página de ${scope.label}.`)
+    log.ok(
+      'Índice leído de la API',
+      `${host} · ${indexSize(index)} entradas · ${r.requests} petición(es)${r.truncated ? ` · recortado en ${INDEX_LIMITS.maxPages}` : ''}` +
+        `${Number.isFinite(r.ms) ? ` · ${r.ms} ms` : ''}`
+    )
+    return { index, profile: guardado, aviso: '' }
+  }
+
+  if (sitio.product === 'jira') {
+    // En Jira Cloud `GET /rest/api/2/search` está retirado (410) y allí todo va
+    // por el MCP: el rechazo vive en jira-rest.js, pero pedirlo para nada sería
+    // una petición y un aviso más confuso que este.
+    if (sitio.cloud) {
+      return falla('cloud', 'En Jira Cloud no puedo consultar la API con tu sesión.')
+    }
+    if (scope?.kind !== 'project') {
+      return falla('ámbito', 'Por la API sólo puedo contar la muestra de UN proyecto, y aquí el ámbito es todo Jira.')
+    }
+    if (tabId == null || !(await ensureContentAccess({ announce: false }))) {
+      return falla('permiso', `No puedo contar la muestra sin permiso sobre ${host}.`)
+    }
+    report(`Contando una muestra de ${scope.label} en la API de Jira…`)
+    const r = await countProfile(sitio, scope, { tabId })
+    if (!r.ok) return falla(r.reason, r.detail)
+    // El perfil se guarda bajo el host con el que se pidió (lo hace
+    // `countProfile`); en el estado sólo entra si el panel sigue ahí (§8.22).
+    if ((state.site?.host ?? state.lastHost) === host) state.profile = r.profile
+    return { index: null, profile: r.profile, aviso: '' }
+  }
+
+  return nada
+}
+
+/**
  * @param {{keepContext?: boolean}} opts keepContext respeta el documento que
  *        trajo el usuario y se queda sólo con el índice de navegación.
  */
@@ -5555,7 +5777,16 @@ async function generateContext({ keepContext = false } = {}) {
     { abort: controller }
   )
 
+  const report = (t) => (el.busyText.textContent = t)
+
   try {
+    // Lo que la API del propio sitio da exacto, antes de gastar un turno: el
+    // árbol del espacio (Confluence) o la muestra contada del proyecto (Jira
+    // Data Center). Si no se puede, `rest.index` viene null y `buildContext`
+    // hace exactamente lo de siempre; el motivo va en el velo y en el Registro.
+    const rest = await restIndexFor(scope, { sitio, report })
+    if (controller.signal.aborted) throw new DOMException('Cancelado', 'AbortError')
+
     const { contextMd, index } = await buildContext(state.client, {
       scope,
       site: sitio,
@@ -5563,8 +5794,12 @@ async function generateContext({ keepContext = false } = {}) {
       // Desde Jira, el indexador sabe qué Confluence hay enlazado y qué
       // cuenta su contexto: es donde buscar si los tickets están documentados.
       linkedContext: state.linkedContext,
+      // Con el árbol ya leído, las fases 2 y 3 no se le piden al modelo; con
+      // el perfil contado, tampoco la muestra de Jira (los dos van al prompt).
+      restIndex: rest.index,
+      profile: rest.profile,
       signal: controller.signal,
-      onProgress: (t) => (el.busyText.textContent = t),
+      onProgress: report,
     })
 
     // ¿Sigue el panel en el sitio que se indexó? Si no, el índice se funde con
@@ -5588,6 +5823,13 @@ async function generateContext({ keepContext = false } = {}) {
     // adversaria de H6).
     const apuntado = state.indexDirty?.host === host ? state.indexDirty.index : null
     const base = apuntado && apuntado !== previo ? mergeIndex(previo, apuntado) : previo
+    // `mergeIndex` y no `mergeIndexKeepingTree`: lo que se acaba de construir es
+    // la fuente de verdad —y desde H9, cuando viene de la API, lo es del todo—,
+    // así que su entrada gana entera. Con la que conserva el árbol, un
+    // `parentId: null` DELIBERADO (las hijas de la portada, que no es una rama
+    // que se despliegue) recuperaría el padre viejo por el `??` y el recorrido
+    // volvería a empezar por un peldaño que no se puede abrir. Las páginas que
+    // el índice nuevo no menciona se conservan igual: nada se borra.
     const fundido = mergeIndex(base, index)
     await saveIndex(host, fundido)
     // El apunte se suelta DESPUÉS de guardar —si la escritura falla, lo que
@@ -5612,7 +5854,10 @@ async function generateContext({ keepContext = false } = {}) {
     // y al volver se repinta solo (refreshTab).
     if (!state.site) return
     await restoreConversation()
-    showNotice(`Contexto listo: ${indexSize(state.index)} entradas indexadas.`)
+    // El motivo por el que la API no sirvió sobrevive al velo: el contexto está
+    // listo igual, pero un fallo silencioso tiene contraparte visible (§8.14) y
+    // la línea del velo se la lleva el siguiente paso en cuanto pasa.
+    showNotice(`Contexto listo: ${indexSize(state.index)} entradas indexadas.` + (rest.aviso ? ' ' + rest.aviso : ''))
   } catch (err) {
     hideBusy()
     const sigueAqui = () => (state.site?.host ?? state.lastHost) === host

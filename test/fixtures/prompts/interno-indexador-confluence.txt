@@ -10,7 +10,7 @@ Salida: un documento en Markdown, en español, con estos apartados:
   1. De qué trata esta zona, en dos o tres frases.
   2. Cómo está organizada (jerarquía, secciones principales).
   3. Vocabulario interno: siglas, nombres de proyecto, términos que un recién llegado no entendería.
-  4. Dónde vive cada cosa: qué se busca en qué sitio.
+  4. Dónde vive cada cosa: qué se busca en qué sitio, nombrando cada página de referencia por su título exacto y su id numérico.
   5. Quién escribe o participa más, si se deduce.
 
 No inventes nada. Si un apartado no se puede rellenar con lo que has visto, dilo en una línea.

@@ -242,17 +242,17 @@ test('msgHandlers reconoce las formas reales de mandar: `type:` en varias línea
 const ATENDIDOS = (nombres) => nombres.map((name) => ({ name, handled: true, sent: false, where: ['bootstrap'] }))
 
 test('MSG_SIN_EMISOR_HASTA nombra los mensajes que esperan su hito, y sólo encoge', () => {
-  // De los cinco que sembró H7 ya faltan dos: `attachJqlResults` manda
-  // JQL_SEARCH y `loadSearchChipSources` FAVOURITE_FILTERS, los dos desde H8, y
-  // dejarlos aquí sería ERROR («ya lo manda alguien»). La lista no puede crecer
-  // sin que el hito que la toca lo escriba.
+  // De los cinco que sembró H7 ya faltan tres: `attachJqlResults` manda
+  // JQL_SEARCH y `loadSearchChipSources` FAVOURITE_FILTERS desde H8, y
+  // `restIndexFor` manda SPACE_PAGES desde H9. Dejarlos aquí sería ERROR («ya
+  // lo manda alguien»). La lista no puede crecer sin que el hito que la toca lo
+  // escriba.
   eq(MSG_SIN_EMISOR_HASTA, {
-    SPACE_PAGES: 'H9',
     RECENT_ISSUES: 'H11',
     RECENT_PAGES: 'H11',
   })
-  for (const cableado of ['JQL_SEARCH', 'FAVOURITE_FILTERS']) {
-    assert(!(cableado in MSG_SIN_EMISOR_HASTA), `H8 cableó ${cableado}: su entrada tenía que salir de la lista`)
+  for (const cableado of ['JQL_SEARCH', 'FAVOURITE_FILTERS', 'SPACE_PAGES']) {
+    assert(!(cableado in MSG_SIN_EMISOR_HASTA), `ya está cableado: ${cableado} tenía que salir de la lista`)
   }
   for (const hito of Object.values(MSG_SIN_EMISOR_HASTA)) assert(/^H\d+$/.test(hito), 'cada entrada dice a qué hito espera: ' + hito)
 })

@@ -51,6 +51,8 @@ import { normalizeSources, hasSources } from '../../../src/panel/sources.js'
 import { normalizeIssueFields } from '../../../src/panel/issue-profile.js'
 import { memoryToPrompt } from '../../../src/panel/memory.js'
 import { formatDigest } from '../../../src/shared/digest.js'
+import { normalizeProfile, PROFILE_VERSION } from '../../../src/shared/jira-rest.js'
+import { treeTitles } from '../../../src/panel/prompts.js'
 
 /** Dónde viven las instantáneas: al lado de este módulo. */
 export const FIXTURES_DIR = import.meta.dirname
@@ -333,6 +335,51 @@ function paginasBase(mode, conPaginas = true) {
   }
 }
 
+/**
+ * El perfil del proyecto tal como lo guarda el panel: lo que la extensión contó
+ * de una muestra de la API de Jira (H9). Pasa por `normalizeProfile`, que es por
+ * donde sale de `getProfile`, para que la instantánea enseñe exactamente lo que
+ * llegaría al prompt y no una forma a mano que el almacén nunca produciría.
+ */
+const PERFIL_JIRA = normalizeProfile({
+  version: PROFILE_VERSION,
+  projectKey: 'SIMPL',
+  sampled: 120,
+  at: Date.UTC(2026, 8, 12, 9, 0, 0),
+  types: [
+    { name: 'Story', count: 61 },
+    { name: 'Bug', count: 24 },
+    { name: 'Task', count: 21 },
+    { name: 'Epic', count: 14 },
+  ],
+  statuses: [
+    { name: 'To Do', count: 38, category: 'new' },
+    { name: 'In Progress', count: 31, category: 'indeterminate' },
+    { name: 'Done', count: 27, category: 'done' },
+    { name: 'In Review', count: 18, category: 'indeterminate' },
+    { name: 'Blocked', count: 6, category: 'indeterminate' },
+  ],
+  components: [
+    { name: 'consent', count: 22 },
+    { name: 'federation', count: 17 },
+  ],
+  labels: [
+    { name: 'API_Definition', count: 19 },
+    { name: 'architecture', count: 9 },
+  ],
+  prefixes: [
+    {
+      pattern: '[APIDefinition]',
+      count: 19,
+      examples: [
+        { key: 'SIMPL-12', summary: '[API Definition] - Consent API v2' },
+        { key: 'SIMPL-31', summary: '[API Definition] - Federation API v1' },
+      ],
+    },
+    { pattern: 'PSO |', count: 11, examples: [{ key: 'SIMPL-40', summary: 'PSO - Architecture for Sprint 18' }] },
+  ],
+})
+
 /** Lo señalado con el ratón, como lo deja `buildTextPick`. */
 const PICK = {
   kind: 'text',
@@ -383,7 +430,7 @@ const INDICE_CONFLUENCE = {
  * normalizan contra el host de la pestaña), y las claves van en el mismo
  * orden que allí.
  */
-function sistema({ site, page, skill, contextMd = '', memoryMd = '', digest = null, linkedContext = null, sources = null }) {
+function sistema({ site, page, skill, contextMd = '', memoryMd = '', digest = null, linkedContext = null, sources = null, profile = null }) {
   const analisis = skill === 'analisis'
   return baseSystem({
     site,
@@ -394,6 +441,7 @@ function sistema({ site, page, skill, contextMd = '', memoryMd = '', digest = nu
     digest: analisis ? digest : null,
     linkedContext,
     sources: analisis && hasSources(sources) ? normalizeSources(sources, { host: site.host }) : null,
+    profile,
   })
 }
 
@@ -533,6 +581,20 @@ export const ESCENARIOS = [
     build: () => sistema({ site: SITE_JIRA, page: PAGE_JIRA, skill: 'busqueda', contextMd: CONTEXTO_JIRA, linkedContext: ENLAZADO }),
   },
   {
+    id: 'jira-busqueda-perfil',
+    que: 'Búsqueda (JQL) en Jira DC con los DATOS DEL PROYECTO que leyó la extensión de la API (H9): la viñeta de los nombres exactos y el bloque entre el contexto propio y el del Confluence enlazado',
+    build: () =>
+      sistema({
+        site: SITE_JIRA,
+        page: PAGE_JIRA,
+        skill: 'busqueda',
+        contextMd: CONTEXTO_JIRA,
+        memoryMd: MEMORIA_MD,
+        linkedContext: ENLAZADO,
+        profile: PERFIL_JIRA,
+      }),
+  },
+  {
     id: 'jira-resumen',
     que: 'Resumen en Jira DC sin contexto propio y con el Confluence enlazado SIN contexto (sólo el host)',
     build: () => sistema({ site: SITE_JIRA, page: PAGE_JIRA, skill: 'resumen', linkedContext: ENLAZADO_SIN_CONTEXTO }),
@@ -647,9 +709,19 @@ export const ESCENARIOS = [
     build: () => indexExploreSystem(defaultScope(SITE_JIRA), SITE_JIRA, { linkedContext: ENLAZADO }),
   },
   {
+    id: 'interno-indexador-jira-perfil',
+    que: 'Sistema del indexador (fase 1) de un proyecto de Jira cuando la extensión ya leyó la muestra: sin pedir jira_search y con los DATOS DEL PROYECTO delante del contexto enlazado',
+    build: () => indexExploreSystem(defaultScope(SITE_JIRA), SITE_JIRA, { linkedContext: ENLAZADO, profile: PERFIL_JIRA }),
+  },
+  {
     id: 'interno-indexador-explorar',
     que: 'Mensaje de la fase 1 del indexador (explorar el espacio)',
     build: () => indexExplorePrompt(defaultScope(SITE_CONFLUENCE_DISPLAY)),
+  },
+  {
+    id: 'interno-indexador-explorar-arbol',
+    que: 'Mensaje de la fase 1 del indexador con el árbol del espacio ya leído de la API: los títulos de primer y segundo nivel con su id, delimitados',
+    build: () => indexExplorePrompt(defaultScope(SITE_CONFLUENCE_DISPLAY), { treeTitles: treeTitles(INDICE_CONFLUENCE) }),
   },
   {
     id: 'interno-indexador-volcar',

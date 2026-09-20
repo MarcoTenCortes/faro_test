@@ -2047,7 +2047,19 @@ test('H8: la tarjeta restaurada no vuelve a pedir la lista sola', () => {
   const restaurar = sinComentarios(JS.slice(JS.indexOf('async function restoreConversation'), JS.indexOf('function showWelcome')))
   assert(!/attachJqlResults\(/.test(restaurar) && !/navCard\(/.test(restaurar), 'al restaurar no se pide ninguna lista')
   assert(!/MSG\.JQL_SEARCH/.test(restaurar))
-  eq(sinComentarios(JS).match(/MSG\.JQL_SEARCH/g).length, 1, 'el mensaje se manda desde un solo sitio del panel')
+  // Dos sitios y sólo dos, cada uno con su motivo: la lista de una tarjeta
+  // (`attachJqlResults`) y la muestra con la que se cuenta el perfil del
+  // proyecto (`countProfile`, H9), que la piden tanto el refresco del arranque
+  // como la reconstrucción del contexto y por eso está escrita UNA vez.
+  const JS_SIN = sinComentarios(JS)
+  eq(JS_SIN.match(/MSG\.JQL_SEARCH/g).length, 2, 'el mensaje se manda desde dos sitios del panel, y cada uno tiene nombre')
+  for (const [desde, hasta] of [
+    ['async function attachJqlResults', 'function jqlResultsList'],
+    ['async function countProfile', 'async function loadLinkedContext'],
+  ]) {
+    const trozo = JS_SIN.slice(JS_SIN.indexOf(desde), JS_SIN.indexOf(hasta))
+    assert(trozo.length > 200 && /MSG\.JQL_SEARCH/.test(trozo), 'aquí se manda la consulta: ' + desde)
+  }
 })
 
 test('H8: el chat vacío ofrece búsquedas al instante, y pintarlas no vuelve a anunciar nada', () => {
@@ -2065,10 +2077,10 @@ test('H8: el chat vacío ofrece búsquedas al instante, y pintarlas no vuelve a 
   assert(/if \(!box\?\.isConnected\) return/.test(pintar), 'el chat pudo repintarse entre que se pidió una fuente y llegó')
   assert(/state\.settings\.restTools/.test(pintar), 'el interruptor maestro apaga también los chips')
   assert(
-    /searchChips\(state\.site, \{\s*issueFields: state\.issueFields && samePage\(state\.issueFields\.url, state\.tabUrl\) \? state\.issueFields\.fields : null,\s*favouriteFilters: state\.favouriteFilters \|\| \[\],\s*recentJql: state\.recentJql,/.test(
-      pintar
+    /searchChips\(state\.site, \{\s*issueFields: state\.issueFields && samePage\(state\.issueFields\.url, state\.tabUrl\) \? state\.issueFields\.fields : null,\s*profile: state\.profile,\s*favouriteFilters: state\.favouriteFilters \|\| \[\],\s*recentJql: state\.recentJql,/.test(
+      sinComentarios(pintar)
     ),
-    'con los campos de la pantalla, los filtros del usuario y sus últimas búsquedas'
+    'con los campos de la pantalla, el perfil contado del proyecto (H9), los filtros del usuario y sus últimas búsquedas'
   )
   assert(/box\.classList\.toggle\('hidden', !chips\.length\)/.test(pintar), 'sin chips, la caja se queda oculta')
   // Se repinta SÓLO esta caja: repintar el estado vacío volvería a anunciar
@@ -2191,7 +2203,14 @@ test('H8: una búsqueda directa no pasa por opencode, y sólo se recuerda si se 
   assert(/if \(!r\?\.ok \|\| \(state\.site\?\.host \?\? state\.lastHost\) !== site\.host\) return/.test(directa), 'la misma pregunta que hace la lista: el sitio del panel es lastHost con la pestaña fuera')
   assert(/rememberJql\(state\.recentJql, chip\.jql, \{ count: r\.total \}\)/.test(directa))
   assert(/await saveSite\(site\.host, \{ recentJql: state\.recentJql \}\)/.test(directa))
-  assert(/import \{ JIRA_REST_LIMITS, normalizeRecentJql, rememberJql \} from '\.\.\/shared\/jira-rest\.js'/.test(JS))
+  // El import del módulo, con todo lo que el panel le pide (H9 añadió el perfil
+  // y la plantilla de la muestra, y el import pasó a varias líneas).
+  const deJira = sinComentarios(JS).slice(sinComentarios(JS).indexOf('import {\n  JIRA_REST_LIMITS,'))
+  const nombres = deJira.slice(0, deJira.indexOf("} from '../shared/jira-rest.js'"))
+  assert(nombres.length > 0 && nombres.length < 400, 'el import de jira-rest.js está donde se espera')
+  for (const nombre of ['JIRA_REST_LIMITS', 'normalizeRecentJql', 'rememberJql']) {
+    assert(new RegExp('\\b' + nombre + ',').test(nombres), 'falta en el import de jira-rest.js: ' + nombre)
+  }
 
   // Lo guardado se reconstruye al leerlo, como las páginas base.
   const arranque = sinComentarios(JS.slice(JS.indexOf('async function bootForSite'), JS.indexOf('async function loadLinkedContext')))
@@ -2275,4 +2294,169 @@ test('H8: el espejo enseña la lista de la tarjeta, la búsqueda directa, los ch
   // Y las dos cajas nuevas se miden a lo ancho como la cabecera y el redactor.
   const cajas = espejo.slice(espejo.indexOf('const CAJAS ='), espejo.indexOf('function check() {'))
   assert(cajas.includes("'.result-row'") && cajas.includes("'.search-chip-row'"), 'las piezas de H8 entran en la medida de desbordamiento')
+})
+
+test('H9: el mapa se levanta con lo que la API da exacto, y si no puede sigue por el modelo', () => {
+  // Levantar el contexto de un espacio eran TRES turnos del modelo; el árbol lo
+  // dice la lista paginada de Confluence en milisegundos (§8.19). La regla de
+  // oro: esto sólo ADELANTA trabajo, y si no se puede, `buildContext` hace lo de
+  // siempre con sus tres fases.
+  const rest = sinComentarios(JS.slice(JS.indexOf('async function restIndexFor'), JS.indexOf('async function generateContext')))
+  assert(rest.length > 400, 'el trozo de restIndexFor existe')
+  assert(
+    /if \(!state\.settings\.restTools \|\| !sitio\) return nada/.test(rest),
+    'el interruptor maestro, y sin aviso: apagarlo no es un fallo, es lo que la casilla promete'
+  )
+  assert(!/'Índice por la API no disponible'[\s\S]*restTools/.test(rest), 'apagarlo tampoco se registra como si hubiera fallado algo')
+
+  // Confluence: el árbol de UN espacio, pedido por el content script, que es
+  // quien vive en el origen del sitio.
+  assert(/if \(scope\?\.kind !== 'space' \|\| !scope\.key\) \{/.test(rest), 'por la API sólo se lee el árbol de un espacio')
+  assert(/await ensureContentAccess\(\{ announce: false \}\)/.test(rest), 'y hace falta permiso sobre el sitio')
+  assert(
+    /\.sendMessage\(tabId, \{ type: MSG\.SPACE_PAGES, spaceKey: scope\.key, wikiPrefix: wikiPrefixOf\(sitio\), cloud: sitio\.cloud \}\)/.test(rest),
+    'el mensaje ENTERO: el panel no manda ni el origen ni ninguna ruta de la API, sólo el prefijo del wiki que observó (como PAGE_ANCESTORS)'
+  )
+  assert(!/\borigin:/.test(rest) && !/location\./.test(rest) && !/maxPages:/.test(rest), 'ni por otro camino, ni un segundo tope por mensaje')
+  assert(/indexFromSpacePages\(r\.pages, \{ site: sitio, scope, homeId: r\.homeId \}\)/.test(rest), 'lo que vuelve pasa por las validadoras del índice')
+  assert(/'Índice leído de la API'/.test(rest) && /'Índice por la API no disponible'/.test(rest), 'las dos salidas se registran (§8.14)')
+
+  // Jira: aquí lo que la API da no es un árbol, es la muestra con la que se
+  // cuenta el perfil. Y en Cloud no hay REST de Jira que leer (410).
+  assert(/if \(sitio\.cloud\) \{/.test(rest), 'en Jira Cloud no se pide nada')
+  assert(/if \(scope\?\.kind !== 'project'\) \{/.test(rest), 'y sólo se cuenta la muestra de un proyecto')
+  assert(/const r = await countProfile\(sitio, scope, \{ tabId \}\)/.test(rest), 'la muestra la lee countProfile, que es quien manda el mensaje')
+  assert(
+    /if \(\(state\.site\?\.host \?\? state\.lastHost\) === host\) state\.profile = r\.profile/.test(rest),
+    'y en el estado sólo entra si el panel sigue en ese sitio (§8.22)'
+  )
+
+  // Nunca lanza: cada camino devuelve, y el que falla devuelve el motivo para
+  // que quien llama lo pueda enseñar.
+  assert(!/throw /.test(rest), 'un fallo de la API no puede tumbar el indexado')
+  assert(/return \{ \.\.\.nada, aviso: texto \}/.test(rest), 'el motivo vuelve con el resultado')
+  assert(/const guardado = sitio && \(state\.site\?\.host \?\? state\.lastHost\) === sitio\.host \? state\.profile : null/.test(rest), 'y el perfil que ya hubiera contado sigue valiendo')
+
+  // En `generateContext`: antes de gastar el turno, con el sitio CAPTURADO, y
+  // lo que salga va a buildContext.
+  const contexto = sinComentarios(JS.slice(JS.indexOf('async function generateContext'), JS.indexOf('async function uploadContext')))
+  assert(/const rest = await restIndexFor\(scope, \{ sitio, report \}\)/.test(contexto), 'con el sitio capturado al empezar, no con el de la pestaña de ahora')
+  assert(contexto.indexOf('await restIndexFor(') < contexto.indexOf('await buildContext('), 'y antes de gastar el turno del modelo')
+  assert(/restIndex: rest\.index,/.test(contexto) && /profile: rest\.profile,/.test(contexto), 'lo leído viaja a buildContext')
+  assert(
+    /if \(controller\.signal\.aborted\) throw new DOMException\('Cancelado', 'AbortError'\)/.test(contexto),
+    'y cancelar durante la lectura de la API no sigue abriendo una sesión de indexado'
+  )
+  // El motivo sobrevive al velo: la línea del velo se la lleva el paso
+  // siguiente en cuanto pasa, y el contexto acaba listo igual (§8.14).
+  assert(/rest\.aviso \? ' ' \+ rest\.aviso : ''/.test(contexto), 'y si la API no sirvió, se dice también al terminar')
+
+  // La casilla de Ajustes vuelve a prometer el índice, ahora que existe.
+  assert(/id="set-rest-tools"[^>]*>[^<]*índice exacto/.test(HTML), 'la casilla dice lo que hace')
+  // Y la pantalla de contexto dice lo que de verdad va a pasar: con las
+  // lecturas REST apagadas, lo de siempre.
+  const pantalla = sinComentarios(JS.slice(JS.indexOf('function showContextScreen'), JS.indexOf('async function showMemoryScreen')))
+  assert(/const porLaApi = !!state\.settings\.restTools/.test(pantalla), 'la pantalla depende del interruptor')
+  assert(/la API de Confluence/.test(pantalla) && /Recorre el árbol, los títulos y las etiquetas\./.test(pantalla), 'y tiene los dos textos')
+})
+
+test('H9: el perfil del proyecto se carga con el sitio y se vuelve a contar fuera del camino crítico', () => {
+  const arranque = sinComentarios(JS.slice(JS.indexOf('async function bootForSite'), JS.indexOf('async function loadLinkedContext')))
+  // Viaja en el MISMO paquete del sitio (`BUNDLE_EXTRA_KEYS`): ni una lectura
+  // más en el arranque, que es lo que P4 dejó en una sola (H6).
+  assert(/state\.profile = normalizeProfile\(bundle\.extras\?\.profile\)/.test(arranque), 'sale del paquete y se reconstruye al leerlo (§9)')
+  assert(!/getProfile\(/.test(arranque), 'sin una segunda lectura del almacén para lo mismo')
+  // Y volver a contarlo va DETRÁS del arranque y sin await: es una petición a
+  // la API del sitio y el chat no puede esperarla.
+  assert(/\n  refreshProfileSoon\(testigo\)/.test(arranque), 'el refresco se lanza al final del arranque')
+  assert(!/await refreshProfileSoon\(/.test(arranque), 'y no se espera: el chat ya está puesto')
+  assert(
+    arranque.indexOf('await ensureContentAccess({ announce: false })') < arranque.indexOf('refreshProfileSoon(testigo)'),
+    'después de asegurarse de que hay content script con quien hablar'
+  )
+
+  const refresco = sinComentarios(JS.slice(JS.indexOf('async function refreshProfile('), JS.indexOf('async function countProfile')))
+  assert(/if \(!state\.settings\.restTools\) return/.test(refresco), 'el interruptor maestro también aquí')
+  assert(/sitio\?\.product !== 'jira' \|\| sitio\.cloud/.test(refresco), 'sólo en un Jira Data Center')
+  assert(/Date\.now\(\) - state\.profile\.at < PROFILE_LIMITS\.ttlMs/.test(refresco), 'un perfil reciente no se vuelve a contar')
+  assert(/state\.profile\.projectKey === scope\.key/.test(refresco), 'y el que hay tiene que ser de ESTE proyecto')
+  assert(
+    /if \(!\(await hasHostPermission\(sitio\.origin\)\)\) return/.test(refresco),
+    'con permiso YA concedido: un refresco en segundo plano no abre un diálogo de permisos que nadie ha pedido'
+  )
+  assert((refresco.match(/state\.bootToken !== testigo/g) || []).length >= 2, 'y se comprueba el testigo tras los await')
+  assert(/\(state\.site\?\.host \?\? state\.lastHost\) !== sitio\.host\) return/.test(refresco), 'lo capturado al pedir manda al volver (§8.22)')
+
+  // La petición está escrita UNA vez, y es una plantilla fija con la clave
+  // validada (§8.12): ni texto del usuario ni prosa del modelo.
+  const contar = sinComentarios(JS.slice(JS.indexOf('async function countProfile'), JS.indexOf('async function loadLinkedContext')))
+  assert(/const jql = sampleQuery\(scope\?\.kind === 'project' \? scope\.key : ''\)/.test(contar), 'la consulta sale de la plantilla del módulo')
+  assert(!/`project = /.test(contar) && !/'project = /.test(contar), 'el panel no escribe ninguna JQL a mano')
+  assert(/fields: SAMPLE_FIELDS/.test(contar), 'y los campos son los de la muestra, que NO llevan personas')
+  assert(/limit: JIRA_REST_LIMITS\.maxResults/.test(contar), 'con el tope del módulo que ejecuta')
+  assert(/profileFromSample\(r\.issues, \{ projectKey: scope\.key \}\)/.test(contar) && /await saveProfile\(sitio\.host, profile\)/.test(contar), 'se cuenta y se guarda bajo el host con el que se pidió')
+  assert(!/state\.profile = /.test(contar), 'quien llama decide si entra en el estado, no esto')
+  assert(/'Perfil del proyecto'/.test(contar), 'y queda en el Registro')
+  assert(/jqlFailText\(r, sitio\.host\)/.test(contar), 'el motivo en palabras sale de rest-notice.js, no de una copia')
+})
+
+test('H9: el perfil entra en el prompt y en los chips, y se va con el sitio', () => {
+  // Sólo lo usa Búsqueda en Jira, y quien lo decide es `baseSystem`: el panel
+  // se limita a pasarlo, como el contexto del Confluence enlazado.
+  const envio = sinComentarios(JS.slice(JS.indexOf('async function send('), JS.indexOf('function paintTurn(')))
+  const peticion = envio.slice(envio.indexOf('const peticion = {'), envio.indexOf('let silencioso'))
+  assert(peticion.length > 200, 'el trozo de la petición existe')
+  assert(
+    /linkedContext: state\.linkedContext,\s*profile: state\.profile,\s*sources,/.test(peticion),
+    'el perfil viaja en el system del turno, entre el contexto enlazado y las páginas base'
+  )
+  assert(/import \{ baseSystem/.test(JS) && !/profileBlock/.test(sinComentarios(JS)), 'el bloque lo monta prompts.js, no el panel')
+
+  // Es del SITIO: al cambiar de host se vacía, y «Olvidar este sitio» —que
+  // borra su clave— no puede dejarlo en memoria para el turno siguiente.
+  const pestana = sinComentarios(JS.slice(JS.indexOf('async function refreshTab'), JS.indexOf('async function bootForSite')))
+  const cambio = pestana.slice(pestana.indexOf('if (changedHost) {'), pestana.indexOf('state.site = site'))
+  assert(/state\.profile = null/.test(cambio), 'al cambiar de host se vacía, como el índice y las últimas búsquedas')
+  const eventos = sinComentarios(JS.slice(JS.indexOf('function wireEvents'), JS.indexOf('async function saveKeys')))
+  const olvidar = eventos.slice(eventos.indexOf("$('btn-forget')"), eventos.indexOf("$('btn-reindex')") > 0 ? eventos.indexOf('// --- memoria') : eventos.length)
+  assert(/forgetSite\(state\.site\.host\)/.test(olvidar) && /state\.profile = null/.test(olvidar), 'olvidar el sitio se lleva también lo contado de su proyecto')
+})
+
+test('H9: el espejo enseña la pantalla de contexto con el texto nuevo y las dos filas del Registro', () => {
+  const espejo = readFileSync(join(ROOT, 'harness/panel-preview.html'), 'utf8')
+
+  // El panel no corre en el banco (`init()` muere en `getSettings`), así que lo
+  // que H9 cambia en la pantalla de contexto sólo se puede mirar aquí: sin esta
+  // fila del espejo, el texto nuevo se acepta sin haberlo visto nunca.
+  const relleno = espejo.slice(espejo.indexOf("$('context-scope')"), espejo.indexOf("$('delay-value')"))
+  assert(relleno.length > 200, 'el trozo de relleno de las pantallas existe')
+  assert(/\$\('context-generate-text'\)\.textContent =/.test(relleno), 'el espejo pinta el texto de «Que lo genere Faro»')
+  // El texto se COPIA porque `showContextScreen` lo compone en línea; entonces
+  // los dos lados tienen que decirlo, o el espejo enseñaría algo que el panel ya
+  // no escribe. Por trozos, no la frase entera: los dos la parten en literales,
+  // y en sitios distintos.
+  for (const trozo of [
+    'Lee el árbol del espacio de la API de Confluence con tu sesión',
+    'escribe con él el documento.',
+    'Con tope, progreso visible y botón de cancelar.',
+  ]) {
+    assert(relleno.includes(trozo), 'el espejo no dice «' + trozo + '»')
+    assert(JS.includes(trozo), 'y el panel tampoco: los dos textos se han separado «' + trozo + '»')
+  }
+  // Y la casilla de Ajustes encendida, que es de lo que depende ese texto: con
+  // ella apagada la pantalla dice lo de siempre, y las dos capturas no cuadrarían.
+  assert(/\$\('set-rest-tools'\)\.checked = true/.test(relleno), 'con el interruptor de las lecturas REST encendido, como el texto que enseña')
+
+  // Las dos filas nuevas del Registro: los títulos son los que registra el panel
+  // (si se renombra uno, el espejo enseñaría un título que ya no existe).
+  const registro = espejo.slice(espejo.indexOf('const logBox ='), espejo.indexOf('const stateBox ='))
+  assert(registro.length > 400, 'el trozo del Registro de ejemplo existe')
+  for (const titulo of ['Índice leído de la API', 'Perfil del proyecto']) {
+    assert(registro.includes("'" + titulo + "'"), 'el Registro del espejo no enseña «' + titulo + '»')
+    assert(JS.includes("'" + titulo + "'"), 'y el panel no registra «' + titulo + '»')
+  }
+  // Con su línea de detalle, que es la que dice cuánto se ahorró: un título sin
+  // detalle no enseña nada de lo que H9 hace.
+  assert(/entradas · 3 petición\(es\)/.test(registro), 'la fila del índice dice entradas y peticiones')
+  assert(/muestra de 30 incidencias · 7 tipos · 6 estados/.test(registro), 'y la del perfil, de cuántas incidencias se contó')
 })

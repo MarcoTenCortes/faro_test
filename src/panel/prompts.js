@@ -12,7 +12,7 @@ import { DEFAULT_SKILL, offersNavigation, skillSystem, MISSING_FROM_BLOCKS } fro
 import { NOTHING_TO_SAY } from './notes.js'
 
 /**
- * Cuánto contexto del sitio y de sesiones anteriores cabe en un turno.
+ * Cuánto de cada bloque de contenido cabe en un prompt.
  *
  * Con la página entera en bloques dentro del mismo prompt hay que dejar sitio:
  * treinta mil caracteres de página más veinticuatro mil de contexto no caben
@@ -30,6 +30,20 @@ export const CONTEXT_BUDGET = {
    */
   linked: 12000,
   linkedWithDigest: 6000,
+  /**
+   * El perfil del proyecto (H9): media docena de líneas contadas de una
+   * muestra. Su forma ya viene acotada de `jira-rest.js` (30 por lista, 6
+   * prefijos, 3 ejemplos), así que este tope no recorta nada de un perfil de
+   * verdad; está por lo mismo que los demás, porque lo que entra en un prompt
+   * no puede depender de que otro módulo siga acotando.
+   */
+  profile: 4000,
+  /**
+   * Los títulos del árbol ya leído, en el prompt del indexador (H9). Un espacio
+   * de 300 páginas con títulos largos no cabe entero y tampoco hace falta: la
+   * fase 1 los quiere para hablar del sitio real, no para recorrerlos.
+   */
+  tree: 6000,
 }
 
 /**
@@ -38,21 +52,32 @@ export const CONTEXT_BUDGET = {
  * @param {{site:object, contextMd?:string, memoryMd?:string, page?:object,
  *          skill?:string, digest?:{text:string, count:number, truncated:boolean, blocks?:Array, issue?:object|null},
  *          sources?:{mode:string, pages:Array}|null,
- *          linkedContext?:{host:string, contextMd:string}|null}} input
+ *          linkedContext?:{host:string, contextMd:string}|null,
+ *          profile?:object|null}} input
  *        `digest` es la página abierta en bloques numerados, si se leyó; va
  *        sólo en el modo Análisis (en Jira trae además `issue`, los campos de
  *        la incidencia). `sources` son las páginas base del análisis
  *        y su alcance, elegidas por el usuario; también sólo en Análisis.
  *        `linkedContext` es el contexto del Confluence enlazado a este Jira
  *        (sólo desde Jira): con él, el modelo sabe qué páginas mirar.
+ *        `profile` es lo que la extensión contó de una muestra del proyecto
+ *        (`normalizeProfile`, H9); sólo en Jira y sólo en Búsqueda.
  */
-export function baseSystem({ site, contextMd, memoryMd, page, skill, digest = null, sources = null, linkedContext = null }) {
+export function baseSystem({ site, contextMd, memoryMd, page, skill, digest = null, sources = null, linkedContext = null, profile = null }) {
   const conPagina = !!digest?.text
   // Con alcance exclusivo, la cabecera no puede invitar a leer «otras
   // páginas» y el modo prohibirlo tres párrafos más abajo: las dos frases que
   // lo hacían cambian. Sin alcance, el prompt es el de siempre, letra a letra.
   const exclusivo = (skill || DEFAULT_SKILL) === 'analisis' && sources?.mode === 'exclusive'
   const enJira = site?.product === 'jira'
+  // Los datos contados del proyecto (H9): los leyó la extensión de la API de
+  // Jira, no el modelo. Van SÓLO en Jira y SÓLO en Búsqueda, que es el único
+  // modo que los explica y los usa —escribir un JQL con los nombres exactos de
+  // tipo y estado (skills.js)—. En Análisis la página ya va entera en bloques y
+  // el sitio del prompt es para ella; en un modo que no los nombra serían seis
+  // líneas de datos sin nadie que diga qué son. Si no hay nada que contar, el
+  // bloque sale vacío y entonces tampoco se le promete al modo que existe.
+  const perfilBlock = enJira && (skill || DEFAULT_SKILL) === 'busqueda' ? profileBlock(profile) : ''
   // La clave del espacio ya llega con forma de clave (`validSpaceKey`, en
   // site.js); se cita entre «» porque es un dato del sitio, no una palabra de
   // Faro (auditoría del 2026-09-13, docs/PLAN.md §2, S2).
@@ -159,6 +184,10 @@ export function baseSystem({ site, contextMd, memoryMd, page, skill, digest = nu
     linked: !!enlazado,
     issue: enJira ? digest?.issue || null : null,
     issueTitle,
+    // Lo que decide el modo es si el BLOQUE va de verdad, no si hay un perfil
+    // guardado: un perfil sin nada contado no tiene bloque, y una viñeta que
+    // mande mirar unos datos que no están abajo es una viñeta que miente.
+    profile: perfilBlock ? profile : null,
   })
   if (modo) out.push('', modo)
 
@@ -183,6 +212,12 @@ export function baseSystem({ site, contextMd, memoryMd, page, skill, digest = nu
       contentRule('un resumen de contenido del sitio, escrito por el modelo al indexarlo o subido por el usuario')
     )
   }
+
+  // Los datos contados del proyecto, entre el contexto propio y el del
+  // Confluence enlazado: hablan de ESTE Jira, como el contexto de arriba, y el
+  // enlazado es lo de al lado. Contenido de Jira, así que delimitado y con la
+  // regla detrás, igual que la página y el contexto (§8.12).
+  if (perfilBlock) out.push('', perfilBlock)
 
   // El contexto del Confluence enlazado, sólo desde Jira y detrás del propio:
   // es lo primero que sobra si no cabe.
@@ -298,6 +333,161 @@ function linkedHostLabel(host) {
   return String(host || '')
     .replace(/[^\p{L}\p{N}.-]+/gu, '')
     .slice(0, 200)
+}
+
+/**
+ * Los datos contados del proyecto de Jira, envueltos para el prompt.
+ *
+ * Son nombres de tipo, de estado, de componente y de etiqueta, y trozos de
+ * resúmenes de tickets: contenido de Jira, que escribe cualquiera de la
+ * organización. Por eso van delimitados y con la regla detrás, como la página
+ * en bloques y el contexto (§8.12), aunque los haya contado la extensión y no
+ * el modelo: quien escribió el nombre de un estado no fue Faro.
+ *
+ * `PROFILE_OPEN` es un PREFIJO, como `LINKED_OPEN`: la clave del proyecto va
+ * dentro de la línea de apertura y cambia con el sitio.
+ */
+export const PROFILE_OPEN = '--- DATOS DEL PROYECTO'
+export const PROFILE_CLOSE = '--- FIN DE LOS DATOS DEL PROYECTO ---'
+
+/**
+ * Un valor de contenido que va DENTRO de una línea de Faro: una sola línea,
+ * sin caracteres invisibles y con tope. Pura.
+ *
+ * Es la misma limpieza que el título de la pestaña: colapsa los cinco
+ * separadores de línea (`ESPACIOS` incluye el NEL, que `\s` no cubre) y borra
+ * lo que no es texto y no se ve (`sinInvisibles`, en site.js), que es lo que
+ * permitiría escribir la ubicación al revés con un U+202E. Con esto, un nombre
+ * de estado no puede abrir una línea ni fingir el cierre de un bloque: nunca
+ * empieza línea, porque siempre va detrás de una etiqueta de Faro.
+ */
+function dato(value, max = 200) {
+  return sinInvisibles(value).replace(ESPACIOS, ' ').trim().slice(0, max)
+}
+
+/** «nombre (12) · otro (3)», con los valores ya limpios. Pura. */
+function contados(lista, max = 200) {
+  return (Array.isArray(lista) ? lista : [])
+    .map((x) => {
+      const nombre = dato(x?.name, max)
+      return nombre ? `${nombre} (${Number(x?.count) || 0})` : ''
+    })
+    .filter(Boolean)
+    .join(' · ')
+}
+
+/**
+ * El perfil del proyecto en seis líneas, o '' si no hay nada que contar.
+ *
+ * Lo que el modelo pedía por herramienta —y contaba a ojo— para poder escribir
+ * un JQL que dé con los tickets: los nombres EXACTOS de tipo y estado, qué
+ * estados son de cierre, y cómo se nombran los tickets aquí. Pura: recibe lo
+ * que devuelve `normalizeProfile` (jira-rest.js) y no cuenta nada.
+ */
+export function profileBlock(profile) {
+  if (!profile || typeof profile !== 'object') return ''
+
+  const cuerpo = []
+  const tipos = contados(profile.types)
+  if (tipos) cuerpo.push(`Tipos de incidencia: ${tipos}`)
+
+  const estados = contados(profile.statuses)
+  if (estados) {
+    cuerpo.push(`Estados: ${estados}`)
+    const finales = (Array.isArray(profile.statuses) ? profile.statuses : [])
+      .filter((s) => s?.category === 'done')
+      .map((s) => dato(s.name))
+      .filter(Boolean)
+      .join(' · ')
+    // Cuál cierra y cuál no lo dice Jira en la categoría del estado, no el
+    // nombre: «Closed» puede ser de cierre y «Done» no serlo en un flujo
+    // retocado, y de ahí sale un `resolution = Unresolved` que no cuadra.
+    if (finales) cuerpo.push(`De esos, los de cierre (la incidencia ya está cerrada): ${finales}`)
+  }
+
+  const componentes = contados(profile.components)
+  if (componentes) cuerpo.push(`Componentes: ${componentes}`)
+  const etiquetas = contados(profile.labels)
+  if (etiquetas) cuerpo.push(`Etiquetas: ${etiquetas}`)
+
+  const prefijos = (Array.isArray(profile.prefixes) ? profile.prefixes : [])
+    .map((p) => {
+      const patron = dato(p?.pattern)
+      if (!patron) return ''
+      const ejemplo = (Array.isArray(p?.examples) ? p.examples : [])
+        .map((e) => {
+          const clave = dato(e?.key, 40)
+          return clave ? `${clave} «${dato(e?.summary)}»` : ''
+        })
+        .filter(Boolean)[0]
+      return `- «${patron}» ×${Number(p?.count) || 0}` + (ejemplo ? ` · p. ej. ${ejemplo}` : '')
+    })
+    .filter(Boolean)
+  if (prefijos.length) cuerpo.push('Así se nombran los tickets aquí (prefijos de los resúmenes):', ...prefijos)
+
+  if (!cuerpo.length) return ''
+
+  const clave = dato(profile.projectKey, 40)
+  const muestra = Number(profile.sampled) || 0
+  return [
+    `${PROFILE_OPEN}${clave ? ' ' + clave : ''} (los leyó la extensión de la API de Jira, contando una muestra de ${muestra} incidencias) ---`,
+    cuerpo.join('\n').slice(0, CONTEXT_BUDGET.profile),
+    PROFILE_CLOSE,
+    contentRule('nombres y resúmenes de tickets de Jira, contados por la extensión', { plural: true }),
+  ].join('\n')
+}
+
+/**
+ * Los títulos del árbol del espacio, envueltos para el prompt del indexador.
+ * Mismo trato: son títulos de páginas, o sea contenido del sitio.
+ */
+export const TREE_OPEN = '--- TÍTULOS DEL ÁRBOL DEL ESPACIO, YA LEÍDO POR LA EXTENSIÓN ---'
+export const TREE_CLOSE = '--- FIN DE LOS TÍTULOS ---'
+
+/**
+ * Los títulos de primer y segundo nivel del índice, con su id. Pura.
+ *
+ * Con el árbol leído de la API (H9), la fase 1 del indexado ya no tiene que
+ * recorrerlo con la herramienta: se le da hecho para que la prosa hable del
+ * sitio REAL —y cite cada página de referencia con su id, que es lo que
+ * permite llevar allí al usuario— en vez de de lo que el modelo alcanzara a
+ * mirar. Primer nivel: las páginas sin padre conocido (en un espacio leído de
+ * la API, su portada). Segundo: sus hijas.
+ *
+ * Orden estable (por título y, a igualdad, por id) porque de esto salen
+ * instantáneas de prompt: un orden que dependa del recorrido del objeto sería
+ * un prompt distinto cada vez.
+ */
+export function treeTitles(index) {
+  const pages = index?.pages && typeof index.pages === 'object' ? index.pages : {}
+  const entradas = Object.entries(pages).filter(([, p]) => p && typeof p === 'object')
+  const orden = (a, b) => dato(a[1].title).localeCompare(dato(b[1].title), 'es') || a[0].localeCompare(b[0])
+  const hijasDe = new Map()
+  const raices = []
+  for (const entrada of entradas) {
+    const padre = entrada[1].parentId ? String(entrada[1].parentId) : ''
+    if (!padre || !pages[padre]) raices.push(entrada)
+    else {
+      if (!hijasDe.has(padre)) hijasDe.set(padre, [])
+      hijasDe.get(padre).push(entrada)
+    }
+  }
+
+  const linea = ([id, p], sangria) => {
+    const titulo = dato(p.title)
+    return titulo ? `${sangria}- «${titulo}» (id ${dato(id, 40)})` : ''
+  }
+  const out = []
+  let chars = 0
+  for (const raiz of raices.sort(orden)) {
+    for (const l of [linea(raiz, ''), ...(hijasDe.get(raiz[0]) || []).sort(orden).map((h) => linea(h, '  '))]) {
+      if (!l) continue
+      chars += l.length + 1
+      if (chars > CONTEXT_BUDGET.tree) return out
+      out.push(l)
+    }
+  }
+  return out
 }
 
 /**
@@ -530,11 +720,12 @@ function currentPageBlock(site, page, conPagina = false, exclusivo = false) {
  * búsqueda con JQL necesita saber, y lo que se saca de una muestra. Y si el
  * proyecto tiene un Confluence enlazado, ahí es donde puede estar documentado.
  *
- * @param {{linkedContext?: {host:string, contextMd:string}|null}} [extra]
- *        desde Jira, el Confluence enlazado y lo que ya se sabe de él
+ * @param {{linkedContext?: {host:string, contextMd:string}|null, profile?: object|null}} [extra]
+ *        desde Jira, el Confluence enlazado y lo que ya se sabe de él, y el
+ *        perfil del proyecto si la extensión ya leyó la muestra (H9)
  */
-export function indexExploreSystem(scope, site, { linkedContext = null } = {}) {
-  if (site?.product === 'jira') return indexExploreJira(scope, site, linkedContext)
+export function indexExploreSystem(scope, site, { linkedContext = null, profile = null } = {}) {
+  if (site?.product === 'jira') return indexExploreJira(scope, site, linkedContext, profile)
   return [
     'Eres el indexador de Faro. Tu trabajo es levantar un mapa de esta zona de Atlassian para que las conversaciones futuras tengan contexto.',
     `Ámbito: ${scope?.label || 'la zona actual'} en ${site?.host || ''}.`,
@@ -548,7 +739,12 @@ export function indexExploreSystem(scope, site, { linkedContext = null } = {}) {
     '  1. De qué trata esta zona, en dos o tres frases.',
     '  2. Cómo está organizada (jerarquía, secciones principales).',
     '  3. Vocabulario interno: siglas, nombres de proyecto, términos que un recién llegado no entendería.',
-    '  4. Dónde vive cada cosa: qué se busca en qué sitio.',
+    // Sin el id, la prosa dice dónde está algo pero la extensión no puede
+    // llevar a nadie allí: «Convenciones REST» hay muchas y el título no es un
+    // identificador. La misma frase que el indexador de Jira («nómbralas por su
+    // título y su id»), y lo que la fase 1 puede dar ya hecho desde H9, porque
+    // el árbol con sus ids le llega en el mensaje.
+    '  4. Dónde vive cada cosa: qué se busca en qué sitio, nombrando cada página de referencia por su título exacto y su id numérico.',
     '  5. Quién escribe o participa más, si se deduce.',
     '',
     'No inventes nada. Si un apartado no se puede rellenar con lo que has visto, dilo en una línea.',
@@ -568,19 +764,29 @@ function indexerContentRule(que) {
 }
 
 /** El indexador de un proyecto de Jira: tipos, estados y cómo se nombran los tickets. */
-function indexExploreJira(scope, site, linkedContext) {
+function indexExploreJira(scope, site, linkedContext, profile = null) {
   const enlazado = linkedContext?.host ? linkedHostLabel(linkedContext.host) : ''
   const contextoEnlazado = String(linkedContext?.contextMd || '').trim().slice(0, CONTEXT_BUDGET.linked)
   const proyecto = scope?.kind === 'project' && scope.key ? String(scope.key) : ''
+  // La muestra que el modelo pedía con `jira_search` y contaba a ojo ya la leyó
+  // la extensión de la API, contada y exacta (H9): pedírsela otra vez sería
+  // gastar minutos y tokens en repetir lo que va escrito más abajo.
+  const perfil = profileBlock(profile)
 
   const out = [
     'Eres el indexador de Faro. Tu trabajo es levantar un mapa de este proyecto de Jira para que las conversaciones futuras tengan contexto, y en especial para poder escribir consultas JQL que den con los tickets que la gente busca.',
     `Ámbito: ${scope?.label || 'la zona actual'} en ${site?.host || ''}.`,
     '',
     'Método:',
-    `- Usa las herramientas MCP de Jira. Tipos de incidencia del proyecto (la herramienta de tipos de incidencia); componentes y versiones si las hay; tableros y sprints activos; y una MUESTRA de incidencias recientes con jira_search (${proyecto ? `project = ${proyecto} ` : ''}ORDER BY created DESC, con los campos summary, issuetype, status, labels, components, priority), de ${INDEX_LIMITS.maxIssues} como mucho.`,
-    '- Los ESTADOS no se preguntan: se cuentan en la muestra. Di qué estados aparecen, cuáles son de trabajo en curso y cuáles de cierre, y si hay estados que sólo usan algunos tipos.',
-    '- Las CONVENCIONES DE NOMBRE se deducen de los resúmenes de la muestra: prefijos entre corchetes («[Backend][Update] …»), separadores («PSO | …», «Ad-hoc execution for API | …»), sufijos de sprint o de entorno, palabras que abren un tipo concreto. Para cada patrón, di qué significa, con qué tipo de incidencia o equipo va, y pon dos o tres ejemplos literales con su clave.',
+    perfil
+      ? '- Usa las herramientas MCP de Jira. Tipos de incidencia del proyecto (la herramienta de tipos de incidencia); componentes y versiones si las hay; tableros y sprints activos. La MUESTRA de incidencias ya la leyó la extensión de la API de Jira y va contada más abajo, en DATOS DEL PROYECTO: no la vuelvas a pedir.'
+      : `- Usa las herramientas MCP de Jira. Tipos de incidencia del proyecto (la herramienta de tipos de incidencia); componentes y versiones si las hay; tableros y sprints activos; y una MUESTRA de incidencias recientes con jira_search (${proyecto ? `project = ${proyecto} ` : ''}ORDER BY created DESC, con los campos summary, issuetype, status, labels, components, priority), de ${INDEX_LIMITS.maxIssues} como mucho.`,
+    perfil
+      ? '- Los ESTADOS ya vienen contados ahí abajo, con cuáles son de cierre. Di qué significa cada uno, en qué orden se recorren y si hay estados que sólo usan algunos tipos.'
+      : '- Los ESTADOS no se preguntan: se cuentan en la muestra. Di qué estados aparecen, cuáles son de trabajo en curso y cuáles de cierre, y si hay estados que sólo usan algunos tipos.',
+    perfil
+      ? '- Las CONVENCIONES DE NOMBRE también vienen contadas ahí abajo, con ejemplos literales: prefijos entre corchetes («[Backend][Update] …»), separadores («PSO | …»). Para cada patrón, di qué significa y con qué tipo de incidencia o equipo va.'
+      : '- Las CONVENCIONES DE NOMBRE se deducen de los resúmenes de la muestra: prefijos entre corchetes («[Backend][Update] …»), separadores («PSO | …», «Ad-hoc execution for API | …»), sufijos de sprint o de entorno, palabras que abren un tipo concreto. Para cada patrón, di qué significa, con qué tipo de incidencia o equipo va, y pon dos o tres ejemplos literales con su clave.',
     enlazado
       ? `- Este proyecto tiene enlazado el Confluence ${enlazado}: busca ahí, con las herramientas de Confluence, si los tipos de incidencia, el flujo de estados o las convenciones de nombre están documentados (busca por el nombre del proyecto, «tipos de incidencia», «workflow», «definition of ready», «convenciones»). Si encuentras páginas, nómbralas por su título y su id, y resume lo que dicen; si no, dilo.`
       : '- Si este Jira tiene un Confluence al alcance de las herramientas, busca ahí si los tipos de incidencia, el flujo de estados o las convenciones de nombre están documentados; si encuentras páginas, nómbralas por su título y su id. Si no hay Confluence o no hay nada, dilo en una línea.',
@@ -599,6 +805,10 @@ function indexExploreJira(scope, site, linkedContext) {
     indexerContentRule('las incidencias y en las páginas'),
   ]
 
+  // Los datos contados van ANTES del contexto del Confluence enlazado, como en
+  // `baseSystem`: hablan de este proyecto, y el enlazado es lo de al lado.
+  if (perfil) out.push('', perfil)
+
   // Lo que ya se sabe del Confluence enlazado, para saber en qué espacios
   // buscar. Es prosa que escribió el modelo al indexarlo (o subió el usuario):
   // información.
@@ -615,8 +825,31 @@ function indexExploreJira(scope, site, linkedContext) {
   return out.join('\n')
 }
 
-export function indexExplorePrompt(scope) {
-  return `Explora ${scope?.label || 'esta zona'} y escribe el documento de contexto.`
+/**
+ * El mensaje de la fase 1 del indexado.
+ *
+ * Con el árbol ya leído de la API (H9), la fase 1 recibe los títulos de primer
+ * y segundo nivel con su id: así la prosa habla del sitio REAL desde la primera
+ * línea —y puede citar cada página de referencia con su id— en vez de de lo que
+ * el modelo alcanzara a recorrer con la herramienta antes de cansarse. Sin
+ * títulos, la frase de siempre, letra a letra.
+ *
+ * @param {{treeTitles?: string[]}} [extra] las líneas que devuelve `treeTitles`
+ */
+export function indexExplorePrompt(scope, { treeTitles: titulos = [] } = {}) {
+  const arbol = (Array.isArray(titulos) ? titulos : []).filter((l) => typeof l === 'string' && l.trim())
+  const pedir = `Explora ${scope?.label || 'esta zona'} y escribe el documento de contexto.`
+  if (!arbol.length) return pedir
+  return [
+    pedir,
+    '',
+    'El árbol de páginas ya está leído: sus títulos de primer y segundo nivel, con su id, van aquí abajo. No lo recorras con la herramienta; úsala sólo para LEER las páginas que necesites.',
+    '',
+    TREE_OPEN,
+    arbol.join('\n'),
+    TREE_CLOSE,
+    contentRule('títulos de páginas del sitio', { plural: true }),
+  ].join('\n')
 }
 
 /** Fase 2 del indexado: volcar el índice de navegación como datos. */

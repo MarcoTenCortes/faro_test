@@ -149,14 +149,32 @@ en el manifest. Si tu Confluence o tu Jira usan un certificado interno, añade
 
 Al entrar por primera vez en un sitio, Faro ofrece tres caminos:
 
-- **Que lo genere Faro** — en Confluence recorre el árbol del espacio, con
-  tope de páginas y profundidad; en un proyecto de **Jira** recorre los tipos
-  de incidencia, cuenta los estados del flujo en una muestra de tickets
-  recientes y deduce las **convenciones de nombre** de los resúmenes (los
-  prefijos y separadores tipo «[Backend][Update] …» o «PSO | …»), con ejemplos
-  literales; y si el proyecto tiene un Confluence enlazado, busca ahí si todo
-  eso está documentado y apunta las páginas. Progreso visible y botón de
-  cancelar. Produce el documento de contexto y el índice de navegación.
+- **Que lo genere Faro** — en Confluence lee el **árbol entero del espacio de
+  la API de tu sitio, con tu sesión**: exacto, en segundos y sin gastar un
+  token, y el modelo sólo escribe con él el documento; en un proyecto de
+  **Jira** propio (Data Center) cuenta una muestra de tickets con tu sesión
+  —tipos, estados del flujo con cuáles son de cierre, componentes, etiquetas y
+  las **convenciones de nombre** de los resúmenes, con ejemplos literales, y
+  sin mirar quién es quién— y el modelo escribe el documento con esos nombres
+  exactos; y si el proyecto tiene un Confluence enlazado, busca ahí si todo eso
+  está documentado y apunta las páginas. Progreso visible y botón de cancelar.
+  Produce el documento de contexto y el índice de navegación.
+
+  Antes eran tres turnos del modelo —explorar, volcar el índice y levantar la
+  jerarquía— y una jerarquía que el modelo se inventaba a trozos; ahora, con el
+  árbol leído de la API, es **uno**. Si la API no contesta —Jira Cloud, sesión
+  caducada, falta el permiso sobre el dominio, o pediste indexar «todo
+  Confluence» en vez de un espacio—, se dice el motivo en el velo y al terminar
+  y **se recorre entero con el modelo, como siempre**: nunca te quedas sin
+  contexto por esto. Con **Ajustes → Consultar tu sitio** apagado va
+  directamente por el camino de siempre, sin avisar de nada: lo elegiste tú.
+
+  Lo contado del proyecto de Jira (los nombres exactos de tipos y estados) se
+  guarda para ese sitio, se vuelve a contar como mucho una vez al día y en
+  segundo plano —nunca mientras esperas el chat, y nunca pidiendo un permiso
+  que no hayas dado ya—, y va en el prompt de **Búsqueda**: es lo que hace que
+  el modelo escriba «status = "In Progress"» y no «status = Revisión», que en
+  JQL no da error, da cero resultados. Se borra con «Olvidar este sitio».
 - **Traigo el mío** — un `.md` que ya tengas escrito. El índice se construye
   igualmente en segundo plano, porque sin él no hay navegación.
 - **Empezar sin contexto** — el chat funciona igual vía MCP. Puedes indexar
@@ -239,7 +257,9 @@ Junto al selector de modelo, abajo, hay otras dos cosas:
   camino por el árbol. En **Jira** no hay árbol: *Búsqueda* escribe una
   **consulta JQL** con lo que preguntas —acotada al proyecto en el que estás,
   salvo que pidas otra cosa, y apoyándose en el contexto del proyecto para
-  poner `issuetype`, `status` o un prefijo del resumen—, te dice qué JQL ha
+  poner `issuetype`, `status` o un prefijo del resumen; en un Jira propio, con
+  los nombres EXACTOS que Faro contó de tu proyecto delante, que es lo que
+  evita un `status = Revisión` que no da error sino cero resultados—, te dice qué JQL ha
   usado para que puedas afinarla, y nombra cada incidencia por su clave y su
   resumen. La tarjeta de abajo ofrece **«Abrir la búsqueda en Jira»**: te
   lleva al buscador con esa consulta y la lista entera. La consulta no se lee
@@ -404,10 +424,12 @@ Junto al selector de modelo, abajo, hay otras dos cosas:
 
 - **Ajustes → Consultar tu sitio** — una sola casilla que enciende o apaga
   **todo** lo que Faro lee de la API de tu Jira o tu Confluence con tu sesión:
-  la lista dentro de la tarjeta de una búsqueda y las búsquedas al instante.
+  la lista dentro de la tarjeta de una búsqueda, las búsquedas al instante y el
+  árbol del espacio —o la muestra del proyecto— al levantar el mapa.
   Viene encendida. Sólo son lecturas (`GET`), siempre al mismo sitio en el que
   estás, y nunca salen de él. Apagarla no rompe nada: la tarjeta sigue
-  llevándote a la búsqueda y las sugerencias del chat vacío siguen ahí. No apaga
+  llevándote a la búsqueda, las sugerencias del chat vacío siguen ahí y el mapa
+  se levanta con los turnos del modelo, como siempre. No apaga
   la lectura del camino por el árbol ni la búsqueda de páginas base, que
   funcionan desde antes. Se aplica al momento, sin rearrancar el panel.
 
@@ -830,6 +852,24 @@ en Confluence no hay nada de esto.
 
 **Contexto**
 
+- «Índice leído de la API» — el árbol del espacio se leyó de la API de tu
+  Confluence con tu sesión, antes de gastar un turno del modelo: cuántas
+  entradas tiene el índice, cuántas peticiones hicieron falta, «recortado en N»
+  si el espacio es más grande que el tope, y los milisegundos. Ni un token.
+- «Perfil del proyecto» — se contó una muestra del proyecto de tu Jira (Data
+  Center) para saber los nombres exactos de tipos, estados, componentes,
+  etiquetas y convenciones: de cuántas incidencias era la muestra y cuántos
+  tipos y estados salieron. Sale al levantar el mapa y también cuando se
+  refresca solo, como mucho una vez al día y siempre en segundo plano; si el
+  refresco no pudo, lo dice con el motivo. No mira quién es quién: del perfil
+  no salen personas.
+- «Índice por la API no disponible» — no se pudo leer eso de la API, con el
+  motivo: estás en Jira Cloud, pediste indexar «todo Confluence» (o «todo
+  Jira») en vez de UN espacio o UN proyecto, falta el permiso sobre el dominio,
+  la pestaña no contestó, o la API no devolvió ninguna página. **El indexado
+  sigue entero por el camino de siempre**, con los turnos del modelo, y el
+  motivo se ve también en el velo mientras pasa y al terminar. Con **Ajustes →
+  Consultar tu sitio** apagado no sale: apagarlo no es un fallo.
 - «Contexto construido» — el indexado terminó: entradas del índice y
   caracteres del documento de contexto.
 - «Contexto construido en segundo plano» — el indexado terminó cuando el panel

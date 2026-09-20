@@ -91,11 +91,12 @@ function busquedaConfluence() {
  * que busca es una página, se nombra como en Confluence y el cierre lleva su
  * id, que ahí sí hace falta.
  *
- * @param {{projectKey?: string, cloud?: boolean}} ctx el proyecto en el que
- *        está el usuario, si la URL lo dice: es el acotado por defecto de la
- *        consulta; y si el sitio es Cloud.
+ * @param {{projectKey?: string, cloud?: boolean, profile?: object|null}} ctx el
+ *        proyecto en el que está el usuario, si la URL lo dice: es el acotado
+ *        por defecto de la consulta; si el sitio es Cloud; y si más abajo van
+ *        los DATOS DEL PROYECTO que leyó la extensión (H9), para decírselo.
  */
-function busquedaJira({ projectKey = '', cloud = false } = {}) {
+function busquedaJira({ projectKey = '', cloud = false, profile = null } = {}) {
   const proyecto = /^[A-Z][A-Z0-9_]*$/.test(String(projectKey || '')) ? String(projectKey) : ''
   return [
     'MODO BÚSQUEDA, en Jira.',
@@ -108,6 +109,15 @@ function busquedaJira({ projectKey = '', cloud = false } = {}) {
         : '; y acótalo al proyecto en el que está, si lo sabes, salvo que pida otra cosa.') +
       ' Si la primera consulta no da nada, prueba otra con menos filtros u otras palabras.',
     '- Apóyate en el CONTEXTO DE ESTE SITIO de más abajo, si lo hay: ahí están los tipos de incidencia, los estados del flujo y las convenciones de nombre de los tickets (los prefijos y separadores de los resúmenes). Un «issuetype = …», un «status = …» o un «summary ~ "[Backend]"» que salgan de ahí dan con lo que una búsqueda por palabras sueltas no encuentra.',
+    // El contexto de arriba es prosa que escribió un modelo hace semanas; estos
+    // datos los contó la extensión de la API de este Jira. Cuando los hay, son
+    // la fuente buena para los NOMBRES, que es donde un JQL falla en silencio:
+    // «status = Revisión» no da error, da cero resultados.
+    ...(profile
+      ? [
+          '- Y sobre todo en los DATOS DEL PROYECTO de más abajo: esos los leyó la extensión de la API de este Jira, no un modelo, así que los nombres de tipo, estado, componente y etiqueta que hay ahí son los EXACTOS. Cópialos tal cual en el JQL (entre comillas si llevan espacios) y no te inventes ni traduzcas ninguno: un nombre que no existe no da error, da cero resultados.',
+        ]
+      : []),
     '- Di en una línea qué JQL has usado, para que pueda repetirlo o afinarlo. La extensión ofrece abajo abrir esa búsqueda en Jira, con la lista entera.',
     cloud
       ? '- Contesta en pocas líneas: qué has encontrado, nombrando cada incidencia por su clave (ABC-123) y su resumen, con su estado y su asignado si vienen; y cada página de Confluence por su título exacto con su id numérico entre paréntesis.'
@@ -141,7 +151,9 @@ export const SKILLS = [
     offersNavigation: true,
     alwaysPlan: true,
     system(ctx = {}) {
-      return ctx.product === 'jira' ? busquedaJira({ projectKey: ctx.projectKey, cloud: !!ctx.cloud }) : busquedaConfluence()
+      return ctx.product === 'jira'
+        ? busquedaJira({ projectKey: ctx.projectKey, cloud: !!ctx.cloud, profile: ctx.profile || null })
+        : busquedaConfluence()
     },
   },
 
@@ -272,14 +284,16 @@ export function skillById(id) {
 /**
  * El bloque de sistema de una Skill. Cadena vacía si no aporta nada.
  * @param {string} id
- * @param {{digest?: boolean, sources?: object|null, product?: string, projectKey?: string, cloud?: boolean, linked?: boolean, issue?: object|null, issueTitle?: string}} [ctx]
+ * @param {{digest?: boolean, sources?: object|null, product?: string, projectKey?: string, cloud?: boolean, linked?: boolean, issue?: object|null, issueTitle?: string, profile?: object|null}} [ctx]
  *        si la página va en el prompt en bloques ¶; las páginas base del
  *        análisis con su alcance (sólo las mira el modo Análisis); el
  *        producto en el que está el usuario ('jira' | 'confluence'), con su
  *        proyecto y si es Cloud si es Jira (Búsqueda); si hay un Confluence
- *        enlazado del que hablar (Análisis en Jira); y los campos de la
+ *        enlazado del que hablar (Análisis en Jira); los campos de la
  *        incidencia abierta (`normalizeIssueFields`) con su título, que
- *        deciden cómo se analiza (Análisis en Jira)
+ *        deciden cómo se analiza (Análisis en Jira); y si el prompt lleva los
+ *        DATOS DEL PROYECTO contados de la API (`profile`, sólo Búsqueda en
+ *        Jira: lo decide `baseSystem`, que es quien pone el bloque)
  */
 export function skillSystem(id, ctx = {}) {
   return skillById(id).system(ctx) || ''
