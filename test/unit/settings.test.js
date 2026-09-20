@@ -13,6 +13,7 @@ import {
   RESTORE_LIMITS,
   SESSION_LIMITS,
   STORAGE_KEYS,
+  INDEX_LIMITS,
   SAFE_PERMISSIONS as DESDE_CONFIG,
 } from '../../src/shared/config.js'
 import { SAFE_PERMISSIONS } from '../../src/shared/permissions.js'
@@ -59,6 +60,35 @@ test('no se muta lo que entra', () => {
   const raw = { assistedByDefault: false }
   migrateSettings(raw)
   eq(raw, { assistedByDefault: false })
+})
+
+// ------------------------------------------------------------------ H7
+
+test('H7: las lecturas REST vienen activadas, y quien las apague sigue con ellas apagadas', () => {
+  // Es el interruptor maestro de todo lo que H8-H11 leen de la API con la sesión
+  // del navegador: la lista de una búsqueda, los chips, el perfil, el índice y
+  // las sugerencias por actividad.
+  eq(DEFAULT_SETTINGS.restTools, true)
+  eq(migrateSettings({}).restTools, true, 'unos ajustes de antes de H7 no dejan el panel sin el interruptor')
+  eq(migrateSettings(undefined).restTools, true)
+  eq(migrateSettings({ restTools: false }).restTools, false, 'lo que eligió el usuario manda')
+  // Lo que no es un booleano no lo escribió Faro: cuenta como no elegido.
+  for (const raro of ['false', 0, 1, null, {}]) eq(migrateSettings({ restTools: raro }).restTools, true, JSON.stringify(raro))
+  const raw = { restTools: false }
+  migrateSettings(raw)
+  eq(raw, { restTools: false }, 'y no se muta lo que entra')
+})
+
+test('H7: el árbol leído de la API tiene tope de peticiones, y las páginas siguen teniendo UN solo tope', () => {
+  // Con 300 páginas y 100 por petición sobran doce; el tope está para que un
+  // servidor que siempre diga que hay más no se convierta en decenas de GET.
+  assert(Number.isInteger(INDEX_LIMITS.restMaxRequests) && INDEX_LIMITS.restMaxRequests >= 1)
+  assert(
+    INDEX_LIMITS.restMaxRequests * 100 >= INDEX_LIMITS.maxPages,
+    'con el tamaño de página de confluence-rest.js tienen que caber las maxPages'
+  )
+  eq(INDEX_LIMITS.maxPages, 300, 'el tope de páginas del índice no cambia por leerlo de la API')
+  assert(!('restMaxPages' in INDEX_LIMITS), 'un segundo tope de páginas acabaría diciendo otra cosa que maxPages')
 })
 
 // ------------------------------------------------------------------ H6 (P6b)

@@ -428,12 +428,32 @@ Trece decisiones que sostienen el diseño:
    - **El razonamiento** de un modelo que piensa en voz alta repintaba la
      respuesta entera por cada trozo, sin que se viera nada: ya no.
 
+15. **Faro va a empezar a preguntarle a tu propio Jira y a tu propio
+   Confluence, no al modelo.** Una búsqueda JQL, el árbol de un espacio, los
+   filtros que tienes marcados, los enlaces de una incidencia o lo último que
+   miraste son cosas que la API del sitio contesta exacta y en milisegundos; hoy
+   se las pide al modelo, que tarda segundos, cuesta tokens y arrastra su
+   respuesta en la conversación. Las lecturas van **con la sesión que ya tienes
+   abierta en el navegador** —Faro no guarda ni pide ningún token para esto—,
+   son **siempre de lectura** (GET, nunca se escribe nada), sólo al sitio en el
+   que estás y con la consulta que escribe la propia extensión a partir de una
+   plantilla fija; si la API no contesta, el camino de siempre sigue entero.
+
+   De momento **no se nota nada**: esta versión trae sólo el cimiento —el
+   transporte, las consultas y el banco de pruebas que lo ejercita—, y todavía
+   no hay ningún botón que lo use. Lo usarán la lista de resultados dentro de la
+   tarjeta de una búsqueda, las sugerencias de qué buscar, el contexto del sitio
+   leído de la API y las recomendaciones de qué mirar hoy. Cuando lleguen, un
+   solo interruptor en Ajustes las apagará todas de golpe; en Jira Cloud no se
+   consulta la API en ningún caso (Atlassian la retiró: allí todo sigue por el
+   MCP).
+
 ---
 
 ## Comprobaciones
 
 ```bash
-npm run check              # sintaxis + orden + manifest + 953 pruebas unitarias + docs
+npm run check              # sintaxis + orden + manifest + 1040 pruebas unitarias + docs
 npm run check:docs         # sólo el paso docs: número de pruebas, títulos del registro, mensajes y ficheros del mapa
 npm run test:integration   # contra un opencode real que arranca la propia prueba
 npm run harness            # banco de pruebas visual en http://127.0.0.1:5175
@@ -580,6 +600,19 @@ Con el banco levantado hay dos páginas:
   porque el último término lleva comodín, con una letra no se pide nada, y las
   comillas y barras del usuario no llegan al CQL.
 
+  Y, desde que Faro lee la API del propio sitio, el banco finge también **la API
+  de Jira**: una consulta de las que Faro escribe por plantilla devuelve las
+  incidencias que dice la fixture y en su orden; una consulta que el servidor
+  rechaza vuelve con el mensaje del servidor y no como una lista vacía; una
+  sesión que no vale se distingue de una consulta mala; los dos reintentos
+  ocurren una sola vez cada uno (una instancia sin el campo «visto por última
+  vez», y una dirección con una carpeta de más delante); el **árbol entero de un
+  espacio** se lee de la propia API, paginado, con el padre de cada página, y
+  dice cuándo se ha quedado corto; y salen los filtros que el usuario tiene
+  marcados, los enlaces de una incidencia a Confluence y lo último que vio.
+  Lo último es de seguridad: ninguna de esas lecturas sale del sitio, y una
+  consulta que no salga de una plantilla no llega a pedirse.
+
 - **`npm run turn`** enseña lo que el modelo contestó DE VERDAD en el último
   turno de la última sesión del panel: la pregunta, cuánto sistema llevaba (con
   sus primeras y últimas líneas), cada consulta a Atlassian con su JQL o su id y
@@ -669,6 +702,21 @@ de que el modelo se porte bien:
   las hace comprueba que ninguna salga de ese origen. La respuesta se trata
   como datos —ids numéricos, títulos recortados, rutas del propio sitio— y
   todo lo demás se ignora.
+
+  Desde esta versión hay un tercer tipo, el mismo en los dos productos:
+  **consultas de plantilla fija**. Las escribe la propia extensión —lo que
+  viste, lo tuyo, lo que se movió en un proyecto, lo enlazado con una
+  incidencia, el árbol de un espacio, tus filtros— y lo único que viaja son
+  parámetros validados: una clave con forma de clave, un número de días entre
+  1 y 30, ids numéricos. No hay ningún camino por el que el texto de una
+  página, un título del DOM o la prosa del modelo se conviertan en una
+  consulta: en Confluence se comprueba además que la consulta casa con una de
+  las plantillas antes de pedir nada. Una búsqueda JQL sí puede viajar escrita,
+  y sólo con tres procedencias: la que el modelo ya ejecutó por el MCP, la de
+  un botón que la extensión arma escapando los valores, o la de un filtro que
+  guardaste tú. Todas salen por el mismo y único punto —siempre `GET`, siempre
+  al sitio en el que estás, con campos fijos, tope de resultados y tope de
+  tiempo—, y en Jira Cloud no se pide nada en absoluto.
 
 **Y el modelo no puede tocar tu máquina.** El agente por defecto de opencode
 trae herramientas de shell y de ficheros, y las usa: comprobado, ejecutaba
@@ -850,16 +898,19 @@ src/
   atlassian/                detección de sitio, índice de contenido
   nav/                      esquema NavigationPlan y su validación
   shared/
-    confluence-rest.js      el árbol y la búsqueda de páginas por la API REST del sitio, con tu sesión (puro)
+    rest-get.js             la única puerta por la que Faro lee una API REST: sólo GET, sólo al mismo sitio, con tope de tiempo y sin lanzar nunca (puro)
+    jira-rest.js            lo que la API del propio Jira da exacto: consultas de plantilla, filas con claves blancas, el perfil contado de un proyecto y las búsquedas sugeridas; en Jira Cloud no pide nada (puro)
+    confluence-rest.js      el árbol y la búsqueda de páginas por la API REST del sitio, con tu sesión; lo último que viste y el árbol entero de un espacio, paginado (puro)
     digest.js               cómo se enseñan los bloques y cómo se reconoce uno después (puro)
     config.js               ajustes por defecto y su migración; NAV_TIMING, el único sitio con los tiempos de la navegación; y los topes de la eficiencia: cuántos mensajes se piden al restaurar y cuándo se avisa de una conversación pesada
     storage.js              lo guardado del navegador; todo lo de un sitio en UNA lectura (getSiteBundle) y lo que arrastra la sesión abierta
     permissions.js          los permisos de cada sesión de opencode: todo denegado salvo el MCP, y una copia de cómo los evalúa opencode para probarlo (puro)
     timing.js               el cronómetro por fases que el registro enseña: sólo etiquetas y números, nunca cuerpos ni claves (puro)
-harness/                    Confluence de mentira para pruebas visuales
+harness/                    Confluence y Jira de mentira para pruebas visuales; issues.json es la fixture de la Jira falsa
 test/                       arnés propio, sin dependencias; test/fixtures/prompts/ son las instantáneas de los prompts
 tools/                      generación de iconos, clave del manifest, servidor del banco
   check-docs.mjs            el paso «docs» de npm run check (npm run check:docs suelto)
+  jql-eval.mjs              el mini-evaluador de JQL de la Jira falsa del banco: lista blanca de cláusulas y 400 con su mensaje para todo lo demás (puro)
   last-turn.mjs             el último turno real desde una copia de opencode.db (npm run turn)
   bench.mjs                 el metro: tamaño del system por escenario y tiempos de los módulos puros (npm run bench)
   contrast-report.mjs       la tabla de contraste del panel y del overlay, por tema, con las parejas de test/contrast-pairs.js (npm run contrast); un token que no exista es un fallo, no un hueco

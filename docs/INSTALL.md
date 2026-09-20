@@ -461,11 +461,42 @@ envía: cablea quien lo manda o bórralo); y el fichero nuevo de `src/` va en el
 mapa de §3. `npm run check:docs` da el informe entero con la línea de cada
 título.
 
+Hay un caso a medio camino, y sale como **nota** en vez de aviso: un mensaje
+que existe y tiene quien lo atienda, pero cuyo botón todavía no está escrito
+porque llega en un paso posterior. Esos van con su nombre y su paso en la lista
+`MSG_SIN_EMISOR_HASTA` de `tools/check-docs.mjs`, y entonces el informe dice «lo
+atiende bootstrap.js y todavía nadie lo manda (lo cablea H8)». La lista sólo
+puede encoger: en cuanto alguien manda ese mensaje —o el mensaje deja de
+existir— seguir en ella es un ERROR que pide borrarlo, para que el aviso de
+verdad no quede tapado. Hoy están ahí los cinco mensajes de las lecturas por
+API.
+
 `npm run snapshots` regenera las instantáneas de los prompts
 (`test/fixtures/prompts/*.txt`): `npm run check` las compara byte a byte con
 lo que el código produce y, si un prompt cambió, falla con la primera línea
 distinta. Se regenera sólo cuando el cambio es intencionado, revisando el
 `git diff` de los `.txt` antes de commitear.
+
+### El banco de pruebas
+
+`npm run harness` levanta en <http://127.0.0.1:5175> una Confluence y un Jira de
+mentira con las piezas reales encima. El botón **Autocomprobación completa**
+recorre hoy **49 comprobaciones**; hay que correrla con el panel del navegador a
+la vista y a 1280×900, porque con la ventana oculta Chrome estrangula los
+temporizadores y no ejecuta los fotogramas.
+
+Los seis últimos tramos (44-49) son de las **lecturas por API** y no tocan la
+página ni el panel: el servidor del banco finge `/rest/api/2/search`, los filtros
+favoritos, los enlaces remotos de una incidencia, el contenido paginado de un
+espacio y las consultas de plantilla de Confluence, y se comprueba que una
+consulta de plantilla devuelve lo que dice la fixture, que un error trae el
+mensaje del servidor, que los dos reintentos ocurren una vez cada uno, que el
+árbol de un espacio se lee entero con el padre de cada página, y que ninguna de
+esas peticiones sale del sitio. Hay un botón propio, **«Leer Jira y el árbol del
+espacio por la API»**, para verlas sueltas. Para provocar los fallos, el servidor
+usa direcciones de mentira delante de la API: `/sinsesion` contesta como una
+sesión caducada (401) y `/sinvista` como una instalación que no tiene el campo
+«visto por última vez» (400).
 
 ### Qué significa cada título del registro
 

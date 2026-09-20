@@ -81,10 +81,18 @@ export function parseAtlassianUrl(url) {
   // cualquier otra cosa (un enlace de una página de Confluence puede llevar lo
   // que quiera) se descarta, no se sube a mayúsculas.
   const claveDeConsulta = validIssueKey(u.searchParams.get('selectedIssue'))
-  // /browse/ABC-123
-  const browse = path.match(/^\/browse\/([A-Za-z][A-Za-z0-9_]*-\d+)/)
+  // Un Jira Data Center puede servirse desde una ruta de contexto
+  // (`/jira/browse/ENG-7`). Sin esto, ahí no se reconocía ni la incidencia
+  // abierta ni el proyecto, y la extensión creía estar en «Jira» a secas
+  // (docs/PLAN.md §4, fila H7). `jiraPrefix` sale en el sitio para que el panel
+  // lo observe, como `wikiPrefix` en Confluence.
+  const ctx = jiraContextPath(path)
+  const jiraPath = ctx ? path.slice(ctx.length) : path
+  // /browse/ABC-123  |  <ctx>/browse/ABC-123
+  const browse = jiraPath.match(/^\/browse\/([A-Za-z][A-Za-z0-9_]*-\d+)/)
   if (browse) {
     out.product = 'jira'
+    out.jiraPrefix = ctx
     const clave = validIssueKey(browse[1])
     if (clave) {
       out.issueKey = clave
@@ -93,9 +101,11 @@ export function parseAtlassianUrl(url) {
     return out
   }
   // /jira/software/projects/ABC/boards/1  |  /jira/core/projects/ABC/...
+  // Es la forma de Cloud, que no tiene ruta de contexto: se mira la ruta entera.
   const proj = path.match(/\/jira\/[^/]+\/projects\/([^/]+)/i)
   if (proj) {
     out.product = 'jira'
+    out.jiraPrefix = ctx
     const proyecto = validProjectKey(safeDecode(proj[1]))
     if (proyecto) out.projectKey = proyecto
     const board = path.match(/\/boards\/(\d+)/)
@@ -103,10 +113,11 @@ export function parseAtlassianUrl(url) {
     if (claveDeConsulta) out.issueKey = claveDeConsulta
     return out
   }
-  // /projects/ABC/issues/ABC-7  |  /projects/ABC/summary  (DC)
-  const dcProj = path.match(/^\/projects\/([A-Za-z][A-Za-z0-9_]*)(?:\/issues\/([A-Za-z][A-Za-z0-9_]*-\d+))?/)
+  // /projects/ABC/issues/ABC-7  |  /projects/ABC/summary  |  <ctx>/projects/… (DC)
+  const dcProj = jiraPath.match(/^\/projects\/([A-Za-z][A-Za-z0-9_]*)(?:\/issues\/([A-Za-z][A-Za-z0-9_]*-\d+))?/)
   if (dcProj) {
     out.product = 'jira'
+    out.jiraPrefix = ctx
     const proyecto = validProjectKey(dcProj[1])
     if (proyecto) out.projectKey = proyecto
     const clave = validIssueKey(dcProj[2]) || claveDeConsulta
@@ -115,6 +126,7 @@ export function parseAtlassianUrl(url) {
   }
   if (/^\/(jira|secure|issues)(\/|$)/i.test(path)) {
     out.product = 'jira'
+    out.jiraPrefix = ctx
     if (claveDeConsulta) out.issueKey = claveDeConsulta
     return out
   }
@@ -155,6 +167,51 @@ export function parseAtlassianUrl(url) {
   }
 
   return null
+}
+
+/**
+ * Un segmento de ruta de contexto. Letras, cifras, `_`, `~` y `-`: NI puntos
+ * (así que ni «.» ni «..» pasan, y `/index.html/browse/X-1` tampoco) ni `%`
+ * (nada codificado), ni barras (por eso es UN segmento y no dos). El nombre de
+ * un contexto de servlet es una palabra: `/jira`, `/jira-dc`.
+ */
+const CTX_SEGMENT = /^[A-Za-z0-9_~-]{1,40}$/
+
+/**
+ * Las rutas de primer nivel de un Jira. Si una de ellas va DETRÁS de un
+ * segmento, ese segmento es la ruta de contexto y no parte de la ruta.
+ */
+const JIRA_ROUTES = /^\/(browse|projects|issues|secure|rest|plugins)(\/|$)/i
+
+/**
+ * La ruta de contexto de un Jira Data Center, deducida de la URL de la pestaña:
+ * `''` o UN segmento («/jira»). Pura.
+ *
+ * Un Data Center puede vivir bajo una ruta de contexto, y entonces TODO cuelga
+ * de ella: la incidencia (`/jira/browse/ENG-7`) y también su API
+ * (`/jira/rest/api/2/search`). Pedir la API sin el prefijo es un 404 en
+ * silencio, que es lo que motiva esta función (docs/plan/anexo-C, «Riesgos»);
+ * plausible, no observado: el Jira del usuario se sirve en la raíz (CLAUDE.md
+ * §12, PASO 0), así que aquí devuelve ''.
+ *
+ * Se deduce igual que `resolveWikiPrefix` deduce el de Confluence: de lo que se
+ * VE en el navegador, nunca de lo que diga el modelo. Y sólo un segmento: con
+ * `/x/y/browse/K-1` devuelve '', porque dos segmentos no son una ruta de
+ * contexto de Jira y adivinar cuál es el prefijo sería inventar.
+ *
+ * El caso ambiguo se resuelve a favor de no inventar: `/jira` a secas puede ser
+ * el contexto de un DC o la ruta de Cloud, y sin nada detrás que lo diga
+ * devuelve '' (la degradación de `searchIssues` ante un 404 va en la otra
+ * dirección: del prefijo a la raíz).
+ */
+export function jiraContextPath(pathname) {
+  const p = String(pathname || '')
+  if (!p.startsWith('/')) return ''
+  const corte = p.indexOf('/', 1)
+  if (corte < 0) return ''
+  const seg = p.slice(1, corte)
+  if (!CTX_SEGMENT.test(seg)) return ''
+  return JIRA_ROUTES.test(p.slice(corte)) ? '/' + seg : ''
 }
 
 /** Una clave de incidencia con forma de clave («ABC-123»), en mayúsculas, o ''. Pura. */

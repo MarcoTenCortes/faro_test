@@ -128,6 +128,11 @@ test('el content script del manifest es bootstrap.js y carga sus módulos por ur
     'src/shared/config.js',
     'src/content/picker.js',
     'src/shared/confluence-rest.js',
+    // H7: el content script es quien pide a la API del sitio, así que carga
+    // también el módulo REST de Jira y site.js (de donde saca la ruta de
+    // contexto de ESTA pestaña).
+    'src/shared/jira-rest.js',
+    'src/atlassian/site.js',
   ]) {
     assert(entradas.includes(esperado), `bootstrap.js ya no carga ${esperado} con url('src/…'): ¿cambió la forma del import()?`)
   }
@@ -136,8 +141,17 @@ test('el content script del manifest es bootstrap.js y carga sus módulos por ur
 test('todo lo que alcanza el content script existe y casa con algún patrón de web_accessible_resources', () => {
   eq(alcance.faltan, [], 'importado y sin fichero')
   // Que el recorrido sea transitivo de verdad: estos no los carga bootstrap.js,
-  // llegan por los imports estáticos de otros.
-  for (const hondo of ['src/content/overlay/styles.js', 'src/content/anchor-match.js', 'src/content/pick-payload.js']) {
+  // llegan por los imports estáticos de otros. Desde H7, también el cimiento
+  // REST: confluence-rest.js importa `getJson` de shared/rest-get.js y
+  // `validSpaceKey` de atlassian/site.js, así que Chrome los pide por URL y
+  // tienen que estar expuestos aunque bootstrap.js no los nombre.
+  for (const hondo of [
+    'src/content/overlay/styles.js',
+    'src/content/anchor-match.js',
+    'src/content/pick-payload.js',
+    'src/shared/rest-get.js',
+    'src/atlassian/site.js',
+  ]) {
     assert(alcance.ficheros.includes(hondo), `${hondo} debería alcanzarse por imports transitivos`)
   }
   const fuera = alcance.ficheros.filter((f) => !expuesta(f, patrones))
@@ -148,9 +162,16 @@ test('SEGURIDAD DEL TEST: sin src/shared/*.js quedarían fuera config.js, messag
   const sinShared = patrones.filter((p) => p !== 'src/shared/*.js')
   assert(sinShared.length === patrones.length - 1, 'el manifest expone src/shared/*.js con ese patrón exacto')
   const fuera = alcance.ficheros.filter((f) => !expuesta(f, sinShared))
-  for (const f of ['src/shared/config.js', 'src/shared/messages.js', 'src/shared/confluence-rest.js']) {
+  for (const f of ['src/shared/config.js', 'src/shared/messages.js', 'src/shared/confluence-rest.js', 'src/shared/rest-get.js', 'src/shared/jira-rest.js']) {
     assert(fuera.includes(f), `${f} tendría que quedar fuera sin src/shared/*.js`)
   }
+  // Y sin src/atlassian/*.js (el patrón que H2 dejó puesto pensando en H7)
+  // quedaría fuera site.js, que ahora llega por confluence-rest.js.
+  const sinAtlassian = patrones.filter((p) => p !== 'src/atlassian/*.js')
+  assert(
+    alcance.ficheros.filter((f) => !expuesta(f, sinAtlassian)).includes('src/atlassian/site.js'),
+    'site.js tendría que quedar fuera sin src/atlassian/*.js'
+  )
 })
 
 test('el manifest expone src/atlassian/*.js y src/nav/*.js (los módulos REST de H7 se importarán desde el content script), y cada patrón casa con algún fichero real', () => {

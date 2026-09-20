@@ -61,6 +61,90 @@
     return ready
   }
 
+  // ------------------------------------------------- lecturas REST del sitio
+  //
+  // Desde H7 el content script contesta también a lo que se lee de la API REST
+  // del propio sitio con la sesión del navegador (CLAUDE.md §8.19). Sigue sin
+  // saber nada de opencode: recibe una consulta o el `kind` de una plantilla,
+  // llama al módulo del producto y devuelve lo que ése ya ha validado. Lo que
+  // decide A QUÉ RUTA se pide —la ruta de contexto de Jira, el prefijo del
+  // wiki— se deduce aquí de la URL de la pestaña en cada petición, nunca del
+  // mensaje, que es lo mismo que ya hacía PAGE_ANCESTORS.
+
+  /**
+   * Ventanas por defecto de las plantillas «lo tuyo» y «lo del proyecto» cuando
+   * el panel no dice otra cosa (docs/plan/anexo-A, «Leer del sitio»). El TOPE lo
+   * pone el constructor de la consulta, que devuelve null si no vale: sin
+   * consulta no hay petición.
+   */
+  const DIAS_POR_DEFECTO = { mine: 7, project: 3 }
+
+  const dias = (v, porDefecto) => (Number.isInteger(v) && v >= 1 ? v : porDefecto)
+
+  /** Un tope de resultados que el panel pide, acotado; sin él, el del módulo. */
+  const tope = (v, max) => (Number.isInteger(v) && v >= 1 ? Math.min(v, max) : max)
+
+  /**
+   * El sitio de ESTA pestaña para las lecturas REST de Jira.
+   *
+   * La ruta de contexto (`/jira`) se deduce de la URL del navegador con
+   * `jiraContextPath`, como el prefijo del wiki con `resolveWikiPrefix`: es lo
+   * que decide a qué ruta se pide, así que no puede llegar por mensaje. Para
+   * `cloud` vale que lo diga cualquiera de los dos: en Jira Cloud no hay REST de
+   * Jira que leer (410) y negarse es el lado seguro.
+   */
+  async function sitioJira(msg) {
+    const { jiraContextPath, parseAtlassianUrl } = await import(url('src/atlassian/site.js'))
+    return {
+      origin: location.origin,
+      jiraPrefix: jiraContextPath(location.pathname),
+      cloud: !!msg.cloud || !!parseAtlassianUrl(location.href)?.cloud,
+    }
+  }
+
+  /**
+   * De un `kind` a la plantilla de jira-rest.js que lo escribe. Aquí NO se
+   * construye ninguna consulta: sólo se elige entre las fijas, y un `kind` que
+   * no esté en la lista no es una consulta.
+   */
+  function jqlDePlantilla(jira, msg) {
+    switch (msg.kind) {
+      case 'history':
+        return jira.historyJql()
+      case 'mine':
+        return jira.mineJql(dias(msg.days, DIAS_POR_DEFECTO.mine))
+      case 'project':
+        return jira.projectJql(msg.projectKey, dias(msg.days, DIAS_POR_DEFECTO.project))
+      case 'related':
+        return jira.relatedJql(msg.issueKey)
+      default:
+        return null
+    }
+  }
+
+  /** Lo mismo para Confluence: `kind` → una de las tres CQL de plantilla. */
+  function cqlDePlantilla(conf, msg) {
+    switch (msg.kind) {
+      case 'viewed':
+        return conf.viewedCql(tope(msg.limit, conf.CONFLUENCE_REST_LIMITS.maxResults))
+      case 'mine':
+        return conf.mineCql(dias(msg.days, DIAS_POR_DEFECTO.mine))
+      case 'ids':
+        return conf.idsCql(msg.ids)
+      default:
+        return null
+    }
+  }
+
+  /** El sitio de ESTA pestaña para las lecturas REST de Confluence. */
+  function sitioConfluence(conf, msg) {
+    return {
+      origin: location.origin,
+      wikiPrefix: conf.resolveWikiPrefix({ requested: msg.wikiPrefix, cloud: !!msg.cloud, pathname: location.pathname }),
+      cloud: !!msg.cloud,
+    }
+  }
+
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (!msg || typeof msg.type !== 'string' || !msg.type.startsWith('faro:')) return undefined
 
@@ -128,6 +212,18 @@
           }
 
           case MSG.PAGE_DIGEST: {
+            // Con `fieldsOnly` sólo se piden los campos de la incidencia, y eso
+            // no necesita trocear la página: trocearla cuesta (H3 le puso
+            // número) y quien pregunta por el tipo y el estado —las búsquedas
+            // sugeridas— no mira ni un bloque. Va ANTES de la guarda de
+            // «editando»: leer un campo no depende de que la página esté
+            // abierta en el editor.
+            if (msg.fieldsOnly) {
+              const t0 = performance.now()
+              const { jiraIssueFields } = await import(url('src/content/jira-issue.js'))
+              sendResponse({ ok: true, issue: jiraIssueFields(), url: location.href, ms: Math.round(performance.now() - t0) })
+              return
+            }
             // La pagina en bloques numerados, tal como se ve en pantalla: es lo
             // que lee el modelo en el modo Analisis y lo mismo contra lo que
             // despues se resuelven sus observaciones. Leer no toca nada.
@@ -211,6 +307,71 @@
                 { limit: msg.limit }
               )
             )
+            return
+          }
+
+          case MSG.JQL_SEARCH: {
+            // Una consulta JQL ejecutada contra la API del propio Jira. De
+            // dónde salió esa consulta responde QUIEN LA MANDA (§8.12: la
+            // llamada real del MCP, un chip con valores escapados o un filtro
+            // del propio usuario); aquí no se puede saber, así que aquí no se
+            // decide: este lado garantiza lo suyo —GET, mismo origen, una línea
+            // sin controles y con tope, campos de lista blanca, `maxResults`
+            // acotado— y nada más. Nunca texto del usuario ni prosa del modelo.
+            const [jira, sitio] = await Promise.all([import(url('src/shared/jira-rest.js')), sitioJira(msg)])
+            sendResponse(
+              await jira.searchIssues((u, o) => fetch(u, o), sitio, msg.jql, { limit: msg.limit, fields: msg.fields })
+            )
+            return
+          }
+
+          case MSG.RECENT_ISSUES: {
+            // Lo que has mirado y lo tuyo, con consultas de PLANTILLA FIJA: el
+            // panel manda un `kind` y parámetros que se validan (una clave, un
+            // número de días), nunca el texto de la consulta. Un `kind` que no
+            // esté en la lista no es una consulta y no se pide nada.
+            const [jira, sitio] = await Promise.all([import(url('src/shared/jira-rest.js')), sitioJira(msg)])
+            const jql = jqlDePlantilla(jira, msg)
+            if (!jql) {
+              sendResponse({ ok: false, reason: 'consulta no permitida' })
+              return
+            }
+            sendResponse(await jira.searchIssues((u, o) => fetch(u, o), sitio, jql, { limit: msg.limit }))
+            return
+          }
+
+          case MSG.RECENT_PAGES: {
+            // Lo mismo en Confluence: las tres CQL de plantilla (lo que viste,
+            // lo tuyo, unos ids concretos). `searchContent` vuelve a comprobar
+            // que el CQL salió de una plantilla, así que la lista de `kind` de
+            // aquí y la de allí no pueden divergir sin que deje de pedirse.
+            const conf = await import(url('src/shared/confluence-rest.js'))
+            const cql = cqlDePlantilla(conf, msg)
+            if (!cql) {
+              sendResponse({ ok: false, reason: 'consulta no permitida' })
+              return
+            }
+            sendResponse(await conf.searchContent((u, o) => fetch(u, o), sitioConfluence(conf, msg), cql, { limit: msg.limit }))
+            return
+          }
+
+          case MSG.SPACE_PAGES: {
+            // El árbol de un espacio, entero y paginado. Los topes (cuántas
+            // páginas y cuántas peticiones) son los del ÍNDICE y los pone el
+            // módulo: no viajan en el mensaje, para que no haya dos topes para
+            // lo mismo diciendo cosas distintas.
+            const conf = await import(url('src/shared/confluence-rest.js'))
+            sendResponse(
+              await conf.fetchSpacePages((u, o) => fetch(u, o), sitioConfluence(conf, msg), msg.spaceKey, { limit: msg.limit })
+            )
+            return
+          }
+
+          case MSG.FAVOURITE_FILTERS: {
+            // Los filtros que el propio usuario tiene marcados en su Jira: sus
+            // consultas, tal como él las guardó.
+            const [jira, sitio] = await Promise.all([import(url('src/shared/jira-rest.js')), sitioJira(msg)])
+            sendResponse(await jira.fetchFavouriteFilters((u, o) => fetch(u, o), sitio))
             return
           }
 

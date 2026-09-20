@@ -543,3 +543,341 @@ test('SEGURIDAD: la búsqueda nunca sale del sitio, venga el prefijo o el texto 
   eq((await searchPages(null, DC, 'ADR')).ok, false)
   eq(calls.length, 0)
 })
+
+// ---------------------------------------------------------------------------
+// H7: consultas de plantilla fija y el árbol entero de un espacio.
+//
+// Aquí el texto de la consulta no lo escribe nadie de fuera: lo escribe Faro con
+// cláusulas fijas y parámetros validados. Lo que se comprueba es que las
+// plantillas son literales, que `searchContent` no ejecuta nada que no salga de
+// ellas, y que el árbol se pagina sin fiarse de la ruta que manda el servidor.
+// ---------------------------------------------------------------------------
+
+import {
+  CONFLUENCE_REST_LIMITS,
+  viewedCql,
+  mineCql,
+  idsCql,
+  isTemplateCql,
+  contentSearchPath,
+  parseRecentV1,
+  searchContent,
+  spacePagesPath,
+  parseSpacePages,
+  fetchSpacePages,
+} from '../../src/shared/confluence-rest.js'
+import { INDEX_LIMITS } from '../../src/shared/config.js'
+
+test('H7: las plantillas de CQL son literales fijos con un solo hueco', () => {
+  eq(viewedCql(30), 'type = page AND id in recentlyViewedContent(30)')
+  eq(viewedCql(5), 'type = page AND id in recentlyViewedContent(5)')
+  eq(
+    mineCql(7),
+    'type = page AND (contributor = currentUser() OR watcher = currentUser() OR mention = currentUser()' +
+      ' OR favourite = currentUser()) AND lastmodified >= startOfDay("-7d") ORDER BY lastmodified DESC'
+  )
+  eq(idsCql(['1', 'x', '2', '1']), 'type = page AND id in (1,2)', 'ids numéricos, sin repetir, en orden')
+  eq(idsCql([98830281, '2003']), 'type = page AND id in (98830281,2003)')
+})
+
+test('SEGURIDAD: en una plantilla sólo entra un número o un id, y nada más', () => {
+  for (const malo of [0, -1, 31, 1.5, NaN, '5;DROP', null, undefined, {}, '30 OR 1=1']) {
+    eq(viewedCql(malo), null, `viewedCql(${JSON.stringify(malo)})`)
+    eq(mineCql(malo), null, `mineCql(${JSON.stringify(malo)})`)
+  }
+  eq(viewedCql(CONFLUENCE_REST_LIMITS.maxResults + 1), null, 'ni más páginas de las que se aceptan')
+  eq(mineCql(CONFLUENCE_REST_LIMITS.daysMax + 1), null)
+  for (const malo of [[], null, undefined, 'abc', ['~'], ['../1'], [''], [{}], ['1 OR 1=1'], ['1;2']]) {
+    eq(idsCql(malo), null, `idsCql(${JSON.stringify(malo)})`)
+  }
+  const muchos = idsCql(Array.from({ length: 40 }, (_, i) => String(i + 1)))
+  eq(muchos.split(',').length, CONFLUENCE_REST_LIMITS.maxIds)
+})
+
+test('SEGURIDAD: isTemplateCql sólo reconoce lo que escribieron las plantillas', () => {
+  for (const buena of [viewedCql(30), mineCql(7), idsCql(['2003'])]) eq(isTemplateCql(buena), true, buena)
+  for (const mala of [
+    'type = page AND title~"Arqui*"',
+    'type = page AND id in recentlyViewedContent(30) OR 1=1',
+    'type = page AND id in (2003) ORDER BY created DESC',
+    'TYPE = PAGE AND id in (2003)',
+    'type = page AND id in (2003);',
+    'type = page AND id in ()',
+    'type = page AND id in (2003) AND space = ENG',
+    cqlTitleQuery('Arqui'),
+    '',
+    null,
+    undefined,
+    7,
+  ]) {
+    eq(isTemplateCql(mala), false, JSON.stringify(mala))
+  }
+  // Los bordes se recortan, y lo que viaja es la plantilla recortada: una
+  // consulta con un espacio delante sigue siendo exactamente esa consulta.
+  eq(isTemplateCql(' type = page AND id in (2003) '), true)
+  eq(
+    new URL('https://x' + contentSearchPath(' type = page AND id in (2003) ')).searchParams.get('cql'),
+    'type = page AND id in (2003)'
+  )
+})
+
+test('H7: contentSearchPath cuelga del prefijo, acota el tope y filtra los expand', () => {
+  const cql = viewedCql(5)
+  eq(
+    contentSearchPath(cql, { wikiPrefix: '', expand: ['space', 'version'], limit: 5 }),
+    '/rest/api/content/search?cql=' + encodeURIComponent(cql) + '&limit=5&expand=space,version'
+  )
+  eq(contentSearchPath(cql, { wikiPrefix: '/wiki' }).startsWith('/wiki/rest/api/content/search?'), true)
+  // SEGURIDAD: `body.storage` traería el cuerpo entero de cada página.
+  const sucia = contentSearchPath(cql, { expand: ['body.storage', 'children.page', 'space', 'space'], limit: 999 })
+  eq(sucia.includes('expand=space'), true)
+  eq(sucia.includes('body.storage'), false)
+  eq(new URL('https://x' + sucia).searchParams.get('limit'), String(CONFLUENCE_REST_LIMITS.maxResults))
+  eq(contentSearchPath(cql, { expand: 'space' }).includes('expand='), false, 'una cadena no es una lista de expand')
+  eq(contentSearchPath('type = page AND title~"x*"'), null, 'lo que no es de plantilla no tiene ruta')
+  eq(contentSearchPath(null), null)
+})
+
+/** Una respuesta v1 con `version` e `history.lastUpdated`, como la de un Data Center. */
+const RECIENTES = {
+  results: [
+    {
+      id: '3003',
+      type: 'page',
+      title: 'Guía de API',
+      space: { key: 'SIMPL' },
+      version: { when: '2026-09-19T08:00:00.000+0000', number: 7, by: { displayName: 'Marta Ruiz', email: 'no@sale' } },
+      _links: { webui: '/display/SIMPL/Guia' },
+    },
+    {
+      id: '2003',
+      type: 'page',
+      title: 'ACV Static',
+      space: { key: 'SIMPL' },
+      history: { lastUpdated: { when: '2026-09-18T10:00:00.000+0000', by: { displayName: 'Ana' } } },
+      _links: { webui: '/display/SIMPL/ACV' },
+    },
+    { id: '99', type: 'blogpost', title: 'No es una página' },
+  ],
+}
+
+test('H7: parseRecentV1 añade cuándo cambió la página y quién, sin inventar nada', () => {
+  const pages = parseRecentV1(RECIENTES, '')
+  eq(pages.length, 2, 'sólo páginas')
+  eq(Object.keys(pages[0]).sort(), ['id', 'spaceKey', 'title', 'updatedAt', 'updatedBy', 'url', 'version'])
+  eq(pages[0].id, '3003')
+  eq(pages[0].updatedAt, Date.parse('2026-09-19T08:00:00.000+0000'))
+  eq(pages[0].updatedBy, 'Marta Ruiz')
+  eq(pages[0].version, 7)
+  eq(pages[0].url, '/display/SIMPL/Guia')
+  // Sin `version` expandida vale `history.lastUpdated`.
+  eq(pages[1].updatedAt, Date.parse('2026-09-18T10:00:00.000+0000'))
+  eq(pages[1].updatedBy, 'Ana')
+  eq(pages[1].version, 0)
+  assert(!JSON.stringify(pages).includes('no@sale'), 'SEGURIDAD: del autor sólo el nombre visible')
+
+  const raro = parseRecentV1({ results: [{ id: '1', title: 'x'.repeat(400), version: { when: 'ayer', by: { displayName: 'y'.repeat(200) } } }] }, '')
+  eq(raro[0].updatedAt, 0, 'una fecha que no se entiende no se inventa')
+  eq(raro[0].updatedBy.length, CONFLUENCE_REST_LIMITS.updatedByChars)
+  eq(parseRecentV1({ size: 0 }, ''), null)
+  eq(parseRecentV1(null, ''), null)
+})
+
+test('H7: searchContent pide UNA vez, al mismo origen, y sólo con un CQL de plantilla', async () => {
+  const { fn, calls } = fakeFetch({ '/rest/api/content/search': RECIENTES })
+  const r = await searchContent(fn, DC, viewedCql(30))
+  eq(r.ok, true)
+  eq(r.via, 'v1')
+  eq(r.pages.map((p) => p.id), ['3003', '2003'])
+  eq(calls.length, 1)
+  eq(calls[0].opts.method, 'GET')
+  eq(new URL(calls[0].url).searchParams.get('cql'), viewedCql(30))
+  eq(new URL(calls[0].url).searchParams.get('expand'), 'space,version,history.lastUpdated')
+
+  // En Cloud cuelga de /wiki, como todo lo demás.
+  const { fn: cloud, calls: c2 } = fakeFetch({ '/wiki/rest/api/content/search': RECIENTES })
+  eq((await searchContent(cloud, { origin: 'https://acme.atlassian.net', cloud: true }, mineCql(7))).ok, true)
+  eq(new URL(c2[0].url).pathname, '/wiki/rest/api/content/search')
+})
+
+test('SEGURIDAD: searchContent no ejecuta un CQL que no salga de una plantilla, ni sale del sitio', async () => {
+  for (const mala of [
+    'type = page AND title~"Arqui*"',
+    'type = page AND id in (2003) OR 1=1',
+    cqlTitleQuery('Guía de API'),
+    'label = secreto',
+    '',
+    null,
+  ]) {
+    const { fn, calls } = fakeFetch({ '/rest/api/content/search': RECIENTES })
+    const r = await searchContent(fn, DC, mala)
+    eq(r, { ok: false, reason: 'consulta no permitida' }, JSON.stringify(mala))
+    eq(calls.length, 0, 'ni una petición')
+  }
+  for (const wikiPrefix of ['@evil.example', '//evil.example', 'https://evil.example', '/wiki/..']) {
+    const { fn, calls } = fakeFetch({ '/': RECIENTES })
+    await searchContent(fn, { origin: 'https://acme.atlassian.net', wikiPrefix, cloud: false }, viewedCql(5))
+    for (const c of calls) eq(new URL(c.url).origin, 'https://acme.atlassian.net', c.url)
+  }
+  const { fn, calls } = fakeFetch({})
+  eq((await searchContent(fn, { origin: 'javascript:alert(1)' }, viewedCql(5))).ok, false)
+  eq((await searchContent(null, DC, viewedCql(5))).ok, false)
+  eq(calls.length, 0)
+  const { fn: sesion } = fakeFetch({ '/rest/api/content/search': 401 })
+  eq((await searchContent(sesion, DC, viewedCql(5))).status, 401)
+})
+
+// -------------------------------------------------- el árbol de un espacio
+
+test('H7: spacePagesPath pide el contenido del espacio con sus antepasados y su portada', () => {
+  eq(
+    spacePagesPath('SIMPL', '', { start: 0, limit: 100 }),
+    '/rest/api/content?spaceKey=SIMPL&type=page&status=current&expand=ancestors,space.homepage&start=0&limit=100'
+  )
+  eq(spacePagesPath('~ana', '/wiki', { start: 100, limit: 5 }).startsWith('/wiki/rest/api/content?spaceKey=~ana'), true)
+  eq(new URL('https://x' + spacePagesPath('SIMPL')).searchParams.get('limit'), String(CONFLUENCE_REST_LIMITS.pageSize))
+  eq(new URL('https://x' + spacePagesPath('SIMPL', '', { limit: 9999 })).searchParams.get('limit'), String(CONFLUENCE_REST_LIMITS.pageSize))
+  eq(new URL('https://x' + spacePagesPath('SIMPL', '', { start: -1 })).searchParams.get('start'), '0')
+  // SEGURIDAD: la clave del espacio es la misma que valida el prompt (validSpaceKey).
+  for (const mala of ['../x', 'ENG x', 'ENG\nhola', '~', '_', '', null, undefined, 'a/b', 'x'.repeat(256)]) {
+    eq(spacePagesPath(mala, ''), null, JSON.stringify(mala))
+  }
+  eq(spacePagesPath('  ENG\n', '').includes('spaceKey=ENG&'), true, 'los bordes se recortan, como en el prompt')
+})
+
+/** Dos páginas de resultados como las que devuelve un Data Center. */
+const ESPACIO_1 = {
+  size: 2,
+  limit: 2,
+  results: [
+    { id: '1', type: 'page', title: 'SIMPL Home', space: { key: 'SIMPL', homepage: { id: '1' } }, ancestors: [], _links: { webui: '/display/SIMPL/Home' } },
+    {
+      id: '1080',
+      type: 'page',
+      title: '1080 - Architecture',
+      space: { key: 'SIMPL', homepage: { id: '1' } },
+      ancestors: [{ id: '1', title: 'SIMPL Home' }],
+      _links: { webui: '/display/SIMPL/1080' },
+    },
+  ],
+  _links: { next: '/rest/api/content?spaceKey=SIMPL&start=2&limit=2' },
+}
+const ESPACIO_2 = {
+  size: 1,
+  limit: 2,
+  results: [
+    {
+      id: '3001',
+      type: 'page',
+      title: 'TechArch',
+      space: { key: 'SIMPL', homepage: { id: '1' } },
+      ancestors: [{ id: '1' }, { id: '1080' }],
+      _links: { webui: '/display/SIMPL/TechArch' },
+    },
+    { id: '77', type: 'blogpost', title: 'No es página' },
+  ],
+}
+
+test('H7: parseSpacePages da cada página con su padre (el último antepasado) y la portada del espacio', () => {
+  const p1 = parseSpacePages(ESPACIO_1, '')
+  eq(p1.pages, [
+    { id: '1', title: 'SIMPL Home', parentId: null, url: '/display/SIMPL/Home', spaceKey: 'SIMPL' },
+    { id: '1080', title: '1080 - Architecture', parentId: '1', url: '/display/SIMPL/1080', spaceKey: 'SIMPL' },
+  ])
+  eq(p1.size, 2)
+  eq(p1.next, true, 'el servidor dice que hay más')
+  eq(p1.homeId, '1')
+
+  const p2 = parseSpacePages(ESPACIO_2, '/wiki')
+  eq(p2.pages.length, 1, 'un blogpost no es una página')
+  eq(p2.pages[0].parentId, '1080', 'el ÚLTIMO antepasado es el padre')
+  eq(p2.pages[0].url, '/wiki/display/SIMPL/TechArch')
+  eq(p2.next, false)
+
+  // Lo que no tiene la forma esperada no se inventa.
+  eq(parseSpacePages({ results: [{ id: 'x' }, null, { id: '5', ancestors: [{ id: '5' }] }] }, '').pages, [
+    { id: '5', title: '', parentId: null, url: '', spaceKey: null },
+  ])
+  eq(parseSpacePages({ size: 0 }, ''), null)
+  eq(parseSpacePages(null, ''), null)
+})
+
+test('H7: fetchSpacePages pagina hasta el final y cuenta las peticiones', async () => {
+  let n = 0
+  const { fn, calls } = fakeFetch({
+    '/rest/api/content?spaceKey=SIMPL': () => (++n === 1 ? ESPACIO_1 : ESPACIO_2),
+  })
+  const r = await fetchSpacePages(fn, DC, 'SIMPL', { limit: 2 })
+  eq(r.ok, true)
+  eq(r.pages.map((p) => p.id), ['1', '1080', '3001'])
+  eq(r.homeId, '1')
+  eq(r.requests, 2)
+  eq(r.truncated, false)
+  assert(Number.isFinite(r.ms) && r.ms >= 0)
+  eq(calls.length, 2)
+  // La segunda página se pide con el `start` que lleva la cuenta el bucle, NO
+  // siguiendo la ruta que mandó el servidor en `_links.next` (§8.3).
+  eq(new URL(calls[0].url).searchParams.get('start'), '0')
+  eq(new URL(calls[1].url).searchParams.get('start'), '2')
+  for (const c of calls) eq(new URL(c.url).origin, DC.origin)
+})
+
+test('H7: el árbol para en el tope de páginas o en el de peticiones, y lo dice', async () => {
+  const pagina = (desde) => ({
+    size: 2,
+    results: [desde, desde + 1].map((i) => ({ id: String(1000 + i), type: 'page', title: 'p' + i, space: { key: 'SIMPL' }, ancestors: [] })),
+    _links: { next: '/siempre-hay-mas' },
+  })
+  let desde = 0
+  const { fn, calls } = fakeFetch({ '/rest/api/content?spaceKey=SIMPL': () => pagina((desde += 2)) })
+  const porPaginas = await fetchSpacePages(fn, DC, 'SIMPL', { limit: 2, maxPages: 5, maxRequests: 12 })
+  eq(porPaginas.truncated, true)
+  eq(porPaginas.pages.length, 5, 'ni una más del tope')
+  eq(calls.length, 3)
+
+  desde = 0
+  const { fn: fn2, calls: c2 } = fakeFetch({ '/rest/api/content?spaceKey=SIMPL': () => pagina((desde += 2)) })
+  const porPeticiones = await fetchSpacePages(fn2, DC, 'SIMPL', { limit: 2, maxPages: 300, maxRequests: 3 })
+  eq(porPeticiones.truncated, true)
+  eq(c2.length, 3, 'nunca más peticiones que el tope')
+  eq(porPeticiones.requests, 3)
+
+  // Los topes por defecto son los del ÍNDICE, no unos propios.
+  eq(INDEX_LIMITS.maxPages, 300)
+  eq(INDEX_LIMITS.restMaxRequests, 12)
+})
+
+test('H7: una página vacía o sin `next` cierra el recorrido; un fallo lo corta y lo dice', async () => {
+  const vacia = { size: 0, results: [], _links: { next: '/otra' } }
+  const { fn, calls } = fakeFetch({ '/rest/api/content?spaceKey=SIMPL': vacia })
+  const r = await fetchSpacePages(fn, DC, 'SIMPL', { limit: 2 })
+  eq(r.ok, true)
+  eq(r.pages, [])
+  eq(calls.length, 1, 'un `next` que viniera siempre no puede ser un bucle')
+
+  let n = 0
+  const { fn: falla } = fakeFetch({ '/rest/api/content?spaceKey=SIMPL': () => (++n === 1 ? ESPACIO_1 : 401) })
+  const corte = await fetchSpacePages(falla, DC, 'SIMPL', { limit: 2 })
+  eq(corte.ok, false)
+  eq(corte.status, 401)
+
+  const { fn: raro } = fakeFetch({ '/rest/api/content?spaceKey=SIMPL': { paginas: [] } })
+  const forma = await fetchSpacePages(raro, DC, 'SIMPL')
+  eq(forma.ok, false)
+  assert(/forma esperada/.test(forma.reason), forma.reason)
+})
+
+test('SEGURIDAD: el árbol no se pide con una clave rara, sin fetch, ni fuera del sitio', async () => {
+  const { fn, calls } = fakeFetch({ '/rest/api/content': ESPACIO_1 })
+  for (const mala of ['../x', 'ENG x', '~', '', null]) {
+    eq(await fetchSpacePages(fn, DC, mala), { ok: false, reason: 'clave de espacio inválida' }, JSON.stringify(mala))
+  }
+  eq((await fetchSpacePages(fn, { origin: 'javascript:alert(1)' }, 'SIMPL')).ok, false)
+  eq((await fetchSpacePages(null, DC, 'SIMPL')).ok, false)
+  eq(calls.length, 0)
+  for (const wikiPrefix of ['@evil.example', '//evil.example', 'https://evil.example']) {
+    const { fn: f2, calls: c2 } = fakeFetch({ '/': ESPACIO_2 })
+    await fetchSpacePages(f2, { origin: 'https://acme.atlassian.net', wikiPrefix, cloud: false }, 'SIMPL', { limit: 2 })
+    for (const c of c2) eq(new URL(c.url).origin, 'https://acme.atlassian.net', c.url)
+  }
+})

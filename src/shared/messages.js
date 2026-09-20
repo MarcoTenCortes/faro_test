@@ -27,6 +27,20 @@ export const MSG = {
   FOCUS_NOTE: 'faro:focus-note',
   CLEAR_NOTES: 'faro:clear-notes',
 
+  // panel -> content script: lecturas REST del propio sitio con la sesión del
+  // navegador (H7). Las contesta el content script porque es quien está en el
+  // origen del sitio; el panel nunca manda rutas ni URLs, sólo la consulta o el
+  // `kind` de una plantilla fija, y el content script deduce de SU pestaña la
+  // ruta de contexto. Nacen con receptor y sin emisor a propósito: los cablean
+  // H8 (JQL_SEARCH, FAVOURITE_FILTERS), H9 (SPACE_PAGES) y H11 (RECENT_*), y
+  // hasta entonces la lista MSG_SIN_EMISOR_HASTA de tools/check-docs.mjs los
+  // declara pendientes.
+  JQL_SEARCH: 'faro:jql-search',
+  RECENT_ISSUES: 'faro:recent-issues',
+  RECENT_PAGES: 'faro:recent-pages',
+  SPACE_PAGES: 'faro:space-pages',
+  FAVOURITE_FILTERS: 'faro:favourite-filters',
+
   // content script -> service worker / panel
   CONTENT_READY: 'faro:content-ready',
   URL_CHANGED: 'faro:url-changed',

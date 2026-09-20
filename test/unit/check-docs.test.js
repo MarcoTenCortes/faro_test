@@ -9,6 +9,8 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   STRICT,
+  MSG_SIN_EMISOR_HASTA,
+  pendingSenders,
   stripComments,
   readmeTestCount,
   logTitles,
@@ -232,6 +234,62 @@ test('msgHandlers reconoce las formas reales de mandar: `type:` en varias línea
   eq(r.map((h) => h.handled), [false, false, false, false], 'ninguna de esas formas atiende nada')
 })
 
+// ---------------------------------------------------------------------------
+// MSG_SIN_EMISOR_HASTA / pendingSenders (H7: el cimiento REST nace sin UI)
+// ---------------------------------------------------------------------------
+
+/** Los cinco mensajes de H7, tal como los ve `msgHandlers`: atendidos y sin nadie que los mande. */
+const ATENDIDOS = (nombres) => nombres.map((name) => ({ name, handled: true, sent: false, where: ['bootstrap'] }))
+
+test('MSG_SIN_EMISOR_HASTA nombra los mensajes de H7 con el hito que los cablea', () => {
+  eq(MSG_SIN_EMISOR_HASTA, {
+    JQL_SEARCH: 'H8',
+    FAVOURITE_FILTERS: 'H8',
+    SPACE_PAGES: 'H9',
+    RECENT_ISSUES: 'H11',
+    RECENT_PAGES: 'H11',
+  })
+  for (const hito of Object.values(MSG_SIN_EMISOR_HASTA)) assert(/^H\d+$/.test(hito), 'cada entrada dice a qué hito espera: ' + hito)
+})
+
+test('pendingSenders: el de la lista es NOTA con su hito y el que no está sigue siendo AVISO', () => {
+  const r = pendingSenders([...ATENDIDOS(['JQL_SEARCH']), { name: 'HUERFANO', handled: true, sent: false, where: ['panel', 'service-worker'] }], {
+    JQL_SEARCH: 'H8',
+  })
+  eq(r.errors, [])
+  eq(r.notes, ['MSG.JQL_SEARCH: lo atiende bootstrap.js y todavía nadie lo manda (lo cablea H8)'])
+  eq(r.warnings.length, 1)
+  assert(/^MSG\.HUERFANO: lo atiende panel\.js y service-worker\.js y nadie lo manda/.test(r.warnings[0]), r.warnings[0])
+})
+
+test('pendingSenders: un mensaje con emisor no sale por ningún lado, y uno sin receptor tampoco', () => {
+  const r = pendingSenders(
+    [
+      { name: 'START_PLAN', handled: true, sent: true, where: ['service-worker'] },
+      { name: 'SIN_NADIE', handled: false, sent: false, where: [] },
+    ],
+    {}
+  )
+  eq(r, { notes: [], warnings: [], errors: [] })
+  eq(pendingSenders([], {}), { notes: [], warnings: [], errors: [] })
+  eq(pendingSenders(null, null), { notes: [], warnings: [], errors: [] }, 'sin datos, nada que decir')
+})
+
+test('pendingSenders: la lista sólo puede encoger — un nombre que YA tiene emisor, o que ya no es mensaje, es ERROR', () => {
+  // H8 cablea el botón que manda JQL_SEARCH: a partir de ahí, tenerlo en la
+  // lista taparía para siempre el aviso que la justifica.
+  const cableado = pendingSenders([{ name: 'JQL_SEARCH', handled: true, sent: true, where: ['bootstrap'] }], { JQL_SEARCH: 'H8' })
+  eq(cableado.notes, [])
+  eq(cableado.warnings, [])
+  eq(cableado.errors.length, 1)
+  assert(/ya lo manda alguien/.test(cableado.errors[0]) && /bórralo de MSG_SIN_EMISOR_HASTA/.test(cableado.errors[0]), cableado.errors[0])
+
+  const borrado = pendingSenders(ATENDIDOS(['OTRO']), { YA_NO_EXISTE: 'H9' })
+  eq(borrado.errors.length, 1)
+  assert(/ya no es un mensaje/.test(borrado.errors[0]) && /bórralo de la lista/.test(borrado.errors[0]), borrado.errors[0])
+  eq(borrado.warnings.length, 1, 'y el que no está en la lista sigue avisando')
+})
+
 test('msgHandlers: los comentarios no cuentan ni como receptor ni como emisor', () => {
   const r = msgHandlers({
     messagesJs: MESSAGES,
@@ -393,7 +451,7 @@ test('checkDocs sobre el repo: sin errores con el número del README y, mientras
   const n = readmeTestCount(readFileSync(join(ROOT, 'README.md'), 'utf8'))
   assert(Number.isInteger(n), 'el README dice cuántas pruebas unitarias hay')
   const r = checkDocs(ROOT, { tests: n })
-  eq(Object.keys(r), ['errors', 'warnings'])
+  eq(Object.keys(r), ['errors', 'warnings', 'notes'], 'el informe lleva además notas informativas (H7: los mensajes que esperan a su hito)')
   eq(r.errors, [], 'con el número del README no hay errores (CLAUDE.md §2 dice lo mismo)')
   for (const w of r.warnings) {
     eq(Object.keys(w), ['kind', 'title', 'items'])
@@ -417,9 +475,8 @@ test('checkDocs sobre el repo: un número de pruebas que no es el del README es 
   eq(sinNumero.errors, [], 'sin `tests`, el número no se comprueba')
 })
 
-test('checkDocs sobre el repo: un mensaje con receptor y sin emisor es aviso, nunca error; hoy ninguno', () => {
+test('checkDocs sobre el repo: un mensaje con receptor y sin emisor es aviso, nunca error; fuera de MSG_SIN_EMISOR_HASTA hoy no hay ninguno', () => {
   const r = checkDocs(ROOT, {})
-  for (const e of r.errors) assert(e.kind !== 'msgs', 'todo MSG tiene receptor y está en §5: ' + JSON.stringify(e))
   const avisos = r.warnings.filter((w) => w.kind === 'msgs')
   for (const w of avisos) for (const item of w.items) assert(/^MSG\.[A-Z0-9_]+: lo atiende .+ y nadie lo manda/.test(item), item)
   // Hasta H2 el único aviso era CANCEL_PLAN: lo atendía el service worker
@@ -427,7 +484,21 @@ test('checkDocs sobre el repo: un mensaje con receptor y sin emisor es aviso, nu
   // «Parar» de la tarjeta de navegación lo manda (`{ type: MSG.CANCEL_PLAN,
   // tabId }` en runPlan), así que no queda ningún mensaje huérfano. Si aparece
   // uno nuevo, esta línea lo dice con su nombre: cablea quien lo manda o bórralo.
-  eq(avisos, [], 'ningún mensaje con receptor y sin emisor')
+  // Los cinco de H7 no cuentan aquí: nacen sin interfaz y van en las notas.
+  eq(avisos, [], 'ningún mensaje con receptor y sin emisor fuera de la lista')
+  const notas = r.notes.filter((w) => w.kind === 'msgs')
+  eq(notas.length, 1, 'los mensajes que esperan a su hito van juntos en una nota')
+  eq(
+    notas[0].items.map((item) => item.split(':')[0]).sort(),
+    Object.keys(MSG_SIN_EMISOR_HASTA)
+      .map((n) => `MSG.${n}`)
+      .sort(),
+    'y son exactamente los de la lista, ni uno más'
+  )
+  for (const item of notas[0].items) assert(/ y todavía nadie lo manda \(lo cablea H\d+\)$/.test(item), item)
+  // Que un mensaje de la lista ya cableado sea ERROR se prueba arriba con
+  // `pendingSenders`; aquí basta con que hoy el repo no tenga ninguno.
+  for (const e of r.errors) assert(e.kind !== 'msgs', 'ningún mensaje sin receptor, sin §5 ni cableado con la lista puesta: ' + JSON.stringify(e))
 })
 
 test('checkDocs sobre el repo: el recuento por fichero de §10 se compara con `porFichero` y una discrepancia es error', () => {

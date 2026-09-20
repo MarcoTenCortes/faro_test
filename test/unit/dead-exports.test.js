@@ -67,6 +67,30 @@ const LISTA_BLANCA = {
 }
 
 /**
+ * Exportaciones que existen para un hito que todavía no ha llegado (H7).
+ *
+ * `EXPORTADAS_SIN_IMPORTAR` es deuda vieja y sólo puede ENCOGER: meter ahí lo
+ * que un hito siguiente va a importar la volvería una lista que crece y deja de
+ * significar nada. Esto es lo contrario: una lista corta, con el hito que la va
+ * a consumir escrito al lado, que se vacía sola cuando ese hito llega y empieza
+ * a importar el nombre.
+ *
+ * Formato: ruta → `{ hito, nombres }`.
+ *
+ * HOY ESTÁ VACÍA a propósito: todo lo que H7 exporta lo importa de verdad su
+ * prueba (rest-get.test.js, jira-rest.test.js, confluence-rest.test.js,
+ * site.test.js, settings.test.js), que es la forma de que una función pura no
+ * nazca sin nadie que la ejercite. Si H8-H11 necesitan exportar algo que aún no
+ * puede tener importador, va aquí con su hito, no en la lista de deuda.
+ */
+const PENDIENTES_DE_HITO = {}
+
+/** La misma lista en la forma `ruta → nombres` que usan las comprobaciones. */
+const pendientesPlanos = Object.fromEntries(
+  Object.entries(PENDIENTES_DE_HITO).map(([ruta, v]) => [ruta, (v && v.nombres) || []])
+)
+
+/**
  * Exportadas pero usadas sólo dentro de su propio fichero (2026-09-14, con la
  * regla «importada de verdad»). No están muertas; el `export` sobra o les
  * falta un test que las importe. La lista sólo puede encoger: una exportación
@@ -286,9 +310,26 @@ test('toda exportación de src/ la importa alguien de verdad, salvo las apuntada
   const { sinImportar } = clasificar(ficheros)
   const nuevas = sinImportar.filter((linea) => {
     const [ruta, name] = linea.split(' exporta ')
-    return !enLista(LISTA_BLANCA, ruta, name) && !enLista(EXPORTADAS_SIN_IMPORTAR, ruta, name)
+    return (
+      !enLista(LISTA_BLANCA, ruta, name) &&
+      !enLista(EXPORTADAS_SIN_IMPORTAR, ruta, name) &&
+      !enLista(pendientesPlanos, ruta, name)
+    )
   })
   eq(nuevas.map((l) => `${l} y nadie lo importa: impórtalo desde un test, quita el export o apúntalo`), [])
+})
+
+test('lo que espera a un hito va en su lista, con el hito escrito, y hoy no espera nada (H7)', () => {
+  // La forma importa: sin el hito al lado, esta lista sería otra lista de deuda.
+  const malFormadas = []
+  for (const [ruta, v] of Object.entries(PENDIENTES_DE_HITO)) {
+    if (!v || !/^H\d{1,2}$/.test(String(v.hito || ''))) malFormadas.push(`${ruta} no dice qué hito lo va a importar`)
+    if (!Array.isArray(v?.nombres) || !v.nombres.length) malFormadas.push(`${ruta} no nombra ninguna exportación`)
+  }
+  eq(malFormadas, [])
+  // Y la comprobación que de verdad importa: todo lo que H7 exporta tiene ya
+  // quien lo importe (su prueba), así que la lista está vacía.
+  eq(Object.keys(PENDIENTES_DE_HITO), [], 'nada de H7 se exporta sin que alguien lo importe de verdad')
 })
 
 test('las listas sólo nombran exportaciones que existen, y la lista blanca sólo las que de verdad nadie importa', () => {
@@ -296,6 +337,7 @@ test('las listas sólo nombran exportaciones que existen, y la lista blanca sól
   for (const [lista, estricta] of [
     [LISTA_BLANCA, true],
     [EXPORTADAS_SIN_IMPORTAR, false],
+    [pendientesPlanos, true],
   ]) {
     for (const [ruta, nombres] of Object.entries(lista)) {
       const f = fuentes.find((x) => x.rel === ruta)

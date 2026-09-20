@@ -31,7 +31,22 @@
  * los mismos filtros que la cadena de antepasados. Comprobado que `~` compara
  * términos analizados: sin el comodín de prefijo en el último término, «Arqui»
  * no encuentra «Arquitectura», que es lo que se espera de un autocompletado.
+ *
+ * Y desde H7 hay un tercer tipo de lectura: las CONSULTAS DE PLANTILLA FIJA
+ * (`viewedCql`, `mineCql`, `idsCql`) y el árbol entero de un espacio
+ * (`fetchSpacePages`). Su texto no lo escribe nadie de fuera: lo escribe Faro
+ * con cláusulas fijas y parámetros validados (un número de días, ids
+ * numéricos), y `searchContent` sólo acepta un CQL que salga de una de esas
+ * plantillas —lo comprueba contra ellas antes de pedir nada—. Un título leído
+ * del DOM NUNCA se convierte en CQL (CLAUDE.md §8.12, §8.19).
+ *
+ * El GET y la guardia de mismo origen viven en rest-get.js: la misma barrera
+ * que usa jira-rest.js, en un solo sitio.
  */
+
+import { getJson, nowMs } from './rest-get.js'
+import { validSpaceKey } from '../atlassian/site.js'
+import { INDEX_LIMITS } from './config.js'
 
 const ID = /^\d+$/
 const MAX_TITLE = 300
@@ -52,6 +67,28 @@ export const SEARCH_LIMITS = {
   maxLimit: 20,
   /** Resultados que se aceptan de la respuesta, venga como venga. */
   maxResults: 20,
+}
+
+/**
+ * Topes de las lecturas que añadió H7: las consultas de plantilla fija y el
+ * árbol de un espacio. Los de la paginación viven con el módulo que pide; los
+ * TOPES DEL ÍNDICE (cuántas páginas y cuántas peticiones como mucho) son los de
+ * `INDEX_LIMITS` en config.js, y quien pagina los aplica: un segundo tope propio
+ * para lo mismo acabaría diciendo otra cosa.
+ */
+export const CONFLUENCE_REST_LIMITS = {
+  /** Páginas por petición. El servidor puede devolver menos, y se sigue por `size`. */
+  pageSize: 100,
+  maxPageSize: 200,
+  /** Resultados que se aceptan de una consulta de plantilla. */
+  maxResults: 30,
+  /** Ids que caben en un `id in (…)`. */
+  maxIds: 20,
+  /** Ventana en días de `mineCql`. */
+  daysMax: 30,
+  /** Quién modificó una página: sólo el nombre visible, acotado. */
+  updatedByChars: 80,
+  timeoutMs: 6000,
 }
 
 /** Un prefijo del wiki tiene forma de ruta: nada, o segmentos normales. */
@@ -308,49 +345,6 @@ async function viaV2(fetchFn, base, wiki, id, opts) {
   return { ok: true, pages: chain, via: 'v2' }
 }
 
-function sameOrigin(url, base) {
-  try {
-    return new URL(url).origin === new URL(base).origin
-  } catch {
-    return false
-  }
-}
-
-/** GET con tope de tiempo, y sólo al sitio. Nunca lanza: devuelve el motivo. */
-async function getJson(fetchFn, url, { timeoutMs, credentials, base }) {
-  if (!url) return { ok: false, status: 0, reason: 'ruta inválida' }
-  // La garantía de mismo origen se comprueba aquí, en el único sitio por el
-  // que pasa toda petición, y no se confía en que la ruta se haya montado bien.
-  if (!sameOrigin(url, base)) return { ok: false, status: 0, reason: 'la petición saldría del sitio' }
-
-  const ctrl = typeof AbortController === 'function' ? new AbortController() : null
-  const timer = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs) : 0
-  try {
-    const res = await fetchFn(url, {
-      method: 'GET',
-      credentials,
-      headers: { Accept: 'application/json' },
-      signal: ctrl?.signal,
-    })
-    if (!res || !res.ok) {
-      const status = Number(res?.status) || 0
-      return { ok: false, status, reason: status ? `la API respondió ${status}` : 'sin respuesta' }
-    }
-    const text = await res.text()
-    try {
-      return { ok: true, status: res.status, json: JSON.parse(text) }
-    } catch {
-      // Una página de login en vez de JSON: la sesión no vale para la API.
-      return { ok: false, status: res.status, reason: 'la respuesta no es JSON' }
-    }
-  } catch (err) {
-    const abortado = err?.name === 'AbortError'
-    return { ok: false, status: 0, reason: abortado ? `sin respuesta en ${timeoutMs} ms` : String(err?.message || err) }
-  } finally {
-    if (timer) clearTimeout(timer)
-  }
-}
-
 // ---------------------------------------------------------------- búsqueda
 
 /**
@@ -494,4 +488,296 @@ export async function searchPages(fetchFn, site, text, { limit, timeoutMs = 6000
   }
 
   return { ok: false, reason: v1.reason, status: v1.status }
+}
+
+// ------------------------------------------- consultas de plantilla fija
+
+/**
+ * Las CQL que Faro sabe escribir, y las ÚNICAS que `searchContent` ejecuta.
+ *
+ * Son literales con un hueco: un número de páginas, un número de días, una lista
+ * de ids numéricos. Nada de lo que escribe el usuario, ni el modelo, ni el DOM
+ * entra en ellas (para el texto del usuario está `cqlTitleQuery`, que es otra
+ * cosa y tiene sus propios límites). `mineCql` ordena por `lastmodified` con
+ * `startOfDay()`, que es la función que la referencia de campos de Data Center
+ * lista para ese campo, y usa `watcher`, que en Confluence SÍ está en esa
+ * referencia (docs/plan/anexo-A, «APIs externas»).
+ */
+const CQL_PLANTILLAS = [
+  /^type = page AND id in recentlyViewedContent\(\d{1,3}\)$/,
+  /^type = page AND \(contributor = currentUser\(\) OR watcher = currentUser\(\) OR mention = currentUser\(\) OR favourite = currentUser\(\)\) AND lastmodified >= startOfDay\("-\d{1,2}d"\) ORDER BY lastmodified DESC$/,
+  /^type = page AND id in \(\d{1,19}(?:,\d{1,19})*\)$/,
+]
+
+/** Los `expand` que se admiten. Uno que no esté aquí se ignora. */
+const EXPAND_BLANCOS = ['space', 'version', 'history.lastUpdated', 'ancestors', 'space.homepage']
+
+/** Un número entero dentro de un rango, o 0. */
+function entre(v, min, max) {
+  const n = Number(v)
+  return Number.isInteger(n) && n >= min && n <= max ? n : 0
+}
+
+/** Las últimas páginas que ESTE usuario ha visto. Pura; null si el tope no vale. */
+export function viewedCql(limit) {
+  const n = entre(limit, 1, CONFLUENCE_REST_LIMITS.maxResults)
+  return n ? `type = page AND id in recentlyViewedContent(${n})` : null
+}
+
+/** Las páginas tuyas —escritas, seguidas, mencionadas o marcadas— de los últimos días. Pura. */
+export function mineCql(days) {
+  const d = entre(days, 1, CONFLUENCE_REST_LIMITS.daysMax)
+  if (!d) return null
+  return (
+    'type = page AND (contributor = currentUser() OR watcher = currentUser() OR mention = currentUser()' +
+    ` OR favourite = currentUser()) AND lastmodified >= startOfDay("-${d}d") ORDER BY lastmodified DESC`
+  )
+}
+
+/** Unas páginas concretas por id. Pura; null sin ningún id numérico. */
+export function idsCql(ids) {
+  const limpios = []
+  for (const raw of Array.isArray(ids) ? ids : []) {
+    if (limpios.length >= CONFLUENCE_REST_LIMITS.maxIds) break
+    const id = cleanId(raw)
+    if (id && !limpios.includes(id)) limpios.push(id)
+  }
+  return limpios.length ? `type = page AND id in (${limpios.join(',')})` : null
+}
+
+/** ¿Este CQL lo escribió una de las plantillas de arriba? Pura. */
+export function isTemplateCql(cql) {
+  const q = str(cql)
+  return CQL_PLANTILLAS.some((re) => re.test(q))
+}
+
+/**
+ * La ruta de una consulta de plantilla. Pura.
+ *
+ * El `expand` se filtra contra la lista blanca: `body.storage` traería el cuerpo
+ * entero de cada página, que ni hace falta ni se quiere arrastrar.
+ */
+export function contentSearchPath(cql, { wikiPrefix = '', expand = [], limit } = {}) {
+  if (!isTemplateCql(cql)) return null
+  const expands = [...new Set((Array.isArray(expand) ? expand : []).map(str).filter((e) => EXPAND_BLANCOS.includes(e)))]
+  const n = entre(limit, 1, CONFLUENCE_REST_LIMITS.maxResults) || CONFLUENCE_REST_LIMITS.maxResults
+  return (
+    `${prefix(wikiPrefix)}/rest/api/content/search?cql=${encodeURIComponent(str(cql))}&limit=${n}` +
+    (expands.length ? `&expand=${expands.join(',')}` : '')
+  )
+}
+
+/** Quién tocó una página por última vez: sólo el nombre visible, acotado. */
+function quien(node) {
+  return str(node?.displayName).replace(CONTROL, ' ').replace(/\s+/g, ' ').trim().slice(0, CONFLUENCE_REST_LIMITS.updatedByChars)
+}
+
+/**
+ * Lo mismo que `parseSearchV1` más CUÁNDO se modificó la página y quién: es lo
+ * que permite decir «cambió después de que la vieras» sin preguntárselo a nadie.
+ * `version.when` si viene expandida; si no, `history.lastUpdated.when`. Pura.
+ *
+ * @returns {Array<{id,title,spaceKey,url,updatedAt,updatedBy,version}>|null}
+ */
+export function parseRecentV1(json, wikiPrefix = '') {
+  const base = parseSearchV1(json, wikiPrefix)
+  if (!base) return null
+  const porId = new Map()
+  for (const r of json.results) {
+    const id = cleanId(r?.id)
+    if (id && !porId.has(id)) porId.set(id, r)
+  }
+  return base.map((p) => {
+    const r = porId.get(p.id) || {}
+    const cuando = str(r.version?.when) || str(r.history?.lastUpdated?.when)
+    const t = Date.parse(cuando)
+    return {
+      ...p,
+      updatedAt: Number.isFinite(t) ? t : 0,
+      updatedBy: quien(r.version?.by) || quien(r.history?.lastUpdated?.by),
+      version: entre(r.version?.number, 1, 1e9),
+    }
+  })
+}
+
+/**
+ * Páginas del sitio que casan con una consulta de PLANTILLA, contra el sitio en
+ * el que está el usuario. Mismas garantías que `searchPages`, y una más: si el
+ * CQL no lo escribió una plantilla de este módulo, no se pide nada.
+ *
+ * @returns {Promise<{ok:true, pages:Array, via:'v1', ms:number}|{ok:false, reason:string, status?:number}>}
+ */
+export async function searchContent(
+  fetchFn,
+  site,
+  cql,
+  {
+    expand = ['space', 'version', 'history.lastUpdated'],
+    limit,
+    timeoutMs = CONFLUENCE_REST_LIMITS.timeoutMs,
+    credentials = 'same-origin',
+  } = {}
+) {
+  const t0 = nowMs()
+  const base = String(site?.origin || '').replace(/\/+$/, '')
+  if (!/^https?:\/\/[^/@]+$/i.test(base)) return { ok: false, reason: 'origen desconocido' }
+  if (typeof fetchFn !== 'function') return { ok: false, reason: 'sin fetch' }
+  if (!isTemplateCql(cql)) return { ok: false, reason: 'consulta no permitida' }
+
+  const wiki = site?.cloud ? '/wiki' : prefix(site?.wikiPrefix)
+  const r = await getJson(fetchFn, base + contentSearchPath(cql, { wikiPrefix: wiki, expand, limit }), {
+    timeoutMs,
+    credentials,
+    base,
+  })
+  if (!r.ok) return { ok: false, reason: r.reason, status: r.status }
+  const pages = parseRecentV1(r.json, wiki)
+  if (!pages) return { ok: false, reason: 'la respuesta de la API no tiene la forma esperada', status: r.status }
+  return { ok: true, pages, via: 'v1', ms: Math.round(nowMs() - t0) }
+}
+
+// ------------------------------------------------- el árbol de un espacio
+
+/**
+ * La ruta de una página de resultados del contenido de un espacio. Pura.
+ *
+ * `expand=ancestors` es lo que hace que una sola lista traiga el árbol entero
+ * con su forma: el último antepasado de cada página es su padre. Está
+ * documentado en `/rest/api/content/{id}` (que Faro ya usa) y no se pudo
+ * confirmar letra a letra como `expand` de la LISTA: si no viene, las páginas
+ * salen sin padre y quien llama se queda como estaba (docs/plan/anexo-C,
+ * «Riesgos»). `space.homepage` trae la portada, que hay que quitar del camino.
+ */
+export function spacePagesPath(spaceKey, wikiPrefix = '', { start, limit } = {}) {
+  const key = validSpaceKey(spaceKey)
+  if (!key) return null
+  const desde = entre(start, 0, 100000) || 0
+  const cuantas = entre(limit, 1, CONFLUENCE_REST_LIMITS.maxPageSize) || CONFLUENCE_REST_LIMITS.pageSize
+  return (
+    `${prefix(wikiPrefix)}/rest/api/content?spaceKey=${encodeURIComponent(key)}&type=page&status=current` +
+    `&expand=ancestors,space.homepage&start=${desde}&limit=${cuantas}`
+  )
+}
+
+/**
+ * De una página de resultados de `/rest/api/content?spaceKey=…` a las páginas con
+ * su padre. Pura.
+ *
+ * `next` es un BOOLEANO, no la ruta que manda el servidor en `_links.next`: la
+ * siguiente petición la monta `spacePagesPath` con el `start` que lleva la
+ * cuenta quien pagina. Seguir una URL que viene en la respuesta sería dejar que
+ * el servidor decida qué se pide (§8.3).
+ *
+ * @returns {{pages:Array<{id,title,parentId,url,spaceKey}>, size:number, next:boolean, homeId:string|null}|null}
+ */
+export function parseSpacePages(json, wikiPrefix = '') {
+  if (!json || typeof json !== 'object' || !Array.isArray(json.results)) return null
+  const pages = []
+  const vistos = new Set()
+  let homeId = null
+  for (const r of json.results) {
+    if (!r || typeof r !== 'object') continue
+    if (r.type != null && str(r.type) !== 'page') continue
+    const id = cleanId(r.id)
+    if (!id || vistos.has(id)) continue
+    vistos.add(id)
+    if (!homeId) homeId = homepageIdV1(r.space)
+    const ancestros = Array.isArray(r.ancestors) ? r.ancestors.slice(-MAX_CHAIN) : []
+    let parentId = null
+    for (let i = ancestros.length - 1; i >= 0; i--) {
+      const aid = cleanId(ancestros[i]?.id)
+      if (aid && aid !== id) {
+        parentId = aid
+        break
+      }
+    }
+    pages.push({
+      id,
+      title: cleanTitle(r.title),
+      parentId,
+      url: webuiOf(r, wikiPrefix),
+      spaceKey: cleanTitle(r.space?.key) || null,
+    })
+  }
+  const size = entre(json.size, 0, 100000) || pages.length
+  return { pages, size, next: !!str(json._links?.next), homeId }
+}
+
+/**
+ * El árbol de páginas de un espacio, entero, paginado y con tope.
+ *
+ * Es lo que sustituye las dos fases de modelo del indexador (el volcado del
+ * índice y la jerarquía): la lista lo dice exacto y en milisegundos. Los topes
+ * son los del ÍNDICE (`INDEX_LIMITS.maxPages` y `restMaxRequests`), no unos
+ * propios: dos topes para lo mismo acabarían diciendo cosas distintas. Si se
+ * llega a alguno, `truncated` lo dice y quien llama sigue completando cada
+ * destino como hasta ahora.
+ *
+ * La guardia de mismo origen se comprueba en CADA página, porque cada página es
+ * un `getJson` y la comprobación vive dentro.
+ *
+ * La PORTADA del espacio viene en `pages` como una más y su id aparte, en
+ * `homeId`: quitarla del camino es decisión de quien monta el índice (lo hace
+ * `finish` para la cadena de antepasados, porque en la barra lateral no es una
+ * rama que se despliegue), y aquí no se decide por él.
+ *
+ * @returns {Promise<{ok:true, pages:Array, homeId:string|null, requests:number, truncated:boolean, ms:number}
+ *          |{ok:false, reason:string, status?:number}>}
+ */
+export async function fetchSpacePages(
+  fetchFn,
+  site,
+  spaceKey,
+  {
+    limit = CONFLUENCE_REST_LIMITS.pageSize,
+    maxPages = INDEX_LIMITS.maxPages,
+    maxRequests = INDEX_LIMITS.restMaxRequests,
+    timeoutMs = CONFLUENCE_REST_LIMITS.timeoutMs,
+    credentials = 'same-origin',
+  } = {}
+) {
+  const t0 = nowMs()
+  const base = String(site?.origin || '').replace(/\/+$/, '')
+  if (!/^https?:\/\/[^/@]+$/i.test(base)) return { ok: false, reason: 'origen desconocido' }
+  if (typeof fetchFn !== 'function') return { ok: false, reason: 'sin fetch' }
+  if (!validSpaceKey(spaceKey)) return { ok: false, reason: 'clave de espacio inválida' }
+
+  const wiki = site?.cloud ? '/wiki' : prefix(site?.wikiPrefix)
+  const opts = { timeoutMs, credentials, base }
+  // Un tope que no sea un número (una opción a medio pasar) vale 1 petición, no
+  // ninguna y tampoco infinitas: `Math.max(1, undefined)` es NaN, y con NaN el
+  // bucle no se ejecutaría y esto devolvería un árbol vacío como si el espacio
+  // no tuviera páginas.
+  const tope = Number.isInteger(maxRequests) && maxRequests >= 1 ? maxRequests : 1
+  const pages = []
+  const vistos = new Set()
+  let homeId = null
+  let start = 0
+  let requests = 0
+  let truncated = false
+
+  while (requests < tope) {
+    const r = await getJson(fetchFn, base + spacePagesPath(spaceKey, wiki, { start, limit }), opts)
+    requests++
+    if (!r.ok) return { ok: false, reason: r.reason, status: r.status }
+    const parsed = parseSpacePages(r.json, wiki)
+    if (!parsed) return { ok: false, reason: 'la respuesta de la API no tiene la forma esperada', status: r.status }
+    if (!homeId) homeId = parsed.homeId
+    for (const p of parsed.pages) {
+      if (vistos.has(p.id)) continue
+      vistos.add(p.id)
+      pages.push(p)
+    }
+    if (pages.length >= maxPages) {
+      truncated = true
+      break
+    }
+    // Una página vacía cierra el recorrido aunque el servidor diga que hay más:
+    // sin esto, un `_links.next` que viniera siempre sería un bucle hasta el tope.
+    if (!parsed.next || !parsed.pages.length) break
+    start += parsed.size || parsed.pages.length
+    if (requests >= tope) truncated = true
+  }
+
+  return { ok: true, pages: pages.slice(0, maxPages), homeId, requests, truncated, ms: Math.round(nowMs() - t0) }
 }

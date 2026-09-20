@@ -58,6 +58,19 @@ export const DEFAULT_SETTINGS = {
   stepDelayMs: NAV_TIMING.stepPauseMs,
   reduceMotion: false,
   highlightStyle: 'spotlight',
+  /**
+   * El interruptor maestro de TODA lectura REST nueva: la lista de una búsqueda,
+   * las búsquedas al instante, el perfil del proyecto, el índice por la API y
+   * las sugerencias por actividad (docs/PLAN.md §3.3). Activo por defecto porque
+   * es lo que hace que Faro conteste en milisegundos y sin gastar tokens; se
+   * apaga entero porque un sitio detrás de un SSO que devuelve una página de
+   * login en cada GET daría un aviso en cada pregunta.
+   *
+   * NO apaga `fetchAncestors` ni `searchPages`, que son las lecturas de las
+   * páginas base y del camino y llevan funcionando desde antes: eso es
+   * comportamiento pinado y no cambia (docs/PLAN.md §3.3).
+   */
+  restTools: true,
 }
 
 /**
@@ -74,14 +87,28 @@ export function migrateSettings(raw) {
     s.navMode = s.assistedByDefault === false ? 'quick' : DEFAULT_SETTINGS.navMode
   }
   delete s.assistedByDefault
+  // Unos ajustes guardados antes de H7 no tienen el interruptor de las lecturas
+  // REST. Se rellena con el valor de por defecto, y lo que el usuario haya
+  // elegido se respeta; cualquier otra cosa en esa casilla no la escribió Faro
+  // y cuenta como no elegida.
+  if (typeof s.restTools !== 'boolean') s.restTools = DEFAULT_SETTINGS.restTools
   return s
 }
 
-/** Topes del indexador: evitan que «indexar Confluence» se vuelva infinito. */
+/**
+ * Topes del indexador: evitan que «indexar Confluence» se vuelva infinito.
+ *
+ * `restMaxRequests` es el tope de PETICIONES del árbol leído de la API
+ * (`fetchSpacePages`, H7): con `maxPages` 300 y 100 páginas por petición sobran,
+ * y es lo que evita que un espacio enorme —o un servidor que siempre dice que
+ * hay más— se convierta en decenas de GET. Las páginas siguen teniendo UN solo
+ * tope, `maxPages`, que es el mismo para el índice venga de donde venga.
+ */
 export const INDEX_LIMITS = {
   maxPages: 300,
   maxDepth: 4,
   maxIssues: 120,
+  restMaxRequests: 12,
   timeoutMs: 10 * 60 * 1000,
 }
 

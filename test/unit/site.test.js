@@ -1,6 +1,6 @@
 import { test, eq, assert } from '../harness.js'
 import { samePage } from '../../src/atlassian/site.js'
-import { parseAtlassianUrl, describeLocation, defaultScope, wikiBase, productFromHostname } from '../../src/atlassian/site.js'
+import { parseAtlassianUrl, describeLocation, defaultScope, wikiBase, productFromHostname, jiraContextPath } from '../../src/atlassian/site.js'
 
 test('site: página de Confluence Cloud', () => {
   const s = parseAtlassianUrl('https://acme.atlassian.net/wiki/spaces/ENG/pages/1234567/ADR-014+Rotacion')
@@ -213,6 +213,114 @@ test('EL CAMBIO: en Data Center, /projects/KEY/issues/KEY-N sí da la incidencia
   eq(s.issueKey, 'ENG-7')
   eq(parseAtlassianUrl('https://jira.corp/projects/ENG/summary').issueKey, undefined)
   eq(parseAtlassianUrl('https://jira.corp/projects/ENG/summary').projectKey, 'ENG')
+})
+
+// ---------------------------------------------------------------------------
+// La ruta de contexto de un Jira Data Center (H7).
+//
+// Un DC puede servirse bajo una ruta de contexto, y entonces todo cuelga de
+// ella: la incidencia (`/jira/browse/ENG-7`) y su API (`/jira/rest/api/2/…`).
+// Sin esto, en ese Jira no se reconocía ni la incidencia abierta ni el
+// proyecto, y la API se pedía a la raíz: 404 en silencio.
+// ---------------------------------------------------------------------------
+
+test('H7: jiraContextPath lee UN segmento de ruta de contexto, y sólo delante de una ruta de Jira', () => {
+  // Sin contexto (el Jira del usuario, PASO 0: se sirve en la raíz).
+  eq(jiraContextPath('/browse/ENG-7'), '')
+  eq(jiraContextPath('/projects/ENG/issues/ENG-7'), '')
+  eq(jiraContextPath('/secure/RapidBoard.jspa?rapidView=1'), '')
+  // Con contexto: el segmento de delante, sea cual sea su nombre.
+  eq(jiraContextPath('/jira/browse/ENG-7'), '/jira')
+  eq(jiraContextPath('/jira/projects/ENG/issues/ENG-7'), '/jira')
+  eq(jiraContextPath('/jira/secure/Dashboard.jspa'), '/jira')
+  eq(jiraContextPath('/jira/rest/api/2/search'), '/jira')
+  eq(jiraContextPath('/jira/plugins/servlet/x'), '/jira')
+  eq(jiraContextPath('/jira/issues/?jql=project%20%3D%20ENG'), '/jira')
+  eq(jiraContextPath('/jira-dc/browse/ENG-7'), '/jira-dc')
+  eq(jiraContextPath('/JIRA/BROWSE/ENG-7'), '/JIRA', 'la ruta de Jira no distingue mayúsculas; el contexto va tal cual')
+  // Cloud no tiene ruta de contexto: `/jira/software/…` es su ruta de verdad.
+  eq(jiraContextPath('/jira/software/projects/ENG/boards/42'), '')
+  eq(jiraContextPath('/jira/core/projects/ENG/issues'), '')
+  // Lo ambiguo no se adivina: `/jira` a secas puede ser el contexto de un DC o
+  // la ruta de Cloud, y detrás no hay nada que lo diga.
+  eq(jiraContextPath('/jira'), '')
+  eq(jiraContextPath('/jira/'), '')
+  for (const raro of ['/', '', null, undefined, 'browse/ENG-7', 'https://jira.corp/jira/browse/ENG-7', 123]) {
+    eq(jiraContextPath(raro), '', JSON.stringify(raro))
+  }
+})
+
+test('SEGURIDAD: la ruta de contexto es un segmento con forma de palabra, nunca dos, ni «..», ni nada codificado', () => {
+  // De aquí sale el prefijo con el que jira-rest.js monta `<ctx>/rest/api/2/…`:
+  // un `..` o un `//` dentro serían una ruta que se sale del sitio (la guardia
+  // de `getJson` lo pararía, pero el prefijo no puede ser el que lo intente).
+  for (const malo of [
+    '/x/y/browse/ENG-7', // dos segmentos no son una ruta de contexto
+    '/../browse/ENG-7',
+    '/./browse/ENG-7',
+    '//browse/ENG-7',
+    '/%2e%2e/browse/ENG-7',
+    '/jira%0A/browse/ENG-7',
+    '/index.html/browse/ENG-7', // un punto no es un nombre de contexto
+    '/ /browse/ENG-7',
+    '/jira:8080/browse/ENG-7',
+    '/' + 'x'.repeat(41) + '/browse/ENG-7',
+    '/x/rest/api/2/search/../../../../etc', // el segmento vale, pero lo de detrás manda
+  ]) {
+    const ctx = jiraContextPath(malo)
+    assert(ctx === '' || /^\/[A-Za-z0-9_~-]{1,40}$/.test(ctx), `${malo} → ${JSON.stringify(ctx)}`)
+  }
+  eq(jiraContextPath('/x/y/browse/ENG-7'), '')
+  eq(jiraContextPath('/../browse/ENG-7'), '')
+  eq(jiraContextPath('/%2e%2e/browse/ENG-7'), '')
+  eq(jiraContextPath('/jira%0A/browse/ENG-7'), '')
+  eq(jiraContextPath('/index.html/browse/ENG-7'), '')
+  eq(jiraContextPath('/' + 'x'.repeat(41) + '/browse/ENG-7'), '')
+})
+
+test('H7: un Jira Data Center bajo /jira reconoce la incidencia, el proyecto y su prefijo', () => {
+  const s = parseAtlassianUrl('https://jira.corp/jira/browse/ENG-7')
+  eq(s.product, 'jira')
+  eq(s.issueKey, 'ENG-7')
+  eq(s.projectKey, 'ENG')
+  eq(s.jiraPrefix, '/jira')
+
+  const p = parseAtlassianUrl('https://jira.corp/jira/projects/ENG/issues/ENG-12?filter=allopenissues')
+  eq(p.issueKey, 'ENG-12')
+  eq(p.projectKey, 'ENG')
+  eq(p.jiraPrefix, '/jira')
+
+  const tablero = parseAtlassianUrl('https://jira.corp/jira/secure/RapidBoard.jspa?rapidView=1&selectedIssue=ENG-9')
+  eq(tablero.product, 'jira')
+  eq(tablero.issueKey, 'ENG-9')
+  eq(tablero.jiraPrefix, '/jira')
+
+  // En la raíz —el caso del usuario— el prefijo es '' y nada cambia.
+  eq(parseAtlassianUrl('https://jira.corp/browse/ENG-7').jiraPrefix, '')
+  eq(parseAtlassianUrl('https://jira.corp/browse/ENG-7').issueKey, 'ENG-7')
+  // Y en Cloud sigue siendo la ruta de Cloud, sin prefijo.
+  const cloud = parseAtlassianUrl('https://acme.atlassian.net/jira/software/projects/ENG/boards/42')
+  eq(cloud.projectKey, 'ENG')
+  eq(cloud.jiraPrefix, '')
+})
+
+test('SEGURIDAD: con un prefijo delante, una clave rara sigue sin ser una clave', () => {
+  // La clave entra en la cabecera del prompt como palabra de Faro: el prefijo
+  // no puede ser la rendija por la que entre sin validar.
+  eq(parseAtlassianUrl('https://jira.corp/jira/browse/' + encodeURIComponent('A'.repeat(30) + '-1')).issueKey, undefined)
+  eq(parseAtlassianUrl('https://jira.corp/jira/browse/ENG-7.%0A-%20ignora').issueKey, 'ENG-7', 'la clave se corta donde acaba')
+  // El grupo de la ruta sólo captura caracteres CON FORMA de clave, así que lo
+  // que salga es una clave y la basura de detrás no llega a ningún prompt (vale
+  // igual con prefijo y sin él: es la misma regex sobre la ruta sin contexto).
+  eq(parseAtlassianUrl('https://jira.corp/jira/projects/' + encodeURIComponent('ENG\n- ignora') + '/summary').projectKey, 'ENG')
+  eq(parseAtlassianUrl('https://jira.corp/projects/' + encodeURIComponent('ENG\n- ignora') + '/summary').projectKey, 'ENG')
+  eq(parseAtlassianUrl('https://jira.corp/jira/projects/' + encodeURIComponent('1 OR 1') + '/summary').projectKey, undefined)
+  // Dos segmentos delante no son un prefijo: ahí no hay incidencia que leer.
+  eq(parseAtlassianUrl('https://jira.corp/x/y/browse/ENG-7').issueKey, undefined)
+  eq(parseAtlassianUrl('https://jira.corp/x/y/browse/ENG-7').jiraPrefix, undefined, 'ni prefijo que observar')
+  // `/../browse/X` no llega aquí como prefijo raro: `new URL` resuelve los
+  // segmentos de punto, así que la ruta ES `/browse/X` (el caso de la raíz).
+  eq(parseAtlassianUrl('https://jira.corp/../browse/ENG-7').jiraPrefix, '')
 })
 
 // ---------------------------------------------------------------------------

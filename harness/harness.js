@@ -958,6 +958,42 @@ const actions = {
     say(`marcadas ${r.placed.length}/12 en ${r.ms} ms · ${(r.detail || []).map((x) => x.strategy).join(' ')}`, r.placed.length === 12 ? 'ok' : 'bad')
   },
 
+  /**
+   * Las lecturas REST de H7 a ojo: una consulta de plantilla contra la Jira de
+   * mentira, los filtros del usuario y el árbol del espacio de la Confluence de
+   * mentira. Nada de esto toca la página; es lo que el content script contesta
+   * cuando el panel pregunta.
+   */
+  async 'jira-rest'() {
+    const jiraRest = await import('/src/shared/jira-rest.js')
+    const confRest = await import('/src/shared/confluence-rest.js')
+    const pide = (u, o) => fetch(u, o)
+    const sitioJira = { origin: location.origin, jiraPrefix: '', cloud: false }
+    const sitioConf = { origin: location.origin, wikiPrefix: '/wiki', cloud: false }
+
+    const vistas = await jiraRest.searchIssues(pide, sitioJira, jiraRest.historyJql(), { limit: 10 })
+    say(
+      vistas.ok ? `lo que has mirado (${vistas.via}, ${vistas.ms} ms): ${vistas.issues.map((i) => i.key).join(', ')}` : `sin lista: ${vistas.reason}`,
+      vistas.ok ? 'ok' : 'bad'
+    )
+    for (const i of (vistas.issues || []).slice(0, 4)) say(`  ${i.key} · ${i.status} (${i.statusCategory}) · ${i.summary}`)
+
+    const mala = await jiraRest.searchIssues(pide, sitioJira, 'foo = 1')
+    say(`una JQL que Jira no acepta: ${mala.reason} · ${(mala.messages || []).join(' | ')}`, mala.ok ? 'bad' : 'ok')
+
+    const filtros = await jiraRest.fetchFavouriteFilters(pide, sitioJira)
+    say(filtros.ok ? `filtros favoritos: ${filtros.filters.map((f) => f.name).join(' | ')}` : `sin filtros: ${filtros.reason}`, filtros.ok ? 'ok' : 'bad')
+
+    const arbol = await confRest.fetchSpacePages(pide, sitioConf, 'ENG', { limit: 5 })
+    say(
+      arbol.ok
+        ? `árbol del espacio ENG: ${arbol.pages.length} páginas en ${arbol.requests} peticiones · portada ${arbol.homeId} · ${arbol.ms} ms`
+        : `sin árbol: ${arbol.reason}`,
+      arbol.ok ? 'ok' : 'bad'
+    )
+    for (const p of (arbol.pages || []).slice(0, 5)) say(`  ${p.id} ← ${p.parentId ?? 'raíz'} · ${p.title}`)
+  },
+
   unsafe() {
     const del = [...document.querySelectorAll('.tb-btn')].find((b) => /elimin/i.test(b.textContent))
     const r = isSafeToClick(del, ORIGIN)
@@ -2271,6 +2307,176 @@ const actions = {
       `${antesMemo43} indice(s) memorizado(s) para ${raices43} raices · tras la segunda cita ${despuesMemo43} · ${otraGlobal43.strategy}`
     )
 
+    // ------------------------------------------------------------------
+    // 44-49: el cimiento REST (H7). Nada de esto toca la página: son las
+    // lecturas que la extensión hace con la sesión del navegador contra la API
+    // del propio sitio, aquí contra la Jira y la Confluence de mentira de
+    // tools/serve-harness.js (fixture harness/issues.json). Lo que se comprueba
+    // es el TRANSPORTE entero —montar la ruta, pedirla, degradar cuando el
+    // servidor dice que no, y devolver datos ya validados—, que es justo lo que
+    // no se puede probar en Node.
+    // ------------------------------------------------------------------
+
+    // 44. Una consulta de PLANTILLA ejecutada contra la API del sitio: es lo que
+    //     sustituye un turno del modelo por una petición de milisegundos. Lo que
+    //     se espera no está escrito a mano: sale de la propia fixture.
+    const jiraRest = await import('/src/shared/jira-rest.js')
+    const confRest = await import('/src/shared/confluence-rest.js')
+    const FIX = await (await fetch('/harness/issues.json')).json()
+    const pedidasRest = []
+    const pideApi = (u, o) => {
+      pedidasRest.push(String(u))
+      return fetch(u, o)
+    }
+    const sitioJira = { origin: location.origin, jiraPrefix: '', cloud: false }
+    const sitioConf = { origin: location.origin, wikiPrefix: '/wiki', cloud: false }
+    const CLAVES_FILA = 'assignee,components,epicKey,key,labels,lastViewedAt,parentKey,priority,reporter,status,statusCategory,summary,type,updatedAt'
+    const vistas44 = FIX.issues
+      .filter((i) => i.history)
+      .sort((a, b) => a.lastViewedHoursAgo - b.lastViewedHoursAgo)
+      .map((i) => i.key)
+    const busca44 = await jiraRest.searchIssues(pideApi, sitioJira, jiraRest.historyJql(), { limit: 10 })
+    ok(
+      'una JQL de plantilla se ejecuta en la API del sitio y devuelve lo que dice la fixture, en su orden',
+      busca44.ok &&
+        busca44.issues.map((i) => i.key).join(',') === vistas44.join(',') &&
+        busca44.via === 'jql' &&
+        busca44.prefix === '' &&
+        Number.isFinite(busca44.ms),
+      busca44.ok ? `${busca44.issues.map((i) => i.key).join(' ')} · ${busca44.total} en total · ${busca44.ms} ms` : busca44.reason
+    )
+    const fila44 = busca44.issues?.[0] || {}
+    ok(
+      'cada fila llega con claves blancas: del JSON de Jira no se cuela ninguna',
+      Object.keys(fila44).sort().join(',') === CLAVES_FILA &&
+        fila44.statusCategory === 'indeterminate' &&
+        fila44.assignee?.displayName === 'Ana Pérez' &&
+        !('fields' in fila44),
+      Object.keys(fila44).sort().join(' ')
+    )
+
+    // 45. Cuando la API dice que no. El mensaje es del SERVIDOR y se devuelve
+    //     tal cual: Faro no decide qué está mal en una consulta, y una sesión
+    //     que no vale no se confunde con una consulta mala.
+    const mala45 = await jiraRest.searchIssues(pideApi, sitioJira, 'foo = 1')
+    ok(
+      'una JQL que el servidor rechaza vuelve con su motivo y su mensaje, no como lista vacía',
+      !mala45.ok && mala45.reason === 'jql' && mala45.status === 400 && /Field 'foo' does not exist/.test(mala45.messages?.[0] || ''),
+      `${mala45.reason} · ${(mala45.messages || []).join(' | ')}`
+    )
+    const sinSesion45 = await jiraRest.searchIssues(pideApi, sitioJira, jiraRest.sampleQuery('ENG'), { prefix: '/sinsesion' })
+    ok(
+      'sin sesión válida el motivo es la sesión, y el mensaje también viene del servidor',
+      !sinSesion45.ok && sinSesion45.reason === 'sesion' && sinSesion45.status === 401 && /authenticated/i.test(sinSesion45.messages?.[0] || ''),
+      `${sinSesion45.reason} · ${sinSesion45.status} · ${(sinSesion45.messages || []).join(' | ')}`
+    )
+
+    // 46. Las dos degradaciones, una vez cada una: una instancia que no tiene
+    //     `lastViewed` (400) y una ruta de contexto que no es la suya (404). En
+    //     las dos se acaba contestando, y se dice por dónde.
+    const antes46 = pedidasRest.length
+    const sinVista46 = await jiraRest.searchIssues(pideApi, sitioJira, jiraRest.historyJql(), { prefix: '/sinvista', limit: 10 })
+    const ultima46 = decodeURIComponent(pedidasRest[pedidasRest.length - 1] || '')
+    ok(
+      'si la instancia no acepta lastViewed, se reintenta sin él —ni en el orden ni en los campos— y se dice que el orden es otro',
+      sinVista46.ok &&
+        sinVista46.via === 'updated' &&
+        sinVista46.prefix === '/sinvista' &&
+        pedidasRest.length === antes46 + 2 &&
+        !/lastViewed/i.test(ultima46),
+      `${sinVista46.via} · ${pedidasRest.length - antes46} peticiones`
+    )
+    const antes46b = pedidasRest.length
+    const otraRuta46 = await jiraRest.searchIssues(pideApi, { ...sitioJira, jiraPrefix: '/jira' }, jiraRest.sampleQuery('OPS'), { limit: 3 })
+    ok(
+      'y si la ruta de contexto no es esa, se reintenta en la raíz una sola vez',
+      otraRuta46.ok &&
+        otraRuta46.prefix === '' &&
+        otraRuta46.issues.length === 3 &&
+        pedidasRest.length === antes46b + 2 &&
+        pedidasRest[antes46b].includes('/jira/rest/api/2/search'),
+      `${pedidasRest.length - antes46b} peticiones · prefijo «${otraRuta46.prefix}»`
+    )
+
+    // 47. El árbol ENTERO de un espacio leído de la lista de la API, paginado:
+    //     es lo que sustituye las dos fases de modelo del indexador. El padre de
+    //     cada página sale de `expand=ancestors`, no de que nadie lo adivine, y
+    //     se comprueba contra la cadena que da la otra ruta de la misma API.
+    const arbol47 = await confRest.fetchSpacePages(pideApi, sitioConf, 'ENG', { limit: 5 })
+    const porId47 = new Map((arbol47.pages || []).map((p) => [p.id, p]))
+    const cadena47 = await confRest.fetchAncestors(pideApi, sitioConf, '1086')
+    const padres47 = cadena47.ok ? cadena47.pages.map((p) => p.id) : []
+    // Las peticiones no se escriben a mano: son las que hacen falta para las
+    // páginas que trajo, de cinco en cinco. Así una página vacía de más, o un
+    // `_links.next` que no acabe nunca, se ven aquí.
+    const peticiones47 = Math.ceil((arbol47.pages || []).length / 5)
+    ok(
+      'el árbol del espacio se lee paginado y el padre de cada página es el que dice la API',
+      arbol47.ok &&
+        arbol47.pages.length === 20 &&
+        arbol47.requests === peticiones47 &&
+        !arbol47.truncated &&
+        arbol47.homeId === '1' &&
+        porId47.get('1')?.parentId === null &&
+        padres47.length === 7 &&
+        padres47.every((id, i) => i === 0 || porId47.get(id)?.parentId === padres47[i - 1]),
+      arbol47.ok
+        ? `${arbol47.pages.length} páginas en ${arbol47.requests} peticiones · portada ${arbol47.homeId} · cadena ${padres47.join('>')}`
+        : arbol47.reason
+    )
+    const corto47 = await confRest.fetchSpacePages(pideApi, sitioConf, 'ENG', { limit: 5, maxRequests: 3 })
+    ok(
+      'con tope de peticiones se para y lo dice: lo que quede se completa como hasta ahora',
+      corto47.ok && corto47.requests === 3 && corto47.pages.length === 15 && corto47.truncated === true,
+      `${corto47.pages.length} páginas · ${corto47.requests} peticiones · recortado ${corto47.truncated}`
+    )
+
+    // 48. Lo demás que se lee con la sesión: los filtros que el usuario tiene
+    //     guardados en su Jira, los enlaces de una incidencia a páginas de
+    //     Confluence y lo último que vio en el wiki.
+    const filtros48 = await jiraRest.fetchFavouriteFilters(pideApi, sitioJira)
+    ok(
+      'los filtros favoritos vuelven con id, nombre y consulta, y nada más',
+      filtros48.ok &&
+        filtros48.filters.length === FIX.filters.length &&
+        filtros48.filters.every((f) => Object.keys(f).sort().join(',') === 'id,jql,name') &&
+        filtros48.filters[0].name === FIX.filters[0].name,
+      filtros48.ok ? filtros48.filters.map((f) => f.name).join(' | ') : filtros48.reason
+    )
+    const enlaces48 = await jiraRest.fetchRemoteLinks(pideApi, sitioJira, 'ENG-7', { hosts: [location.hostname] })
+    ok(
+      'de los enlaces remotos sólo cuentan los que señalan una página de Confluence por id',
+      enlaces48.ok && enlaces48.links.length === 1 && enlaces48.links[0].pageId === '200' && enlaces48.links[0].url.startsWith(location.origin),
+      enlaces48.ok ? enlaces48.links.map((l) => `${l.pageId} ${l.title}`).join(' | ') : enlaces48.reason
+    )
+    const vistas48 = await confRest.searchContent(pideApi, sitioConf, confRest.viewedCql(3))
+    ok(
+      'y lo último que viste en el wiki llega con quién lo tocó y cuándo',
+      vistas48.ok && vistas48.via === 'v1' && vistas48.pages.length === 3 && vistas48.pages.every((p) => p.updatedAt > 0 && p.updatedBy),
+      vistas48.ok ? vistas48.pages.map((p) => `${p.id}:${p.updatedBy}`).join(' | ') : vistas48.reason
+    )
+
+    // 49. SEGURIDAD: ninguna de estas lecturas sale del sitio, y lo que no es
+    //     una consulta de plantilla ni siquiera se pide.
+    const fuera49 = pedidasRest.filter((u) => !u.startsWith(location.origin))
+    ok(
+      'ninguna de las lecturas de este tramo salió del origen del sitio',
+      fuera49.length === 0 && pedidasRest.length > 10,
+      `${pedidasRest.length} peticiones, todas a ${location.origin}`
+    )
+    const antes49 = pedidasRest.length
+    const otroOrigen49 = await jiraRest.searchIssues(pideApi, { origin: location.origin + '/jira', cloud: false }, jiraRest.sampleQuery('ENG'))
+    const libre49 = await confRest.searchContent(pideApi, sitioConf, 'type = page AND title ~ "lo que sea"')
+    ok(
+      'un origen que no es un origen y un CQL que no escribió una plantilla no piden nada',
+      !otroOrigen49.ok &&
+        otroOrigen49.reason === 'origen' &&
+        !libre49.ok &&
+        libre49.reason === 'consulta no permitida' &&
+        pedidasRest.length === antes49,
+      `${otroOrigen49.reason} · ${libre49.reason} · ${pedidasRest.length - antes49} peticiones`
+    )
+
     renderPage('page:200')
     await wait(320)
 
@@ -2318,5 +2524,11 @@ window.faroHarness = {
   // Una función y no el objeto: `resetStats()` lo sustituye, así que una
   // referencia guardada se quedaría contando lo de antes.
   overlayStats: () => runner.overlay.stats,
+  // Los módulos REST de H7 y la fixture de la Jira de mentira, a demanda: el
+  // banco no los necesita para pintar, y quien dirige el banco desde fuera
+  // (H8-H11) los quiere enteros, no una copia envuelta aquí.
+  jiraRest: () => import('/src/shared/jira-rest.js'),
+  confluenceRest: () => import('/src/shared/confluence-rest.js'),
+  issuesFixture: () => fetch('/harness/issues.json').then((r) => r.json()),
 }
 say('banco listo')

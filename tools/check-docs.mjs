@@ -27,7 +27,9 @@
  *      bootstrap.js de un mensaje panel → content no se notaba, y una
  *      constante nueva mandada por el panel sin receptor pasaba. Un mensaje
  *      con receptor y sin emisor es AVISO (código que espera algo que nadie
- *      manda: o se cablea o se borra).
+ *      manda: o se cablea o se borra), salvo los de `MSG_SIN_EMISOR_HASTA`,
+ *      que son NOTA con el hito que los va a cablear —y ERROR en cuanto
+ *      alguien los manda, para que esa lista sólo pueda encoger.
  *   4. Cada .js de src/ está en el bloque de código del mapa de CLAUDE.md §3.
  * Las tres últimas son AVISO mientras `STRICT` diga false: se pasan a error
  * después de sembrar los documentos (docs/PLAN.md, hito H1, paso 2).
@@ -50,6 +52,31 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
  * aviso amarillo con lista.
  */
 export const STRICT = { titles: true, msgs: true, files: true }
+
+/**
+ * Mensajes que nacen con RECEPTOR y sin EMISOR a propósito, con el hito que los
+ * va a cablear al lado.
+ *
+ * Por qué existe: un mensaje sin emisor es un aviso porque casi siempre es
+ * código que espera algo que nadie manda (o se cablea o se borra). Pero H7 es el
+ * cimiento REST y va SIN interfaz: el content script ya sabe contestar a las
+ * lecturas del sitio y quien las pedirá —la lista de la tarjeta, los chips, el
+ * índice por API, «qué mirar hoy»— llega en H8-H11. Sin esta lista, el paso
+ * «docs» avisaría de cinco mensajes durante cuatro hitos y el aviso dejaría de
+ * significar nada; con ella, cada uno dice a qué hito espera.
+ *
+ * Sólo puede ENCOGER, y el propio paso lo vigila: en cuanto alguien manda uno de
+ * estos mensajes, tenerlo aquí es un ERROR que pide borrarlo (si no, la lista
+ * taparía para siempre el aviso que la justifica). Un nombre que ya no está en
+ * MSG, igual.
+ */
+export const MSG_SIN_EMISOR_HASTA = {
+  JQL_SEARCH: 'H8',
+  FAVOURITE_FILTERS: 'H8',
+  SPACE_PAGES: 'H9',
+  RECENT_ISSUES: 'H11',
+  RECENT_PAGES: 'H11',
+}
 
 /** Ficheros que se leen. Rutas relativas a la raíz del repo, siempre con «/». */
 export const DOC_FILES = {
@@ -235,6 +262,48 @@ export function msgHandlers({ messagesJs, bootstrapJs, swJs, panelJs } = {}) {
   })
 }
 
+/** Cómo se llama en el informe cada sitio que puede atender un mensaje. */
+const NOMBRE_DE = { bootstrap: 'bootstrap.js', 'service-worker': 'service-worker.js', panel: 'panel.js' }
+
+/**
+ * Los mensajes que nadie manda, repartidos en tres: `notes` (los que
+ * `pendientes` declara a la espera de un hito), `warnings` (los demás: código
+ * que espera algo que nadie manda) y `errors` (los de `pendientes` que ya no
+ * esperan a nadie, porque alguien los manda o porque ya no existen). Pura.
+ *
+ * Que la lista sólo pueda encoger es lo que la separa de una excepción
+ * permanente: cablear el emisor en H8 pone el paso «docs» en rojo hasta que el
+ * nombre sale de la lista.
+ */
+export function pendingSenders(handlers, pendientes = MSG_SIN_EMISOR_HASTA) {
+  const lista = pendientes && typeof pendientes === 'object' ? pendientes : {}
+  const hs = Array.isArray(handlers) ? handlers : []
+  const notes = []
+  const warnings = []
+  const errors = []
+  for (const h of hs) {
+    if (!h || !h.handled || h.sent) continue
+    const donde = (h.where || []).map((w) => NOMBRE_DE[w] || w).join(' y ')
+    if (lista[h.name]) {
+      notes.push(`MSG.${h.name}: lo atiende ${donde} y todavía nadie lo manda (lo cablea ${lista[h.name]})`)
+    } else {
+      warnings.push(
+        `MSG.${h.name}: lo atiende ${donde} y nadie lo manda (ni «type: MSG.${h.name}» ni «sendMessage(…MSG.${h.name}» en bootstrap.js, service-worker.js o panel.js)`
+      )
+    }
+  }
+  const porNombre = new Map(hs.filter((h) => h && h.name).map((h) => [h.name, h]))
+  for (const [name, hito] of Object.entries(lista)) {
+    const h = porNombre.get(name)
+    if (!h) {
+      errors.push(`MSG.${name}: está en MSG_SIN_EMISOR_HASTA (${hito}) y ya no es un mensaje: bórralo de la lista en tools/check-docs.mjs`)
+    } else if (h.sent) {
+      errors.push(`MSG.${name}: ya lo manda alguien, así que ya no espera a ${hito}: bórralo de MSG_SIN_EMISOR_HASTA en tools/check-docs.mjs`)
+    }
+  }
+  return { notes, warnings, errors }
+}
+
 /** Las líneas [start, end) de la sección «## N. …» de un markdown (hasta el siguiente «## »), o null. */
 function sectionRange(lines, number) {
   const start = lines.findIndex((l) => new RegExp(`^## ${number}\\.`).test(l))
@@ -398,14 +467,16 @@ function readOrNull(root, relPath) {
 
 /**
  * Lee README.md, CLAUDE.md, docs/INSTALL.md y src/**\/*.js de `root` y devuelve
- * `{errors, warnings}`: listas de hallazgos `{kind, title, items}` con
- * `kind` ∈ 'tests' | 'titles' | 'msgs' | 'files'. `tests` es el número real de
+ * `{errors, warnings, notes}`: listas de hallazgos `{kind, title, items}` con
+ * `kind` ∈ 'tests' | 'titles' | 'msgs' | 'files' (`notes` es informativo: hoy
+ * sólo los mensajes que esperan a su hito). `tests` es el número real de
  * pruebas unitarias y `porFichero` las que registra cada test/unit/x.test.js
  * (`{'x.test.js': N}`); lo que no se pasa no se comprueba.
  */
 export function checkDocs(root, { tests, porFichero } = {}) {
   const errors = []
   const warnings = []
+  const notes = []
   const push = (strict, finding) => (strict ? errors : warnings).push(finding)
 
   const readme = readOrNull(root, DOC_FILES.readme)
@@ -469,17 +540,11 @@ export function checkDocs(root, { tests, porFichero } = {}) {
     panelJs: readOrNull(root, DOC_FILES.panel),
   })
   const enDocs = new Set(msgInDocs(claude))
-  const nombreDe = { bootstrap: 'bootstrap.js', 'service-worker': 'service-worker.js', panel: 'panel.js' }
   const mensajes = []
-  const sinEmisor = []
   for (const h of handlers) {
     if (!h.handled) {
       mensajes.push(
         `MSG.${h.name}: nadie lo atiende (ni «case MSG.${h.name}» en bootstrap.js o service-worker.js, ni «=== MSG.${h.name}» en panel.js o service-worker.js)`
-      )
-    } else if (!h.sent) {
-      sinEmisor.push(
-        `MSG.${h.name}: lo atiende ${h.where.map((w) => nombreDe[w]).join(' y ')} y nadie lo manda (ni «type: MSG.${h.name}» ni «sendMessage(…MSG.${h.name}» en bootstrap.js, service-worker.js o panel.js)`
       )
     }
     if (!enDocs.has(h.name)) mensajes.push(`MSG.${h.name}: no aparece en ${DOC_FILES.claude} §5`)
@@ -487,8 +552,17 @@ export function checkDocs(root, { tests, porFichero } = {}) {
   if (mensajes.length) {
     push(STRICT.msgs, { kind: 'msgs', title: `Mensajes (MSG) sin receptor o sin mención en §5 (${mensajes.length})`, items: mensajes })
   }
-  if (sinEmisor.length) {
-    warnings.push({ kind: 'msgs', title: `Mensajes (MSG) con receptor y sin emisor (${sinEmisor.length})`, items: sinEmisor })
+  // Los que nadie manda: aviso, salvo los que esperan a su hito (nota), y error
+  // el que ya no espera a nadie y sigue en la lista.
+  const emisores = pendingSenders(handlers)
+  if (emisores.errors.length) {
+    errors.push({ kind: 'msgs', title: `Mensajes (MSG) que ya no esperan a ningún hito (${emisores.errors.length})`, items: emisores.errors })
+  }
+  if (emisores.warnings.length) {
+    warnings.push({ kind: 'msgs', title: `Mensajes (MSG) con receptor y sin emisor (${emisores.warnings.length})`, items: emisores.warnings })
+  }
+  if (emisores.notes.length) {
+    notes.push({ kind: 'msgs', title: `Mensajes (MSG) a la espera de su hito (${emisores.notes.length})`, items: emisores.notes })
   }
 
   // 4. Ficheros de src/ fuera del mapa §3.
@@ -497,7 +571,7 @@ export function checkDocs(root, { tests, porFichero } = {}) {
     push(STRICT.files, { kind: 'files', title: `Ficheros de src/ fuera del mapa de ${DOC_FILES.claude} §3 (${fuera.length})`, items: fuera })
   }
 
-  return { errors, warnings }
+  return { errors, warnings, notes }
 }
 
 /**
@@ -518,8 +592,12 @@ export async function countUnitTests(root) {
   return { total: registry.length, porFichero }
 }
 
-/** Líneas del informe para la consola. `paint(text, kind)` colorea ('error' | 'warn'); sin él, texto plano. */
-export function formatReport({ errors, warnings }, paint = (t) => t) {
+/**
+ * Líneas del informe para la consola. `paint(text, kind)` colorea
+ * ('error' | 'warn' | 'note'); sin él, texto plano. Un informe sin `notes` (los
+ * que se construyen a mano en un test) se imprime igual que antes.
+ */
+export function formatReport({ errors, warnings, notes }, paint = (t) => t) {
   const out = []
   for (const e of errors) {
     out.push(paint(`✗ ${e.title}`, 'error'))
@@ -528,6 +606,10 @@ export function formatReport({ errors, warnings }, paint = (t) => t) {
   for (const w of warnings) {
     out.push(paint(`⚠ ${w.title}`, 'warn'))
     for (const item of w.items) out.push(paint(`   ${item}`, 'warn'))
+  }
+  for (const n of notes || []) {
+    out.push(paint(`· ${n.title}`, 'note'))
+    for (const item of n.items) out.push(paint(`   ${item}`, 'note'))
   }
   return out
 }
@@ -545,13 +627,13 @@ async function main() {
   const root = join(dirname(fileURLToPath(import.meta.url)), '..')
   const { total: tests, porFichero } = await countUnitTests(root)
   const report = checkDocs(root, { tests, porFichero })
-  const colores = { error: '\x1b[31m', warn: '\x1b[33m' }
+  const colores = { error: '\x1b[31m', warn: '\x1b[33m', note: '\x1b[36m' }
   const paint = (text, kind) => (process.stdout.isTTY && colores[kind] ? `${colores[kind]}${text}\x1b[0m` : text)
   console.log(`Faro · docs ↔ código (${tests} pruebas unitarias cargadas de ${Object.keys(porFichero).length} ficheros)\n`)
   const lines = formatReport(report, paint)
   if (lines.length) console.log(lines.join('\n'))
   console.log(
-    `\n${report.errors.length} error(es) · ${report.warnings.length} aviso(s)` +
+    `\n${report.errors.length} error(es) · ${report.warnings.length} aviso(s) · ${report.notes.length} nota(s)` +
       (report.errors.length ? '' : ' · número de pruebas al día en README.md y CLAUDE.md (§2 y §10)')
   )
   process.exitCode = report.errors.length ? 1 : 0

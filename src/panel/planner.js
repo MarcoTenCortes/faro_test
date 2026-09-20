@@ -22,6 +22,7 @@
  * parece apuntar a algún sitio concreto.
  */
 
+import { JQL_LIMITS, cleanJql } from '../shared/jira-rest.js'
 import { NAVIGATION_PLAN_SCHEMA, plannerSystemPrompt } from '../nav/schema.js'
 import { validatePlan } from '../nav/validate.js'
 import { indexDigest, mergeIndex, normalizeIndex } from '../atlassian/index-store.js'
@@ -225,11 +226,16 @@ export function declaredDestination(answer, index, { excludeId = '' } = {}) {
   return { none: true, reason: 'el destino declarado no está en el índice' }
 }
 
-/** Lo que se acepta de una consulta JQL antes de meterla en una URL. */
-export const JQL_LIMITS = {
-  /** Una consulta escrita a mano rara vez pasa de doscientos caracteres; dos mil ya es un volcado. */
-  maxChars: 2000,
-}
+/**
+ * Lo que se acepta de una consulta JQL antes de meterla en una URL.
+ *
+ * Desde H7 vive en `src/shared/jira-rest.js`, con el módulo que EJECUTA la
+ * consulta: aquí sólo se lee de la llamada del MCP para fabricar un enlace, y
+ * allí se convierte en una petición. Se reexporta para que quien lo importaba de
+ * aquí no tenga que cambiar nada. `cleanJql` no se reexporta: nunca fue público
+ * de este módulo, y quien lo necesite lo pide a jira-rest.js, que es su sitio.
+ */
+export { JQL_LIMITS }
 
 /**
  * La búsqueda de Jira que produjo la lista, como destino.
@@ -267,16 +273,6 @@ export function jqlDestination(parts, { origin } = {}) {
 
   const path = '/issues/?jql=' + encodeURIComponent(elegida.jql)
   return { ...elegida, path, url: base + path }
-}
-
-/** Una consulta en una línea, sin caracteres de control y con tope. */
-function cleanJql(value) {
-  if (typeof value !== 'string') return ''
-  return value
-    .replace(new RegExp('[\\u0000-\\u001F\\u007F]', 'g'), ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, JQL_LIMITS.maxChars)
 }
 
 /**
