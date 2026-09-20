@@ -2077,7 +2077,7 @@ test('H8: el chat vacío ofrece búsquedas al instante, y pintarlas no vuelve a 
   assert(/if \(!box\?\.isConnected\) return/.test(pintar), 'el chat pudo repintarse entre que se pidió una fuente y llegó')
   assert(/state\.settings\.restTools/.test(pintar), 'el interruptor maestro apaga también los chips')
   assert(
-    /searchChips\(state\.site, \{\s*issueFields: state\.issueFields && samePage\(state\.issueFields\.url, state\.tabUrl\) \? state\.issueFields\.fields : null,\s*profile: state\.profile,\s*favouriteFilters: state\.favouriteFilters \|\| \[\],\s*recentJql: state\.recentJql,/.test(
+    /searchChips\(state\.site, \{\s*issueFields: state\.issueFields && samePage\(state\.issueFields\.url, state\.tabUrl\) \? state\.issueFields\.fields : null,\s*profile: currentProfile\(\),\s*favouriteFilters: state\.favouriteFilters \|\| \[\],\s*recentJql: state\.recentJql,/.test(
       sinComentarios(pintar)
     ),
     'con los campos de la pantalla, el perfil contado del proyecto (H9), los filtros del usuario y sus últimas búsquedas'
@@ -2325,7 +2325,25 @@ test('H9: el mapa se levanta con lo que la API da exacto, y si no puede sigue po
   // cuenta el perfil. Y en Cloud no hay REST de Jira que leer (410).
   assert(/if \(sitio\.cloud\) \{/.test(rest), 'en Jira Cloud no se pide nada')
   assert(/if \(scope\?\.kind !== 'project'\) \{/.test(rest), 'y sólo se cuenta la muestra de un proyecto')
-  assert(/const r = await countProfile\(sitio, scope, \{ tabId \}\)/.test(rest), 'la muestra la lee countProfile, que es quien manda el mensaje')
+  assert(/const r = await countProfile\(sitio, scope, \{ tabId, signal \}\)/.test(rest), 'la muestra la lee countProfile, que es quien manda el mensaje')
+
+  // Revisión adversaria de H9: «un indexado cancelado no escribe nada» (§4.6)
+  // vale también para lo que se lee de la API. El Cancelar del velo no corta la
+  // petición, pero lo que vuelva después ni se guarda ni entra en el estado.
+  assert(/async function restIndexFor\(scope, \{ sitio, report = \(\) => \{\}, tabId = state\.tabId, signal = null \} = \{\}\)/.test(rest))
+  assert((rest.match(/if \(signal\?\.aborted\) return nada/g) || []).length >= 3, 'antes de pedir y al volver, en los dos productos')
+  assert(/if \(signal\?\.aborted \|\| r\.reason === 'cancelado'\) return nada/.test(rest), 'un perfil cancelado no es un fallo que avisar')
+  const contar = sinComentarios(JS.slice(JS.indexOf('async function countProfile'), JS.indexOf('async function loadLinkedContext')))
+  assert(contar.length > 300, 'el trozo de countProfile existe')
+  assert(/if \(signal\?\.aborted\) return \{ ok: false, reason: 'cancelado'/.test(contar))
+  assert(
+    contar.indexOf("if (signal?.aborted) return { ok: false, reason: 'cancelado'") < contar.indexOf('await saveProfile(sitio.host, profile)'),
+    'la guarda de cancelación va ANTES de guardar el perfil'
+  )
+  // Y el perfil que acompaña al indexado es el de ESTE proyecto, leído del
+  // almacén cuando el panel ya está en otro sitio.
+  assert(/const guardado = profileForProject\(delHost, sitio\?\.projectKey\)/.test(rest), 'sólo el perfil del proyecto que se indexa')
+  assert(/await getProfile\(sitio\.host\)/.test(rest), 'con el panel en otro sitio, el de ese host sale del almacén')
   assert(
     /if \(\(state\.site\?\.host \?\? state\.lastHost\) === host\) state\.profile = r\.profile/.test(rest),
     'y en el estado sólo entra si el panel sigue en ese sitio (§8.22)'
@@ -2335,12 +2353,18 @@ test('H9: el mapa se levanta con lo que la API da exacto, y si no puede sigue po
   // que quien llama lo pueda enseñar.
   assert(!/throw /.test(rest), 'un fallo de la API no puede tumbar el indexado')
   assert(/return \{ \.\.\.nada, aviso: texto \}/.test(rest), 'el motivo vuelve con el resultado')
-  assert(/const guardado = sitio && \(state\.site\?\.host \?\? state\.lastHost\) === sitio\.host \? state\.profile : null/.test(rest), 'y el perfil que ya hubiera contado sigue valiendo')
+  assert(
+    rest.includes('const delHost = !sitio ? null : (state.site?.host ?? state.lastHost) === sitio.host ? state.profile : await getProfile(sitio.host)'),
+    'y el perfil que ya hubiera contado sigue valiendo'
+  )
 
   // En `generateContext`: antes de gastar el turno, con el sitio CAPTURADO, y
   // lo que salga va a buildContext.
   const contexto = sinComentarios(JS.slice(JS.indexOf('async function generateContext'), JS.indexOf('async function uploadContext')))
-  assert(/const rest = await restIndexFor\(scope, \{ sitio, report \}\)/.test(contexto), 'con el sitio capturado al empezar, no con el de la pestaña de ahora')
+  assert(
+    /const rest = await restIndexFor\(scope, \{ sitio, report, signal: controller\.signal \}\)/.test(contexto),
+    'con el sitio capturado al empezar, no con el de la pestaña de ahora, y con la señal de cancelar'
+  )
   assert(contexto.indexOf('await restIndexFor(') < contexto.indexOf('await buildContext('), 'y antes de gastar el turno del modelo')
   assert(/restIndex: rest\.index,/.test(contexto) && /profile: rest\.profile,/.test(contexto), 'lo leído viaja a buildContext')
   assert(
@@ -2356,7 +2380,9 @@ test('H9: el mapa se levanta con lo que la API da exacto, y si no puede sigue po
   // Y la pantalla de contexto dice lo que de verdad va a pasar: con las
   // lecturas REST apagadas, lo de siempre.
   const pantalla = sinComentarios(JS.slice(JS.indexOf('function showContextScreen'), JS.indexOf('async function showMemoryScreen')))
-  assert(/const porLaApi = !!state\.settings\.restTools/.test(pantalla), 'la pantalla depende del interruptor')
+  // Por `readsByApi`, que mira el interruptor Y el ámbito (revisión adversaria de
+  // H9: con «todo Confluence» prometía la API y luego iba por el modelo).
+  assert(/const porLaApi = readsByApi\(state\.site, scope\)/.test(pantalla), 'la pantalla depende del interruptor y del ámbito')
   assert(/la API de Confluence/.test(pantalla) && /Recorre el árbol, los títulos y las etiquetas\./.test(pantalla), 'y tiene los dos textos')
 })
 
@@ -2407,7 +2433,7 @@ test('H9: el perfil entra en el prompt y en los chips, y se va con el sitio', ()
   const peticion = envio.slice(envio.indexOf('const peticion = {'), envio.indexOf('let silencioso'))
   assert(peticion.length > 200, 'el trozo de la petición existe')
   assert(
-    /linkedContext: state\.linkedContext,\s*profile: state\.profile,\s*sources,/.test(peticion),
+    /linkedContext: state\.linkedContext,\s*profile: currentProfile\(\),\s*sources,/.test(peticion),
     'el perfil viaja en el system del turno, entre el contexto enlazado y las páginas base'
   )
   assert(/import \{ baseSystem/.test(JS) && !/profileBlock/.test(sinComentarios(JS)), 'el bloque lo monta prompts.js, no el panel')
@@ -2418,8 +2444,46 @@ test('H9: el perfil entra en el prompt y en los chips, y se va con el sitio', ()
   const cambio = pestana.slice(pestana.indexOf('if (changedHost) {'), pestana.indexOf('state.site = site'))
   assert(/state\.profile = null/.test(cambio), 'al cambiar de host se vacía, como el índice y las últimas búsquedas')
   const eventos = sinComentarios(JS.slice(JS.indexOf('function wireEvents'), JS.indexOf('async function saveKeys')))
-  const olvidar = eventos.slice(eventos.indexOf("$('btn-forget')"), eventos.indexOf("$('btn-reindex')") > 0 ? eventos.indexOf('// --- memoria') : eventos.length)
+  // Hasta el manejador SIGUIENTE y no hasta el final de wireEvents: el corte
+  // viejo buscaba un comentario («// --- memoria») en un fuente SIN comentarios,
+  // daba -1 y el trozo abarcaba todo lo de detrás, así que el pin seguía verde con
+  // el perfil vaciado en otro manejador (revisión adversaria de H9).
+  const desdeOlvidar = eventos.indexOf("$('btn-forget')")
+  const hastaOlvidar = eventos.indexOf("$('mem-enabled')", desdeOlvidar)
+  assert(desdeOlvidar > 0 && hastaOlvidar > desdeOlvidar, 'el manejador de «Olvidar este sitio» se puede recortar')
+  const olvidar = eventos.slice(desdeOlvidar, hastaOlvidar)
   assert(/forgetSite\(state\.site\.host\)/.test(olvidar) && /state\.profile = null/.test(olvidar), 'olvidar el sitio se lleva también lo contado de su proyecto')
+})
+
+test('H9 revisión: el perfil sólo vale para el proyecto que hay delante, y la pantalla de contexto no promete la API donde no se usa', () => {
+  // El perfil se guarda por HOST y un Jira tiene muchos proyectos: el de SIMPL
+  // entraba en la Búsqueda y en los chips de OPS como «los nombres exactos».
+  const vigente = sinComentarios(JS.slice(JS.indexOf('function currentProfile'), JS.indexOf('function refreshProfileSoon')))
+  assert(/return profileForProject\(state\.profile, site\?\.projectKey\)/.test(vigente), 'el cruce lo hace la pura de jira-rest.js')
+  const limpio = sinComentarios(JS)
+  assert(!/profile: state\.profile\b/.test(limpio), 'nadie consume state.profile a secas: todos pasan por currentProfile()')
+  eq((limpio.match(/profile: currentProfile\(\)/g) || []).length, 2, 'los chips y la petición del turno')
+
+  // Cambiar de proyecto sin cambiar de host no pasa por bootForSite: se cuenta
+  // el del nuevo en segundo plano, UNA vez por proyecto.
+  const pestana = sinComentarios(JS.slice(JS.indexOf('async function refreshTab'), JS.indexOf('async function bootForSite')))
+  assert(
+    /else if \(site\.product === 'jira' && site\.projectKey && !currentProfile\(site\) && state\.profileAsked !== `\$\{site\.host\}:\$\{site\.projectKey\}`\) \{\s*refreshProfileSoon\(state\.bootToken\)/.test(pestana),
+    'otro proyecto del mismo Jira vuelve a contar, con tregua por proyecto'
+  )
+  const refresco = sinComentarios(JS.slice(JS.indexOf('async function refreshProfile('), JS.indexOf('async function countProfile')))
+  assert(/state\.profileAsked = `\$\{sitio\.host\}:\$\{scope\.key\}`/.test(refresco), 'la tregua se marca al decidir contar')
+  assert(refresco.indexOf('if (vigente) return') < refresco.indexOf('state.profileAsked ='), 'un perfil vigente no gasta tregua')
+  assert(/profileAsked: ''/.test(limpio))
+
+  // La pantalla de contexto pregunta lo mismo que restIndexFor: UN espacio, o UN
+  // proyecto de un Jira Data Center, y con las lecturas REST encendidas.
+  const porApi = sinComentarios(JS.slice(JS.indexOf('function readsByApi'), JS.indexOf('function showContextScreen')))
+  assert(/if \(!state\.settings\.restTools \|\| !site\) return false/.test(porApi))
+  assert(/if \(site\.product === 'confluence'\) return scope\?\.kind === 'space' && !!scope\.key/.test(porApi))
+  assert(/if \(site\.product === 'jira'\) return !site\.cloud && scope\?\.kind === 'project'/.test(porApi))
+  const pantalla = sinComentarios(JS.slice(JS.indexOf('function showContextScreen'), JS.indexOf('async function showMemoryScreen')))
+  assert(/const porLaApi = readsByApi\(state\.site, scope\)/.test(pantalla), 'con el ámbito, no sólo con el producto')
 })
 
 test('H9: el espejo enseña la pantalla de contexto con el texto nuevo y las dos filas del Registro', () => {

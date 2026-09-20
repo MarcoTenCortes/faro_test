@@ -21,6 +21,7 @@ import {
   JIRA_REST_LIMITS,
   SAMPLE_FIELDS,
   normalizeProfile,
+  profileForProject,
   normalizeRecentJql,
   profileFromSample,
   rememberJql,
@@ -30,7 +31,7 @@ import { navOptions } from '../nav/options.js'
 import { validatePlan } from '../nav/validate.js'
 import {
   getSettings, saveSettings, getSite, saveSite, forgetSite, getSiteBundle,
-  getIndex, saveIndex, saveProfile, getSessionId, setSessionId, clearSessionId,
+  getIndex, saveIndex, getProfile, saveProfile, getSessionId, setSessionId, clearSessionId,
   getSessionWeight, setSessionWeight, clearSessionWeight,
 } from '../shared/storage.js'
 import { renderMarkdown } from './markdown.js'
@@ -270,6 +271,9 @@ const state = {
   // el paquete del sitio, se vuelve a contar cuando envejece y `refreshTab` lo
   // vacía al cambiar de host: es de ESTE proyecto. null en Confluence.
   profile: null,
+  // Por qué proyecto se preguntó ya el perfil («host:CLAVE»): la tregua del
+  // refresco que dispara `refreshTab` al cambiar de proyecto sin cambiar de host.
+  profileAsked: '',
 }
 
 // -------------------------------------------------------------------- init
@@ -468,6 +472,18 @@ async function refreshTab() {
   }
 
   if (changedHost) await bootForSite()
+  // Otro PROYECTO del mismo Jira: no hay arranque, pero el perfil que hay en
+  // memoria es del de antes. `currentProfile()` ya no lo deja entrar en ningún
+  // sitio; aquí se cuenta el del nuevo, en segundo plano y con las mismas
+  // condiciones del arranque (permiso ya concedido, restTools, Data Center).
+  // Límite asumido: se guarda UNO por host, así que alternar entre dos proyectos
+  // recuenta en cada salto (una petición de la sesión del navegador).
+  // `refreshTab` corre en cada cambio de pestaña y de URL, así que se pregunta UNA
+  // vez por proyecto (`state.profileAsked`): una API que no contesta no puede
+  // convertirse en una petición por cada clic.
+  else if (site.product === 'jira' && site.projectKey && !currentProfile(site) && state.profileAsked !== `${site.host}:${site.projectKey}`) {
+    refreshProfileSoon(state.bootToken)
+  }
   // El MCP acabó de cargar mientras la pestaña estaba fuera: el arranque que
   // `finishSetup` no pudo hacer se hace ahora (bootForSite lo da por hecho).
   else if (state.bootPending === site.host) await bootForSite()
@@ -688,6 +704,19 @@ async function bootForSite() {
  * llegue, y hasta entonces vale el perfil guardado (o ninguno). Un fallo aquí
  * no puede tumbar el arranque, así que se recoge y se apunta en el Registro.
  */
+/**
+ * El perfil contado, sólo si es del proyecto que hay delante.
+ *
+ * `state.profile` es del HOST (así se guarda) y un Jira tiene muchos proyectos:
+ * al pasar de SIMPL-12 a OPS-77 en la misma pestaña no hay arranque que lo
+ * vacíe, y el de SIMPL entraba en el prompt y en los chips de OPS como «los
+ * nombres exactos» (revisión adversaria de H9). Los tres que lo consumen —la
+ * petición de `send()`, los chips y el indexador— pasan por aquí.
+ */
+function currentProfile(site = state.site) {
+  return profileForProject(state.profile, site?.projectKey)
+}
+
 function refreshProfileSoon(testigo) {
   refreshProfile(testigo).catch((err) => log.info('Perfil del proyecto', 'no se pudo refrescar: ' + String(err?.message || err)))
 }
@@ -713,6 +742,7 @@ async function refreshProfile(testigo) {
   const vigente =
     state.profile && state.profile.projectKey === scope.key && Date.now() - state.profile.at < PROFILE_LIMITS.ttlMs
   if (vigente) return
+  state.profileAsked = `${sitio.host}:${scope.key}`
   // Con permiso YA concedido y nada más: un refresco en segundo plano no puede
   // abrir un diálogo de permisos que el usuario no ha pedido. Sin permiso, el
   // perfil se cuenta cuando se reconstruye el contexto, que sí es un gesto suyo.
@@ -744,7 +774,7 @@ async function refreshProfile(testigo) {
  *
  * @returns {Promise<{ok:true, profile:object, ms:number}|{ok:false, reason:string, detail:string}>}
  */
-async function countProfile(sitio, scope, { tabId = state.tabId } = {}) {
+async function countProfile(sitio, scope, { tabId = state.tabId, signal = null } = {}) {
   const jql = sampleQuery(scope?.kind === 'project' ? scope.key : '')
   if (!jql) return { ok: false, reason: 'ámbito', detail: 'aquí no hay un proyecto del que contar una muestra' }
 
@@ -752,6 +782,10 @@ async function countProfile(sitio, scope, { tabId = state.tabId } = {}) {
     .sendMessage(tabId, { type: MSG.JQL_SEARCH, jql, limit: JIRA_REST_LIMITS.maxResults, fields: SAMPLE_FIELDS, cloud: sitio.cloud })
     .catch(() => null)
   if (!r?.ok) return { ok: false, reason: r?.reason || 'sin respuesta', detail: jqlFailText(r, sitio.host) }
+  // «Un indexado cancelado no escribe nada» (§4.6) vale también para el perfil:
+  // el Cancelar del velo no corta la petición —tarda lo que tarde—, pero lo que
+  // vuelva después ya no se guarda ni se registra (revisión adversaria de H9).
+  if (signal?.aborted) return { ok: false, reason: 'cancelado', detail: 'Cancelado.' }
 
   const profile = profileFromSample(r.issues, { projectKey: scope.key })
   await saveProfile(sitio.host, profile)
@@ -1409,7 +1443,7 @@ function paintSearchChips(box) {
         // grupo «estado» que H8 dejó hecho en `search-chips.js` ya tiene qué
         // ofrecer. Sin perfil, `suggestedQueries` no saca ninguno y los chips
         // son exactamente los de antes.
-        profile: state.profile,
+        profile: currentProfile(),
         favouriteFilters: state.favouriteFilters || [],
         recentJql: state.recentJql,
       })
@@ -1872,7 +1906,7 @@ async function send() {
         linkedContext: state.linkedContext,
         // Y lo que la extensión contó del proyecto (H9): sólo lo usa Búsqueda
         // en Jira, y lo decide `baseSystem`, que es quien pone el bloque.
-        profile: state.profile,
+        profile: currentProfile(),
         sources,
       }),
     }
@@ -4769,6 +4803,22 @@ async function copyToClipboard(text, button) {
   return ok
 }
 
+/**
+ * ¿Lo que se va a indexar lo puede leer la extensión de la API del sitio?
+ *
+ * El mismo criterio con el que `restIndexFor` decide: por la API sólo se lee el
+ * árbol de UN espacio de Confluence o la muestra de UN proyecto de un Jira Data
+ * Center, y sólo con las lecturas REST encendidas. La pantalla de contexto lo
+ * pregunta aquí para no prometer «exacto y en segundos» en un ámbito —todo el
+ * sitio— que luego va por las tres fases del modelo (revisión adversaria de H9).
+ */
+function readsByApi(site, scope) {
+  if (!state.settings.restTools || !site) return false
+  if (site.product === 'confluence') return scope?.kind === 'space' && !!scope.key
+  if (site.product === 'jira') return !site.cloud && scope?.kind === 'project'
+  return false
+}
+
 function showContextScreen() {
   const scope = defaultScope(state.site)
   $('context-scope').textContent = scope?.label || state.site.host
@@ -4778,7 +4828,7 @@ function showContextScreen() {
   // H9 tampoco es lo mismo con las lecturas REST encendidas que sin ellas: con
   // ellas, el árbol y la muestra los lee la extensión de la API y el modelo
   // sólo escribe la prosa. La pantalla dice lo que de verdad va a pasar.
-  const porLaApi = !!state.settings.restTools && !(state.site?.product === 'jira' && state.site?.cloud)
+  const porLaApi = readsByApi(state.site, scope)
   $('context-generate-text').textContent =
     state.site?.product === 'jira'
       ? (porLaApi
@@ -5682,10 +5732,13 @@ function paintSnippet() {
  *        CAPTURADO al empezar, nunca el de la pestaña de ahora (§8.22)
  * @returns {Promise<{index:object|null, profile:object|null, aviso:string}>}
  */
-async function restIndexFor(scope, { sitio, report = () => {}, tabId = state.tabId } = {}) {
+async function restIndexFor(scope, { sitio, report = () => {}, tabId = state.tabId, signal = null } = {}) {
   // El perfil que ya hubiera contado sigue valiendo aunque hoy no se pueda
   // contar otro: es un conteo, no una lectura de ahora mismo.
-  const guardado = sitio && (state.site?.host ?? state.lastHost) === sitio.host ? state.profile : null
+  // Y sólo el de ESTE proyecto: el perfil se guarda por host y un Jira tiene
+  // muchos. Con el panel ya en otro sitio, el de este host se lee del almacén.
+  const delHost = !sitio ? null : (state.site?.host ?? state.lastHost) === sitio.host ? state.profile : await getProfile(sitio.host)
+  const guardado = profileForProject(delHost, sitio?.projectKey)
   const nada = { index: null, profile: guardado, aviso: '' }
   // El interruptor maestro. Apagado no es un fallo —lo eligió el usuario en
   // Ajustes—, así que no se avisa de nada ni se apunta nada: el indexado va por
@@ -5711,14 +5764,17 @@ async function restIndexFor(scope, { sitio, report = () => {}, tabId = state.tab
     report(`Leyendo ${scope.label} en la API de Confluence: el árbol de páginas…`)
     // Quien pide es el content script, que vive en el origen del sitio; los
     // topes (páginas y peticiones) los pone el módulo y no viajan en el mensaje.
+    if (signal?.aborted) return nada
     const r = await chrome.tabs
       .sendMessage(tabId, { type: MSG.SPACE_PAGES, spaceKey: scope.key, wikiPrefix: wikiPrefixOf(sitio), cloud: sitio.cloud })
       .catch(() => null)
+    // Cancelado mientras se leía: ni aviso, ni registro, ni índice.
+    if (signal?.aborted) return nada
     if (!r?.ok) {
       return falla(r?.reason || 'sin respuesta', `No he podido leer el árbol de ${host} por su API: ${r?.reason || 'la pestaña no contestó'}.`)
     }
     const index = indexFromSpacePages(r.pages, { site: sitio, scope, homeId: r.homeId })
-    if (!index) return falla('vacío', `La API de ${host} no devuelve ninguna página de ${scope.label}.`)
+    if (!index) return falla('vacío', `La API de ${host} no devuelve ninguna página en ${scope.label}.`)
     log.ok(
       'Índice leído de la API',
       `${host} · ${indexSize(index)} entradas · ${r.requests} petición(es)${r.truncated ? ` · recortado en ${INDEX_LIMITS.maxPages}` : ''}` +
@@ -5740,8 +5796,10 @@ async function restIndexFor(scope, { sitio, report = () => {}, tabId = state.tab
     if (tabId == null || !(await ensureContentAccess({ announce: false }))) {
       return falla('permiso', `No puedo contar la muestra sin permiso sobre ${host}.`)
     }
-    report(`Contando una muestra de ${scope.label} en la API de Jira…`)
-    const r = await countProfile(sitio, scope, { tabId })
+    report(`Contando ${scope.label} en la API de Jira: una muestra de sus tickets…`)
+    if (signal?.aborted) return nada
+    const r = await countProfile(sitio, scope, { tabId, signal })
+    if (signal?.aborted || r.reason === 'cancelado') return nada
     if (!r.ok) return falla(r.reason, r.detail)
     // El perfil se guarda bajo el host con el que se pidió (lo hace
     // `countProfile`); en el estado sólo entra si el panel sigue ahí (§8.22).
@@ -5784,7 +5842,7 @@ async function generateContext({ keepContext = false } = {}) {
     // árbol del espacio (Confluence) o la muestra contada del proyecto (Jira
     // Data Center). Si no se puede, `rest.index` viene null y `buildContext`
     // hace exactamente lo de siempre; el motivo va en el velo y en el Registro.
-    const rest = await restIndexFor(scope, { sitio, report })
+    const rest = await restIndexFor(scope, { sitio, report, signal: controller.signal })
     if (controller.signal.aborted) throw new DOMException('Cancelado', 'AbortError')
 
     const { contextMd, index } = await buildContext(state.client, {

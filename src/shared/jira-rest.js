@@ -764,6 +764,25 @@ function normalizeCounted(v, tope) {
 }
 
 /**
+ * El perfil, sólo si es del proyecto que hay delante. Pura.
+ *
+ * POR QUÉ EXISTE: el perfil se guarda por HOST (`faro:profile:<host>`) y un Jira
+ * tiene muchos proyectos. Sin este cruce, el de SIMPL entraba en la Búsqueda, en
+ * los chips y en el indexador de OPS como «los nombres EXACTOS: cópialos tal
+ * cual» —y un estado que no existe en ese proyecto no da cero resultados, da un
+ * 400— con sólo navegar de una incidencia a otra en la misma pestaña (revisión
+ * adversaria de H9). Se cruza DONDE SE CONSUME, como `state.issueFields` se
+ * cruza con `samePage`: quien lo guarda no sabe qué habrá delante después.
+ *
+ * @returns el mismo objeto, o null si no hay perfil, no hay proyecto o no casan
+ */
+export function profileForProject(profile, projectKey) {
+  const key = validProjectKey(projectKey)
+  if (!key || !profile || typeof profile !== 'object') return null
+  return validProjectKey(profile.projectKey) === key ? profile : null
+}
+
+/**
  * El perfil guardado, en la forma actual. Pura.
  *
  * Lo que sale del almacén se reconstruye con claves blancas como todo lo demás

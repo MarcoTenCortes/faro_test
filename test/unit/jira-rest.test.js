@@ -39,6 +39,7 @@ import {
   fetchRemoteLinks,
   profileFromSample,
   normalizeProfile,
+  profileForProject,
   suggestedQueries,
   normalizeRecentJql,
   rememberJql,
@@ -661,6 +662,20 @@ test('SEGURIDAD: el perfil no lleva personas, es determinista y va acotado', () 
   }
   eq(profileFromSample(MUESTRA, { projectKey: '1 OR 1', now: 1 }).projectKey, '')
   eq(profileFromSample(MUESTRA, { projectKey: 'ENG', now: NaN }).at, 0, 'una fecha que no es un instante no se inventa')
+})
+
+test('SEGURIDAD: profileForProject sólo deja pasar el perfil del proyecto que hay delante', () => {
+  // El perfil se guarda por host y un Jira tiene muchos proyectos: el de SIMPL
+  // no son «los nombres exactos» de OPS (revisión adversaria de H9).
+  const perfil = { version: PROFILE_VERSION, projectKey: 'SIMPL', statuses: [{ name: 'Pending PSO review', count: 9, category: 'indeterminate' }] }
+  assert(profileForProject(perfil, 'SIMPL') === perfil, 'el mismo objeto, sin copiar')
+  assert(profileForProject(perfil, 'simpl') === perfil, 'la clave no distingue mayúsculas: validProjectKey la sube')
+  for (const otro of ['OPS', 'SIMPLE', 'SIM', '', null, undefined, 'SIMPL-12', 'SIMPL OR 1=1', {}]) {
+    eq(profileForProject(perfil, otro), null, JSON.stringify(otro) ?? String(otro))
+  }
+  for (const sinPerfil of [null, undefined, 'SIMPL', 7, {}, { projectKey: '' }, { projectKey: 'OPS' }]) {
+    eq(profileForProject(sinPerfil, 'SIMPL'), null, JSON.stringify(sinPerfil) ?? String(sinPerfil))
+  }
 })
 
 test('normalizeProfile: lo guardado se reconstruye con claves blancas, y otra versión se descarta', () => {

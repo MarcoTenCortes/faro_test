@@ -451,8 +451,15 @@ export const TREE_CLOSE = '--- FIN DE LOS TÍTULOS ---'
  * recorrerlo con la herramienta: se le da hecho para que la prosa hable del
  * sitio REAL —y cite cada página de referencia con su id, que es lo que
  * permite llevar allí al usuario— en vez de de lo que el modelo alcanzara a
- * mirar. Primer nivel: las páginas sin padre conocido (en un espacio leído de
- * la API, su portada). Segundo: sus hijas.
+ * mirar. Primer nivel: las páginas sin padre conocido. Segundo: sus hijas.
+ *
+ * OJO con lo que eso significa en un espacio leído de la API: `indexFromSpacePages`
+ * les quita el padre A PROPÓSITO a las hijas de la portada (la portada no es un
+ * peldaño que se despliegue en la barra lateral), así que aquí la portada y SUS
+ * SECCIONES salen juntas como primer nivel, y el segundo son las hijas de las
+ * secciones. Es lo que conviene —las secciones y lo que cuelga de ellas dicen
+ * más del sitio que una portada con veinte hijas— y es lo que dice la instantánea;
+ * hasta la revisión adversaria de H9 este comentario decía otra cosa.
  *
  * Orden estable (por título y, a igualdad, por id) porque de esto salen
  * instantáneas de prompt: un orden que dependa del recorrido del objeto sería
