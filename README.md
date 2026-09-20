@@ -494,16 +494,18 @@ Trece decisiones que sostienen el diseño:
    que hacer: **Abrir** (por el mismo camino validado que cualquier destino),
    **Analizar** —que te lleva, pone la Skill Análisis y **deja la pregunta
    escrita en el cuadro sin mandarla**: la mandas tú— y **Ya lo he visto**, que
-   la quita y la devuelve sola en cuanto esa página vuelva a cambiar. Se apaga
-   entero en Ajustes, o sólo en un sitio desde su propia pantalla, y tu
-   actividad se borra cuando quieras.
+   la quita y la devuelve sola en cuanto esa página vuelva a cambiar *después de
+   que la descartaras*. Se apaga entero en Ajustes; la casilla de su propia
+   pantalla calla un sitio —sus consultas y sus recomendaciones, también cuando
+   las pide el Jira que lo tiene enlazado—, y tu actividad se borra cuando
+   quieras.
 
 ---
 
 ## Comprobaciones
 
 ```bash
-npm run check              # sintaxis + orden + manifest + 1258 pruebas unitarias + docs
+npm run check              # sintaxis + orden + manifest + 1266 pruebas unitarias + docs
 npm run check:docs         # sólo el paso docs: número de pruebas, títulos del registro, mensajes y ficheros del mapa
 npm run test:integration   # contra un opencode real que arranca la propia prueba
 npm run harness            # banco de pruebas visual en http://127.0.0.1:5175
@@ -804,14 +806,20 @@ id de la página, su **título**, su **ruta relativa** dentro del sitio, cuándo
 viste y cuántas veces, cuándo la analizaste y con cuántas observaciones, si la
 usaste como página base, y de qué **tipo** era la incidencia. Qué NO guarda: la
 URL completa, nada de lo que venga detrás de un «?» o de un «#», el texto de
-ninguna página, ni una sola palabra de lo que escribes. Trescientas entradas por
-sitio, **treinta días**, y sólo de los sitios que has configurado. **Nada de eso
+ninguna página, ni una sola palabra de lo que escribes. Y de lo que
+quitas con «Ya lo he visto», sólo **cuándo lo quitaste**, para poder devolvértelo
+si vuelve a cambiar. Trescientas entradas por sitio, **treinta días** —también los
+«ya lo he visto»: cuando cae el último, el diario de ese sitio se borra solo—, y
+sólo de los sitios que has configurado. **Nada de eso
 llega nunca al modelo**: no entra en ningún prompt, y lo comprobamos por los dos
 lados (hay una prueba que compara los 36 prompts byte a byte y otra que exige
 que el diario no se le pase a quien los escribe). Está a la vista —la pantalla
-dice en una línea qué se guarda y dónde, con los números— y se borra con
-**«Borrar mi actividad»**, o con **«Olvidar este sitio»** junto con todo lo
-demás.
+dice en una línea qué se guarda y dónde, con los números, los «ya lo he visto»
+incluidos— y se borra con **«Borrar mi actividad»**, o con **«Olvidar este
+sitio»** junto con todo lo demás. Y se borra de verdad: el panel y el proceso de
+fondo escriben ese diario cada uno por su lado, así que al borrarlo se deja una
+señal que el otro mira antes de guardar, para que lo que tuviera a medias no te
+devuelva lo que acabas de tirar.
 
 **Y el modelo no puede tocar tu máquina.** El agente por defecto de opencode
 trae herramientas de shell y de ficheros, y las usa: comprobado, ejecutaba
@@ -1000,6 +1008,7 @@ src/
     digest.js               la página en bloques numerados, y de «¶7 + cita» a un Range
     jira-issue.js           qué es una incidencia de Jira en pantalla: título, campos, descripción, comentarios; y qué es interfaz
     page-links.js           los enlaces que la página tiene en su CONTENIDO, y de qué parte viene cada uno (nunca los de la interfaz)
+    page-id.js              el id de la página de Confluence, leído de una etiqueta de la cabecera; sin un solo import, porque lo pide el aviso de cada carga de página
     overlay/rects.js        funde por línea y recorta a su caja (puro)
     tree-dom.js             qué es el árbol, una fila y su control · diagnóstico
     locators.js             cascada href → rol → texto + lista blanca de clics

@@ -753,10 +753,14 @@ async function arrancar() {
     const entradas = items.length
     const analisis = items.filter((i) => i.analyzedAt).length
     const base = items.filter((i) => i.sourceAt).length
+    // Los descartes cuentan como lo demás: son datos guardados (revisión
+    // adversaria de H11).
+    const descartes = Object.keys(DIARIOS_HOY[sitio().host]?.dismissed || {}).length
     $('today-activity-text').textContent =
       `El diario son ids, claves y títulos —nunca la dirección entera ni lo que pone la página— de lo que abres, ` +
       `analizas o usas como página base aquí: ${entradas} ${entradas === 1 ? 'entrada' : 'entradas'}, ` +
-      `${analisis} ${analisis === 1 ? 'análisis' : 'análisis'} y ${base} ${base === 1 ? 'página base' : 'páginas base'}. ` +
+      `${analisis} ${analisis === 1 ? 'análisis' : 'análisis'}, ${base} ${base === 1 ? 'página base' : 'páginas base'} y ` +
+      `${descartes} ${descartes === 1 ? 'descarte' : 'descartes'}. ` +
       `Se guarda en este navegador, ${ACTIVITY_LIMITS.maxAgeDays} días como mucho, no sale de aquí y no entra en nada de ` +
       `lo que se le manda al modelo. Borrarlo no borra nada en Jira ni en Confluence.`
   }

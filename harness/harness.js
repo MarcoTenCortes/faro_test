@@ -12,7 +12,8 @@
 import { NavRunner, STEP_RESULT } from '../src/content/runner.js'
 import { isSafeToClick } from '../src/content/locators.js'
 import { treeContainer, rowFor, toggleFor, treeScroller } from '../src/content/tree-dom.js'
-import { pageIdFromDom, scrollWithinScrollers } from '../src/content/dom-utils.js'
+import { scrollWithinScrollers } from '../src/content/dom-utils.js'
+import { pageIdFromDom } from '../src/content/page-id.js'
 import { imagesWithin } from '../src/content/anchor.js'
 import { Picker } from '../src/content/picker.js'
 import { pageDigest, digestScope, resolveBlockQuote } from '../src/content/digest.js'
@@ -1888,6 +1889,13 @@ const actions = {
     preCode.style.maxWidth = '160px'
     preCode.scrollLeft = 90
     preCode.dispatchEvent(new Event('scroll', { bubbles: true }))
+    // Desde H6 el overlay atiende el scroll en el frame siguiente, y en un
+    // navegador sin foco ese frame puede tardar medio segundo (medido: 505 ms en
+    // el Browser pane, con el repintado correcto a los 535): 320 ms fijos daban
+    // un fallo que era del entorno. Se espera AL FRAME —el del overlay se pidió
+    // antes, así que corre antes que éste— con un tope, porque con la página
+    // oculta no hay frames y la espera no volvería nunca.
+    await Promise.race([frame(), wait(1500)])
     await wait(320)
 
     const cajaPre = preCode.getBoundingClientRect()
@@ -3293,14 +3301,15 @@ const actions = {
     )
     const eng12 = cands57.find((c) => c.id === 'ENG-12')
     const descartado58 = act56.dismissItem(diario57, 'jira-issue:ENG-12', eng12.updatedAt, { host: location.hostname, now: ahora57 })
-    // El descarte guarda CÓMO estaba la cosa, no cuándo se descartó: con la
-    // fecha de una hora antes, «desde entonces alguien la ha tocado».
-    const antiguo58 = act56.dismissItem(diario57, 'jira-issue:ENG-12', eng12.updatedAt - 3600000, { host: location.hostname, now: ahora57 })
+    // El descarte guarda CUÁNDO se descartó (revisión adversaria de H11): uno de
+    // hace una hora, cuando la fila todavía no había cambiado, deja que vuelva.
+    const antes58 = eng12.updatedAt - 3600000
+    const antiguo58 = act56.dismissItem(diario57, 'jira-issue:ENG-12', antes58, { host: location.hostname, now: antes58 })
     const conDescarte = (diario) => ordenar57(hoy57.buildCandidates({ reads: todas57, activity: { [location.hostname]: diario }, here: null, now: ahora57 }))
     const sin12 = conDescarte(descartado58)
     const vuelve12 = conDescarte(antiguo58)
     ok(
-      'lo descartado desaparece, y vuelve solo en cuanto cambia: el descarte recuerda como estaba',
+      'lo descartado desaparece, y vuelve solo en cuanto cambia despues del descarte',
       !sin12.some((f) => f.id === 'ENG-12') &&
         sin12.length === hoy57.TODAY_LIMITS.maxItems &&
         vuelve12.map(corto57).join(' ') === filas57.map(corto57).join(' ') &&

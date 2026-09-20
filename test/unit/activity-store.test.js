@@ -12,8 +12,10 @@
 import { test, eq, assert } from '../harness.js'
 import { STORAGE_KEYS } from '../../src/shared/config.js'
 import {
+  CLEAR_GRACE_MS,
   clearActivity,
   clearTodayCache,
+  dismissActivity,
   getActivity,
   getTodayCache,
   recordActivity,
@@ -232,6 +234,196 @@ test('almacén: dos eventos seguidos del mismo contexto no se pisan (la cola)', 
     eq(items['jira-issue:ENG-7'].seenCount, 1, 'ni el campo de un escritor')
     eq(items['jira-issue:ENG-7'].analyzedCount, 1, 'ni el del otro')
   })
+})
+
+test('almacén: un descarte y un análisis a la vez no se pisan (la cola, también para «Ya lo he visto»)', async () => {
+  // EL CAMBIO (revisión adversaria de H11): «Ya lo he visto» hacía su propio
+  // lee-funde-escribe en el panel (`getActivity` + `saveActivity` sueltos), fuera
+  // de esta cola, así que con un análisis terminando a la vez se perdía uno de
+  // los dos. Ahora entra por `dismissActivity`, que va DENTRO de `cola`.
+  await conChrome({}, async (diario, local) => {
+    await Promise.all([
+      dismissActivity(HOST, 'jira-issue:ENG-7', AHORA - DIA, { now: AHORA }),
+      recordActivity(HOST, { event: 'analyzed', kind: 'jira-issue', id: 'ENG-9', notes: 4 }, { now: AHORA }),
+    ])
+    eq(local[CLAVE].dismissed, { 'jira-issue:ENG-7': AHORA }, 'el descarte sigue ahí')
+    eq(Object.keys(local[CLAVE].items), ['jira-issue:ENG-9'], 'y el análisis del otro evento también')
+    eq(local[CLAVE].items['jira-issue:ENG-9'].analyzedCount, 1)
+  })
+})
+
+test('almacén: cuando caduca el último descarte, la clave del host se va', async () => {
+  // Un «ya lo he visto» era lo único que podía dejar la clave puesta para
+  // siempre: `dismissed` no caducaba, así que `saveActivity` nunca la veía vacía
+  // y el diario de un host seguía guardado con 0 entradas dentro (§8.20).
+  const viejo = { version: 1, host: HOST, items: {}, dismissed: { 'confluence-page:9': AHORA - 40 * DIA } }
+  await conChrome({ local: { [CLAVE]: viejo } }, async (diario, local) => {
+    eq(await getActivity(HOST, { now: AHORA }), { version: 1, host: HOST, items: {}, dismissed: {} }, 'al leer ya no sale')
+    await recordActivity(HOST, { event: 'seen', kind: 'jira-issue', id: 'ENG' }, { now: AHORA })
+    eq(CLAVE in local, false, 'y la primera escritura se lleva la clave')
+    eq(diario.removed, [CLAVE])
+  })
+})
+
+/**
+ * Los dos escritores del diario viven en contextos distintos (el service worker
+ * y el panel) con su propia cola, y eso no se puede simular con un solo módulo
+ * cargado: la cola los serializaría. Con una consulta en el especificador, Node
+ * carga OTRA instancia del módulo, con su `colas` propia, sobre el mismo
+ * `chrome.storage` — que es exactamente la situación de verdad.
+ */
+async function otroContexto() {
+  return import('../../src/shared/activity-store.js?contexto=worker')
+}
+
+test('SEGURIDAD: una escritura del otro contexto no devuelve un diario recién borrado', async () => {
+  // EL CAMBIO (revisión adversaria de H11): el worker lee el diario, el usuario
+  // pulsa «Borrar mi actividad» (o «Olvidar este sitio») y el worker guarda lo
+  // que había leído unos milisegundos después. La clave volvía ENTERA, con todo
+  // lo que el usuario acababa de pedir que se fuera.
+  const worker = await otroContexto()
+  const antes = {
+    version: 1,
+    host: HOST,
+    items: {
+      'jira-issue:ENG-7': { kind: 'jira-issue', id: 'ENG-7', seenAt: AHORA - DIA, seenCount: 5, title: 'Consent API v2' },
+      'jira-issue:ENG-9': { kind: 'jira-issue', id: 'ENG-9', seenAt: AHORA - DIA, seenCount: 3, title: 'Otra' },
+    },
+    dismissed: { 'confluence-page:3003': AHORA - DIA },
+  }
+  for (const [nombre, escribir] of [
+    ['una visita', () => worker.recordActivity(HOST, VISITA, { now: AHORA })],
+    ['un descarte', () => worker.dismissActivity(HOST, 'jira-issue:ENG-7', AHORA - DIA, { now: AHORA })],
+  ]) {
+    await conChrome({ local: { [CLAVE]: antes } }, async (diario, local) => {
+      // La lectura del otro contexto se queda esperando justo después de leer:
+      // es el hueco en el que el usuario pulsa el botón.
+      const leer = globalThis.chrome.storage.local.get
+      let soltar
+      const puerta = new Promise((r) => (soltar = r))
+      let primera = true
+      globalThis.chrome.storage.local.get = async (k) => {
+        const got = await leer(k)
+        if (primera && String(k).includes('actividad')) {
+          primera = false
+          await puerta
+        }
+        return got
+      }
+
+      const enVuelo = escribir()
+      await Promise.resolve()
+      await clearActivity(HOST)
+      eq(CLAVE in local, false, nombre + ': el borrado se lleva la clave')
+      soltar()
+      await enVuelo
+
+      const guardado = local[CLAVE] || { items: {}, dismissed: {} }
+      assert(!('jira-issue:ENG-9' in guardado.items), nombre + ': lo borrado no vuelve — ' + JSON.stringify(guardado))
+      assert(!('confluence-page:3003' in guardado.dismissed), nombre + ': ni los descartes de antes')
+      if (nombre === 'una visita') {
+        // La visita de AHORA sí es legítima: pasó después del borrado.
+        eq(Object.keys(guardado.items), ['jira-issue:ENG-7'])
+        eq(guardado.items['jira-issue:ENG-7'].seenCount, 1, 'y empieza a contar de cero, no de cinco')
+      } else {
+        eq(Object.keys(guardado.items), [], 'un descarte no resucita ninguna entrada')
+        eq(guardado.dismissed, { 'jira-issue:ENG-7': AHORA })
+      }
+    })
+  }
+})
+
+test('SEGURIDAD: la marca de borrado se pone ANTES de quitar la clave', async () => {
+  // Entre las dos cosas cabe una escritura del otro contexto, y lo que decide si
+  // ve el borrado es el orden: con la marca detrás, esa escritura lee «aquí no se
+  // ha borrado nada» y funde sobre el diario que todavía está en el almacén.
+  const worker = await otroContexto()
+  const antes = {
+    version: 1,
+    host: HOST,
+    items: { 'jira-issue:ENG-9': { kind: 'jira-issue', id: 'ENG-9', seenAt: AHORA - DIA, seenCount: 3 } },
+    dismissed: {},
+  }
+  await conChrome({ local: { [CLAVE]: antes } }, async (diario, local) => {
+    // El borrado se queda a medias: la marca ya está puesta (o no, según el
+    // orden) y la clave todavía no se ha ido.
+    const quitar = globalThis.chrome.storage.local.remove
+    let soltar
+    const puerta = new Promise((r) => (soltar = r))
+    let primera = true
+    globalThis.chrome.storage.local.remove = async (k) => {
+      if (primera && String(k).includes('actividad')) {
+        primera = false
+        await puerta
+      }
+      return quitar(k)
+    }
+
+    const borrando = clearActivity(HOST)
+    try {
+      await Promise.resolve()
+      // Y en ese hueco, el worker guarda la visita que había leído antes.
+      const guardado = await worker.recordActivity(HOST, VISITA, { now: AHORA })
+      assert(!('jira-issue:ENG-9' in guardado.items), 'lo de antes del borrado no se refunde: ' + JSON.stringify(guardado.items))
+      eq(guardado.items['jira-issue:ENG-7'].seenCount, 1)
+    } finally {
+      // Siempre, y aunque la prueba falle: la cola de este host es del módulo, y
+      // dejarla con un borrado a medias colgaría todas las pruebas de después.
+      soltar()
+      await borrando
+    }
+    eq(CLAVE in local, false, 'y el borrado acaba llevándose la clave')
+  })
+})
+
+test('SEGURIDAD: el margen de la marca no depende de que el reloj no avance, y una marca vieja no borra nada', async () => {
+  // EL CAMBIO: la prueba de arriba pasaba casi siempre y falló una vez. La
+  // escritura que empieza entre «poner la marca» y «quitar la clave» nace DESPUÉS
+  // de la marca; con `marca >= t0` a secas sólo se salvaba si `Date.now()` no
+  // había avanzado entre los dos (en Windows salta de 16 en 16 ms). Aquí el reloj
+  // avanza a propósito.
+  const worker = await otroContexto()
+  eq(CLEAR_GRACE_MS, 1000)
+  const antes = {
+    version: 1,
+    host: HOST,
+    items: { 'jira-issue:ENG-9': { kind: 'jira-issue', id: 'ENG-9', seenAt: AHORA - DIA, seenCount: 3 } },
+    dismissed: {},
+  }
+  const relojDeVerdad = Date.now
+  const MARCA = STORAGE_KEYS.activityCleared(HOST)
+  try {
+    // (1) La marca se puso hace 40 ms y la clave TODAVÍA está: lo leído es lo que
+    // se está borrando, y no se refunde.
+    let ahora = 1_800_000_000_000
+    Date.now = () => ahora
+    await conChrome({ local: { [CLAVE]: antes }, session: { [MARCA]: ahora - 40 } }, async () => {
+      const guardado = await worker.recordActivity(HOST, VISITA, { now: AHORA })
+      eq(Object.keys(guardado.items), ['jira-issue:ENG-7'], 'a medio borrar: sólo la visita de ahora')
+    })
+    await conChrome({ local: { [CLAVE]: antes }, session: { [MARCA]: ahora - 40 } }, async () => {
+      const descartado = await worker.dismissActivity(HOST, 'jira-issue:ENG-7', AHORA - DIA, { now: AHORA })
+      eq(Object.keys(descartado.items), [], 'y un descarte tampoco refunde lo de antes')
+    })
+    // (2) Una marca de hace un minuto es historia: el diario que hay es de
+    // DESPUÉS de aquel borrado y se funde como siempre.
+    await conChrome({ local: { [CLAVE]: antes }, session: { [MARCA]: ahora - 60_000 } }, async () => {
+      const guardado = await worker.recordActivity(HOST, VISITA, { now: AHORA })
+      eq(Object.keys(guardado.items).sort(), ['jira-issue:ENG-7', 'jira-issue:ENG-9'], 'una marca vieja no borra nada')
+      eq(guardado.items['jira-issue:ENG-9'].seenCount, 3)
+    })
+    // (3) Justo en el borde del margen: dentro cuenta, un milisegundo fuera no.
+    await conChrome({ local: { [CLAVE]: antes }, session: { [MARCA]: ahora - CLEAR_GRACE_MS } }, async () => {
+      const guardado = await worker.recordActivity(HOST, VISITA, { now: AHORA })
+      eq(Object.keys(guardado.items), ['jira-issue:ENG-7'], 'en el borde todavía es «durante el borrado»')
+    })
+    await conChrome({ local: { [CLAVE]: antes }, session: { [MARCA]: ahora - CLEAR_GRACE_MS - 1 } }, async () => {
+      const guardado = await worker.recordActivity(HOST, VISITA, { now: AHORA })
+      eq(Object.keys(guardado.items).length, 2, 'un milisegundo fuera del margen ya no')
+    })
+  } finally {
+    Date.now = relojDeVerdad
+  }
 })
 
 test('almacén: «Borrar mi actividad» se lleva la clave entera de ese host', async () => {

@@ -109,14 +109,14 @@ import {
 } from '../shared/confluence-rest.js'
 // «Qué mirar hoy» (H11): el diario local de actividad y la puntuación pura que
 // lo ordena. Ni uno ni otra tocan la red; quien pide y quien pinta es el panel.
-import { ACTIVITY_LIMITS, activityKey, dismissItem, preferredFamilies } from '../atlassian/activity.js'
+import { ACTIVITY_LIMITS, activityKey, preferredFamilies } from '../atlassian/activity.js'
 import {
   clearActivity,
   clearTodayCache,
+  dismissActivity,
   getActivity,
   getTodayCache,
   recordActivity,
-  saveActivity,
   saveTodayCache,
 } from '../shared/activity-store.js'
 import {
@@ -5596,7 +5596,7 @@ async function paintState() {
   add(
     'actividad',
     todayEnabled()
-      ? `${cuentas.entradas} entradas · ${cuentas.analisis} análisis · ${cuentas.base} páginas base`
+      ? `${cuentas.entradas} entradas · ${cuentas.analisis} análisis · ${cuentas.base} páginas base · ${cuentas.descartes} descartes`
       : '(apagada)'
   )
   add(
@@ -6104,6 +6104,13 @@ function wireEvents() {
   $('btn-tree-debug').addEventListener('click', () => treeDebug().catch(console.error))
   $('btn-forget').addEventListener('click', async () => {
     if (!state.site) return
+    // El diario de actividad, ANTES que nada y por su propia puerta: `forgetSite`
+    // borra su clave con las demás, pero borrarla a secas no impide que una
+    // escritura del service worker que ya había leído la devuelva unos
+    // milisegundos después. `clearActivity` deja la marca de borrado que ese
+    // escritor relee antes de guardar (revisión adversaria de H11), y es también
+    // lo que serializa el borrado con lo que el panel tuviera en la cola.
+    await clearActivity(state.site.host)
     await forgetSite(state.site.host)
     await memory.clearMemory(state.site.host)
     await memory.saveContextMd(state.site.host, '')
@@ -6758,31 +6765,38 @@ async function loadToday({ force = false, testigo = state.bootToken } = {}) {
   // El interruptor por sitio. Se normaliza al leer: lo que no sea `true` no lo
   // escribió Faro y no apaga nada (misma regla que `migrateSettings`).
   if (saved?.todayOff === true) return
-  // Cuándo se miró la lista por última vez en ESTE sitio, para que la insignia
-  // cuente lo nuevo y no lo que hay. Se normaliza al leer: lo que no sea un
-  // instante no lo escribió `markTodaySeen` y cuenta como «nunca».
-  state.today.seenAt = todaySeenAt(saved)
   if (state.bootToken !== testigo || (state.site?.host ?? state.lastHost) !== host) return
 
   const hoy = state.today
+  // Cuándo se miró la lista por última vez en ESTE sitio, para que la insignia
+  // cuente lo nuevo y no lo que hay. Se normaliza al leer: lo que no sea un
+  // instante no lo escribió `markTodaySeen` y cuenta como «nunca». Va DETRÁS de
+  // la guarda y sobre `hoy`, como todo lo demás: escribirlo antes metía la fecha
+  // de un sitio en el estado de otro (revisión adversaria de H11).
+  hoy.seenAt = todaySeenAt(saved)
   hoy.loading = true
   try {
     const t0 = performance.now()
-    // Los diarios: el del sitio de la pestaña y, si lo hay, el del Confluence
-    // enlazado. Son DOS diarios distintos y cada candidato se cruza con el
-    // suyo: lo guardado por host se consume por host (§8.22).
     const enlazado = linkedSite(state.linkedContext)
-    const diarios = { [host]: await getActivity(host) }
-    if (enlazado && enlazado.host !== host) diarios[enlazado.host] = await getActivity(enlazado.host)
+    // El registro del Confluence enlazado, sólo para su `todayOff`: «No sugerir
+    // nada en este sitio» se pone desde el panel de ESE host, y sin leerlo aquí
+    // no apagaba nada de lo que se le pregunta desde el Jira que lo enlaza.
+    const guardadoEnlazado = enlazado && enlazado.host !== host ? await getSite(enlazado.host) : null
 
     // Las páginas del diario por las que se pregunta «¿ha cambiado alguna?».
     // Son las del host de CONFLUENCE al que se va a preguntar, que es el de la
     // pestaña si estamos en Confluence y el enlazado si estamos en Jira: en
-    // ningún caso hay dos objetivos de Confluence a la vez.
+    // ningún caso hay dos objetivos de Confluence a la vez. Este diario sólo
+    // sirve para montar esos ids; el que se cruza con lo leído se lee al final.
     const hostPaginas = sitio.product === 'confluence' ? host : enlazado?.host || ''
-    const ids = hostPaginas ? recentPagesFromActivity(diarios[hostPaginas]).map((p) => p.id) : []
+    const paraIds = hostPaginas ? await getActivity(hostPaginas) : null
+    const ids = paraIds ? recentPagesFromActivity(paraIds).map((p) => p.id) : []
 
-    const { targets, skipped } = todayTargets(sitio, saved, { linked: state.linkedContext, pageIds: ids })
+    const { targets, skipped } = todayTargets(sitio, saved, {
+      linked: state.linkedContext,
+      linkedSaved: guardadoEnlazado,
+      pageIds: ids,
+    })
     if (!targets.length) {
       // Sin nadie a quien preguntar no es un fallo: en Jira Cloud no hay REST
       // que leer y desde Confluence todavía no se consulta el Jira enlazado.
@@ -6839,6 +6853,14 @@ async function loadToday({ force = false, testigo = state.bootToken } = {}) {
     }
 
     const now = Date.now()
+    // Los diarios, LEÍDOS AHORA: el del sitio de la pestaña y, si lo hay, el del
+    // Confluence enlazado. Son DOS diarios distintos y cada candidato se cruza
+    // con el suyo (§8.22). Se leen aquí y no antes de las peticiones porque entre
+    // una cosa y otra hay segundos, y en ese hueco el usuario puede haber
+    // descartado una fila con la «×»: con la copia de antes, su descarte se
+    // deshacía solo en cuanto llegaba la lectura (revisión adversaria de H11).
+    const diarios = { [host]: await getActivity(host) }
+    if (enlazado && enlazado.host !== host) diarios[enlazado.host] = await getActivity(enlazado.host)
     hoy.host = host
     hoy.fetchedAt = fetchedAt
     hoy.candidates = buildCandidates({ reads, activity: diarios, here: todayHere(), now })
@@ -7206,20 +7228,19 @@ async function consumePendingIntent(site) {
 /**
  * «Ya lo he visto»: esa fila deja de recomendarse hasta que cambie.
  *
- * Se guarda CUÁNDO estaba cambiada la cosa al descartarla, no cuándo se
- * descartó, que es lo que hace que vuelva sola en cuanto alguien la toca
- * (`dismissItem`). Se escribe con el mismo lee-funde-escribe del diario y
- * tocando SÓLO `dismissed`, que no escribe ningún otro: ni el service worker
- * (que apunta visitas) ni `touchActivity` (que apunta análisis y páginas base),
- * así que la ventana entre la lectura y la escritura no puede perder más que
- * una visita, igual que las demás (la cabecera de activity-store.js lo explica).
+ * Se guarda cuándo se descartó, nunca antes del cambio que el usuario tenía
+ * delante, que es lo que hace que vuelva sola en cuanto alguien la toca DESPUÉS
+ * (`dismissItem`). Y se escribe por `dismissActivity`, que está DENTRO de la cola
+ * del diario: hasta la revisión adversaria de H11 esto hacía su propio
+ * lee-funde-escribe con `getActivity` + `saveActivity`, así que un descarte a la
+ * vez que el apunte de un análisis se perdía, y uno en vuelo durante «Borrar mi
+ * actividad» devolvía el diario recién borrado.
  */
 async function dismissTodayItem(item) {
   const host = String(item?.host || '')
   const clave = activityKey(item?.kind, item?.id)
   if (!host || !clave) return false
-  const actual = await getActivity(host)
-  await saveActivity(host, dismissItem(actual, clave, item.updatedAt, { host }))
+  await dismissActivity(host, clave, item.updatedAt)
   // Y fuera de los candidatos que hay en memoria, para que la lista se repinte
   // sin él sin tener que volver a leer nada.
   state.today.candidates = state.today.candidates.filter(
@@ -7662,22 +7683,31 @@ async function askTodayPermission() {
 async function paintTodayActivity() {
   const host = state.site?.host ?? state.lastHost
   const diario = host ? await getActivity(host) : null
-  const { entradas, analisis, base } = activityCounts(diario)
+  const { entradas, analisis, base, descartes } = activityCounts(diario)
   $('today-activity-text').textContent =
     `El diario son ids, claves y títulos —nunca la dirección entera ni lo que pone la página— de lo que abres, ` +
     `analizas o usas como página base aquí: ${entradas} ${entradas === 1 ? 'entrada' : 'entradas'}, ` +
-    `${analisis} ${analisis === 1 ? 'análisis' : 'análisis'} y ${base} ${base === 1 ? 'página base' : 'páginas base'}. ` +
+    `${analisis} ${analisis === 1 ? 'análisis' : 'análisis'}, ${base} ${base === 1 ? 'página base' : 'páginas base'} y ` +
+    `${descartes} ${descartes === 1 ? 'descarte' : 'descartes'}. ` +
     `Se guarda en este navegador, ${ACTIVITY_LIMITS.maxAgeDays} días como mucho, no sale de aquí y no entra en nada de ` +
     `lo que se le manda al modelo. Borrarlo no borra nada en Jira ni en Confluence.`
 }
 
-/** Las cuentas del diario: números, nunca títulos ni ids (§8.20). */
+/**
+ * Las cuentas del diario: números, nunca títulos ni ids (§8.20).
+ *
+ * Los descartes cuentan porque son datos guardados: un «ya lo he visto» es una
+ * clave más en el disco de su navegador, y decir «0 entradas» de un diario que
+ * tiene doce descartes dentro sería la promesa a medias que encontró la revisión
+ * adversaria de H11.
+ */
 function activityCounts(activity) {
   const items = Object.values(activity?.items || {})
   return {
     entradas: items.length,
     analisis: items.filter((i) => i?.analyzedAt).length,
     base: items.filter((i) => i?.sourceAt).length,
+    descartes: Object.keys(activity?.dismissed || {}).length,
   }
 }
 

@@ -290,14 +290,23 @@ function ambitoDe(cand) {
  * parámetro sería una consulta que el content script rechaza por «no
  * permitida».
  *
+ *  - **Un sitio con «No sugerir nada en este sitio» puesto**: el del enlazado se
+ *    comprueba AQUÍ porque el suyo lo mira el panel antes de llamar (el de la
+ *    pestaña corta la función entera). Sin esto, apagar las sugerencias en un
+ *    Confluence sólo las apagaba al abrir el panel EN ese Confluence: desde el
+ *    Jira que lo tiene enlazado se le seguían haciendo lecturas y se seguían
+ *    recomendando sus páginas (revisión adversaria de H11).
+ *
  * @param {object|null} site el sitio de la pestaña (`parseAtlassianUrl`)
  * @param {object|null} saved el registro guardado del host (`sites[host]`)
- * @param {{linked?: object|null, pageIds?: string[]}} [ctx] el Confluence
- *        enlazado (`state.linkedContext`) y los ids de página que preguntar
+ * @param {{linked?: object|null, linkedSaved?: object|null, pageIds?: string[]}} [ctx]
+ *        el Confluence enlazado (`state.linkedContext`), SU registro guardado
+ *        (`sites[hostEnlazado]`, de donde sale su `todayOff`) y los ids de
+ *        página que preguntar
  * @returns {{targets: Array<{host:string, kinds:string[], product:string, site:object|null, via:'tab'|'linked'}>,
  *            skipped: Array<{host:string, product:string, reason:string}>}}
  */
-export function todayTargets(site, saved = null, { linked = null, pageIds = [] } = {}) {
+export function todayTargets(site, saved = null, { linked = null, linkedSaved = null, pageIds = [] } = {}) {
   const targets = []
   const skipped = []
   const host = limpiar(site?.host, HOST_MAX).toLowerCase()
@@ -333,6 +342,14 @@ export function todayTargets(site, saved = null, { linked = null, pageIds = [] }
           reason: enlazado
             ? 'El Confluence enlazado es el mismo sitio que el Jira: no hay nada que preguntar dos veces.'
             : 'El Confluence enlazado no se reconoce como un sitio.',
+        })
+      } else if (linkedSaved?.todayOff === true) {
+        // Su propio interruptor, comparado con `true` como el de la pestaña: lo
+        // que no sea `true` no lo escribió Faro y no apaga nada.
+        skipped.push({
+          host: enlazado.host,
+          product: 'confluence',
+          reason: 'Apagado en ese sitio: abre el panel ahí y quita la casilla para volver a mirar.',
         })
       } else {
         const kinds = ['viewed', 'mine']

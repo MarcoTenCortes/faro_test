@@ -77,8 +77,12 @@ chrome.tabs.onRemoved.addListener((tabId) => setPlan(tabId, null))
  *
  * Sólo con `changeInfo.url`: `onUpdated` dispara varias veces por carga
  * (`status`, `favIconUrl`, `title`…) y lo que interesa es la navegación, una
- * vez. Lo primero es `parseAtlassianUrl`, que es puro y barato: una pestaña de
- * cualquier otra web sale de aquí sin tocar el almacén.
+ * vez. Lo que el filtro ahorra no son entradas de más —`recordVisit` funde por su
+ * clave los dos avisos de la misma navegación, y ahí está `dedupeMs` para eso—:
+ * son los ajustes y el mapa de sitios LEÍDOS otra vez en cada uno de los cuatro o
+ * cinco avisos de cada carga de cualquier pestaña. Lo primero es
+ * `parseAtlassianUrl`, que es puro y barato: una pestaña de cualquier otra web
+ * sale de aquí sin tocar el almacén.
  */
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (!changeInfo?.url) return

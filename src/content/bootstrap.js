@@ -21,10 +21,11 @@
   async function boot() {
     if (ready) return ready
     ready = (async () => {
-      const [{ NavRunner }, { MSG }, { onUrlChange, pageIdFromDom }, { NAV_TIMING }] = await Promise.all([
+      const [{ NavRunner }, { MSG }, { onUrlChange }, { pageIdFromDom }, { NAV_TIMING }] = await Promise.all([
         import(url('src/content/runner.js')),
         import(url('src/shared/messages.js')),
         import(url('src/content/dom-utils.js')),
+        import(url('src/content/page-id.js')),
         import(url('src/shared/config.js')),
       ])
 
@@ -466,11 +467,13 @@
   //
   // Lleva el `pageId` de la meta `ajs-page-id` por lo mismo que `URL_CHANGED`:
   // es lo único que identifica una página de un Confluence Data Center, y el
-  // service worker no puede leer el DOM. Por eso se carga también dom-utils.js
-  // aquí, que es un módulo que el content script va a pedir igualmente en
-  // cuanto el panel le mande el primer mensaje.
+  // service worker no puede leer el DOM. Se carga `page-id.js`, que es esa
+  // función y nada más: esto corre en CADA carga de página, y pedir
+  // `dom-utils.js` —que arrastra tree-dom.js y config.js: unos 37 KB— para un
+  // `querySelector` era el precio de una navegación entera (revisión adversaria
+  // de H11).
   const announce = () => {
-    Promise.all([import(url('src/shared/messages.js')), import(url('src/content/dom-utils.js'))])
+    Promise.all([import(url('src/shared/messages.js')), import(url('src/content/page-id.js'))])
       .then(([{ MSG }, { pageIdFromDom }]) =>
         chrome.runtime
           .sendMessage({ type: MSG.CONTENT_READY, url: location.href, pageId: pageIdFromDom() })

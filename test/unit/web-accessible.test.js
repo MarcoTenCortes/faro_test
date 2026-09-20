@@ -136,6 +136,10 @@ test('el content script del manifest es bootstrap.js y carga sus módulos por ur
     // H10: los enlaces del contenido de la página o de la incidencia, que es
     // de donde salen las páginas base sugeridas que vienen de la pantalla.
     'src/content/page-links.js',
+    // Y de la revisión adversaria de H11: el id de la página de Confluence, en
+    // su propio módulo sin imports, porque lo pide el aviso de CADA carga de
+    // página y vivía en dom-utils.js (11 KB + tree-dom.js + config.js).
+    'src/content/page-id.js',
   ]) {
     assert(entradas.includes(esperado), `bootstrap.js ya no carga ${esperado} con url('src/…'): ¿cambió la forma del import()?`)
   }

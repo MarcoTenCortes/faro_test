@@ -229,9 +229,10 @@ function rutaRelativa(value) {
  * Los topes conservan lo más RECIENTE: si hay que tirar entradas, las que
  * sobran son las que hace más que no se tocan. `dismissed` se recorta por el
  * final de la lista —el orden de inserción de las claves de un objeto, que es
- * lo que `dismissItem` respeta reinsertando—, porque su valor es la fecha de la
- * COSA descartada y no la del descarte: ordenar por él haría volver lo que
- * acabas de quitar sólo porque lleve tiempo sin cambiar.
+ * lo que `dismissItem` respeta reinsertando— y no por su valor: son la misma
+ * cosa (el valor es CUÁNDO se descartó, así que crece con la inserción) salvo
+ * cuando la cosa descartada venía con una fecha por delante del reloj, y ahí lo
+ * que dice la verdad es el orden en que se pulsó.
  */
 export function normalizeActivity(raw, { host = '', now = Date.now() } = {}) {
   const t = Number.isFinite(now) ? now : Date.now()
@@ -265,6 +266,13 @@ export function normalizeActivity(raw, { host = '', now = Date.now() } = {}) {
  * La antigüedad de una entrada es la del ÚLTIMO toque, sea una visita, un
  * análisis o un uso como página base: una guía que se usa cada semana no
  * caduca porque la abrieras por primera vez hace dos meses.
+ *
+ * Y los descartes caducan igual, con los MISMOS `maxAgeDays`. Sin esto no
+ * caducaban nunca (revisión adversaria de H11): un «ya lo he visto» mantenía
+ * viva la clave del host para siempre, así que la promesa de los treinta días de
+ * §8.20 no se cumplía y la pantalla acababa diciendo «0 entradas» de un diario
+ * que seguía guardado. Un descarte de hace más de un mes tampoco decide nada:
+ * lo que se descartó entonces ha cambiado o ya no interesa.
  */
 export function pruneActivity(activity, { host = '', now = Date.now() } = {}) {
   const t = Number.isFinite(now) ? now : Date.now()
@@ -274,7 +282,9 @@ export function pruneActivity(activity, { host = '', now = Date.now() } = {}) {
   for (const [key, item] of Object.entries(base.items)) {
     if (ultimoToque(item) >= limite) out.items[key] = item
   }
-  out.dismissed = { ...base.dismissed }
+  for (const [key, at] of Object.entries(base.dismissed)) {
+    if (at >= limite) out.dismissed[key] = at
+  }
   return out
 }
 
@@ -424,10 +434,18 @@ export function touchActivity(activity, evento, { host = '', now = Date.now() } 
  * «Ya lo he visto»: la entrada deja de recomendarse hasta que cambie. No muta lo
  * que recibe. Pura.
  *
- * Se guarda CUÁNDO estaba cambiada la cosa cuando se descartó, no cuándo se
- * descartó: así vuelve sola en cuanto alguien la toca otra vez, que es lo que
- * el usuario espera de «ya lo he visto». Sin esa fecha se usa la de ahora, que
- * es lo más cerca que se puede estar de la verdad.
+ * Se guarda EL MOMENTO EN QUE SE DESCARTÓ, y nunca antes del cambio que el
+ * usuario tenía delante al descartar (`Math.max`). «Ya lo he visto» quiere decir
+ * «lo he visto AHORA», así que vuelve sola en cuanto alguien la toca DESPUÉS,
+ * que es lo que el usuario espera; y el filtro de today.js sigue siendo el mismo
+ * (`updatedAt <= descartadoEn`).
+ *
+ * Las dos mitades de ese `Math.max` arreglan un fallo cada una (revisión
+ * adversaria de H11): con la fecha de la cosa a secas, un `updatedAt` de 0 —una
+ * API que no dijo cuándo cambió— dejaba una marca de 1970 que `pruneActivity`
+ * tira en la siguiente escritura, así que el descarte no duraba nada; y una fila
+ * con `updatedAt` por delante del reloj no se podía descartar NUNCA, porque la
+ * marca se quedaba por detrás de su propio cambio y el filtro la dejaba pasar.
  */
 export function dismissItem(activity, key, updatedAt, { host = '', now = Date.now() } = {}) {
   const t = Number.isFinite(now) ? now : Date.now()
@@ -436,7 +454,8 @@ export function dismissItem(activity, key, updatedAt, { host = '', now = Date.no
   if (!partesDeClave(clave)) return base
 
   const bruto = Number(updatedAt)
-  const at = Number.isFinite(bruto) && bruto >= 0 ? Math.round(bruto) : t
+  const visto = Number.isFinite(bruto) && bruto >= 0 ? Math.round(bruto) : 0
+  const at = Math.max(visto, t)
   // Se reinserta al final a propósito: el orden de las claves es lo que decide
   // qué descartes se conservan cuando hay que recortar.
   const dismissed = { ...base.dismissed }

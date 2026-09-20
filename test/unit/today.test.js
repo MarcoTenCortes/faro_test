@@ -161,6 +161,30 @@ test('todayTargets: desde un Jira Data Center se pregunta a la pestaña y al Con
   eq(suelto.targets[0].kinds, ['history', 'mine'], 'sin clave abierta no hay `project` ni `related`')
 })
 
+test('todayTargets: «No sugerir nada en este sitio» del Confluence enlazado también lo apaga desde Jira', () => {
+  // EL CAMBIO (revisión adversaria de H11): `todayOff` es por SITIO y se pone
+  // desde el panel de ese host, pero la lectura del Confluence enlazado la lanza
+  // el Jira que lo enlaza. Sin mirar su registro, apagarlo en el Confluence no
+  // apagaba nada: se le seguían haciendo lecturas y recomendando sus páginas.
+  const ctx = { linked: { host: CONF, wikiPrefix: '' }, linkedSaved: { host: CONF, todayOff: true }, pageIds: ['3003'] }
+  const r = todayTargets(SITIO_JIRA, { confluenceHost: CONF }, ctx)
+  eq(r.targets.length, 1, 'sólo la pestaña')
+  eq(r.targets[0].product, 'jira')
+  eq(r.skipped.length, 1)
+  eq(r.skipped[0].host, CONF)
+  eq(r.skipped[0].product, 'confluence')
+  assert(/[Aa]pagado en ese sitio/.test(r.skipped[0].reason), 'y se dice por qué: ' + r.skipped[0].reason)
+
+  // Normalizado como el de la pestaña: lo que no sea `true` no lo escribió Faro.
+  for (const raro of [false, 'true', 1, null, undefined, {}]) {
+    const otro = todayTargets(SITIO_JIRA, { confluenceHost: CONF }, { ...ctx, linkedSaved: { todayOff: raro } })
+    eq(otro.targets.length, 2, 'con todayOff ' + JSON.stringify(raro) + ' se sigue preguntando')
+    eq(otro.skipped, [])
+  }
+  // Y sin registro del enlazado, lo de siempre.
+  eq(todayTargets(SITIO_JIRA, { confluenceHost: CONF }, { linked: { host: CONF } }).targets.length, 2)
+})
+
 test('todayTargets: en Jira Cloud no se pregunta a la API de Jira, y se dice por qué', () => {
   const cloud = { host: 'acme.atlassian.net', origin: 'https://acme.atlassian.net', product: 'jira', cloud: true, projectKey: 'ENG' }
   const r = todayTargets(cloud, { confluenceHost: 'acme.atlassian.net' }, {})

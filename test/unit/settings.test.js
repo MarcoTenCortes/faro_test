@@ -131,6 +131,18 @@ test('H11: la actividad y la caché de hoy tienen su clave POR HOST, distintas d
   assert(!otras.includes(STORAGE_KEYS.activity(host)), 'el diario no pisa ninguna de las que ya había')
   assert(!otras.includes(STORAGE_KEYS.today(host)), 'ni la caché')
   assert(STORAGE_KEYS.activity(host) !== STORAGE_KEYS.today(host), 'y el diario no es la caché: uno dura 30 días y la otra 15 minutos')
+
+  // Y la marca de borrado (revisión adversaria de H11): otra clave por host, en
+  // storage.session, que es lo que hace que una escritura tardía del service
+  // worker no devuelva un diario recién borrado. No es la del diario ni la de la
+  // caché, porque sobrevive a que las dos se vayan.
+  eq(typeof STORAGE_KEYS.activityCleared, 'function')
+  eq(STORAGE_KEYS.activityCleared('jira.simplprogramme.eu'), 'faro:actividad-borrada:jira.simplprogramme.eu')
+  assert(!otras.includes(STORAGE_KEYS.activityCleared(host)), 'no pisa ninguna de las que ya había')
+  assert(
+    STORAGE_KEYS.activityCleared(host) !== STORAGE_KEYS.activity(host) && STORAGE_KEYS.activityCleared(host) !== STORAGE_KEYS.today(host),
+    'ni el diario ni su caché'
+  )
 })
 
 // ------------------------------------------------------------------ H9

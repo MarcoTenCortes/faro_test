@@ -168,7 +168,8 @@ test('el árbol de un espacio no acepta topes por mensaje: los pone el módulo',
 // quien construyó el diario): estas tres líneas se podían borrar en verde.
 
 test('H11: los dos avisos del content script llevan el pageId leído de la página', () => {
-  assert(JS.includes('{ onUrlChange, pageIdFromDom }'), 'se carga con lo demás al arrancar')
+  assert(JS.includes("import(url('src/content/page-id.js'))"), 'el id lo da page-id.js, que no importa nada')
+  assert(JS.includes('{ pageIdFromDom }'), 'se carga con lo demás al arrancar')
   assert(
     JS.includes('chrome.runtime.sendMessage({ type: MSG.URL_CHANGED, url: href, pageId: pageIdFromDom() })'),
     'cada cambio de URL dice qué página es'
@@ -177,4 +178,11 @@ test('H11: los dos avisos del content script llevan el pageId leído de la pági
   assert(aviso.includes('type: MSG.CONTENT_READY, url: location.href, pageId: pageIdFromDom()'), 'y el aviso de que la pestaña está lista, también')
   // Sólo el id: ni el título ni nada del contenido viajan en estos avisos.
   assert(!/document\.title|textContent|innerText/.test(aviso), 'del DOM sólo sale el id de la página')
+  // Y el aviso NO se trae dom-utils.js, que es lo que hacía hasta la revisión
+  // adversaria de H11: son 11 KB más tree-dom.js y config.js por sus imports
+  // estáticos —unos 37 KB— pedidos, parseados y ejecutados en CADA carga de
+  // página para hacer un `querySelector`. El arranque sí lo carga, porque de ahí
+  // sale `onUrlChange`, pero el arranque ocurre cuando llega el primer mensaje.
+  assert(!aviso.includes('dom-utils.js'), 'el aviso de cada carga no puede arrastrar dom-utils.js')
+  assert(aviso.includes("import(url('src/content/page-id.js'))"), 'sólo los mensajes y el id')
 })

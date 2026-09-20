@@ -310,16 +310,28 @@ test('analizado: un evento que no vale deja el diario como estaba', () => {
 
 // ------------------------------------------------------------- dismissItem
 
-test('descartado: «ya lo he visto» se guarda con la fecha de lo descartado', () => {
+test('descartado: «ya lo he visto» se guarda con la fecha del DESCARTE, nunca anterior al cambio que se vio', () => {
+  // EL CAMBIO (revisión adversaria de H11): antes se guardaba la fecha de la
+  // COSA, y eso rompía dos cosas. Ahora es el momento del descarte, subido al del
+  // cambio si el cambio venía por delante del reloj.
   const a = dismissItem(emptyActivity(HOST), CLAVE, AHORA - DIA, { host: HOST, now: AHORA })
-  eq(a.dismissed, { [CLAVE]: AHORA - DIA })
-  // Así vuelve sola en cuanto alguien la toca: quien lo consume compara
-  // `dismissed[clave] >= updatedAt`.
-  assert(a.dismissed[CLAVE] < AHORA, 'algo cambiado después vuelve a salir')
+  eq(a.dismissed, { [CLAVE]: AHORA }, '«ya lo he visto» es «lo he visto AHORA»')
+  // Y sigue volviendo sola en cuanto alguien la toca DESPUÉS: quien lo consume
+  // compara `updatedAt <= dismissed[clave]`.
+  assert(a.dismissed[CLAVE] >= AHORA - DIA, 'lo que ya estaba visto no vuelve')
+  assert(AHORA + DIA > a.dismissed[CLAVE], 'y un cambio posterior sí')
 
-  // Sin fecha utilizable se usa la de ahora, que es lo más cerca de la verdad.
+  // (12) Una fila con `updatedAt` por delante del reloj también se descarta: con
+  // la fecha de la cosa a secas, la marca se quedaba por detrás de su propio
+  // cambio y la fila no se podía quitar NUNCA.
+  eq(dismissItem(emptyActivity(HOST), CLAVE, AHORA + DIA, { host: HOST, now: AHORA }).dismissed[CLAVE], AHORA + DIA)
+
+  // Sin fecha utilizable, la de ahora.
   eq(dismissItem(emptyActivity(HOST), CLAVE, 'ayer', { host: HOST, now: AHORA }).dismissed[CLAVE], AHORA)
   eq(dismissItem(emptyActivity(HOST), CLAVE, -5, { host: HOST, now: AHORA }).dismissed[CLAVE], AHORA)
+  // (2) Y un `updatedAt` de 0 —una API que no dijo cuándo cambió— tampoco deja
+  // una marca de 1970 que `pruneActivity` se lleve en la primera escritura.
+  eq(dismissItem(emptyActivity(HOST), CLAVE, 0, { host: HOST, now: AHORA }).dismissed[CLAVE], AHORA)
   // Y una clave que no lo es no se guarda.
   eq(dismissItem(emptyActivity(HOST), 'jira-issue:ENG', 1, { host: HOST, now: AHORA }).dismissed, {})
   eq(dismissItem(emptyActivity(HOST), '__proto__', 1, { host: HOST, now: AHORA }).dismissed, {})
@@ -480,10 +492,35 @@ test('caducidad: lo que hace más de 30 días que no se toca se va, por el ÚLTI
   )
   const p = pruneActivity(a, { host: HOST, now: AHORA })
   eq(Object.keys(p.items).sort(), ['confluence-page:2', 'confluence-page:3', 'confluence-page:4'])
-  eq(p.dismissed, { 'confluence-page:9': viejo }, 'un descarte se guarda por su fecha, no caduca por ella')
   eq(pruneActivity(p, { host: HOST, now: AHORA }), p, 'idempotente')
   // Determinista: el mismo diario con el mismo reloj da el mismo JSON.
   eq(JSON.stringify(pruneActivity(a, { host: HOST, now: AHORA })), JSON.stringify(p))
+})
+
+test('caducidad: un descarte también caduca a los 30 días, y con él se va el diario entero', () => {
+  // EL CAMBIO (revisión adversaria de H11): `dismissed` no caducaba nunca, así
+  // que un «ya lo he visto» mantenía viva la clave del host para siempre —con 0
+  // entradas dentro— y los treinta días de §8.20 no se cumplían.
+  const a = normalizeActivity(
+    {
+      items: {},
+      dismissed: { 'confluence-page:9': AHORA - 40 * DIA, 'confluence-page:10': AHORA - 10 * DIA },
+    },
+    { host: HOST, now: AHORA }
+  )
+  const p = pruneActivity(a, { host: HOST, now: AHORA })
+  eq(p.dismissed, { 'confluence-page:10': AHORA - 10 * DIA }, 'el de hace 40 días se va; el de hace 10 decide todavía')
+  eq(Object.keys(p.items), [])
+
+  // Y cuando caduca el último, el diario se queda vacío del todo: es lo que
+  // permite a `saveActivity` quitar la clave en vez de dejar un objeto para
+  // siempre (activity-store.test.js lo comprueba contra el almacén).
+  const todo = pruneActivity(a, { host: HOST, now: AHORA + 40 * DIA })
+  eq(todo, { version: ACTIVITY_VERSION, host: HOST, items: {}, dismissed: {} })
+  // Un descarte de algo que venía del futuro (`Math.max` en `dismissItem`) no se
+  // cae por adelantado.
+  const futuro = pruneActivity({ items: {}, dismissed: { [CLAVE]: AHORA + DIA } }, { host: HOST, now: AHORA })
+  eq(futuro.dismissed, { [CLAVE]: AHORA + DIA })
 })
 
 // ---------------------------------------------------------------- consultas

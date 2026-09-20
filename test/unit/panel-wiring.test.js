@@ -2875,11 +2875,25 @@ test('H11: «Qué mirar hoy» se lee fuera del arranque, con sus dos interruptor
   assert(/if \(!force\) \{/.test(cargar), 'y «Actualizar» se la salta')
   // Un objetivo caído no se lleva a los demás.
   assert(/Promise\.allSettled\(targets\.map\(/.test(cargar), 'los objetivos van a la vez y ninguno tumba al otro')
-  assert(/todayTargets\(sitio, saved, \{ linked: state\.linkedContext, pageIds: ids \}\)/.test(cargar), 'a quién preguntar lo decide el módulo puro')
+  assert(/todayTargets\(sitio, saved, \{\s*linked: state\.linkedContext,/.test(cargar), 'a quién preguntar lo decide el módulo puro')
   assert(/buildCandidates\(\{ reads, activity: diarios, here: todayHere\(\), now \}\)/.test(cargar), 'y los candidatos también')
   // Los dos diarios: el de la pestaña y el del Confluence enlazado. Cada
   // candidato se cruza con el SUYO (§8.22).
   assert(/const diarios = \{ \[host\]: await getActivity\(host\) \}/.test(cargar) && /diarios\[enlazado\.host\] = await getActivity\(enlazado\.host\)/.test(cargar))
+  // Y se leen DESPUÉS de las peticiones, no antes: entre una cosa y otra hay
+  // segundos, y un descarte hecho en ese hueco se deshacía solo en cuanto llegaba
+  // la lectura (revisión adversaria de H11). Los de antes sólo montan los ids del
+  // CQL, que hay que tener para preguntar.
+  assert(
+    cargar.indexOf('Promise.allSettled(targets.map(') < cargar.indexOf('const diarios = { [host]: await getActivity(host) }'),
+    'el diario que se cruza con lo leído se lee después de leer, no al empezar'
+  )
+  assert(/const paraIds = hostPaginas \? await getActivity\(hostPaginas\) : null/.test(cargar), 'y el de los ids es otro, con su nombre')
+  assert(/preferredFamilies\(diarios\[host\], \{ now \}\)/.test(cargar), 'las familias también salen del diario fresco')
+  // El `todayOff` del Confluence ENLAZADO: se pone desde el panel de ESE host y
+  // hay que leerlo aquí, porque la lectura la lanza el Jira que lo enlaza.
+  assert(/const guardadoEnlazado = enlazado && enlazado\.host !== host \? await getSite\(enlazado\.host\) : null/.test(cargar))
+  assert(/linkedSaved: guardadoEnlazado,/.test(cargar), 'y viaja al módulo, que es quien decide')
   // Los avisos, por la tregua de rest-notice.js y no por una copia local.
   assert(/restFailureDue\(state\.restWarned, e\.reason, e\.host, sessionID\)/.test(cargar), 'un fallo se dice una vez por host, sesión y motivo')
   assert(/'Qué mirar hoy'/.test(cargar) && /'Qué mirar hoy no disponible'/.test(cargar), 'y los dos títulos del Registro')
@@ -2998,6 +3012,13 @@ test('H11: «Analizar» navega y deja la pregunta escrita, y nunca la manda', ()
   // página (M3), y el id se reconstruye con la validadora.
   assert(/validIssueKey\(site\.issueKey\) === intent\.id/.test(consumir))
   assert(/String\(site\.pageId \|\| currentPageId\(state\.index, state\.tabUrl\) \|\| ''\) === intent\.id/.test(consumir))
+  // Y ese identificador CIERRA el paso: sin el `return`, llegar a otra página del
+  // mismo host escribiría ahí la pregunta y cambiaría la Skill. Lo calculaba y no
+  // lo usaba nadie en el pin (revisión adversaria de H11).
+  assert(
+    consumir.indexOf('if (!aqui) return') >= 0 && consumir.indexOf('if (!aqui) return') < consumir.indexOf("setSkill('analisis')"),
+    'lo que no es la página que esperaba la pregunta se va antes de tocar nada'
+  )
   assert(/setSkill\('analisis'\)/.test(consumir) && /saveSite\(site\.host, \{ skill: 'analisis' \}\)/.test(consumir), 'la Skill se fija y se guarda')
   assert(/el\.input\.value = intent\.question/.test(consumir) && /el\.input\.focus\(\)/.test(consumir), 'y la pregunta se DEJA en el cuadro')
   assert(/announce\(/.test(consumir), 'y se dice en voz alta: un cuadro que se rellena solo, sin voz, es magia (A2)')
@@ -3051,11 +3072,15 @@ test('H11: el panel apunta en el diario sólo lo que sólo él sabe, y se borra 
   const alta = sinComentarios(JS.slice(JS.indexOf('async function addSource('), JS.indexOf('async function removeSource')))
   assert(/noteActivity\(linkedHost\(\) \|\| state\.site\.host, \{/.test(alta) && /event: 'source'/.test(alta))
 
-  // «Ya lo he visto»: se guarda cuándo estaba cambiada la cosa, no cuándo se
-  // descartó, que es lo que la hace volver sola.
+  // «Ya lo he visto» se escribe por la puerta del diario, que es la que tiene la
+  // cola: hasta la revisión adversaria de H11 hacía su propio lee-funde-escribe
+  // aquí, así que un descarte a la vez que un análisis se perdía, y uno en vuelo
+  // durante «Borrar mi actividad» devolvía el diario recién borrado.
   const descartar = hoyEntre('async function dismissTodayItem', 'async function clearMyActivity')
-  assert(/dismissItem\(actual, clave, item\.updatedAt, \{ host \}\)/.test(descartar))
-  assert(/saveActivity\(host, /.test(descartar) && /activityKey\(item\?\.kind, item\?\.id\)/.test(descartar))
+  assert(/await dismissActivity\(host, clave, item\.updatedAt\)/.test(descartar))
+  assert(/activityKey\(item\?\.kind, item\?\.id\)/.test(descartar))
+  assert(!/getActivity\(/.test(descartar) && !/dismissItem\(/.test(descartar), 'ni lee ni funde aquí: eso es del almacén')
+  eq(sinComentarios(JS).match(/\bsaveActivity\(/g), null, 'y en todo el panel no queda ninguna escritura del diario fuera de la cola')
 
   // «Borrar mi actividad» se lleva el diario y su caché, también los del
   // Confluence enlazado: sus páginas salen en esta misma lista.
@@ -3064,9 +3089,18 @@ test('H11: el panel apunta en el diario sólo lo que sólo él sabe, y se borra 
   assert(/clearActivity\(enlazado\.host\)/.test(borrar), 'y el del enlazado, que desde Jira nadie más va a borrar')
   assert(/state\.today = emptyToday\(\)/.test(borrar))
 
-  // Y «Olvidar este sitio» también: `forgetSite` borra la clave del almacén.
+  // Y «Olvidar este sitio» también: `forgetSite` borra la clave del almacén, y
+  // ANTES pasa por `clearActivity`, que es quien deja la marca de borrado que el
+  // service worker relee antes de guardar. Sin ella, una visita que el worker ya
+  // hubiera leído devolvía el diario entero unos milisegundos después (revisión
+  // adversaria de H11).
   const olvidarSitio = sinComentarios(JS.slice(JS.indexOf("$('btn-forget').addEventListener"), JS.indexOf("$('mem-enabled').addEventListener")))
   assert(/clearTodayCache\(state\.site\.host\)/.test(olvidarSitio) && /state\.today = emptyToday\(\)/.test(olvidarSitio))
+  assert(
+    olvidarSitio.indexOf('await clearActivity(state.site.host)') >= 0 &&
+      olvidarSitio.indexOf('await clearActivity(state.site.host)') < olvidarSitio.indexOf('await forgetSite(state.site.host)'),
+    'el diario se borra por su puerta y antes de olvidar el sitio'
+  )
   const almacen = readFileSync(join(ROOT, 'src/shared/storage.js'), 'utf8')
   assert(/STORAGE_KEYS\.activity\(host\)/.test(almacen), 'y forgetSite, su clave del almacén')
 })
@@ -3095,6 +3129,11 @@ test('H11: el quinto botón de la cabecera es «Qué mirar hoy», con su insigni
 
   const insignia = uiEntre('function paintTodayBadge()', 'function paintTodayBlock(')
   assert(/const n = todayEnabled\(\) \? todayCount\(\) : 0/.test(insignia), 'cuenta lo NUEVO, y sólo si está encendido')
+  // Y lo que cuenta `todayCount` es lo NUEVO de verdad: nada lo pinaba, así que
+  // podía volver a contar las filas que hay (revisión adversaria de H11). Sin
+  // esto la insignia no significa nada: enseñaría un 8 fijo todos los días.
+  const cuenta = uiEntre('function todayCount()', 'async function markTodaySeen()')
+  assert(/return countNew\(todayRows\(\), state\.today\.seenAt\)/.test(cuenta), 'la insignia es lo que ha cambiado desde que se miró')
   assert(/insignia\.classList\.toggle\('hidden', !n\)/.test(insignia), 'sin novedades no queda un hueco vacío')
   assert(/boton\.title = nombre/.test(insignia) && /boton\.setAttribute\('aria-label', nombre\)/.test(insignia), 'el tooltip y el nombre dicen lo mismo')
   for (const texto of ['Qué mirar hoy: ${n} ${n === 1 ? \'novedad\' : \'novedades\'}', "'Qué mirar hoy'"]) {
@@ -3139,6 +3178,15 @@ test('H11: el chat vacío enseña hasta tres filas, y si no caben se queda en un
   assert(!/showWelcome\(\)/.test(bloque), 'se repinta sólo esta caja: repintar el estado vacío volvería a anunciarlo (A2)')
   assert(/`Qué mirar hoy \(\$\{todas\.length\}\)`/.test(bloque), 'degradado: una línea con cuántas hay')
   assert(/`Ver todo \(\$\{todas\.length\}\)`/.test(bloque), 'y entero: las filas y «Ver todo»')
+  // La degradación la DECIDE `emptyFits`, y la línea vive dentro de esa rama:
+  // nada lo pinaba, así que se podía desactivar en verde y el chat vacío se
+  // llenaba de recomendaciones (revisión adversaria de H11).
+  assert(/if \(!emptyFits\(filas\.length, pastillas\)\) \{/.test(bloque), 'quien decide es emptyFits, con las filas y las pastillas')
+  assert(
+    bloque.indexOf('if (!emptyFits(filas.length, pastillas)) {') < bloque.indexOf('`Qué mirar hoy (${todas.length})`') &&
+      bloque.indexOf('`Qué mirar hoy (${todas.length})`') < bloque.indexOf("kicker.className = 'today-kicker'"),
+    'la línea sola es lo único de esa rama, y el rótulo con las filas queda detrás'
+  )
 
   // El criterio no mide nada —el panel puede estar oculto al pintar—: cuenta
   // piezas. Con las cuatro pastillas que puede ofrecer H8 ya no cabe.
@@ -3220,6 +3268,11 @@ test('H11: la pantalla dice qué guarda y dónde, y se puede apagar, actualizar 
   }
   const cuentas = uiEntre('function activityCounts(activity)', 'async function analyzeFromToday(item)')
   assert(/entradas: items\.length/.test(cuentas) && /i\?\.analyzedAt/.test(cuentas) && /i\?\.sourceAt/.test(cuentas))
+  // Y los descartes, que también son datos guardados: decir «0 entradas» de un
+  // diario con doce «ya lo he visto» dentro era la promesa a medias que encontró
+  // la revisión adversaria de H11.
+  assert(/descartes: Object\.keys\(activity\?\.dismissed \|\| \{\}\)\.length/.test(cuentas))
+  assert(/\$\{descartes\} \$\{descartes === 1 \? 'descarte' : 'descartes'\}/.test(diario), 'y se dicen en la línea de la pantalla')
 
   // El interruptor por sitio: se lee normalizado y se guarda en el registro del
   // sitio, como `skill` o `model`.
@@ -3228,6 +3281,13 @@ test('H11: la pantalla dice qué guarda y dónde, y se puede apagar, actualizar 
   const apagar = uiEntre('async function setTodayOff(off)', 'function paintTodaySetting()')
   assert(/saveSite\(host, \{ todayOff: !!off \}\)/.test(apagar) && /state\.today = emptyToday\(\)/.test(apagar))
   assert(/await refreshToday\(\)/.test(apagar), 'y encenderlo vuelve a mirar en el acto')
+  // Y la casilla dice QUÉ apaga, porque no apaga lo que uno esperaría: las
+  // lecturas y las sugerencias de ese sitio, no el diario, que lo gobiernan los
+  // dos interruptores globales (revisión adversaria de H11).
+  const casillaSitio = HTML.slice(HTML.indexOf('id="today-off"'), HTML.indexOf('id="btn-today-refresh"'))
+  assert(/Faro sigue\s+apuntando lo que abres aquí/.test(casillaSitio), 'la casilla dice que Faro sigue apuntando')
+  assert(/apaga «Qué mirar hoy» en Ajustes/.test(casillaSitio), 'y dónde se apaga el apuntado')
+  assert(/desde el Jira que lo tenga enlazado/.test(casillaSitio), 'y que también calla al Jira que lo enlaza')
 
   // La insignia cuenta lo nuevo desde que se MIRÓ la lista, y eso sobrevive a
   // cerrar el panel: si no, cada apertura lo contaría todo como novedad.
@@ -3236,7 +3296,15 @@ test('H11: la pantalla dice qué guarda y dónde, y se puede apagar, actualizar 
   const normaliza = uiEntre('function todaySeenAt(saved)', '/**\n * Abrir una fila.')
   assert(/Number\.isFinite\(at\) && at > 0 \? at : 0/.test(normaliza), 'normalizado al leer, como todo lo que viene del almacén')
   const cargar = sinComentarios(JS.slice(JS.indexOf('async function loadToday'), JS.indexOf('async function fetchTodayTarget')))
-  assert(/state\.today\.seenAt = todaySeenAt\(saved\)/.test(cargar), 'y se recupera con el sitio')
+  assert(/hoy\.seenAt = todaySeenAt\(saved\)/.test(cargar), 'y se recupera con el sitio')
+  // Detrás de la guarda del testigo y del host, como las demás asignaciones y
+  // sobre `hoy`: escrito antes, la fecha de un sitio acababa en el estado de otro
+  // (§8.22, revisión adversaria de H11).
+  assert(
+    cargar.indexOf('!== host) return') < cargar.indexOf('hoy.seenAt = todaySeenAt(saved)'),
+    'la fecha de «ya la miré» no se escribe hasta saber que este arranque y este host siguen siendo los suyos'
+  )
+  assert(!/state\.today\.seenAt =/.test(cargar), 'y no por `state.today`, que es lo que la escribía antes de saberlo')
   assert(
     abrir.indexOf('const desde = state.today.seenAt') < abrir.indexOf('await markTodaySeen()'),
     'lo nuevo se marca contra la visita ANTERIOR: abrir la pantalla no puede borrar la marca que la explica'

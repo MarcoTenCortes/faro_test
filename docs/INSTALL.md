@@ -469,7 +469,8 @@ Junto al selector de modelo, abajo, hay otras dos cosas:
   una consulta y no se apunta nada. Viene encendida, y **depende de la de
   arriba**: con *Consultar tu sitio* apagado ésta se queda desactivada y lo
   dice. Para apagarla sólo en un sitio, la casilla **«No sugerir nada en este
-  sitio»** vive en su propia pantalla. Se aplica al momento.
+  sitio»** vive en su propia pantalla, y apaga las consultas y las
+  recomendaciones de ese sitio (no el diario, que lo apaga ésta). Se aplica al momento.
 
 - **Teclado y lector de pantalla** — `Esc` cierra Ajustes, Memoria, Registro,
   Páginas base (donde primero vacía las sugerencias) y Qué mirar hoy y cancela el
@@ -515,12 +516,20 @@ Cada fila tiene tres cosas que hacer:
   de dos minutos o acabas en otra página, la pregunta se descarta sola en vez de
   aparecer donde no viene a cuento.
 - **Ya lo he visto** — quita la fila. No es «para siempre»: **vuelve sola en
-  cuanto esa página o esa incidencia cambie**, porque lo que se recuerda es cómo
-  estaba cuando la descartaste.
+  cuanto esa página o esa incidencia cambie**, porque lo que se recuerda es
+  cuándo la quitaste, así que cualquier cambio posterior la devuelve. Eso también
+  caduca a los treinta días, y cuando cae el último el diario de ese sitio se
+  borra solo.
 
 Abajo del todo de la pantalla: **«No sugerir nada en este sitio»** (una casilla,
 por sitio), **Actualizar**, **Borrar mi actividad** y una línea que dice qué se
 guarda y dónde, con los números.
+
+Esa casilla apaga **las consultas y las recomendaciones de ese sitio** —ahí y
+también cuando las pide el Jira que lo tenga enlazado—, pero **no** el diario:
+Faro sigue apuntando lo que abres allí. Para que no apunte nada, la casilla que
+manda es **Ajustes → Sugerirme qué mirar hoy** (o la de arriba, *Consultar tu
+sitio*). Lo dice la propia pantalla, debajo de la casilla.
 
 ### Qué guarda tu diario, y dónde
 
@@ -531,8 +540,10 @@ relativa** dentro del sitio, cuándo la viste y cuántas veces, cuándo la
 analizaste y con cuántas observaciones, si la usaste como página base y de qué
 **tipo** era la incidencia. **No** guarda la URL completa, ni nada de lo que
 venga detrás de un «?» o de un «#», ni el texto de ninguna página, ni una
-palabra de lo que escribes. Trescientas entradas por sitio y **treinta días**;
-lo más viejo se cae solo. Sólo se apunta de los sitios que has configurado, y
+palabra de lo que escribes. De lo que quitas con «Ya lo he visto» apunta sólo **cuándo lo
+quitaste**, para poder devolvértelo si vuelve a cambiar. Trescientas entradas por
+sitio y **treinta días** —los «ya lo he visto» también, y cuando cae el último el
+diario de ese sitio se borra solo—; lo más viejo se cae solo. Sólo se apunta de los sitios que has configurado, y
 sólo con las dos casillas encendidas.
 
 **Nada de eso llega nunca al modelo**: no entra en ningún prompt. Se borra con
@@ -674,7 +685,7 @@ que se apuntó al verla; las siete consultas contra la Jira y la Confluence de
 mentira, de las que salen veintidós candidatos y una lista de ocho que es
 **exactamente la misma dos veces seguidas**, con sus motivos escritos; que lo
 que tienes abierto no aparezca en la lista y que lo descartado vuelva en cuanto
-cambia; y que con la sesión caducada las cuatro consultas de Jira fallen, no se
+cambia DESPUÉS de que lo descartaras; y que con la sesión caducada las cuatro consultas de Jira fallen, no se
 salga del sitio y la lista salga de lo que sí contestó Confluence. Tienen botón
 propio, **«Qué mirar hoy: lo que ha cambiado desde que lo miraste»**.
 
@@ -1235,9 +1246,9 @@ cuarto de hora; **Actualizar** la vuelve a pedir.
 **Qué mirar hoy → Borrar mi actividad** borra el diario de ese sitio (y el del
 Confluence enlazado, si lo hay). **Ajustes → Olvidar este sitio** se lo lleva
 junto con el índice, el contexto y la memoria. Lo que se guarda está escrito en
-una línea al pie de esa misma pantalla, con los números: claves, ids, títulos y
-rutas relativas, nunca la URL completa ni el texto de ninguna página, y nunca
-llega al modelo.
+una línea al pie de esa misma pantalla, con los números —entradas, análisis,
+páginas base y «ya lo he visto»—: claves, ids, títulos y rutas relativas, nunca la
+URL completa ni el texto de ninguna página, y nunca llega al modelo.
 
 **«El modelo no aceptó la petición» o el turno se queda pensando**
 Es el modelo, no Faro. Cambia de modelo en el desplegable: el propio mensaje

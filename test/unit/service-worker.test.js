@@ -47,6 +47,14 @@ function makeChrome() {
     panelMessages: [],
     /** Las claves de cada `storage.local.set`: para poder contar que NO se escribe. */
     escrituras: [],
+    /**
+     * Y las de cada `storage.local.get`. Hace falta para el filtro de
+     * `onUpdated`: sin él no se escriben visitas de más —`recordVisit` las funde
+     * por su clave—, lo que se hace son LECTURAS de balde (los ajustes y el mapa
+     * de sitios) en cada carga de cualquier pestaña, y eso no se ve contando
+     * escrituras (revisión adversaria de H11).
+     */
+    lecturas: [],
   }
 
   globalThis.chrome = {
@@ -90,7 +98,10 @@ function makeChrome() {
         remove: async (k) => delete state.session[k],
       },
       local: {
-        get: async (k) => (k in state.local ? { [k]: state.local[k] } : {}),
+        get: async (k) => {
+          state.lecturas.push(k)
+          return k in state.local ? { [k]: state.local[k] } : {}
+        },
         set: async (o) => {
           state.escrituras.push(Object.keys(o))
           Object.assign(state.local, o)
@@ -506,6 +517,7 @@ async function conSitios(sites = null) {
     'confluence.simplprogramme.eu': { host: 'confluence.simplprogramme.eu', configured: true, product: 'confluence' },
   }
   rig.state.escrituras.length = 0
+  rig.state.lecturas.length = 0
   return rig
 }
 
@@ -569,14 +581,25 @@ test('H11: con cualquiera de los dos interruptores apagado no se apunta NADA', a
   }
 })
 
-test('H11: sin `changeInfo.url` no hay navegación que apuntar', async () => {
-  // `onUpdated` dispara varias veces por carga (status, favicon, título): sin
-  // este filtro, una sola página escribiría el diario cuatro o cinco veces.
+test('H11: sin `changeInfo.url` no se lee ni se escribe nada', async () => {
+  // `onUpdated` dispara varias veces por carga (status, favicon, título) y lo que
+  // interesa es la navegación, una vez. Lo que el filtro ahorra NO son entradas
+  // de más —`recordVisit` funde los avisos de la misma navegación por su clave—:
+  // son los ajustes y el mapa de sitios leídos otra vez en cada carga de
+  // CUALQUIER pestaña. Contando sólo escrituras esto daba verde con el filtro
+  // borrado, así que el mock cuenta también las lecturas (revisión adversaria de
+  // H11).
   const rig = await conSitios()
   await rig.fireTabUpdated(1, { status: 'loading' }, { id: 1, url: `${JIRA}/browse/ENG-7`, title: 'X - Jira' })
   await rig.fireTabUpdated(1, { title: 'X - Jira' }, { id: 1, url: `${JIRA}/browse/ENG-7` })
   await rig.fireTabUpdated(1, {}, { id: 1, url: `${JIRA}/browse/ENG-7` })
   eq(rig.state.escrituras, [])
+  eq(rig.state.lecturas, [], 'tres avisos sin URL nueva no tocan el almacén ni para leerlo')
+
+  // Y con URL, lo de siempre: se lee lo que hace falta y se apunta una vez.
+  await rig.fireTabUpdated(1, { url: `${JIRA}/browse/ENG-7` }, { id: 1, title: 'X - Jira' })
+  assert(rig.state.lecturas.length > 0, 'con una navegación de verdad sí se lee')
+  eq(rig.state.escrituras, [[DIARIO_JIRA]])
 })
 
 test('H11: lo que no es una incidencia ni una página no se apunta', async () => {

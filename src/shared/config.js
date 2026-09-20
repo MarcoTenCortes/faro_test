@@ -206,6 +206,13 @@ export const STORAGE_KEYS = {
   // ENTIDAD: una página del Confluence enlazado analizada desde Jira se apunta
   // en el host de Confluence, que es donde su pestaña la verá.
   activity: (host) => `faro:actividad:${host}`,
+  // Cuándo se borró por última vez el diario de ese host. Va en storage.session
+  // porque la escribe un contexto (el panel, al borrar) y la lee el otro (el
+  // service worker, antes de guardar una visita que había leído ANTES del
+  // borrado: sin esta marca, esa escritura devolvía el diario entero unos
+  // milisegundos después). Es un instante y nada más, y muere con el navegador:
+  // al arrancar Chrome no hay ninguna escritura en vuelo que desmentir.
+  activityCleared: (host) => `faro:actividad-borrada:${host}`,
   // Y la caché de lo que contestaron las API para «qué mirar hoy». Va en
   // storage.session, como la sesión: abrir el panel cinco veces en una mañana
   // no puede costar cinco tandas de peticiones, y al cerrar Chrome se va sola.
