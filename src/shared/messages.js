@@ -29,9 +29,11 @@ export const MSG = {
 
   // panel -> content script: lecturas REST del propio sitio con la sesión del
   // navegador (H7). Las contesta el content script porque es quien está en el
-  // origen del sitio; el panel nunca manda rutas ni URLs, sólo la consulta o el
-  // `kind` de una plantilla fija, y el content script deduce de SU pestaña la
-  // ruta de contexto. Nacen con receptor y sin emisor a propósito: los cablean
+  // origen del sitio; el panel nunca manda el origen ni una URL, sólo la consulta
+  // o el `kind` de una plantilla fija, y el content script deduce de SU pestaña
+  // la ruta de contexto de Jira. En Confluence el mensaje puede PROPONER el
+  // prefijo del wiki que el panel observó (como PAGE_ANCESTORS y PAGE_SEARCH):
+  // `resolveWikiPrefix` sólo lo acepta con forma de ruta. Nacen con receptor y sin emisor a propósito: los cablean
   // H8 (JQL_SEARCH, FAVOURITE_FILTERS), H9 (SPACE_PAGES) y H11 (RECENT_*), y
   // hasta entonces la lista MSG_SIN_EMISOR_HASTA de tools/check-docs.mjs los
   // declara pendientes.

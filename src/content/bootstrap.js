@@ -88,8 +88,10 @@
    * El sitio de ESTA pestaña para las lecturas REST de Jira.
    *
    * La ruta de contexto (`/jira`) se deduce de la URL del navegador con
-   * `jiraContextPath`, como el prefijo del wiki con `resolveWikiPrefix`: es lo
-   * que decide a qué ruta se pide, así que no puede llegar por mensaje. Para
+   * `jiraContextPath`: es lo que decide a qué ruta se pide, así que no puede
+   * llegar por mensaje. (El prefijo del wiki de Confluence sí se puede proponer,
+   * porque un DC bajo `/confluence` sólo lo conoce quien lo observó;
+   * `resolveWikiPrefix` lo acepta sólo con forma de ruta.) Para
    * `cloud` vale que lo diga cualquiera de los dos: en Jira Cloud no hay REST de
    * Jira que leer (410) y negarse es el lado seguro.
    */

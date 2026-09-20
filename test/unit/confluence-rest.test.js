@@ -842,6 +842,17 @@ test('H7: el árbol para en el tope de páginas o en el de peticiones, y lo dice
   eq(c2.length, 3, 'nunca más peticiones que el tope')
   eq(porPeticiones.requests, 3)
 
+  // Revisión adversaria de H7: un tope de páginas que no es un número (una opción
+  // a medio pasar) gastaba las doce peticiones y devolvía `ok: true` con CERO
+  // páginas, porque `slice(0, NaN)` es `[]`. Ahora vale el del índice.
+  for (const malo of [NaN, undefined, null, 0, -1, 2.5, '5']) {
+    desde = 0
+    const { fn: f3 } = fakeFetch({ '/rest/api/content?spaceKey=SIMPL': () => pagina((desde += 2)) })
+    const r = await fetchSpacePages(f3, DC, 'SIMPL', { limit: 2, maxPages: malo, maxRequests: 2 })
+    eq(r.ok, true, String(malo))
+    eq(r.pages.length, 4, 'un tope de páginas raro no vacía el árbol: ' + String(malo))
+  }
+
   // Los topes por defecto son los del ÍNDICE, no unos propios.
   eq(INDEX_LIMITS.maxPages, 300)
   eq(INDEX_LIMITS.restMaxRequests, 12)

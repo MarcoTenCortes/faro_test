@@ -144,7 +144,11 @@ export const SAMPLE_FIELDS = ['summary', 'issuetype', 'status', 'priority', 'lab
 /** Las categorías de estado que Jira define; cualquier otra cosa no es una categoría. */
 const STATUS_CATEGORIES = ['new', 'indeterminate', 'done', 'undefined']
 
-const CONTROL = new RegExp('[\\u0000-\\u001F\\u007F]', 'g')
+// Los controles C0, el DEL y los C1 (U+0080-U+009F). Los C1 entran por el NEL
+// (U+0085), que abre línea y que el `\s` de JavaScript NO cubre: sin él, una
+// consulta con un NEL dentro seguía siendo «dos líneas» en el Registro después de
+// pasar por `cleanJql` (revisión adversaria de H7). U+2028 y U+2029 sí los colapsa `\s`.
+const CONTROL = new RegExp('[\\u0000-\\u001F\\u007F-\\u009F]', 'g')
 const DIGITS = /^\d+$/
 /**
  * El `pageId` con el que un enlace remoto señala una página de Confluence: en el

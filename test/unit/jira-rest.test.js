@@ -107,6 +107,13 @@ test('cleanJql: una línea, sin controles, con tope; y es la misma que pina plan
   eq(cleanJql('  project = SIMPL   AND text ~ "x"  '), 'project = SIMPL AND text ~ "x"')
   eq(cleanJql('project = SIMPL\nORDER BY\tcreated DESC'), 'project = SIMPL ORDER BY created DESC')
   eq(cleanJql('a\u0000b'), 'a b')
+  // Revisión adversaria de H7: el NEL (U+0085) abre línea y `\s` no lo cubre; con
+  // él dentro, una consulta seguía siendo «dos líneas» en el Registro. Los
+  // caracteres se componen con fromCharCode: crudos no se leerían en el fuente.
+  for (const salto of [0x85, 0x2028, 0x2029, 0x9b]) {
+    const c = String.fromCharCode(salto)
+    eq(cleanJql(`project = SIMPL${c}ORDER BY created`), 'project = SIMPL ORDER BY created', 'U+' + salto.toString(16))
+  }
   eq(cleanJql('x'.repeat(2500)).length, 2000)
   for (const malo of [null, undefined, 7, {}, []]) eq(cleanJql(malo), '', JSON.stringify(malo))
 })
@@ -117,6 +124,7 @@ test('SEGURIDAD: jqlQuote cierra el literal, escapa la barra y la comilla, y aco
   eq(jqlQuote('API" OR project = OTRO'), '"API\\" OR project = OTRO"')
   eq(jqlQuote('C:\\ruta'), '"C:\\\\ruta"')
   eq(jqlQuote('con\nsalto\u0000'), '"con salto"')
+  eq(jqlQuote('con' + String.fromCharCode(0x85) + 'NEL'), '"con NEL"', 'el NEL también es un salto')
   eq(jqlQuote('"'), '"\\""')
   // La barra se escapa ANTES que la comilla: si no, `\"` acabaría como `\\"`,
   // que es una barra escapada y una comilla que cierra.

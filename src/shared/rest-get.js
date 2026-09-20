@@ -30,7 +30,10 @@
 /** Cuántos mensajes de error del servidor se leen, y cuánto de cada uno. */
 export const REST_ERROR_LIMITS = { messages: 3, chars: 200 }
 
-const CONTROL = new RegExp('[\\u0000-\\u001F\\u007F]', 'g')
+// Los controles C0, el DEL y los C1 (U+0080-U+009F): el NEL (U+0085) abre línea y
+// el `\s` de JavaScript no lo cubre; un mensaje del servidor es texto ajeno y
+// tiene que salir de aquí en UNA línea (revisión adversaria de H7).
+const CONTROL = new RegExp('[\\u0000-\\u001F\\u007F-\\u009F]', 'g')
 
 /**
  * Reloj monótono para los `ms` que devuelven los lectores REST.

@@ -93,7 +93,10 @@ export const CONFLUENCE_REST_LIMITS = {
 
 /** Un prefijo del wiki tiene forma de ruta: nada, o segmentos normales. */
 const PREFIX = /^(\/[A-Za-z0-9._~-]+)*$/
-const CONTROL = new RegExp('[\\u0000-\\u001F\\u007F]', 'g')
+// Los controles C0, el DEL y los C1 (U+0080-U+009F): el NEL (U+0085) abre línea y
+// el `\s` de JavaScript no lo cubre, así que un título o un nombre con un NEL
+// dentro salía de aquí en dos líneas (revisión adversaria de H7).
+const CONTROL = new RegExp('[\\u0000-\\u001F\\u007F-\\u009F]', 'g')
 /** Lo que en un literal CQL rompe la cadena (`"`, `\`) o es un comodín (`*`, `?`). */
 const CQL_UNSAFE = new RegExp('["\\\\*?]', 'g')
 
@@ -749,6 +752,11 @@ export async function fetchSpacePages(
   // bucle no se ejecutaría y esto devolvería un árbol vacío como si el espacio
   // no tuviera páginas.
   const tope = Number.isInteger(maxRequests) && maxRequests >= 1 ? maxRequests : 1
+  // Y lo mismo con el tope de PÁGINAS: con NaN, `pages.length >= NaN` es siempre
+  // falso y `slice(0, NaN)` es `[]`, así que se gastaban todas las peticiones
+  // para devolver un árbol vacío con `ok: true` (revisión adversaria de H7). Un
+  // tope que no vale es el del índice, que es el que tiene dueño.
+  const topePaginas = Number.isInteger(maxPages) && maxPages >= 1 ? maxPages : INDEX_LIMITS.maxPages
   const pages = []
   const vistos = new Set()
   let homeId = null
@@ -768,7 +776,7 @@ export async function fetchSpacePages(
       vistos.add(p.id)
       pages.push(p)
     }
-    if (pages.length >= maxPages) {
+    if (pages.length >= topePaginas) {
       truncated = true
       break
     }
@@ -779,5 +787,5 @@ export async function fetchSpacePages(
     if (requests >= tope) truncated = true
   }
 
-  return { ok: true, pages: pages.slice(0, maxPages), homeId, requests, truncated, ms: Math.round(nowMs() - t0) }
+  return { ok: true, pages: pages.slice(0, topePaginas), homeId, requests, truncated, ms: Math.round(nowMs() - t0) }
 }

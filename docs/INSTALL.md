@@ -481,7 +481,7 @@ distinta. Se regenera sólo cuando el cambio es intencionado, revisando el
 
 `npm run harness` levanta en <http://127.0.0.1:5175> una Confluence y un Jira de
 mentira con las piezas reales encima. El botón **Autocomprobación completa**
-recorre hoy **49 comprobaciones**; hay que correrla con el panel del navegador a
+recorre hoy **49 tramos numerados (89 comprobaciones)**; hay que correrla con el panel del navegador a
 la vista y a 1280×900, porque con la ventana oculta Chrome estrangula los
 temporizadores y no ejecuta los fotogramas.
 
