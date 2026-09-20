@@ -71,8 +71,10 @@ export const STRICT = { titles: true, msgs: true, files: true }
  * MSG, igual.
  */
 export const MSG_SIN_EMISOR_HASTA = {
-  JQL_SEARCH: 'H8',
-  FAVOURITE_FILTERS: 'H8',
+  // JQL_SEARCH y FAVOURITE_FILTERS salieron al cablearlos H8: la lista de la
+  // tarjeta de búsqueda manda el primero desde `attachJqlResults` y los chips
+  // del chat vacío el segundo desde `loadSearchChipSources` (src/panel/panel.js).
+  // Así es como encoge.
   SPACE_PAGES: 'H9',
   RECENT_ISSUES: 'H11',
   RECENT_PAGES: 'H11',

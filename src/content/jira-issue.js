@@ -32,6 +32,8 @@
  * Sólo se leen nodos; no se toca nada. Es DOM puro: se comprueba en el banco.
  */
 
+import { validIssueKey } from '../atlassian/site.js'
+
 /** La vista de incidencia, si la página lo es. Data Center primero; Cloud sin verificar. */
 const VIEW = ['#issue-content', '.issue-view', '[data-testid="issue.views.issue-details.issue-layout.container-left"]']
 
@@ -193,6 +195,8 @@ const FIELD_LABELS = {
   labels: /^(etiquetas?|labels?)$/i,
 }
 const LIST_FIELDS = new Set(['fixVersions', 'affectsVersions', 'components', 'labels'])
+/** La clave que lleva dentro un enlace a una incidencia («/browse/ENG-7», «/jira/browse/ENG-7?src=x»). */
+const BROWSE_KEY = /\/browse\/([^/?#]+)/
 /** Lo que escribió un usuario: la descripción, los comentarios y la actividad. Un campo nunca sale de ahí. */
 const USER_CONTENT = '#description-val, .user-content-block, .action-body, .activity-comment, #issue_actions_container'
 
@@ -212,10 +216,30 @@ function lista(el) {
 }
 
 /**
+ * La clave de incidencia que lleva el ENLACE de un campo, o ''.
+ *
+ * Sólo del `href`, nunca del texto: el campo de la épica enseña su NOMBRE
+ * («Rotación de credenciales»), y en Data Center `'Epic Link' = nombre` no
+ * encuentra nada —hay que buscar por clave, y por nombre hace falta un
+ * complemento (docs/plan/anexo-C, «APIs externas»)—. Lo que salga de aquí acaba
+ * dentro de una consulta JQL, así que pasa por `validIssueKey`, que es donde se
+ * decide qué tiene forma de clave; si el campo no enlaza a ninguna, no hay
+ * clave, y quien la pida se queda sin ella (el chip «Misma épica» no se ofrece).
+ */
+function claveDeEnlace(el) {
+  for (const a of el?.querySelectorAll?.('a[href]') || []) {
+    const m = BROWSE_KEY.exec(a.getAttribute('href') || '')
+    const key = m ? validIssueKey(m[1]) : ''
+    if (key) return key
+  }
+  return ''
+}
+
+/**
  * Los campos de la incidencia abierta, o null si esta página no es una.
  *
  * @param {Document} [doc]
- * @returns {{type:string, status:string, priority:string, resolution:string, assignee:string, reporter:string, epic:string, sprint:string, fixVersions:string[], affectsVersions:string[], components:string[], labels:string[]}|null}
+ * @returns {{type:string, status:string, priority:string, resolution:string, assignee:string, reporter:string, epic:string, epicKey:string, sprint:string, fixVersions:string[], affectsVersions:string[], components:string[], labels:string[]}|null}
  */
 export function jiraIssueFields(doc = document) {
   if (!VIEW.some((s) => doc.querySelector(s))) return null
@@ -239,11 +263,18 @@ export function jiraIssueFields(doc = document) {
   }
 
   const out = {}
+  let epicEl = null
   for (const [k, re] of Object.entries(FIELD_LABELS)) {
     // Por id, en orden de preferencia (el primero que exista); si no, por etiqueta.
     const porId = (FIELD_IDS[k] || []).map((s) => doc.querySelector(s)).find(Boolean) || null
     const el = porId || pares.find((p) => re.test(p.nombre))?.el || null
+    if (k === 'epic') epicEl = el
     out[k] = LIST_FIELDS.has(k) ? lista(el) : texto(el)
   }
+  // Y la épica otra vez, esta vez como CLAVE: es lo único con lo que se puede
+  // escribir una consulta que la encuentre. No sustituye a `epic` —que es lo
+  // que el usuario lee en pantalla— ni entra en el prompt: sirve para construir
+  // «Misma épica ENG-1» sin pedirle nada al modelo.
+  out.epicKey = claveDeEnlace(epicEl)
   return out
 }

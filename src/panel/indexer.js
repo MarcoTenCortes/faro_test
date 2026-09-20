@@ -9,7 +9,7 @@
  */
 
 import { normalizeIndex, mergeIndex, mergeIndexKeepingTree, indexSize } from '../atlassian/index-store.js'
-import { canonicalPagePath, canonicalSpacePath, isRealSpaceKey, validProjectKey } from '../atlassian/site.js'
+import { canonicalPagePath, canonicalSpacePath, isRealSpaceKey, validIssueKey, validProjectKey } from '../atlassian/site.js'
 import {
   indexExploreSystem,
   indexExplorePrompt,
@@ -146,6 +146,58 @@ export function ownProductEntities(found, site) {
   if (site.product === 'jira') return { ...found, pages: [], spaces: [] }
   if (site.product === 'confluence') return { ...found, issues: [], projects: [] }
   return found
+}
+
+/**
+ * Las incidencias que acaba de devolver la API REST de Jira, al índice. Pura.
+ *
+ * Hermana de `harvestIndex`, y con su misma firma a propósito: el panel las llama
+ * igual y las dos acaban en `mergeIndexKeepingTree`. La diferencia es de dónde
+ * viene lo que se funde. `harvestIndex` lee el TEXTO que devolvió una herramienta
+ * del MCP y tiene que adivinar con regex qué es una clave y qué no (S6/M4);
+ * aquí lo que llega ya pasó por `parseSearchIssues` (claves blancas, clave
+ * validada, resumen de una línea acotado), así que basta con volver a exigir la
+ * forma de clave —lo que entra en el índice se valida en el índice, no antes— y
+ * dejar que `normalizeIndex` fabrique la ruta `/browse/CLAVE`.
+ *
+ * Esto es lo que hace que una fila de la lista de la tarjeta pueda abrirse sin
+ * concatenar ninguna URL: la clave entra en el índice y el destino pasa por
+ * `validatePlan` como cualquier otro (§8.3). Y pasa por `ownProductEntities`
+ * porque en Data Center Jira y Confluence son dos sitios: desde una pestaña de
+ * Confluence, una incidencia no es un destino de ESTE host.
+ *
+ * @param {Array<{key:string, summary?:string}>} issues lo que devolvió `searchIssues`
+ * @param {{site:object, index:object|null}} opts
+ * @returns {{index: object|null, added: number}}
+ */
+export function harvestFromSearch(issues, { site, index }) {
+  if (!site) return { index, added: 0 }
+  const vistas = new Set()
+  const limpias = []
+  for (const raw of Array.isArray(issues) ? issues : []) {
+    const key = validIssueKey(raw?.key)
+    if (!key || vistas.has(key)) continue
+    vistas.add(key)
+    limpias.push({ key, summary: typeof raw.summary === 'string' ? raw.summary : '' })
+  }
+  const found = ownProductEntities({ pages: [], spaces: [], projects: [], issues: limpias }, site)
+  if (!found.issues.length) return { index, added: 0 }
+
+  const fresh = normalizeIndex({ ...found, updated: Date.now() }, site.host, index?.scope, {
+    cloud: site?.cloud,
+    wikiPrefix: site?.wikiPrefix,
+  })
+  if (!indexSize(fresh)) return { index, added: 0 }
+
+  const before = indexSize(index)
+  // La MISMA fusión que `harvestIndex`. Hoy `mergeIndex` haría exactamente lo
+  // mismo, porque lo que sale de aquí son sólo incidencias y lo que distingue a
+  // `mergeIndexKeepingTree` es que no deja que una página nueva le quite el
+  // padre a una que ya lo sabía. Se usa igualmente la que conserva el árbol para
+  // que no haya dos formas de fundir en el índice: el día que una búsqueda traiga
+  // una página —un enlace remoto, un padre— el cambio no sería silencioso.
+  const merged = mergeIndexKeepingTree(index, fresh)
+  return { index: merged, added: indexSize(merged) - before }
 }
 
 // El `/wiki` es OPCIONAL: sólo lo lleva Confluence Cloud. En Server/Data

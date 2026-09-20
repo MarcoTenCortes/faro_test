@@ -80,6 +80,12 @@ export const JIRA_REST_LIMITS = {
   links: 20,
   /** Búsquedas sugeridas que se ofrecen como mucho. */
   suggestions: 8,
+  /**
+   * Las últimas consultas ejecutadas que se recuerdan por sitio. Cinco: son
+   * chips en el chat vacío, no un historial; con más, las de hace una semana
+   * empujarían fuera a las sugeridas de la pantalla de ahora.
+   */
+  recentJql: 5,
   /** El perfil del proyecto: listas, patrones de nombre y ejemplos por patrón. */
   profileList: 30,
   profilePrefixes: 6,
@@ -819,6 +825,56 @@ function normalizePrefixes(v) {
     out.push({ pattern, count: cuenta(p?.count), examples })
   }
   return out
+}
+
+// ------------------------------------------- las últimas que se ejecutaron
+
+/**
+ * Las últimas consultas que se ejecutaron de verdad, en su forma canónica. Pura.
+ *
+ * Se guardan en el registro del sitio (`sites[host].recentJql`), que es un
+ * objeto de `chrome.storage` como cualquier otro: lo que salga de ahí puede
+ * estar editado a mano o venir de una versión anterior, así que se reconstruye
+ * al LEER con claves blancas (CLAUDE.md §9) y cada consulta vuelve a pasar por
+ * `cleanJql` antes de que nadie la meta en una URL. Sin repetir (sin distinguir
+ * mayúsculas: la misma consulta escrita de dos formas es una) y con tope.
+ *
+ * @returns {Array<{jql:string, at:number, count:number}>}
+ */
+export function normalizeRecentJql(raw) {
+  if (!Array.isArray(raw)) return []
+  const out = []
+  const vistas = new Set()
+  for (const item of raw) {
+    if (out.length >= JIRA_REST_LIMITS.recentJql) break
+    // Una lista de cadenas a secas también vale: es lo que escribiría alguien
+    // a mano, y lo único que hace falta de una entrada es su consulta.
+    const jql = cleanJql(typeof item === 'string' ? item : item?.jql)
+    if (!jql) continue
+    const huella = jql.toLowerCase()
+    if (vistas.has(huella)) continue
+    vistas.add(huella)
+    out.push({ jql, at: Number.isFinite(item?.at) ? Math.round(item.at) : 0, count: cuenta(item?.count) })
+  }
+  return out
+}
+
+/**
+ * Apunta una consulta que acaba de ejecutarse. Pura (el reloj se inyecta).
+ *
+ * La más nueva delante, sin repetir y con tope. Sólo se apunta lo que se
+ * EJECUTÓ —un chip pulsado, una búsqueda del modelo que devolvió lista—, nunca
+ * lo que se escribió: una consulta que Jira rechaza no merece volver a
+ * ofrecerse. `count` es cuántos resultados dio, que es lo que distingue una
+ * consulta útil de una que no encuentra nada.
+ */
+export function rememberJql(list, jql, { count = 0, now = Date.now() } = {}) {
+  const consulta = cleanJql(jql)
+  const previas = normalizeRecentJql(list)
+  if (!consulta) return previas
+  const huella = consulta.toLowerCase()
+  const entrada = { jql: consulta, at: Number.isFinite(now) ? Math.round(now) : 0, count: cuenta(count) }
+  return [entrada, ...previas.filter((r) => r.jql.toLowerCase() !== huella)].slice(0, JIRA_REST_LIMITS.recentJql)
 }
 
 // ------------------------------------------------- búsquedas sugeridas

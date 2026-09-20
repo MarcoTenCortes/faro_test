@@ -1443,13 +1443,37 @@ test('H5: el espejo del panel no copia la paleta, fuerza el tema con data-theme 
   // PR diga números y no impresiones.
   assert(espejo.includes('window.faroPreview = {'), 'los mandos del espejo son API')
   const medida = espejo.slice(espejo.indexOf('function check() {'), espejo.indexOf('function pintarMedidas('))
-  for (const clave of ['ok', 'overflowX', 'topHeight', 'composerMetaHeight', 'screenHeadsVisible', 'emptyStateRows']) {
+  for (const clave of ['ok', 'overflowX', 'topHeight', 'composerMetaHeight', 'screenHeadsVisible', 'emptyStateRows', 'chipRows', 'chipsClipped', 'emptyFits']) {
     assert(new RegExp('\\b' + clave + '\\b').test(medida), `check() mide ${clave}`)
   }
-  assert(
-    /const ok = presente && !overflowX && topHeight <= 48 && composerMetaHeight <= 36 && screenHeadsVisible && emptyStateRows <= 3/.test(medida),
-    'y el veredicto son los cinco a la vez, y que haya panel'
-  )
+  // Y los MIDE: devolver un nombre que ya no se calcula deja el resultado con
+  // una clave y sin número (y el espejo reventando al mirarla).
+  for (const medido of ['chipRows', 'chipsClipped', 'emptyFits']) {
+    assert(new RegExp('const ' + medido + ' =').test(medida), `check() calcula ${medido}, no sólo lo devuelve`)
+  }
+  // El veredicto, condición a condición y contadas: una regex de una sola línea
+  // dejó de valer cuando H8 añadió las dos suyas, y lo que hay que impedir es
+  // que alguna se caiga o que entre un término que lo ponga verde por su cuenta.
+  const veredicto = medida.slice(medida.indexOf('const ok ='), medida.indexOf('return { ok,'))
+  for (const condicion of [
+    'presente',
+    '!overflowX',
+    'topHeight <= 48',
+    'composerMetaHeight <= 36',
+    'screenHeadsVisible',
+    'emptyStateRows <= 3',
+    'chipsClipped === 0',
+    'emptyFits',
+  ]) {
+    assert(veredicto.includes(condicion), `el veredicto tiene que mirar ${condicion}`)
+  }
+  eq(veredicto.match(/&&/g)?.length, 7, 'y nada más: ocho condiciones y ninguna suelta')
+  assert(!veredicto.includes('||'), 'y ninguna se puede saltar con un «o»: un «|| true» dejaría el veredicto verde siempre')
+  // `chipRows` es un NÚMERO y no una condición: a 320 px cuatro chips con
+  // etiquetas de verdad no caben en una línea (panel.css los envuelve a
+  // propósito), así que lo que falla es que el estado vacío no quepa —eso es
+  // `emptyFits`— y el número está para ver el coste en la captura.
+  assert(!veredicto.includes('chipRows'), 'las filas de chips se imprimen, no se juzgan')
 
   // Que haya panel es lo PRIMERO: un selector que no casa medía 0 px y 0 ≤ 48,
   // así que el espejo sobre un documento vacío —el fallo que H5 tuvo de
@@ -1889,4 +1913,340 @@ test('H6 revisión: una escritura tardía del índice no pisa un contexto recié
   assert(/const aGuardar = sigueAqui && state\.index \? state\.index : index/.test(escribir), '…manda lo que el panel tiene ahora, que nunca es más viejo')
   assert(/await saveIndex\(host, aGuardar\)/.test(escribir))
   assert(!/saveIndex\(state\./.test(escribir), 'nunca bajo el host de ahora: el host es el apuntado, pase lo que pase')
+})
+
+test('H8: la tarjeta de una búsqueda de Jira trae la lista leída de la API, y la de siempre no desaparece', () => {
+  // Hasta H8 la tarjeta decía «Los 37 resultados de la búsqueda en Jira» y para
+  // ver cuáles había que irse a Jira. La MISMA consulta que el modelo acaba de
+  // ejecutar por el MCP se lee de la API del propio sitio: 0 tokens (§8.19).
+  const nav = sinComentarios(JS.slice(JS.indexOf('async function offerNavigation'), JS.indexOf('async function learnAncestry')))
+  assert(/const card = navCard\(jqlPlan\(busqueda\)\)/.test(nav) && /attachToBubble\(bubble, card\)/.test(nav), 'la tarjeta de siempre se pinta primero')
+  assert(
+    /await attachJqlResults\(card, busqueda, \{ site: state\.site, sessionID: state\.sessionID, tabId: state\.tabId \}\)/.test(nav),
+    'y la lista se le añade con el sitio, la sesión y la pestaña capturados al pedir (§8.22)'
+  )
+  assert(
+    nav.indexOf('attachToBubble(bubble, card)') < nav.indexOf('await attachJqlResults('),
+    'la tarjeta existe antes de que se lea nada: si la API no contesta, ya está puesta'
+  )
+  // Y se ESPERA dentro del turno: lo que la lista funde en el índice tiene que
+  // estar apuntado antes de la única escritura del turno (P3 de H6).
+  const envio = sinComentarios(JS.slice(JS.indexOf('async function send('), JS.indexOf('function paintTurn(')))
+  assert(envio.indexOf('await offerNavigation(') < envio.indexOf('await persistIndex()'))
+
+  const lista = sinComentarios(JS.slice(JS.indexOf('async function attachJqlResults'), JS.indexOf('function jqlResultsList')))
+  assert(lista.length > 200, 'el trozo de attachJqlResults existe')
+  assert(/if \(!state\.settings\.restTools\) return/.test(lista), 'el interruptor maestro, y sin aviso: apagarlo no es un fallo')
+  assert(/site\.product !== 'jira'/.test(lista), 'sólo en Jira')
+  assert(/if \(site\.cloud\) \{/.test(lista), 'en Jira Cloud no hay REST de Jira que leer (410)')
+  assert(/await ensureContentAccess\(\{ announce: false \}\)/.test(lista), 'quien pide es el content script, que vive en el origen del sitio')
+  assert(/type: MSG\.JQL_SEARCH, jql, limit: JIRA_REST_LIMITS\.defaultResults/.test(lista), 'la consulta viaja tal cual, con el tope del módulo')
+  assert(!/state\.site\.origin/.test(lista) && !/location\./.test(lista), 'el panel no manda ni el origen ni ninguna ruta: los deduce el content script')
+  // Lo capturado manda al pintar (§8.22), y el chat puede haberse repintado (C7).
+  assert(/if \(!card\.isConnected\) return/.test(lista))
+  assert(
+    /if \(\(state\.site\?\.host \?\? state\.lastHost\) !== site\.host \|\| state\.sessionID !== sessionID\) \{/.test(lista),
+    'si el panel se fue a otro sitio o abrió otra sesión, no se pinta ni se cosecha'
+  )
+  assert(
+    lista.indexOf('if (!card.isConnected) return') < lista.indexOf('harvestFromSearch('),
+    'las dos guardas van antes de cosechar'
+  )
+  // Al índice antes de pintar las filas, y apuntado (no escrito) como todo lo
+  // que crece dentro de un turno.
+  assert(/const \{ index, added \} = harvestFromSearch\(issues, \{ site, index: state\.index \}\)/.test(lista))
+  assert(/markIndexDirty\(index, site\.host\)/.test(lista) && !/saveIndex\(/.test(lista), 'se apunta bajo el host que lo aprendió; escribe persistIndex')
+  assert(lista.indexOf('harvestFromSearch(') < lista.indexOf('jqlResultsList('), 'el índice se funde antes de que haya filas que pulsar')
+  // Contraparte visible de cada fallo (§8.14), y la tarjeta sigue entera.
+  assert(/noticeNode\(/.test(lista) && /'Lista de Jira no disponible'/.test(lista) && /'Lista de Jira leída'/.test(lista))
+  assert(/restFailureDue\(reason, site\.host, sessionID\)/.test(lista), 'con tregua por host y sesión para lo que no cambia por reintentar')
+  assert(!/card\.remove\(\)/.test(lista), 'la tarjeta de siempre nunca desaparece: la lista es un añadido')
+})
+
+test('H8: una fila de la lista no navega por su cuenta — pasa por el índice y por validatePlan', () => {
+  // §8.3: el destino se resuelve contra el índice y la URL la reconstruye
+  // `resolveTarget` contra el origen de la pestaña. El panel no concatena ninguna.
+  const filas = sinComentarios(JS.slice(JS.indexOf('function jqlResultsList'), JS.indexOf('function openIssueFromResults')))
+  assert(/createElement\('button'\)/.test(filas), 'cada fila es un botón, no un enlace: no hay URL hasta que validatePlan la da')
+  assert(/textContent = issue\.summary/.test(filas), 'el resumen es texto de Jira y entra con textContent')
+  assert(/openIssueFromResults\(issue\.key, \{ site, card \}\)/.test(filas))
+  for (const clase of ['result-status', 'result-list', 'result-row', 'result-key', 'result-body', 'result-title', 'result-meta']) {
+    assert(CSS_LIMPIO.includes('.' + clase), 'clase sin estilo: ' + clase)
+  }
+
+  const abrir = sinComentarios(JS.slice(JS.indexOf('function openIssueFromResults'), JS.indexOf('async function offerNotes')))
+  assert(
+    /validatePlan\(\s*\{ navigate: true, mode: 'direct', destination: \{ kind: 'jira-issue', id: key \} \},/.test(abrir),
+    'el destino se valida como cualquier otro'
+  )
+  assert(/index: state\.index, origin: site\.origin, host: site\.host, here: state\.tabUrl, site/.test(abrir), 'contra el índice y el origen del sitio')
+  assert(/await runPlan\(r\.plan, 'direct', card\)/.test(abrir), 'y lo lanza el mismo runPlan: NAVIGATE_DIRECT')
+  assert(
+    /for \(const b of card\.querySelectorAll\('\.result-row'\)\) b\.disabled = false/.test(abrir),
+    'y las filas vuelven: un salto directo no tiene PLAN_FINISHED que las encienda, y la lista se quedaba muerta tras abrir una'
+  )
+  assert(/noticeNode\(/.test(abrir), 'y si el plan no vale, se dice (§8.14)')
+  assert(/import \{ validatePlan \} from '\.\.\/nav\/validate\.js'/.test(JS))
+
+  // SEGURIDAD: el panel nunca escribe una ruta de la API ni fabrica un /browse/.
+  const JS_LIMPIO = sinComentarios(JS)
+  assert(!JS_LIMPIO.includes('/rest/api/'), 'ninguna ruta REST en el panel: las monta el módulo del producto')
+  assert(!/'\/browse\/' \+/.test(JS_LIMPIO), 'ninguna URL de incidencia concatenada a mano')
+})
+
+test('H8: la casilla de las lecturas REST se lee y se guarda en Ajustes, y no rearranca el panel', () => {
+  assert(htmlIds.has('set-rest-tools'), 'la casilla existe en la pantalla de Ajustes')
+  const pantalla = sinComentarios(JS.slice(JS.indexOf('async function showSettingsScreen'), JS.indexOf('function setStatus')))
+  assert(/\$\('set-rest-tools'\)\.checked = state\.settings\.restTools/.test(pantalla), 'al abrir refleja lo guardado')
+  const cerrar = sinComentarios(JS.slice(JS.indexOf("$('btn-settings-close')"), JS.indexOf("$('btn-reindex')")))
+  assert(/restTools: \$\('set-rest-tools'\)\.checked,/.test(cerrar), 'al cerrar se guarda')
+  assert(
+    /const clientChanged = state\.settings\.serverUrl !== antes\.serverUrl \|\| state\.settings\.password !== antes\.password/.test(cerrar),
+    'y no cuenta para rearrancar: no cambia con quién se habla (P6a de H6)'
+  )
+
+  // El pin que dejó encargado la revisión adversaria de H7: `restTools` apaga
+  // las lecturas NUEVAS, no las de las páginas base ni la del camino, que llevan
+  // funcionando desde antes y son comportamiento pinado (docs/PLAN.md §3.3).
+  const deAntes = [
+    ['async function fetchPageChain', 'async function mergePagesIntoIndex'],
+    ['async function searchSourcesRemote', 'function searchFailText'],
+    ['async function learnAncestry', 'const REST_REASON_ALWAYS'],
+  ]
+  for (const [desde, hasta] of deAntes) {
+    const trozo = sinComentarios(JS.slice(JS.indexOf(desde), JS.indexOf(hasta)))
+    assert(trozo.length > 200, 'el trozo existe: ' + desde)
+    assert(!/restTools/.test(trozo), desde + ' no mira restTools: esa lectura es de antes de H7 y la casilla no la apaga')
+  }
+})
+
+test('H8: la tarjeta restaurada no vuelve a pedir la lista sola', () => {
+  // `restoreConversation` no recrea ninguna tarjeta de navegación (ni las filas
+  // de herramientas): lo que pinta es la prosa y, si las marcas siguen en la
+  // página, la tarjeta del análisis. Una lista leída «ahora mismo de Jira» al
+  // reabrir el panel serían N peticiones por cada tarjeta vieja del historial.
+  const restaurar = sinComentarios(JS.slice(JS.indexOf('async function restoreConversation'), JS.indexOf('function showWelcome')))
+  assert(!/attachJqlResults\(/.test(restaurar) && !/navCard\(/.test(restaurar), 'al restaurar no se pide ninguna lista')
+  assert(!/MSG\.JQL_SEARCH/.test(restaurar))
+  eq(sinComentarios(JS).match(/MSG\.JQL_SEARCH/g).length, 1, 'el mensaje se manda desde un solo sitio del panel')
+})
+
+test('H8: el chat vacío ofrece búsquedas al instante, y pintarlas no vuelve a anunciar nada', () => {
+  // Las tres sugerencias van AL MODELO; los chips los ejecuta la extensión. Son
+  // dos cosas y viven en dos módulos: el de las sugerencias no se toca.
+  assert(/import \{ searchChips \} from '\.\/search-chips\.js'/.test(JS), 'la lista de chips es pura y vive aparte')
+  const vacio = sinComentarios(JS.slice(JS.indexOf('function showWelcome'), JS.indexOf('function paintSearchChips')))
+  assert(/'search-chips hidden'/.test(vacio), 'la caja nace oculta, como la dejó H5')
+  assert(/paintSearchChips\(chips\)/.test(vacio), 'y se llena con lo que YA se sabe, sin pedir nada')
+  assert(/loadSearchChipSources\(chips\)/.test(vacio), 'lo que falte llega después')
+  assert(vacio.includes('announce(h.textContent)'), 'el estado vacío sigue anunciándose una vez')
+  assert(vacio.indexOf('announce(h.textContent)') < vacio.indexOf('paintSearchChips(chips)'), 'los chips no cambian lo que se anuncia')
+
+  const pintar = sinComentarios(JS.slice(JS.indexOf('function paintSearchChips'), JS.indexOf('async function loadSearchChipSources')))
+  assert(/if \(!box\?\.isConnected\) return/.test(pintar), 'el chat pudo repintarse entre que se pidió una fuente y llegó')
+  assert(/state\.settings\.restTools/.test(pintar), 'el interruptor maestro apaga también los chips')
+  assert(
+    /searchChips\(state\.site, \{\s*issueFields: state\.issueFields\?\.fields \|\| null,\s*favouriteFilters: state\.favouriteFilters \|\| \[\],\s*recentJql: state\.recentJql,/.test(
+      pintar
+    ),
+    'con los campos de la pantalla, los filtros del usuario y sus últimas búsquedas'
+  )
+  assert(/box\.classList\.toggle\('hidden', !chips\.length\)/.test(pintar), 'sin chips, la caja se queda oculta')
+  // Se repinta SÓLO esta caja: repintar el estado vacío volvería a anunciar
+  // «Listo para escuchar» cada vez que llega una fuente (A2, el mismo motivo por
+  // el que cambiar de Skill no lo repinta).
+  assert(!/showWelcome\(\)/.test(pintar), 'no se repinta el estado vacío entero')
+  assert(/b\.className = 'ghost small search-chip ' \+ NEEDS_IDLE/.test(pintar), 'y con un turno en vuelo no se pulsan (H6)')
+  assert(
+    /b\.disabled = state\.streaming/.test(pintar) && /if \(state\.streaming\) \{/.test(pintar),
+    'nace desactivado y el clic que llegue justo en el cambio tampoco pasa'
+  )
+  assert(/b\.textContent = chip\.label/.test(pintar) && /b\.title = chip\.title/.test(pintar), 'la consulta entera se puede leer antes de pulsar')
+  assert(/runDirectSearch\(chip\)/.test(pintar))
+  // La REGLA con su llave, no el nombre suelto: `.search-chip-loquesea`
+  // contiene `.search-chip` y dejaría el pin en verde con el chip sin estilo
+  // (el mismo fallo que la revisión adversaria de H6 encontró en `.older-turns`).
+  for (const clase of ['search-chips', 'search-chip-row', 'search-chip']) {
+    assert(new RegExp('\\.' + clase + '\\s*\\{').test(CSS_LIMPIO), 'clase sin estilo: ' + clase)
+  }
+})
+
+test('H8: los filtros favoritos se piden una vez por sitio, y sólo cuando hay chips que pintar', () => {
+  const cargar = sinComentarios(JS.slice(JS.indexOf('async function loadSearchChipSources'), JS.indexOf('async function readIssueFieldsQuick')))
+  assert(
+    /if \(!state\.settings\.restTools \|\| state\.site\?\.product !== 'jira' \|\| state\.site\?\.cloud\) return/.test(cargar),
+    'ni con el interruptor apagado, ni en Confluence, ni en Cloud (allí no hay REST de Jira que leer)'
+  )
+  assert(/await readIssueFieldsQuick\(\)/.test(cargar))
+  assert(/state\.favouriteFilters === null/.test(cargar), 'null es «no se ha preguntado»; una lista vacía es «ya se preguntó»')
+  assert(cargar.includes('state.favouriteFilters = []'), 'se dan por preguntados aunque la lectura falle')
+  assert(
+    cargar.indexOf('state.favouriteFilters = []') < cargar.indexOf('type: MSG.FAVOURITE_FILTERS'),
+    'y ANTES de preguntar: un sitio que contesta 401 no puede volver a pedirlo en cada chat vacío'
+  )
+  assert(/await ensureContentAccess\(\{ announce: false \}\)/.test(cargar), 'quien pide es el content script, que vive en el origen del sitio')
+  assert(/'Filtros favoritos'/.test(cargar) && !/noticeNode\(/.test(cargar), 'un fallo aquí sólo quita chips: queda en el Registro, no en el chat')
+  // §8.22: lo capturado al pedir manda al volver.
+  assert(/const host = state\.site\.host/.test(cargar), 'el host con el que se pide')
+  assert(cargar.includes('if (state.site?.host !== host) return'), 'y con el que se vuelve: lo leído en otro sitio no se pinta aquí')
+  assert(cargar.lastIndexOf('paintSearchChips(box)') > cargar.indexOf('if (state.site?.host !== host) return'), 'y se repinta al final')
+  eq(sinComentarios(JS).match(/MSG\.FAVOURITE_FILTERS/g).length, 1, 'se piden desde un solo sitio del panel')
+  // Son de ESTE Jira: al cambiar de sitio vuelven a quedar por pedir, y
+  // «Olvidar este sitio» se las lleva con el resto de lo suyo.
+  const refresh = sinComentarios(JS.slice(JS.indexOf('async function refreshTab'), JS.indexOf('async function bootForSite')))
+  assert(/state\.favouriteFilters = null/.test(refresh) && /state\.recentJql = \[\]/.test(refresh))
+  const olvidar = sinComentarios(JS.slice(JS.indexOf("$('btn-forget')"), JS.indexOf("$('mem-enabled').addEventListener")))
+  assert(/state\.recentJql = \[\]/.test(olvidar) && /state\.favouriteFilters = null/.test(olvidar), 'olvidar el sitio olvida sus búsquedas')
+
+  // Y el interruptor manda en caliente: los chips se repintan al aplicar los
+  // ajustes, en los dos sentidos (H6 dejó de rearrancar el panel al cerrarlos).
+  const ajustes = sinComentarios(JS.slice(JS.indexOf('function applySettingsToUi'), JS.indexOf('function wireEvents')))
+  assert(/el\.chat\.querySelector\('\.empty \.search-chips'\)/.test(ajustes) && /paintSearchChips\(chips\)/.test(ajustes))
+})
+
+test('H8: los campos de la incidencia se leen sin trocear la página y se olvidan al cambiar de página', () => {
+  const rapida = sinComentarios(JS.slice(JS.indexOf('async function readIssueFieldsQuick'), JS.indexOf('async function runDirectSearch')))
+  assert(/type: MSG\.PAGE_DIGEST, fieldsOnly: true/.test(rapida), 'sólo los campos: trocear la página cuesta y aquí no se mira ni un bloque')
+  assert(/const fields = normalizeIssueFields\(r\.issue\)/.test(rapida), 'y llegan con claves blancas, como con el digest')
+  assert(/state\.issueFields = \{ url: r\.url \|\| state\.tabUrl, fields \}/.test(rapida), 'se recuerdan con la URL de la que salieron')
+  assert(
+    /if \(state\.issueFields && samePage\(state\.issueFields\.url, state\.tabUrl\)\) return state\.issueFields\.fields/.test(rapida),
+    'y no se vuelven a pedir para la misma página, ni cuando no había campos que leer'
+  )
+  // El Análisis ya los trae con el digest: los mismos campos, sin una lectura más.
+  const lectura = sinComentarios(JS.slice(JS.indexOf('async function readPageDigest'), JS.indexOf('function attachToBubble')))
+  assert(/state\.issueFields = \{ url: r\.url \|\| state\.tabUrl, fields: issue \}/.test(lectura))
+  // Y son de la incidencia que había en pantalla: al cambiar de página se van,
+  // antes de reasignar la URL, como las marcas de un análisis.
+  const refresh = sinComentarios(JS.slice(JS.indexOf('async function refreshTab'), JS.indexOf('async function bootForSite')))
+  assert(/if \(state\.issueFields && !samePage\(tab\.url \|\| '', state\.issueFields\.url\)\) state\.issueFields = null/.test(refresh))
+  assert(refresh.indexOf('state.issueFields = null') < refresh.indexOf('state.tabUrl = tab.url'), 'antes de reasignar la URL de la pestaña')
+
+  // Y en la página, la clave de la épica sale del ENLACE y pasa por la forma de
+  // clave: el texto del campo es el NOMBRE de la épica, y con el nombre la
+  // consulta no encuentra nada en Data Center. `jira-issue.js` necesita DOM y no
+  // tiene prueba propia en Node: se mira por regex, como bootstrap.js.
+  const jiraIssue = sinComentarios(readFileSync(join(ROOT, 'src/content/jira-issue.js'), 'utf8'))
+  assert(/import \{ validIssueKey \} from '\.\.\/atlassian\/site\.js'/.test(jiraIssue), 'la forma de una clave se decide en un solo sitio')
+  const delEnlace = jiraIssue.slice(jiraIssue.indexOf('function claveDeEnlace'), jiraIssue.indexOf('export function jiraIssueFields'))
+  assert(/querySelectorAll\?\.\('a\[href\]'\)/.test(delEnlace) && /validIssueKey\(m\[1\]\)/.test(delEnlace), 'del href, y validada')
+  assert(!/textContent/.test(delEnlace), 'nunca del texto del campo, que es el nombre de la épica')
+  assert(/out\.epicKey = claveDeEnlace\(epicEl\)/.test(jiraIssue))
+})
+
+test('H8: una búsqueda directa no pasa por opencode, y sólo se recuerda si se ejecutó', () => {
+  const directa = sinComentarios(JS.slice(JS.indexOf('async function runDirectSearch'), JS.indexOf('function markIfRestored')))
+  assert(directa.length > 400, 'el trozo de runDirectSearch existe')
+  assert(
+    !/createSession\(/.test(directa) && !/runTurn\(/.test(directa) && !/state\.turns\.push/.test(directa),
+    'ni sesión, ni turno, ni memoria: aquí no ha hablado nadie con el modelo'
+  )
+  assert(/addUserMessage\(chip\.label, 'búsqueda directa, sin modelo'\)/.test(directa), 'y se dice bajo la pregunta')
+  // §8.22: el sitio, la sesión y la pestaña con los que se pide.
+  assert(/const site = state\.site/.test(directa) && /const sessionID = state\.sessionID/.test(directa) && /const tabId = state\.tabId/.test(directa))
+  assert(/jqlLink\(chip\.jql, \{ origin: site\.origin \}\)/.test(directa), 'la URL se monta como la de una búsqueda del modelo')
+  assert(/navCard\(jqlPlan\(destino, \{ kicker: 'Búsqueda directa', title: chip\.label \}\)\)/.test(directa))
+  assert(/card\.classList\.add\('direct'\)/.test(directa) && /\.nav-card\.direct\s*\{/.test(CSS_LIMPIO), 'con su propia tarjeta')
+  assert(/attachJqlResults\(card, destino, \{ site, sessionID, tabId \}\)/.test(directa), 'y la MISMA lista que la de un turno')
+  // Una consulta con una función que no es de Jira se abre allí, no se ejecuta aquí.
+  assert(directa.includes('if (!chip.run) {'), 'lo que no se puede ejecutar aquí se sabe antes de pedir nada')
+  assert(directa.indexOf('if (!chip.run) {') < directa.indexOf('attachJqlResults('), 'y se decide antes')
+  assert(/nav-text/.test(directa), 'y se dice en la tarjeta por qué (§8.14)')
+  // Fuera de un turno nadie llama al `persistIndex()` de `send()`: lo que la
+  // lista apunta en el índice se escribe aquí, antes de cualquier salida.
+  assert(/await persistIndex\(\)/.test(directa), 'lo que la lista aprende se guarda aunque no haya turno')
+  assert(
+    directa.indexOf('attachJqlResults(card, destino') < directa.indexOf('await persistIndex()') &&
+      directa.indexOf('await persistIndex()') < directa.indexOf('if (!r?.ok || state.site?.host !== site.host) return'),
+    'después de la lista y antes de salir por una lista que no llegó'
+  )
+  // Sólo se apunta como «última» lo que devolvió una lista, y bajo el host que
+  // la ejecutó.
+  assert(/if \(!r\?\.ok \|\| state\.site\?\.host !== site\.host\) return/.test(directa))
+  assert(/rememberJql\(state\.recentJql, chip\.jql, \{ count: r\.total \}\)/.test(directa))
+  assert(/await saveSite\(site\.host, \{ recentJql: state\.recentJql \}\)/.test(directa))
+  assert(/import \{ JIRA_REST_LIMITS, normalizeRecentJql, rememberJql \} from '\.\.\/shared\/jira-rest\.js'/.test(JS))
+
+  // Lo guardado se reconstruye al leerlo, como las páginas base.
+  const arranque = sinComentarios(JS.slice(JS.indexOf('async function bootForSite'), JS.indexOf('async function loadLinkedContext')))
+  assert(/state\.recentJql = normalizeRecentJql\(saved\?\.recentJql\)/.test(arranque))
+
+  // Y el epígrafe de la tarjeta lo pone el plan: una búsqueda directa no la
+  // ofreció ningún turno, así que no dice «Puedo llevarte».
+  const tarjeta = sinComentarios(JS.slice(JS.indexOf('function navCard('), JS.indexOf('async function runPlan')))
+  assert(/kicker\.textContent = plan\.kicker \|\| 'Puedo llevarte'/.test(tarjeta))
+})
+
+test('H8: el espejo enseña la lista de la tarjeta, la búsqueda directa, los chips y el aviso de que no hay lista', () => {
+  const espejo = readFileSync(join(ROOT, 'harness/panel-preview.html'), 'utf8')
+
+  // Las tres piezas nuevas se miran en el espejo y en ningún otro sitio: el
+  // panel no corre en el banco (`init()` muere en `getSettings`), así que si no
+  // están aquí, el rediseño de H8 se acepta sin haberlo visto.
+  assert(espejo.includes('data-chat="jira-busqueda"'), 'la conversación de Búsqueda es una opción del espejo')
+  assert(espejo.includes('data-chat="empty-jira"'), 'y el chat vacío de un Jira, que es el único que tiene chips')
+  const reparto = espejo.slice(espejo.indexOf('function pintarChat()'), espejo.indexOf('// ------------------------------------------------- relleno'))
+  assert(/estado\.chat === 'jira-busqueda'/.test(reparto) && /conversacionBusqueda\(\)/.test(reparto), 'y se pintan de verdad')
+  assert(/estado\.chat\.startsWith\('empty'\)/.test(reparto), 'los dos vacíos pintan el estado vacío')
+
+  // La tarjeta con lista: las clases son las que pinta `jqlResultsList`, así que
+  // un renombrado en el panel deja el espejo enseñando algo que ya no existe.
+  const busqueda = espejo.slice(espejo.indexOf('function conversacionBusqueda()'), espejo.indexOf('/** La burbuja que está llegando'))
+  assert(busqueda.length > 500, 'el trozo de conversacionBusqueda existe')
+  // Sobre las piezas que PINTAN, no sobre el fichero entero: `.result-row` está
+  // también en la lista de cajas que se miden a lo ancho, y ahí el nombre
+  // seguiría estando aunque nadie lo pintara.
+  const piezas = espejo.slice(espejo.indexOf('function tarjetaBusqueda(plan)'), espejo.indexOf('/** La tarjeta de «Falta un permiso»'))
+  for (const clase of ['result-status', 'result-list', 'result-row', 'result-key', 'result-body', 'result-title', 'result-meta']) {
+    // El literal ENTERO, con su comilla de cierre: `'result-list'` es prefijo de
+    // `'result-lista'` y un renombrado se colaría.
+    assert(piezas.includes("'" + clase + "'") || piezas.includes(' ' + clase + "'"), 'el espejo no enseña la clase ' + clase)
+    assert(CSS_LIMPIO.includes('.' + clase), 'clase sin estilo: ' + clase)
+  }
+  assert(/leídos ahora mismo de Jira/.test(busqueda), 'con la línea de estado que dice de dónde salió la lista')
+  // Las filas de ejemplo llevan las claves EXACTAS de `parseSearchIssues`, y una
+  // de las dos está en un estado final: cerrada y viva no se ven igual.
+  const filas = espejo.slice(espejo.indexOf('const RESULTADOS ='), espejo.indexOf('const FUENTES_CHIPS ='))
+  for (const clave of ['key:', 'summary:', 'status:', 'assignee:']) assert(filas.includes(clave), 'la fila de ejemplo no trae ' + clave)
+  assert(/status: 'Cerrada'/.test(filas), 'y una fila en un estado final al lado de una viva')
+  assert(/displayName:/.test(filas) && !/emailAddress/.test(filas), 'del asignado sólo el nombre visible, que es lo único que deja pasar el parser')
+
+  // El título de la tarjeta y la URL los escribe el código real: escritos a mano
+  // aquí se quedarían atrás en cuanto `jqlPlan` cambie una palabra.
+  assert(/import\('\/src\/panel\/planner\.js'\)/.test(espejo), 'el plan sale de planner.js')
+  assert(busqueda.includes('jqlPlan({ ...jqlLink(BUSQUEDA_JQL, { origin }), count: 37 })'), 'con la consulta y cuántos resultados hubo')
+  assert(!/Los 37 resultados/.test(espejo), 'el título no se copia: lo pone jqlPlan')
+
+  // La búsqueda directa: su propio epígrafe, su filete y la nota bajo la
+  // pregunta, que es lo único que avisa de que esto no está en opencode.
+  assert(/kicker: 'Búsqueda directa', title: chip\.label/.test(busqueda), 'el epígrafe y el título los pone el plan, como en el panel')
+  assert(/directa\.classList\.add\('direct'\)/.test(busqueda) && /\.nav-card\.direct\s*\{/.test(CSS_LIMPIO), 'con su filete dorado')
+  assert(/'búsqueda directa, sin modelo'/.test(busqueda) && JS.includes("'búsqueda directa, sin modelo'"), 'y la misma nota que pone el panel')
+
+  // El aviso de que no hay lista: DENTRO de la tarjeta, detrás de los botones, y
+  // con el texto de `jqlFailText`. La tarjeta sigue entera (§8.14).
+  assert(/sinLista\.appendChild\(\s*aviso\(/.test(busqueda), 'el aviso cuelga de la tarjeta, no del chat')
+  for (const trozo of ['no vale para su API', 'La tarjeta te lleva igual.']) {
+    assert(busqueda.includes(trozo), 'el espejo no dice «' + trozo + '»')
+    assert(JS.includes(trozo), 'y el panel tampoco: los dos textos se han separado')
+  }
+
+  // Los chips salen del módulo REAL con las fuentes de ejemplo: cuáles y cuántos
+  // los decide `searchChips`, no este fichero, y en Confluence no sale ninguno
+  // porque el sitio que se le pasa es el de la conversación.
+  assert(/import\('\/src\/panel\/search-chips\.js'\)/.test(espejo), 'los chips salen de search-chips.js')
+  assert(/searchChips\(sitio\(\), FUENTES_CHIPS\)/.test(espejo), 'con el sitio de la conversación: en Confluence devuelve una lista vacía')
+  const chips = espejo.slice(espejo.indexOf('function pintarChips(box)'), espejo.indexOf('/** La tarjeta de «Falta un permiso»'))
+  assert(/'Búsquedas al instante, sin modelo'/.test(chips) && JS.includes("'Búsquedas al instante, sin modelo'"), 'el mismo epígrafe que el panel')
+  assert(/box\.classList\.toggle\('hidden', !chips\.length\)/.test(chips), 'sin chips la caja se queda oculta, como en el panel')
+  assert(/'ghost small search-chip needs-idle'/.test(chips) && /const NEEDS_IDLE = 'needs-idle'/.test(JS), 'y con la clase gancho de H6')
+  assert(/b\.title = chip\.title/.test(chips), 'la consulta entera en el title, para poder leerla antes de pulsar')
+  const vacio = espejo.slice(espejo.indexOf('function estadoVacio()'), espejo.indexOf('function conversacionBusqueda()'))
+  assert(/pintarChips\(chips\)/.test(vacio), 'el estado vacío los pinta')
+  assert(/suggestionsFor\(/.test(vacio) && /'suggestions'/.test(vacio), 'y las tres sugerencias siguen donde estaban')
+  assert(vacio.indexOf("'suggestions'") < vacio.indexOf('pintarChips('), 'los chips van debajo de ellas, no en su sitio')
+
+  // Y las dos cajas nuevas se miden a lo ancho como la cabecera y el redactor.
+  const cajas = espejo.slice(espejo.indexOf('const CAJAS ='), espejo.indexOf('function check() {'))
+  assert(cajas.includes("'.result-row'") && cajas.includes("'.search-chip-row'"), 'las piezas de H8 entran en la medida de desbordamiento')
 })

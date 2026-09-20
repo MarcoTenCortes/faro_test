@@ -1,5 +1,5 @@
 import { test, eq, assert } from '../harness.js'
-import { extractEntities, harvestIndex, dropForeignUrls } from '../../src/panel/indexer.js'
+import { extractEntities, harvestIndex, harvestFromSearch, dropForeignUrls } from '../../src/panel/indexer.js'
 import { normalizeIndex, indexSize } from '../../src/atlassian/index-store.js'
 import { shouldPlan } from '../../src/panel/planner.js'
 import { indexExploreSystem } from '../../src/panel/prompts.js'
@@ -366,4 +366,73 @@ test('EL CAMBIO: el indexador de un proyecto de Jira saca tipos, estados y conve
   const espacio = { kind: 'space', key: 'ENG', label: 'el espacio ENG' }
   eq(indexExploreSystem(espacio, conf, { linkedContext: { host: 'x', contextMd: 'y' } }), indexExploreSystem(espacio, conf))
   assert(/árbol del espacio/.test(indexExploreSystem(espacio, conf)))
+})
+
+// --- H8: las incidencias de una búsqueda REST, al índice ------------------
+// La lista de la tarjeta la lee `searchIssues` de la API del propio Jira, y cada
+// fila tiene que poder abrirse SIN concatenar ninguna URL: la clave entra en el
+// índice y el destino pasa por `validatePlan` (§8.3).
+
+const JIRA_PARA_LISTA = { host: 'jira.corp', origin: 'https://jira.corp', product: 'jira', cloud: false }
+
+test('H8: las incidencias de una búsqueda entran en el índice con su resumen y su ruta /browse/', () => {
+  const issues = [
+    { key: 'ENG-7', summary: 'Rotar tokens del conector' },
+    { key: 'OPS-2', summary: 'Purga de la cola' },
+  ]
+  const r = harvestFromSearch(issues, { site: JIRA_PARA_LISTA, index: null })
+  eq(r.added, 2)
+  eq(Object.keys(r.index.issues).sort(), ['ENG-7', 'OPS-2'])
+  eq(r.index.issues['ENG-7'].title, 'Rotar tokens del conector', 'el resumen es el título con el que se ve la fila')
+  eq(r.index.issues['ENG-7'].path, '/browse/ENG-7', 'sólo la ruta: la URL la reconstruye resolveTarget contra el origen')
+  eq(r.index.issues['ENG-7'].projectKey, 'ENG')
+  // Sin resumen queda la clave, que es lo que hace `normalizeIndex`; y sin nada
+  // que fundir, el índice se devuelve tal cual y `added` es 0.
+  eq(harvestFromSearch([{ key: 'ENG-9' }], { site: JIRA_PARA_LISTA, index: null }).index.issues['ENG-9'].title, 'ENG-9')
+  eq(harvestFromSearch([], { site: JIRA_PARA_LISTA, index: null }), { index: null, added: 0 })
+  eq(harvestFromSearch(null, { site: JIRA_PARA_LISTA, index: null }), { index: null, added: 0 })
+  eq(harvestFromSearch(issues, { site: null, index: null }), { index: null, added: 0 }, 'sin sitio no hay host bajo el que guardar')
+})
+
+test('H8: lo que ya estaba en el índice no se cuenta dos veces, y el árbol no se toca', () => {
+  const previo = normalizeIndex(
+    { issues: [{ key: 'ENG-7', summary: 'Título viejo' }], pages: [{ id: '10', title: 'Raíz' }, { id: '11', title: 'Hija', parentId: '10' }], updated: 1 },
+    'jira.corp'
+  )
+  const r = harvestFromSearch([{ key: 'ENG-7', summary: 'Título nuevo' }, { key: 'ENG-8', summary: 'Otra' }], {
+    site: JIRA_PARA_LISTA,
+    index: previo,
+  })
+  eq(r.added, 1, 'sólo la que no estaba')
+  eq(r.index.issues['ENG-7'].title, 'Título nuevo', 'y la que estaba se refresca con lo que dice Jira ahora')
+  eq(r.index.pages['11'].parentId, '10', 'fundir incidencias no toca las páginas ni el árbol que ya se había leído')
+  eq(r.index.pages['10'].title, 'Raíz')
+})
+
+test('SEGURIDAD: una clave que no tiene forma de clave no entra en el índice, y en Data Center tampoco desde Confluence', () => {
+  const basura = [
+    { key: 'javascript:alert(1)' },
+    { key: 'UTF-8' + String.fromCharCode(10) + 'ENG-1' },
+    { key: '../../otro' },
+    { key: '' },
+    { key: 12 },
+    null,
+    'ENG-3',
+    // La forma de clave la decide `validIssueKey`, no el índice: el índice
+    // acepta un proyecto de cualquier longitud y aquí el tope son 20 caracteres,
+    // que es lo que también exigió `parseSearchIssues` al leer la respuesta. Los
+    // dos lados tienen que decir lo mismo sobre qué es una clave.
+    { key: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ-1', summary: 'un proyecto imposible' },
+    { key: 'ENG-4', summary: 'buena' },
+  ]
+  const r = harvestFromSearch(basura, { site: JIRA_PARA_LISTA, index: null })
+  eq(Object.keys(r.index.issues), ['ENG-4'], 'sólo la que pasa validIssueKey')
+
+  // La misma lista repetida no duplica ni recuenta.
+  eq(harvestFromSearch([{ key: 'ENG-4' }, { key: 'eng-4' }], { site: JIRA_PARA_LISTA, index: null }).added, 1)
+
+  // Y en Data Center una incidencia no es un destino del host de Confluence: la
+  // misma barrera por producto que `harvestIndex`.
+  const conf = { host: 'confluence.corp', origin: 'https://confluence.corp', product: 'confluence', cloud: false }
+  eq(harvestFromSearch([{ key: 'ENG-4', summary: 'buena' }], { site: conf, index: null }), { index: null, added: 0 })
 })

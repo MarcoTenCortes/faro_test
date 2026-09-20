@@ -297,6 +297,12 @@
       <input id="set-delay" type="range" min="400" max="4000" step="100">
     </div>
 
+    <h2>Consultar tu sitio</h2>
+    <!-- El interruptor maestro de TODA lectura REST nueva. No apaga la lectura
+         de la cadena de padres ni la búsqueda de páginas base, que llevan
+         funcionando desde antes (DEFAULT_SETTINGS.restTools en config.js). -->
+    <label class="check"><input type="checkbox" id="set-rest-tools"> Consultar la API de Jira y Confluence con mi sesión — lista de resultados en la tarjeta, búsquedas al instante y un índice exacto sin gastar tokens. Sólo lecturas, al mismo sitio.</label>
+
     <h2>Servidor</h2>
     <div class="field">
       <label for="set-url">Dirección</label>

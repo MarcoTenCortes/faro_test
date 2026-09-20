@@ -13,6 +13,7 @@ import {
   ISSUE_FIELD_LIMITS,
   ISSUE_TEXT_KEYS,
   ISSUE_LIST_KEYS,
+  ISSUE_REF_KEYS,
   ISSUE_FAMILIES,
   ISSUE_PHASES,
   normalizeIssueFields,
@@ -49,7 +50,7 @@ test('SEGURIDAD: los campos se quedan en claves blancas, valores de una línea y
     fields: [{ name: 'x', value: 'y' }],
     onclick: 'alert(1)',
   })
-  eq(Object.keys(f).sort(), [...ISSUE_TEXT_KEYS, ...ISSUE_LIST_KEYS].sort())
+  eq(Object.keys(f).sort(), [...ISSUE_TEXT_KEYS, ...ISSUE_LIST_KEYS, ...ISSUE_REF_KEYS].sort())
   eq(f.type, 'API Definition')
   eq(f.status, '"In Review"', 'las comillas latinas no pueden cerrar la cita del prompt')
   eq(f.labels, ['api', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'], 'sin repetir, sin vacíos y con tope')
@@ -66,6 +67,28 @@ test('sin nada que valga no hay campos', () => {
   eq(normalizeIssueFields({}), null)
   eq(normalizeIssueFields({ type: '', labels: [], other: 'x' }), null)
   eq(normalizeIssueFields({ labels: ['a'] }).labels, ['a'])
+  // Y la clave de la épica no es un campo que enseñar: sola no hace que haya
+  // campos. Si contara, `issueBlock` imprimiría «Campos leídos de la pantalla: »
+  // sin nada detrás.
+  eq(normalizeIssueFields({ epicKey: 'ENG-1' }), null)
+})
+
+// --- la épica, como CLAVE (H8) --------------------------------------------
+
+test('H8: la clave de la épica entra validada, y no es un campo que se enseñe', () => {
+  eq(ISSUE_REF_KEYS, ['epicKey'])
+  eq(normalizeIssueFields({ ...ENG7, epicKey: 'eng-1' }).epicKey, 'ENG-1', 'con forma de clave y en mayúsculas')
+  // SEGURIDAD: de aquí sale el valor de una consulta JQL («'Epic Link' = X»),
+  // así que lo que no tenga forma de clave no pasa.
+  for (const raro of ['Rotación de credenciales', 'javascript:alert(1)', 'ENG-1 OR project = OTRO', 'ENG 1', '', null, 12, {}]) {
+    eq(normalizeIssueFields({ ...ENG7, epicKey: raro }).epicKey, '', 'no es una clave: ' + JSON.stringify(raro))
+  }
+  // Y el prompt no cambia por esto: `epic` (el nombre, que es lo que se lee en
+  // pantalla) se sigue enseñando y la clave no aparece por ningún lado.
+  const bloque = issueBlock({ ...ENG7, epicKey: 'ENG-1' })
+  assert(bloque.includes('épica «Rotación de credenciales»'), 'la épica se enseña por su nombre, como siempre')
+  assert(!bloque.includes('ENG-1') && !/epicKey/.test(bloque), 'la clave es para construir una consulta, no para el modelo')
+  eq(issueBlock({ ...ENG7, epicKey: 'ENG-1' }), issueBlock(ENG7), 'con clave y sin ella, byte a byte lo mismo')
 })
 
 // --- familia y fase --------------------------------------------------------

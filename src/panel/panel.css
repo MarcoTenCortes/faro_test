@@ -476,6 +476,12 @@ hr { border: 0; border-top: 1px solid var(--hairline); margin: 1em 0; }
 /* «Dar permiso»: es una explicación, no un destino; su epígrafe no se pinta de
    la marca. La pinta panel.js y hasta ahora no tenía ninguna regla. */
 .perm-card .nav-kicker { color: var(--muted); }
+/* Una búsqueda directa (un chip pulsado) no la ofreció ningún turno: lleva el
+   mismo filete dorado que los chips de lo señalado y de páginas base, que es
+   como se ven en el panel las cosas que hace la extensión por su cuenta. El
+   borde es decorativo —la tarjeta se identifica por su texto y sus botones—, y
+   por eso --gold-line va en EXENTOS de test/contrast-pairs.js. */
+.nav-card.direct { border-color: var(--gold-line); }
 .nav-title { font-size: var(--text-md); font-weight: 600; color: var(--ink); margin-bottom: 2px; }
 .nav-text { font-size: var(--text-sm); color: var(--ink-2); margin-bottom: var(--s2); }
 .nav-steps {
@@ -485,6 +491,47 @@ hr { border: 0; border-top: 1px solid var(--hairline); margin: 1em 0; }
 .nav-steps span { background: var(--surface-2); border: 1px solid var(--hairline); border-radius: var(--r-sm); padding: 1px var(--s1); }
 .nav-steps b { color: var(--gold); font-weight: 700; }
 .nav-actions { display: flex; gap: var(--s2); }
+
+/* La lista de una búsqueda de Jira, DENTRO de la tarjeta que lleva a ella: la
+   tarjeta decía «los 37 resultados» y para ver cuáles había que irse a Jira.
+   Filas separadas por una hairline y no cajas dentro de una caja, como las
+   observaciones de un análisis; la clave monoespaciada y en el acento de TEXTO,
+   porque es un identificador que se compara de un vistazo (nunca en --mark, que
+   es relleno). Todo sobre --surface, que es el fondo de la tarjeta. */
+.result-status { margin-bottom: var(--s1); }
+.result-list { display: flex; flex-direction: column; margin: 0 0 var(--s2); }
+.result-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2);
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  font-size: var(--text-sm);
+  background: transparent;
+  color: var(--ink-2);
+  border: 0;
+  border-top: 1px solid var(--hairline);
+  padding: var(--s2) var(--s1);
+  cursor: pointer;
+  transition: background var(--dur-1) ease;
+}
+.result-row:first-child { border-top: 0; }
+.result-row:hover:not(:disabled) { background: var(--surface-2); }
+/* Navegando: `runPlan` apaga los botones de la tarjeta, y estas filas son botones. */
+.result-row:disabled { cursor: default; opacity: .7; }
+.result-key {
+  flex: none;
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--gold);
+}
+/* Quien cede es el resumen, nunca la clave: sin `min-width: 0` el texto largo
+   de un ticket empuja la fila y la clave se parte por la mitad. */
+.result-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.result-title { color: var(--ink); }
+.result-meta { font-size: var(--text-xs); color: var(--muted); }
 
 /* El principio de una conversación que no se ha pedido entera: se enseñan los
    últimos RESTORE_LIMITS.messages mensajes y desde aquí se trae el resto. Va
@@ -535,6 +582,28 @@ hr { border: 0; border-top: 1px solid var(--hairline); margin: 1em 0; }
 }
 .suggestion:last-child { border-bottom: 0; }
 .suggestion:hover { background: var(--surface-2); color: var(--ink); }
+
+/* Búsquedas al instante: consultas que la extensión ejecuta ella misma, debajo
+   de las tres sugerencias (que van al modelo). Son pastillas y no una lista
+   como las de arriba justamente para que no se confundan con ellas: aquí no se
+   escribe nada, se pulsa y sale la lista.
+
+   Envuelven en vez de ir en una fila con scroll: a 320 px cuatro pastillas no
+   caben en una línea, y un chip al que hay que desplazarse para verlo es un
+   chip que nadie pulsa. El tope de cuatro (SEARCH_CHIP_COUNT) es lo que hace
+   que envolver no se coma el estado vacío. Colores y borde, los de
+   `button.ghost.small`; lo único propio es el radio de pastilla y que el texto
+   largo se recorta en vez de estirar la fila. */
+.search-chips { margin-top: var(--s3); }
+.search-chips .fine { margin-bottom: var(--s2); }
+.search-chip-row { display: flex; flex-wrap: wrap; gap: var(--s2); justify-content: center; }
+.search-chip {
+  border-radius: var(--r-pill);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* ---------------------------------------------------------------- redactor */
 

@@ -445,20 +445,47 @@ export async function planNavigation(client, opts) {
 }
 
 /**
+ * Una consulta PROPIA como destino, con la misma forma que la que se lee de una
+ * llamada del modelo. Pura.
+ *
+ * La usa una búsqueda directa: un chip lleva su JQL escrita aquí (plantillas y
+ * valores por `jqlQuote`, CLAUDE.md §8.12) y no hay ninguna llamada del MCP de
+ * la que leerla, pero la URL se fabrica EXACTAMENTE igual —contra el origen de
+ * la pestaña, con la consulta codificada— para que no haya dos formas de montar
+ * la misma dirección. `count` es 0 porque todavía no se ha ejecutado nada: quien
+ * la pinte le pone el título.
+ *
+ * @returns {{jql:string, count:number, path:string, url:string}|null}
+ */
+export function jqlLink(jql, { origin } = {}) {
+  const base = String(origin || '').replace(/\/+$/, '')
+  const consulta = cleanJql(jql)
+  if (!base || !consulta) return null
+  const path = '/issues/?jql=' + encodeURIComponent(consulta)
+  return { jql: consulta, count: 0, path, url: base + path }
+}
+
+/**
  * El plan que abre el buscador de Jira con una consulta. Tiene la misma forma
  * que un plan validado —la tarjeta y el service worker no distinguen—, con un
  * solo paso: en Jira no hay árbol que recorrer. Pura.
+ *
+ * `kicker` y `title` los pone quien pinta una búsqueda que no salió de un turno
+ * del modelo: una búsqueda directa no es «Puedo llevarte · Los 0 resultados»,
+ * sino «Búsqueda directa · Mis abiertas de ENG». Sin ellos, byte a byte lo de
+ * siempre.
  */
-export function jqlPlan({ jql, count, path, url }) {
-  const title = count === 1 ? 'El resultado de la búsqueda en Jira' : `Los ${count} resultados de la búsqueda en Jira`
-  const destination = { kind: 'jira-jql', id: jql, title, path, url }
+export function jqlPlan({ jql, count, path, url }, { kicker = '', title = '' } = {}) {
+  const nombre = title || (count === 1 ? 'El resultado de la búsqueda en Jira' : `Los ${count} resultados de la búsqueda en Jira`)
+  const destination = { kind: 'jira-jql', id: jql, title: nombre, path, url }
   return {
     navigate: true,
     mode: 'direct',
     destination,
     anchor: null,
-    steps: [{ ...destination, label: title, action: 'open' }],
+    steps: [{ ...destination, label: nombre, action: 'open' }],
     explanation: jql,
+    ...(kicker ? { kicker } : {}),
   }
 }
 

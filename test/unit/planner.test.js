@@ -12,7 +12,7 @@
  *    modo rápido ni siquiera eso.
  */
 import { test, eq, assert } from '../harness.js'
-import { pickDestination, declaredDestination, currentPageId, planNavigation, jqlDestination, JQL_LIMITS } from '../../src/panel/planner.js'
+import { pickDestination, declaredDestination, currentPageId, planNavigation, jqlDestination, jqlLink, jqlPlan, JQL_LIMITS } from '../../src/panel/planner.js'
 import { normalizeIndex } from '../../src/atlassian/index-store.js'
 
 const HOST = 'confluence.simplprogramme.eu'
@@ -596,4 +596,42 @@ test('EL CAMBIO: planNavigation en Jira devuelve la búsqueda sin índice, sin �
   // Y en Confluence una búsqueda de Jira que hubiera hecho el modelo no manda a ningún sitio de este host.
   const desdeConfluence = await planNavigation(fakeClient(null), base({ parts, learnAncestry: async () => CADENA_TCV }))
   eq(desdeConfluence.source, 'respuesta')
+})
+
+// ------------------------------------------- una consulta propia (H8)
+
+test('H8: jqlLink monta la URL de una consulta propia igual que la de una del modelo', () => {
+  const r = jqlLink('project = ENG AND labels = api', { origin: 'https://jira.x.eu/' })
+  eq(r.jql, 'project = ENG AND labels = api')
+  eq(r.count, 0, 'todavía no se ha ejecutado: el título lo pone quien la pinte')
+  eq(r.url, 'https://jira.x.eu/issues/?jql=' + encodeURIComponent('project = ENG AND labels = api'), 'contra el origen, sin barra doble')
+  eq(r.path, '/issues/?jql=' + encodeURIComponent('project = ENG AND labels = api'))
+  // La misma cola que `jqlDestination`: una sola forma de montar esa dirección.
+  const delModelo = jqlDestination([busquedaJira('project = ENG AND labels = api', '{"total":1}')], { origin: 'https://jira.x.eu' })
+  eq(r.url, delModelo.url)
+  // SEGURIDAD: una línea, con tope y codificada, venga como venga el chip.
+  const sucia = jqlLink('project = A\nAND summary ~ "x" #' + '#'.repeat(3000), { origin: 'https://jira.x.eu' })
+  assert(!sucia.jql.includes('\n') && sucia.jql.length === JQL_LIMITS.maxChars)
+  assert(!sucia.url.includes('#') && !sucia.url.includes(' '))
+  for (const malo of [null, undefined, '', '   ', 7]) eq(jqlLink(malo, { origin: 'https://jira.x.eu' }), null, JSON.stringify(malo))
+  eq(jqlLink('project = ENG', {}), null, 'sin origen no hay URL')
+  eq(jqlLink('project = ENG'), null)
+})
+
+test('H8: jqlPlan admite el epígrafe y el título de una búsqueda directa, y sin ellos no cambia', () => {
+  const destino = jqlLink('project = ENG AND assignee = currentUser()', { origin: 'https://jira.x.eu' })
+  const directa = jqlPlan(destino, { kicker: 'Búsqueda directa', title: 'Mis abiertas de ENG' })
+  eq(directa.kicker, 'Búsqueda directa')
+  eq(directa.destination.title, 'Mis abiertas de ENG')
+  eq(directa.steps.map((s) => s.label), ['Mis abiertas de ENG'], 'el paso dice lo mismo que la tarjeta')
+  eq(directa.destination.kind, 'jira-jql')
+  eq(directa.mode, 'direct')
+  eq(directa.explanation, destino.jql, 'la consulta se enseña, como en la del modelo')
+  // Sin opciones, byte a byte lo de siempre (y sin `kicker`, para que la
+  // tarjeta siga diciendo «Puedo llevarte»).
+  const delModelo = jqlPlan({ jql: 'project = ENG', count: 4, path: '/p', url: 'https://jira.x.eu/p' })
+  eq(delModelo.destination.title, 'Los 4 resultados de la búsqueda en Jira')
+  eq('kicker' in delModelo, false)
+  eq(JSON.stringify(delModelo), JSON.stringify(jqlPlan({ jql: 'project = ENG', count: 4, path: '/p', url: 'https://jira.x.eu/p' }, {})))
+  eq(jqlPlan({ jql: 'x', count: 1, path: '/p', url: 'u' }).destination.title, 'El resultado de la búsqueda en Jira')
 })

@@ -40,6 +40,8 @@ import {
   profileFromSample,
   normalizeProfile,
   suggestedQueries,
+  normalizeRecentJql,
+  rememberJql,
 } from '../../src/shared/jira-rest.js'
 
 const ORIGIN = 'https://jira.simplprogramme.eu'
@@ -820,4 +822,50 @@ test('suggestedQueries: sin repetir consulta, con tope, y lo que no valida no en
   const larga = suggestedQueries({ recent: ['project = SIMPL AND text ~ "' + 'x'.repeat(200) + '"'] })
   eq(larga[0].label.length <= 60 + 'Última: '.length, true, 'la etiqueta se recorta, la consulta no')
   assert(larga[0].jql.length > 60)
+})
+
+// ---------------------------------------------------------------------------
+// Las últimas consultas ejecutadas (H8)
+// ---------------------------------------------------------------------------
+
+test('H8: las últimas consultas se reconstruyen al leerlas, sin repetir y con tope', () => {
+  eq(normalizeRecentJql(null), [])
+  eq(normalizeRecentJql('project = ENG'), [], 'lo que no es una lista no es un historial')
+  eq(normalizeRecentJql([{ jql: 'project = ENG', at: 5, count: 3 }]), [{ jql: 'project = ENG', at: 5, count: 3 }])
+  // Claves blancas: lo guardado se puede editar a mano y de aquí sale una
+  // consulta que acaba dentro de una URL.
+  const sucia = normalizeRecentJql([{ jql: 'project = ENG', at: 'ayer', count: -2, onclick: 'alert(1)', extra: 1 }])
+  eq(sucia, [{ jql: 'project = ENG', at: 0, count: 0 }])
+  // Una lista de cadenas a secas también vale.
+  eq(normalizeRecentJql(['project = ENG']), [{ jql: 'project = ENG', at: 0, count: 0 }])
+  // Sin repetir, sin distinguir mayúsculas, y lo que no es consulta se cae.
+  eq(
+    normalizeRecentJql([{ jql: 'project = ENG' }, { jql: 'PROJECT = eng' }, { jql: '  ' }, null, 7]).map((r) => r.jql),
+    ['project = ENG']
+  )
+  eq(normalizeRecentJql(Array.from({ length: 20 }, (_, i) => ({ jql: 'project = ENG AND labels = x' + i }))).length, JIRA_REST_LIMITS.recentJql)
+  // Y en una línea: una consulta guardada con saltos fingiría dos filas.
+  eq(normalizeRecentJql([{ jql: 'project = ENG\nAND labels = api' }])[0].jql, 'project = ENG AND labels = api')
+})
+
+test('H8: se apunta lo que se ejecutó, la última delante y sin repetirla', () => {
+  const uno = rememberJql([], 'project = ENG', { count: 7, now: 1000 })
+  eq(uno, [{ jql: 'project = ENG', at: 1000, count: 7 }])
+  const dos = rememberJql(uno, 'project = OPS', { count: 2, now: 2000 })
+  eq(dos.map((r) => r.jql), ['project = OPS', 'project = ENG'], 'la más nueva delante')
+  // La misma consulta otra vez sube al principio y no se duplica, con su cuenta
+  // de ahora: una búsqueda repetida es la misma búsqueda, no dos chips.
+  const tres = rememberJql(dos, 'PROJECT = eng', { count: 9, now: 3000 })
+  eq(tres.map((r) => r.jql), ['PROJECT = eng', 'project = OPS'])
+  eq(tres[0].count, 9)
+  eq(rememberJql(dos, '   ').map((r) => r.jql), ['project = OPS', 'project = ENG'], 'sin consulta, la lista se queda como estaba')
+  // Tope: la más vieja se cae.
+  let lista = []
+  for (let i = 0; i < JIRA_REST_LIMITS.recentJql + 3; i++) lista = rememberJql(lista, 'project = ENG AND labels = x' + i, { now: i })
+  eq(lista.length, JIRA_REST_LIMITS.recentJql)
+  eq(lista[0].jql, 'project = ENG AND labels = x' + (JIRA_REST_LIMITS.recentJql + 2))
+  // Es pura: el reloj se inyecta y lo que entra no se toca.
+  const previas = [{ jql: 'project = ENG', at: 1, count: 1 }]
+  rememberJql(previas, 'project = OPS', { now: 5 })
+  eq(previas, [{ jql: 'project = ENG', at: 1, count: 1 }])
 })

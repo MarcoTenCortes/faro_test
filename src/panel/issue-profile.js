@@ -26,6 +26,7 @@
  */
 
 import { clean } from '../nav/validate.js'
+import { validIssueKey } from '../atlassian/site.js'
 
 export const ISSUE_FIELD_LIMITS = {
   /** Un nombre de tipo, de estado o de persona es corto; un valor más largo es otra cosa. */
@@ -40,6 +41,20 @@ export const ISSUE_FIELD_LIMITS = {
 export const ISSUE_TEXT_KEYS = ['type', 'status', 'priority', 'resolution', 'assignee', 'reporter', 'epic', 'sprint']
 /** Y los que llevan una lista. */
 export const ISSUE_LIST_KEYS = ['fixVersions', 'affectsVersions', 'components', 'labels']
+/**
+ * Los que son una REFERENCIA a otra incidencia y no se enseñan a nadie.
+ *
+ * `epicKey` la lee el content script del enlace del campo de la épica, porque el
+ * texto de ese campo es el NOMBRE de la épica y con el nombre una consulta JQL
+ * no encuentra nada (docs/plan/anexo-C). Se conserva para poder CONSTRUIR esa
+ * consulta —el chip «Misma épica ENG-1»—, así que pasa por `validIssueKey` como
+ * todo lo que va a acabar dentro de una consulta, y no entra en `camposLine`:
+ * el prompt del Análisis no cambia ni un byte por esto (pinado). Tampoco cuenta
+ * para decidir si hay campos: una incidencia de la que sólo se supiera la clave
+ * de su épica no tiene nada que enseñar, y `issueBlock` imprimiría una línea de
+ * campos vacía.
+ */
+export const ISSUE_REF_KEYS = ['epicKey']
 
 /** Las comillas latinas rompen la forma «campo «valor»» con la que se enseñan los valores. */
 const QUOTES = /[«»]/g
@@ -53,7 +68,7 @@ function valor(v) {
  * conocidas, cada valor limpio y de una línea, las listas acotadas y sin
  * repetir. null si no hay nada que valga. Pura.
  *
- * @returns {{type:string, status:string, priority:string, resolution:string, assignee:string, reporter:string, epic:string, sprint:string, fixVersions:string[], affectsVersions:string[], components:string[], labels:string[]}|null}
+ * @returns {{type:string, status:string, priority:string, resolution:string, assignee:string, reporter:string, epic:string, epicKey:string, sprint:string, fixVersions:string[], affectsVersions:string[], components:string[], labels:string[]}|null}
  */
 export function normalizeIssueFields(raw) {
   if (!raw || typeof raw !== 'object') return null
@@ -76,6 +91,9 @@ export function normalizeIssueFields(raw) {
     }
     if (out[k].length) alguno = true
   }
+  // Las referencias van aparte y NO cuentan para `alguno`: son para construir
+  // una consulta, no para enseñar.
+  for (const k of ISSUE_REF_KEYS) out[k] = validIssueKey(raw[k])
   return alguno ? out : null
 }
 

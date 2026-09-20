@@ -30,16 +30,19 @@
 
   `window.faroPreview.check()` mide lo que hay que mirar en cada captura
   (desbordamiento, alto de la cabecera, alto de la fila del redactor, cabeceras
-  de pantalla a la vista, sugerencias del estado vacío) y deja el resultado en
-  la barra lateral. Los mandos también son API: setTheme, setWidth, setStatus,
-  setChat, setScreen, setPick, setSources, setFifth.
+  de pantalla a la vista, sugerencias del estado vacío, y de H8 las filas de
+  chips, si alguno se recorta y si el estado vacío entero cabe sin desplazar el
+  chat) y deja el resultado en la barra lateral. Los mandos también son API:
+  setTheme, setWidth, setStatus, setChat, setScreen, setPick, setSources,
+  setFifth.
 
   Cómo se acepta el rediseño (paso 8 del anexo D, CLAUDE.md §2): con el Browser
-  pane VISIBLE a 1280×900, cuatro capturas —320 y 420 px × claro y oscuro— y
-  `faroPreview.check()` en verde en cada una y en cada pantalla. `setFifth(true)`
-  mete un quinto `icon-btn` del tamaño que tendrá «Qué mirar hoy» (H11) para ver
-  la cabecera estrecha con los cinco: es un hueco, no ese botón, y el espejo no
-  se adelanta a su id.
+  pane VISIBLE a 1280×900, capturas a 320 y 420 px × claro y oscuro de cada
+  conversación —las cinco del grupo «Conversación»— y `faroPreview.check()` en
+  verde en cada una y en cada pantalla. `setFifth(true)` mete un quinto
+  `icon-btn` del tamaño que tendrá «Qué mirar hoy» (H11) para ver la cabecera
+  estrecha con los cinco: es un hueco, no ese botón, y el espejo no se adelanta
+  a su id.
 -->
 
 <link rel="stylesheet" href="/src/panel/panel.css">
@@ -114,7 +117,9 @@
     <div class="grp-title">Conversación</div>
     <button class="rig on" data-chat="confluence">Confluence · ADR-014</button>
     <button class="rig" data-chat="jira">Jira · SIMPL-1234</button>
+    <button class="rig" data-chat="jira-busqueda" title="La tarjeta de Búsqueda con la lista leída de Jira, el aviso cuando la API no contesta y una búsqueda directa">Jira · Búsqueda con lista</button>
     <button class="rig" data-chat="empty">Chat vacío</button>
+    <button class="rig" data-chat="empty-jira" title="La bienvenida de un Jira: tres sugerencias y los chips de búsqueda al instante">Chat vacío · Jira</button>
   </div>
 
   <div class="grp">
@@ -204,17 +209,29 @@ async function arrancar() {
 
   // Todo lo que se puede leer del código real se lee del código real: las
   // Skills, las opciones de la tarjeta de navegación, la etiqueta de lo
-  // señalado, las etiquetas de las páginas base y las sugerencias del vacío.
-  // Lo demás son textos de ejemplo.
-  const [{ renderMarkdown }, { SKILLS }, { pickLabel, buildTextPick }, { navOptions }, { sourcesLabel, sourcesNote }, { suggestionsFor }] =
-    await Promise.all([
-      import('/src/panel/markdown.js'),
-      import('/src/panel/skills.js'),
-      import('/src/content/pick-payload.js'),
-      import('/src/nav/options.js'),
-      import('/src/panel/sources.js'),
-      import('/src/panel/suggestions.js'),
-    ])
+  // señalado, las etiquetas de las páginas base, las sugerencias del vacío y,
+  // de H8, los chips de búsqueda al instante y el plan de una búsqueda (su
+  // título y su URL los escribe `jqlPlan`/`jqlLink`, no este fichero). Lo demás
+  // son textos de ejemplo.
+  const [
+    { renderMarkdown },
+    { SKILLS },
+    { pickLabel, buildTextPick },
+    { navOptions },
+    { sourcesLabel, sourcesNote },
+    { suggestionsFor },
+    { searchChips },
+    { jqlLink, jqlPlan },
+  ] = await Promise.all([
+    import('/src/panel/markdown.js'),
+    import('/src/panel/skills.js'),
+    import('/src/content/pick-payload.js'),
+    import('/src/nav/options.js'),
+    import('/src/panel/sources.js'),
+    import('/src/panel/suggestions.js'),
+    import('/src/panel/search-chips.js'),
+    import('/src/panel/planner.js'),
+  ])
 
   const $ = (id) => doc.getElementById(id)
   const mk = (tag, cls, text) => {
@@ -254,6 +271,13 @@ async function arrancar() {
       host: 'jira.simplprogramme.eu',
       clave: 'SIMPL-1234',
       titulo: 'Definición de la API de federación entre proveedores',
+      // De H8: lo que `searchChips` y `jqlLink` necesitan del sitio. Es un Data
+      // Center (`cloud: false`): en Cloud no hay REST de Jira y no habría chips
+      // ni lista que enseñar, que es justo lo que decide `searchChips`.
+      cloud: false,
+      origin: 'https://jira.simplprogramme.eu',
+      projectKey: 'SIMPL',
+      issueKey: 'SIMPL-1234',
     },
   }
   const PAGINAS_BASE = {
@@ -265,8 +289,55 @@ async function arrancar() {
   }
   const SIN_BASE = { mode: 'open', pages: [] }
 
+  // H8 · lo que la extensión lee de la API del propio Jira. Las FILAS tienen las
+  // claves EXACTAS que deja `parseSearchIssues` (CLAUDE.md §6): así la fila se
+  // pinta con lo mismo que llega de verdad, `assignee` incluido, del que sólo se
+  // enseña el nombre visible. La segunda está en un estado final, para ver una
+  // fila cerrada al lado de una viva.
+  const BUSQUEDA_JQL = 'project = SIMPL AND sprint = "Sprint 37" AND resolution = Unresolved ORDER BY updated DESC'
+  const RESULTADOS = [
+    {
+      key: 'SIMPL-1234',
+      summary: 'Definición de la API de federación entre proveedores',
+      status: 'En revisión',
+      assignee: { name: 'ana', displayName: 'Ana Pérez' },
+    },
+    {
+      key: 'SIMPL-1198',
+      summary: 'Retirar el endpoint de consentimiento v1 y su documentación',
+      status: 'Cerrada',
+      assignee: { name: 'marco', displayName: 'Marco Tenorio' },
+    },
+  ]
+  // Y lo que alimenta los chips: los campos de la incidencia abierta tal como los
+  // deja `normalizeIssueFields` (con `epicKey`, que es lo único con lo que una
+  // consulta encuentra la épica en Data Center), un filtro del propio usuario y
+  // la última búsqueda que se ejecutó aquí. Cuáles de ellos salen y en qué orden
+  // lo decide `searchChips`, no este fichero.
+  const FUENTES_CHIPS = {
+    issueFields: {
+      type: 'API Definition',
+      status: 'En revisión',
+      epic: 'Plataforma de consentimiento',
+      epicKey: 'SIMPL-4000',
+      sprint: 'Sprint 37',
+      components: ['Federación'],
+      labels: ['api'],
+    },
+    favouriteFilters: [{ id: '10100', name: 'API en revisión', jql: 'project = SIMPL AND status = "In Review"' }],
+    // Corta a propósito: la etiqueta de una «Última» puede llegar a 60
+    // caracteres y entonces la pastilla se recorta con puntos suspensivos (a 320
+    // px al panel le quedan unos 272 de ancho), que es justo lo que mide
+    // `chipsClipped`. Aquí se enseña una que cabe; el caso largo se ve en el
+    // Jira real, y si sale recortado el veredicto lo dirá.
+    recentJql: [{ jql: 'text ~ "cuotas"', at: 1, count: 12 }],
+  }
+
   const estado = { chat: 'confluence', pantalla: '', status: 'ok', pick: 'off', sources: 'off', ancho: 360, tema: 'dark', quinto: false }
-  const sitio = () => SITIOS[estado.chat === 'jira' ? 'jira' : 'confluence']
+  // Tres de las cinco conversaciones son de Jira («jira», «jira-busqueda» y el
+  // vacío «empty-jira»): el producto se mira por el nombre, que es lo que decide
+  // la cabecera, las etiquetas de las páginas base y si hay chips.
+  const sitio = () => SITIOS[estado.chat.includes('jira') ? 'jira' : 'confluence']
   const paginasBase = () => (estado.sources === 'on' ? PAGINAS_BASE : SIN_BASE)
 
   // ------------------------------------------------------------- cabecera
@@ -542,6 +613,82 @@ async function arrancar() {
     return wrap
   }
 
+  /**
+   * La tarjeta de una búsqueda de Jira (H8), como la pinta `navCard`: el kicker
+   * que trae el plan («Puedo llevarte», o «Búsqueda directa» si no la pidió
+   * ningún turno), el título y la explicación —que en una búsqueda es la propia
+   * consulta— y los botones, que salen de `navOptions` de verdad. Un plan de
+   * búsqueda tiene UN solo paso, así que no hay `nav-steps`.
+   */
+  function tarjetaBusqueda(plan) {
+    const card = mk('div', 'nav-card')
+    card.appendChild(mk('div', 'nav-kicker', plan.kicker || 'Puedo llevarte'))
+    card.appendChild(mk('div', 'nav-title', plan.destination.title))
+    if (plan.explanation) card.appendChild(mk('div', 'nav-text', plan.explanation))
+    const acciones = mk('div', 'nav-actions')
+    for (const o of navOptions(plan, { navMode: 'guided' })) acciones.appendChild(mk('button', o.kind, o.label))
+    card.appendChild(acciones)
+    return card
+  }
+
+  /**
+   * Lo que `attachJqlResults` mete DENTRO de la tarjeta, delante de los botones:
+   * una línea de estado y la lista. Lo de fuera («Abrir la búsqueda en Jira») no
+   * se mueve, porque la lista es un añadido y la tarjeta tiene que llevar igual.
+   */
+  function ponerEstado(card, texto) {
+    card.insertBefore(mk('div', 'nav-text result-status', texto), card.querySelector('.nav-actions'))
+  }
+
+  /**
+   * Una fila de la lista: la clave, de qué va, y en qué estado y de quién es.
+   * Es un botón y no un enlace, como en el panel: no hay URL hasta que
+   * `validatePlan` la reconstruye contra el origen del sitio (§8.3).
+   */
+  function filaResultado(issue) {
+    const row = doc.createElement('button')
+    row.type = 'button'
+    row.className = 'result-row'
+    const cuerpo = mk('span', 'result-body')
+    cuerpo.appendChild(mk('span', 'result-title', issue.summary || issue.key))
+    const detalle = [issue.status, issue.assignee?.displayName].filter(Boolean).join(' · ')
+    if (detalle) cuerpo.appendChild(mk('span', 'result-meta', detalle))
+    row.append(mk('span', 'result-key', issue.key), cuerpo)
+    return row
+  }
+
+  function ponerLista(card, issues) {
+    const lista = mk('div', 'result-list')
+    for (const i of issues) lista.appendChild(filaResultado(i))
+    card.insertBefore(lista, card.querySelector('.nav-actions'))
+  }
+
+  /**
+   * Los chips de «búsquedas al instante» del chat vacío (H8), con las mismas
+   * piezas que `paintSearchChips`: el epígrafe fino, la fila que envuelve y un
+   * botón por chip con la consulta entera en su `title`.
+   *
+   * Cuáles son y cuántos lo decide `searchChips` con las fuentes de arriba: en
+   * Confluence devuelve una lista vacía y la caja se queda oculta, igual que en
+   * el panel. Los botones llevan la clase gancho `needs-idle` porque en el panel
+   * nacen desactivados mientras se responde (H6).
+   */
+  function pintarChips(box) {
+    const chips = searchChips(sitio(), FUENTES_CHIPS)
+    box.classList.toggle('hidden', !chips.length)
+    if (!chips.length) return chips
+    box.appendChild(mk('div', 'fine', 'Búsquedas al instante, sin modelo'))
+    const fila = mk('div', 'search-chip-row')
+    for (const chip of chips) {
+      const b = mk('button', 'ghost small search-chip needs-idle', chip.label)
+      b.type = 'button'
+      b.title = chip.title
+      fila.appendChild(b)
+    }
+    box.appendChild(fila)
+    return chips
+  }
+
   /** La tarjeta de «Falta un permiso», que cuelga del chat y no de una burbuja. */
   function tarjetaPermiso(host) {
     const card = mk('div', 'nav-card perm-card')
@@ -764,11 +911,11 @@ async function arrancar() {
 
   /**
    * El chat vacío, como lo pinta `showWelcome`: el faro grande, la explicación,
-   * el hueco de «Qué mirar hoy» (H8), las tres sugerencias reales y el de los
-   * chips de búsqueda al instante (H11). Los dos huecos van vacíos y ocultos,
-   * igual que en el panel: están para que el sitio esté decidido y el
-   * presupuesto del estado vacío se pueda medir antes de que exista lo que los
-   * llena.
+   * el hueco de «Qué mirar hoy» (H11), las tres sugerencias reales y los chips
+   * de búsqueda al instante (H8). El hueco de «hoy» sigue vacío y oculto, igual
+   * que en el panel: está para que el sitio esté decidido y el presupuesto del
+   * estado vacío se pueda medir antes de que exista lo que lo llena. Los chips
+   * sí se llenan ya, y sólo en Jira: es lo que decide `searchChips`.
    */
   function estadoVacio() {
     const s = sitio()
@@ -792,8 +939,74 @@ async function arrancar() {
       sugerencias.appendChild(b)
     }
     wrap.appendChild(sugerencias)
-    wrap.appendChild(mk('div', 'search-chips hidden'))
+    const chips = mk('div', 'search-chips hidden')
+    wrap.appendChild(chips)
+    pintarChips(chips)
     chat.appendChild(wrap)
+  }
+
+  /**
+   * La tercera conversación: Búsqueda en Jira con la lista dentro (H8).
+   *
+   * Tres cosas que sólo se ven aquí, y que son las tres que pinta
+   * `attachJqlResults`: la tarjeta de siempre con la lista leída de la API, la
+   * MISMA tarjeta cuando la API no contesta —entera, con el aviso debajo y sin
+   * perder el botón que lleva a Jira (§8.14)— y la de una búsqueda directa, que
+   * no la pidió ningún turno y por eso trae su propio kicker y su filete dorado.
+   */
+  function conversacionBusqueda() {
+    const origin = SITIOS.jira.origin
+
+    chat.appendChild(burbujaUsuario('¿Qué queda sin cerrar del sprint 37?'))
+    const b1 = mk('div', 'msg assistant')
+    b1.appendChild(toolsFold([['Jira: search', true]]))
+    b1.appendChild(
+      prosa([
+        'Quedan **37** incidencias sin resolver en el sprint 37; la mitad son de la API de federación.',
+        '',
+        'Las dos que más se han movido hoy las tienes en la tarjeta.',
+      ])
+    )
+    // El título de la tarjeta y la URL los escribe el código real (`jqlPlan`
+    // cuenta los resultados): aquí sólo se dice la consulta y cuántos hubo.
+    const conLista = tarjetaBusqueda(jqlPlan({ ...jqlLink(BUSQUEDA_JQL, { origin }), count: 37 }))
+    ponerEstado(conLista, `${RESULTADOS.length} de 37, leídos ahora mismo de Jira`)
+    ponerLista(conLista, RESULTADOS)
+    b1.appendChild(conLista)
+    chat.appendChild(b1)
+
+    chat.appendChild(burbujaUsuario('¿Y lo que he tocado yo esta semana?'))
+    const b2 = mk('div', 'msg assistant')
+    b2.appendChild(toolsFold([['Jira: search', true]]))
+    b2.appendChild(prosa(['Hay **4** incidencias tuyas con cambios esta semana.']))
+    const sinLista = tarjetaBusqueda(
+      jqlPlan({ ...jqlLink('project = SIMPL AND assignee = currentUser() AND updated >= -7d', { origin }), count: 4 })
+    )
+    // El aviso va DENTRO de la tarjeta y detrás de los botones, como lo pone
+    // `attachJqlResults`: si el chat se repinta, se van juntos. El texto es el de
+    // `jqlFailText` para una sesión que no vale, con su coletilla.
+    sinLista.appendChild(
+      aviso(`Tu sesión de ${SITIOS.jira.host} no vale para su API: recarga la pestaña y vuelve a entrar. La tarjeta te lleva igual.`)
+    )
+    b2.appendChild(sinLista)
+    chat.appendChild(b2)
+
+    // Y una búsqueda directa: el chip que se pulsó, su etiqueta como pregunta y
+    // la nota que dice que esto no pasó por el modelo (ni está en la sesión de
+    // opencode, así que no sobrevive a repintar el chat).
+    // Va la última, y con guarda: si `searchChips` dejara de ofrecer ninguno,
+    // esto reventaría `arrancar()` entero y con él `faroPreview` —el fallo que
+    // H5 tuvo— en vez de quedarse sin una tarjeta.
+    const chip = searchChips(SITIOS.jira, FUENTES_CHIPS)[0]
+    if (!chip) return console.warn('[faroPreview] searchChips no ofrece ningún chip para este sitio: sin tarjeta de búsqueda directa')
+    chat.appendChild(burbujaUsuario(chip.label, 'búsqueda directa, sin modelo'))
+    const b3 = mk('div', 'msg assistant')
+    const directa = tarjetaBusqueda(jqlPlan(jqlLink(chip.jql, { origin }), { kicker: 'Búsqueda directa', title: chip.label }))
+    directa.classList.add('direct')
+    ponerEstado(directa, '2 de 9, leídos ahora mismo de Jira')
+    ponerLista(directa, RESULTADOS)
+    b3.appendChild(directa)
+    chat.appendChild(b3)
   }
 
   /** La burbuja que está llegando: sólo en «Respondiendo». */
@@ -812,10 +1025,11 @@ async function arrancar() {
 
   function pintarChat() {
     chat.textContent = ''
-    if (estado.chat === 'empty') estadoVacio()
+    if (estado.chat.startsWith('empty')) estadoVacio()
+    else if (estado.chat === 'jira-busqueda') conversacionBusqueda()
     else if (estado.chat === 'jira') conversacionJira()
     else conversacionConfluence()
-    if (estado.status === 'busy' && estado.chat !== 'empty') chat.appendChild(burbujaEnVuelo())
+    if (estado.status === 'busy' && !estado.chat.startsWith('empty')) chat.appendChild(burbujaEnVuelo())
     chat.scrollTop = chat.scrollHeight
   }
 
@@ -1095,6 +1309,22 @@ async function arrancar() {
    *   perderían al desplazar).
    * - `emptyStateRows`: cuántas sugerencias enseña el estado vacío (tope 3,
    *   docs/PLAN.md §3.4). Sin estado vacío a la vista es 0.
+   * - `chipRows` (H8): cuántas FILAS ocupan los chips de búsqueda al instante.
+   *   Es un número y no un veredicto a propósito: el presupuesto de la decisión 3
+   *   los quería «en una línea», y a 320 px no caben —al panel le quedan unos
+   *   272 px de ancho y una pastilla de veinte caracteres ya mide unos 135—, así
+   *   que `panel.css` los ENVUELVE a propósito (un chip al que hay que
+   *   desplazarse es un chip que nadie pulsa). Lo que importa entonces es cuánto
+   *   crece el estado vacío, y eso lo dice `emptyFits`; el número está para que
+   *   en la captura se vea el coste, y para que un chip más o una etiqueta más
+   *   larga se noten.
+   * - `chipsClipped` (H8): cuántos chips se recortan con puntos suspensivos. Ése
+   *   sí es un veredicto: un chip cuya etiqueta no cabe entera no dice qué va a
+   *   buscar, y entonces sobra.
+   * - `emptyFits` (H8): el estado vacío entero cabe sin desplazar el chat. Es el
+   *   presupuesto de la decisión 3 medido donde se rompe: tres sugerencias más
+   *   los chips más lo que H11 traiga no pueden dejar el faro fuera de la vista.
+   *   Sin estado vacío delante no hay nada que medir y es `true`.
    * - `motivo`: por qué no hay NADA que medir, si es el caso. La ausencia de una
    *   pieza es un fallo, no un cero: `getBoundingClientRect()` sobre un selector
    *   que no casa daba 0 px, 0 ≤ 48, y el espejo sobre un documento vacío
@@ -1102,7 +1332,10 @@ async function arrancar() {
    *   del iframe— devolvía `ok: true` sin panel ninguno (revisión adversaria de
    *   H5). Los demás fallos se leen en sus propios números; éste no se veía.
    */
-  const CAJAS = ['.top', '.brand', '.top-actions', '.composer', '.composer-meta', '.composer-row', '.chat']
+  // `.result-row` y `.search-chip-row` son las dos piezas de H8 que podrían no
+  // caber a lo ancho: la fila de un resultado (clave que no cede + resumen que
+  // sí) y la de los chips (que envuelve).
+  const CAJAS = ['.top', '.brand', '.top-actions', '.composer', '.composer-meta', '.composer-row', '.chat', '.result-row', '.search-chip-row']
 
   function check() {
     const raiz = doc.documentElement
@@ -1138,6 +1371,18 @@ async function arrancar() {
 
     const emptyStateRows = doc.querySelectorAll('.empty .suggestion').length
 
+    // Los chips: en qué filas caen (por la coordenada de su caja, que es lo que
+    // el navegador decidió de verdad) y cuántos se recortan.
+    const chips = [...doc.querySelectorAll('.empty .search-chip')]
+    const chipRows = new Set(chips.map((c) => Math.round(c.getBoundingClientRect().top))).size
+    const chipsClipped = chips.filter((c) => c.scrollWidth > c.clientWidth + 1).length
+
+    // Y si el estado vacío entero cabe: con él delante, el chat no tiene que
+    // desplazarse (una conversación sí, y por eso sólo se mide con el vacío).
+    const vacio = doc.querySelector('.empty')
+    const caja = doc.querySelector('.chat')
+    const emptyFits = !vacio || !caja || caja.scrollHeight <= caja.clientHeight + 1
+
     // ¿Hay panel? Las tres piezas que sostienen las medidas de arriba, y que
     // midan algo: un 0 px no es «cabe de sobra», es que no está pintado.
     const falta = ['#app', '.top', '.composer-meta'].filter((s) => !doc.querySelector(s))
@@ -1148,8 +1393,16 @@ async function arrancar() {
         : ''
     const presente = !motivo
 
-    const ok = presente && !overflowX && topHeight <= 48 && composerMetaHeight <= 36 && screenHeadsVisible && emptyStateRows <= 3
-    return { ok, motivo, overflowX, topHeight, composerMetaHeight, screenHeadsVisible, emptyStateRows }
+    const ok =
+      presente &&
+      !overflowX &&
+      topHeight <= 48 &&
+      composerMetaHeight <= 36 &&
+      screenHeadsVisible &&
+      emptyStateRows <= 3 &&
+      chipsClipped === 0 &&
+      emptyFits
+    return { ok, motivo, overflowX, topHeight, composerMetaHeight, screenHeadsVisible, emptyStateRows, chipRows, chipsClipped, emptyFits }
   }
 
   /** El resultado, a la vista en la barra lateral: se mira sin abrir la consola. */
@@ -1163,6 +1416,12 @@ async function arrancar() {
       ['redactor', r.composerMetaHeight + ' px', r.composerMetaHeight <= 36],
       ['cabeceras de pantalla', r.screenHeadsVisible ? 'a la vista' : 'fuera', r.screenHeadsVisible],
       ['sugerencias', String(r.emptyStateRows), r.emptyStateRows <= 3],
+      // `bien` en null es «esto es un número, no un veredicto»: las filas de
+      // chips son el coste del presupuesto, no un fallo (el fallo sería que el
+      // estado vacío no quepa, y eso se mide aparte).
+      ['chips', r.chipRows ? `${r.chipRows} fila(s)` : 'ninguno', null],
+      ['chips legibles', r.chipsClipped ? `${r.chipsClipped} recortado(s)` : 'sí', r.chipsClipped === 0],
+      ['estado vacío', r.emptyFits ? 'cabe' : 'se desplaza', r.emptyFits],
     ]
     for (const [k, v, bien] of filas) {
       const row = document.createElement('div')
@@ -1171,7 +1430,7 @@ async function arrancar() {
       kk.className = 'k'
       kk.textContent = k
       const vv = document.createElement('span')
-      vv.className = 'v ' + (bien ? 'ok' : 'bad')
+      vv.className = 'v' + (bien === null ? '' : bien ? ' ok' : ' bad')
       vv.textContent = v
       row.append(kk, vv)
       cajaMedidas.appendChild(row)

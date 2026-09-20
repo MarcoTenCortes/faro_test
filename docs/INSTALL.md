@@ -246,7 +246,25 @@ Junto al selector de modelo, abajo, hay otras dos cosas:
   de lo que el modelo escribe, sino de la llamada real que hizo a
   `jira_search` (la última que devolvió resultados): un modelo que escribe
   una JQL en su respuesta y busca con otra no puede mandarte a una lista que
-  no ha visto. Si no buscó nada y nombra una sola incidencia, la tarjeta abre
+  no ha visto.
+
+  Y **dentro de esa tarjeta viene la lista**: las incidencias de verdad, con su
+  clave, su resumen, en qué estado están y de quién son. No las escribe el
+  modelo ni te las cuenta de memoria: Faro ejecuta esa misma consulta contra la
+  API de tu propio Jira con tu sesión del navegador, así que son de este
+  momento, tardan milisegundos y no cuestan ni un token. Una línea encima dice
+  cuántas se enseñan de cuántas hay. Al pulsar una fila, Faro te lleva a esa
+  incidencia —por el mismo camino que cualquier destino: la clave entra en el
+  índice del sitio y se comprueba antes de abrir nada, no se pega una URL a
+  mano—, y la lista se queda viva para que sigas con la siguiente.
+
+  Si la API no contesta —Jira Cloud, sesión caducada, falta el permiso sobre el
+  dominio, o Jira rechaza la consulta—, **la tarjeta se queda entera** y debajo
+  sale un aviso con el motivo y «La tarjeta te lleva igual»: nunca te quedas sin
+  el botón que te lleva a la búsqueda. Todo esto se apaga desde **Ajustes →
+  Consultar tu sitio**.
+
+  Si no buscó nada y nombra una sola incidencia, la tarjeta abre
   esa incidencia: el proyecto no es un paso intermedio, sería otra carga de
   página. Y la incidencia que ya tienes abierta nunca es el destino.
 
@@ -361,6 +379,38 @@ Junto al selector de modelo, abajo, hay otras dos cosas:
   primero que se mira cuando la respuesta no cuadra. Siempre empieza plegada, y
   al reabrir el panel no se recrea: la conversación restaurada no las tiene.
 
+- **Búsquedas al instante** — en un **Jira propio (Data Center)**, con el chat
+  vacío, bajo las tres sugerencias hay hasta cuatro pastillas: «Misma épica
+  ENG-1», «Mismo sprint «S37 Infra»», «Mis abiertas de ENG», «Filtro: API en
+  revisión», «Última: …». Las tres sugerencias son preguntas **para el modelo**;
+  estas pastillas no pasan por él: Faro ejecuta la consulta él mismo contra tu
+  Jira y te devuelve la lista, con la misma tarjeta de una búsqueda. Bajo la
+  pregunta lo dice: «búsqueda directa, sin modelo». El tooltip de cada pastilla
+  es la consulta entera, para que puedas leerla antes de pulsar.
+
+  De dónde salen: de los campos de la incidencia que tienes delante —la épica se
+  busca por su clave, no por su nombre, que es lo único con lo que Jira la
+  encuentra—, de los **filtros que tú tienes marcados como favoritos** en tu
+  Jira, y de las **últimas búsquedas que se ejecutaron** en ese sitio (se
+  guardan cinco, y sólo las que de verdad devolvieron lista). Ninguna se inventa
+  y ninguna sale de lo que escribas: son plantillas fijas con los valores
+  entrecomillados, o consultas tuyas. Si un filtro tuyo usa una función que no es
+  de Jira (ScriptRunner y compañía), la pastilla aparece igual pero **te abre
+  Jira** en vez de intentar ejecutarla y enseñarte un error.
+
+  En Confluence y en Jira Cloud no hay pastillas. Y una búsqueda directa **no
+  queda en la conversación**: no ha hablado nadie con opencode, así que al
+  reabrir el panel no está.
+
+- **Ajustes → Consultar tu sitio** — una sola casilla que enciende o apaga
+  **todo** lo que Faro lee de la API de tu Jira o tu Confluence con tu sesión:
+  la lista dentro de la tarjeta de una búsqueda y las búsquedas al instante.
+  Viene encendida. Sólo son lecturas (`GET`), siempre al mismo sitio en el que
+  estás, y nunca salen de él. Apagarla no rompe nada: la tarjeta sigue
+  llevándote a la búsqueda y las sugerencias del chat vacío siguen ahí. No apaga
+  la lectura del camino por el árbol ni la búsqueda de páginas base, que
+  funcionan desde antes. Se aplica al momento, sin rearrancar el panel.
+
 - **Teclado y lector de pantalla** — `Esc` cierra Ajustes, Memoria, Registro y
   Páginas base (en Páginas base, primero vacía las sugerencias) y cancela el
   velo «Trabajando…»; con una pantalla abierta el resto del panel queda inerte
@@ -468,8 +518,8 @@ porque llega en un paso posterior. Esos van con su nombre y su paso en la lista
 atiende bootstrap.js y todavía nadie lo manda (lo cablea H8)». La lista sólo
 puede encoger: en cuanto alguien manda ese mensaje —o el mensaje deja de
 existir— seguir en ella es un ERROR que pide borrarlo, para que el aviso de
-verdad no quede tapado. Hoy están ahí los cinco mensajes de las lecturas por
-API.
+verdad no quede tapado. Hoy están ahí tres de las lecturas por API: las otras
+dos (la búsqueda JQL y los filtros favoritos) ya tienen quien las mande.
 
 `npm run snapshots` regenera las instantáneas de los prompts
 (`test/fixtures/prompts/*.txt`): `npm run check` las compara byte a byte con
@@ -481,11 +531,19 @@ distinta. Se regenera sólo cuando el cambio es intencionado, revisando el
 
 `npm run harness` levanta en <http://127.0.0.1:5175> una Confluence y un Jira de
 mentira con las piezas reales encima. El botón **Autocomprobación completa**
-recorre hoy **49 tramos numerados (89 comprobaciones)**; hay que correrla con el panel del navegador a
+recorre hoy **50 tramos numerados (92 comprobaciones)**; hay que correrla con el panel del navegador a
 la vista y a 1280×900, porque con la ventana oculta Chrome estrangula los
 temporizadores y no ejecuta los fotogramas.
 
-Los seis últimos tramos (44-49) son de las **lecturas por API** y no tocan la
+El último tramo (50) junta las dos mitades de las **búsquedas al instante**: lo
+que la extensión lee de la pantalla —los campos de una incidencia, con la clave
+de la épica sacada del enlace y no de su nombre— y lo que hace con ello,
+ejecutando cada pastilla contra la Jira de mentira sin que ninguna dé un error, y
+comprobando que la consulta de un filtro con una función de complemento no se
+ejecuta aquí sino que se abre en Jira. Tiene botón propio, **«Búsquedas al
+instante de ENG-7»**.
+
+Los tramos 44-49 son de las **lecturas por API** y no tocan la
 página ni el panel: el servidor del banco finge `/rest/api/2/search`, los filtros
 favoritos, los enlaces remotos de una incidencia, el contenido paginado de un
 espacio y las consultas de plantilla de Confluence, y se comprueba que una
@@ -733,6 +791,37 @@ corto y un detalle. Todos los títulos, por dónde salen:
   lateral; cada línea del informe va debajo como «debug» (fuera del filtro
   «Solo problemas»).
 
+**Buscar en Jira sin gastar tokens**
+
+Estos cinco salen sólo en un **Jira propio (Data Center)** y sólo con la casilla
+**Ajustes → Consultar tu sitio** encendida. En Jira Cloud esa API está retirada y
+en Confluence no hay nada de esto.
+
+- «Lista de Jira leída» — la tarjeta de una búsqueda trae dentro la lista de
+  incidencias, leída de la API del propio Jira con tu sesión del navegador:
+  cuántas se enseñan de cuántas hay, «sin ordenar por lo último visto» si tu
+  instalación no acepta ese orden y hubo que pedirlo por fecha de cambio, «vía
+  /jira» si tu Jira cuelga de una ruta de contexto, cuántos milisegundos costó y
+  la consulta entera. Ni un token: la consulta es la misma que el modelo acababa
+  de ejecutar, y ejecutarla otra vez contra tu sitio es una petición.
+- «Lista de Jira no disponible» — no se pudo leer esa lista, con el motivo:
+  estás en Jira Cloud, falta el permiso sobre el dominio, tu sesión no vale para
+  la API (401/403), Jira rechazó la consulta (y entonces el detalle es **el
+  mensaje del servidor**, tal cual), o el panel ya se había ido a otro sitio
+  mientras llegaba. **La tarjeta se queda igual y sigue llevándote a la
+  búsqueda**: la lista es un añadido. El aviso bajo la tarjeta sale una vez por
+  sitio y por sesión, salvo el de una consulta rechazada, que habla de ESA
+  consulta y se dice siempre.
+- «Búsquedas al instante» — sólo si algo falló al preparar los chips del chat
+  vacío; el detalle es el error. Los chips en sí no se apuntan: son una oferta.
+- «Filtros favoritos» — los filtros que tú tienes marcados en tu Jira se
+  leyeron para ofrecerlos como chip (cuántos), o no se pudieron leer, con el
+  motivo. Quedarse sin ellos sólo quita chips, así que no sale nada en el chat.
+- «Búsqueda directa» — pulsaste un chip: la consulta se ejecutó **sin pasar por
+  el modelo** (de qué fuente salía el chip, su etiqueta y la consulta). Bajo la
+  pregunta lo pone: «búsqueda directa, sin modelo». Si el chip no se pudo
+  ejecutar, el detalle dice por qué.
+
 **Señalar en la página**
 
 - «Señalado en la página» — lo que subrayaste o la imagen que pulsaste llegó
@@ -900,6 +989,28 @@ Mira qué JQL ha usado: lo dice en la respuesta. Casi siempre es que acotó al
 proyecto de la URL y lo que buscas está en otro: dile «en todos los proyectos»
 o nombra el proyecto. Y en Jira Data Center `text ~` busca por palabras
 enteras.
+
+**La tarjeta de la búsqueda no trae la lista, o dice «tu sesión no vale para la API»**
+La lista se lee de la API de tu propio Jira con la sesión del navegador, así que
+lo primero es **abrir ese Jira en una pestaña y entrar**: si la sesión caducó, la
+API contesta 401 aunque el panel siga funcionando (el modelo va por el MCP, que
+usa su token, no tu sesión). Recarga la pestaña y vuelve a preguntar. El registro
+lo dice con el motivo exacto en «Lista de Jira no disponible». Los demás motivos:
+**Jira Cloud** (esa API está retirada allí; todo va por el MCP), **falta el
+permiso** sobre el dominio (la navegación paso a paso lo pide con un botón), y
+**Jira rechazó la consulta**, en cuyo caso el aviso trae el mensaje del propio
+servidor —normalmente una cláusula que tu instalación no tiene—. Y comprueba que
+**Ajustes → Consultar tu sitio** está encendido: apagado, no se pide nada y no
+hay aviso, porque no es un fallo. En todos los casos la tarjeta sigue llevándote
+a la búsqueda en Jira.
+
+**No me salen las búsquedas al instante en el chat vacío**
+Sólo salen en un **Jira propio (Data Center)**, con la casilla **Ajustes →
+Consultar tu sitio** encendida, y salen las que haya de qué sacar: si no tienes
+una incidencia abierta, no hay épica ni sprint de los que partir; si no tienes
+filtros marcados como favoritos en tu Jira, no hay pastilla de filtro (el registro
+dice «Filtros favoritos» con cuántos leyó); y las «Última: …» aparecen en cuanto
+ejecutes la primera. Como mucho cuatro, para que el chat vacío siga cabiendo.
 
 **«El modelo no aceptó la petición» o el turno se queda pensando**
 Es el modelo, no Faro. Cambia de modelo en el desplegable: el propio mensaje

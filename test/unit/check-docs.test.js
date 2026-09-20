@@ -238,17 +238,22 @@ test('msgHandlers reconoce las formas reales de mandar: `type:` en varias línea
 // MSG_SIN_EMISOR_HASTA / pendingSenders (H7: el cimiento REST nace sin UI)
 // ---------------------------------------------------------------------------
 
-/** Los cinco mensajes de H7, tal como los ve `msgHandlers`: atendidos y sin nadie que los mande. */
+/** Un mensaje que espera su hito, tal como lo ve `msgHandlers`: atendido y sin nadie que lo mande. */
 const ATENDIDOS = (nombres) => nombres.map((name) => ({ name, handled: true, sent: false, where: ['bootstrap'] }))
 
-test('MSG_SIN_EMISOR_HASTA nombra los mensajes de H7 con el hito que los cablea', () => {
+test('MSG_SIN_EMISOR_HASTA nombra los mensajes que esperan su hito, y sólo encoge', () => {
+  // De los cinco que sembró H7 ya faltan dos: `attachJqlResults` manda
+  // JQL_SEARCH y `loadSearchChipSources` FAVOURITE_FILTERS, los dos desde H8, y
+  // dejarlos aquí sería ERROR («ya lo manda alguien»). La lista no puede crecer
+  // sin que el hito que la toca lo escriba.
   eq(MSG_SIN_EMISOR_HASTA, {
-    JQL_SEARCH: 'H8',
-    FAVOURITE_FILTERS: 'H8',
     SPACE_PAGES: 'H9',
     RECENT_ISSUES: 'H11',
     RECENT_PAGES: 'H11',
   })
+  for (const cableado of ['JQL_SEARCH', 'FAVOURITE_FILTERS']) {
+    assert(!(cableado in MSG_SIN_EMISOR_HASTA), `H8 cableó ${cableado}: su entrada tenía que salir de la lista`)
+  }
   for (const hito of Object.values(MSG_SIN_EMISOR_HASTA)) assert(/^H\d+$/.test(hito), 'cada entrada dice a qué hito espera: ' + hito)
 })
 
@@ -484,7 +489,9 @@ test('checkDocs sobre el repo: un mensaje con receptor y sin emisor es aviso, nu
   // «Parar» de la tarjeta de navegación lo manda (`{ type: MSG.CANCEL_PLAN,
   // tabId }` en runPlan), así que no queda ningún mensaje huérfano. Si aparece
   // uno nuevo, esta línea lo dice con su nombre: cablea quien lo manda o bórralo.
-  // Los cinco de H7 no cuentan aquí: nacen sin interfaz y van en las notas.
+  // Los que H7 sembró sin interfaz no cuentan aquí: van en las notas mientras
+  // esperan a su hito, y salen de la lista en cuanto alguien los manda (H8 ya
+  // se llevó dos).
   eq(avisos, [], 'ningún mensaje con receptor y sin emisor fuera de la lista')
   const notas = r.notes.filter((w) => w.kind === 'msgs')
   eq(notas.length, 1, 'los mensajes que esperan a su hito van juntos en una nota')

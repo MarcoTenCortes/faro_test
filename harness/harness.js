@@ -264,7 +264,7 @@ const PAGES = {
                     <li class="item"><div class="wrap"><strong class="name">Etiquetas:</strong> <span class="value"><ul class="labels"><li><a href="#">seguridad</a></li><li><a href="#">tokens</a></li></ul></span></div></li>
                   </ul>
                   <ul class="tabs-menu"><li class="menu-item active-tab"><a href="#">Main</a></li><li class="menu-item"><a href="#">Planning</a></li></ul>
-                  <div class="tabs-pane active-pane"><ul class="property-list"><li class="item"><div class="wrap"><strong class="name">Epic Link:</strong> <span class="value">Rotación de credenciales</span></div></li></ul></div>
+                  <div class="tabs-pane active-pane"><ul class="property-list"><li class="item"><div class="wrap"><strong class="name">Epic Link:</strong> <span class="value"><a class="issue-link" href="/browse/ENG-1">Rotación de credenciales</a></span></div></li></ul></div>
                   <div class="tabs-pane" style="display:none"><ul class="property-list"><li class="item"><div class="wrap"><strong class="name">Sprint:</strong> <span class="value">S37 Infra</span></div></li></ul></div>
                 </div>
               </div>
@@ -992,6 +992,45 @@ const actions = {
       arbol.ok ? 'ok' : 'bad'
     )
     for (const p of (arbol.pages || []).slice(0, 5)) say(`  ${p.id} ← ${p.parentId ?? 'raíz'} · ${p.title}`)
+  },
+
+  /**
+   * Los chips de «búsquedas al instante» de la incidencia que hay delante (H8),
+   * con sus consultas ejecutadas de verdad contra la Jira de mentira.
+   *
+   * Es la acción que enseña el camino entero sin panel: de los campos que se leen
+   * de la pantalla a una lista de incidencias, sin modelo y sin tokens.
+   */
+  async chips() {
+    renderPage('issue:ENG-7')
+    await wait(320)
+    const jiraRest = await import('/src/shared/jira-rest.js')
+    const { searchChips } = await import('/src/panel/search-chips.js')
+    const { normalizeIssueFields } = await import('/src/panel/issue-profile.js')
+    const FIX = await (await fetch('/harness/issues.json')).json()
+    const campos = normalizeIssueFields(jiraIssueFields())
+    if (!campos) return say('esta página no es una incidencia', 'bad')
+    say(`campos leídos: tipo «${campos.type}» · estado «${campos.status}» · épica ${campos.epicKey || '(sin enlace)'}`)
+
+    const sitio = { product: 'jira', cloud: false, projectKey: 'ENG', issueKey: 'ENG-7' }
+    const chips = searchChips(sitio, {
+      issueFields: campos,
+      favouriteFilters: FIX.filters,
+      recentJql: [{ jql: 'project = ENG AND labels = seguridad', at: Date.now(), count: 4 }],
+    })
+    const sitioJira = { origin: location.origin, jiraPrefix: '', cloud: false }
+    for (const chip of chips) {
+      if (!chip.run) {
+        say(`  ${chip.label} → se abre en Jira: ${chip.title}`, 'ok')
+        continue
+      }
+      const r = await jiraRest.searchIssues((u, o) => fetch(u, o), sitioJira, chip.jql, { limit: 5 })
+      say(
+        `  ${chip.label} → ${r.ok ? `${r.issues.length} de ${r.total} en ${r.ms} ms` : 'sin lista: ' + r.reason}  ·  ${chip.jql}`,
+        r.ok ? 'ok' : 'bad'
+      )
+      for (const i of (r.issues || []).slice(0, 3)) say(`      ${i.key} · ${i.status} · ${i.summary}`)
+    }
   },
 
   unsafe() {
@@ -2477,6 +2516,76 @@ const actions = {
       `${otroOrigen49.reason} · ${libre49.reason} · ${pedidasRest.length - antes49} peticiones`
     )
 
+    // ------------------------------------------------------------------
+    // 50: las búsquedas al instante (H8). Es el único tramo que junta las dos
+    // mitades: lo que la extensión LEE de la pantalla (los campos de la
+    // incidencia, con la clave de la épica sacada del enlace) y lo que hace con
+    // ello (consultas que ejecuta ella misma contra la API del sitio). Ninguna
+    // de las dos se puede probar sola en Node: una necesita DOM y la otra un
+    // servidor que conteste como Jira.
+    // ------------------------------------------------------------------
+
+    // 50. Cada chip que sale de la incidencia que hay delante es EJECUTABLE: eso
+    //     es lo que lo separa de una sugerencia en prosa. Y el que llama a una
+    //     función que no es de Jira no se ejecuta aquí, porque acabaría en un 400
+    //     del servidor.
+    renderPage('issue:ENG-7')
+    await wait(320)
+    const { searchChips: chipsDe } = await import('/src/panel/search-chips.js')
+    const { normalizeIssueFields } = await import('/src/panel/issue-profile.js')
+    const campos50 = normalizeIssueFields(jiraIssueFields())
+    const sitio50 = { product: 'jira', cloud: false, projectKey: 'ENG', issueKey: 'ENG-7' }
+    const chips50 = chipsDe(sitio50, {
+      issueFields: campos50,
+      favouriteFilters: FIX.filters,
+      recentJql: [{ jql: 'project = ENG AND labels = seguridad', at: 1, count: 4 }],
+    })
+    const epica50 = chips50.find((c) => c.kind === 'epica')
+    ok(
+      'la clave de la épica sale del enlace del campo, no de su nombre: con el nombre la consulta no encontraría nada',
+      campos50?.epicKey === 'ENG-1' &&
+        !!epica50 &&
+        epica50.jql.includes('ENG-1') &&
+        !/credenciales/i.test(epica50.jql) &&
+        chips50.length > 1,
+      `${chips50.length} chips · ${chips50.map((c) => c.kind).join(' ')} · ${epica50 ? epica50.jql : 'sin chip de épica'}`
+    )
+
+    const antes50 = pedidasRest.length
+    const corridas50 = []
+    for (const chip of chips50) corridas50.push({ chip, r: await jiraRest.searchIssues(pideApi, sitioJira, chip.jql, { limit: 5 }) })
+    const filas50 = corridas50.flatMap(({ r }) => r.issues || [])
+    ok(
+      'cada chip se ejecuta en la API del sitio sin que ninguno dé un 400, y lo que vuelve son filas con claves blancas',
+      corridas50.length === chips50.length &&
+        corridas50.every(({ chip, r }) => chip.run && r.ok) &&
+        pedidasRest.length === antes50 + chips50.length &&
+        filas50.length > 0 &&
+        filas50.every((f) => Object.keys(f).sort().join(',') === CLAVES_FILA),
+      corridas50.map(({ chip, r }) => `${chip.kind}:${r.ok ? r.issues.length + ' de ' + r.total : 'FALLO ' + r.reason}`).join(' · ')
+    )
+
+    // Un filtro que el propio usuario guardó puede llamar a una función de un
+    // complemento (ScriptRunner y compañía): es suya y sólo lee, pero la API de
+    // Jira no la conoce. El chip se ofrece igual y se ABRE en Jira; si se
+    // ejecutara aquí, esto es lo que contestaría el servidor.
+    const plugin50 = { id: '9', name: 'ScriptRunner', jql: 'issueFunction in linkedIssuesOf("project = ENG")' }
+    const conPlugin50 = chipsDe(sitio50, { favouriteFilters: [plugin50] }).find((c) => c.kind === 'filtro')
+    const antes50b = pedidasRest.length
+    const rechazada50 = await jiraRest.searchIssues(pideApi, sitioJira, plugin50.jql)
+    ok(
+      'una consulta con una función que no es de Jira no la ejecuta Faro, y el servidor la rechaza con SU mensaje',
+      !!conPlugin50 &&
+        conPlugin50.run === false &&
+        /la abro en Jira/.test(conPlugin50.title) &&
+        !rechazada50.ok &&
+        rechazada50.reason === 'jql' &&
+        rechazada50.status === 400 &&
+        /linkedIssuesOf/.test(rechazada50.messages?.[0] || '') &&
+        pedidasRest.length === antes50b + 1,
+      `run=${conPlugin50?.run} · ${rechazada50.reason} · ${(rechazada50.messages || []).join(' | ')}`
+    )
+
     renderPage('page:200')
     await wait(320)
 
@@ -2530,5 +2639,10 @@ window.faroHarness = {
   jiraRest: () => import('/src/shared/jira-rest.js'),
   confluenceRest: () => import('/src/shared/confluence-rest.js'),
   issuesFixture: () => fetch('/harness/issues.json').then((r) => r.json()),
+  // Y de H8, los chips: viven en src/panel/, así que aquí sólo se piden a
+  // demanda como los módulos REST. Lo que el panel hace con ellos no se puede
+  // probar en el banco (panel.js necesita `chrome.*`), pero QUÉ consultas
+  // produce la pantalla y si son ejecutables, sí.
+  searchChips: () => import('/src/panel/search-chips.js'),
 }
 say('banco listo')

@@ -428,32 +428,46 @@ Trece decisiones que sostienen el diseño:
    - **El razonamiento** de un modelo que piensa en voz alta repintaba la
      respuesta entera por cada trozo, sin que se viera nada: ya no.
 
-15. **Faro va a empezar a preguntarle a tu propio Jira y a tu propio
-   Confluence, no al modelo.** Una búsqueda JQL, el árbol de un espacio, los
-   filtros que tienes marcados, los enlaces de una incidencia o lo último que
-   miraste son cosas que la API del sitio contesta exacta y en milisegundos; hoy
-   se las pide al modelo, que tarda segundos, cuesta tokens y arrastra su
-   respuesta en la conversación. Las lecturas van **con la sesión que ya tienes
-   abierta en el navegador** —Faro no guarda ni pide ningún token para esto—,
-   son **siempre de lectura** (GET, nunca se escribe nada), sólo al sitio en el
-   que estás y con la consulta que escribe la propia extensión a partir de una
-   plantilla fija; si la API no contesta, el camino de siempre sigue entero.
+15. **Faro le pregunta a tu propio Jira, no al modelo.** Una búsqueda JQL, el
+   árbol de un espacio, los filtros que tienes marcados, los enlaces de una
+   incidencia o lo último que miraste son cosas que la API del sitio contesta
+   exacta y en milisegundos; pedírselas al modelo tarda segundos, cuesta tokens
+   y arrastra su respuesta en la conversación. Las lecturas van **con la sesión
+   que ya tienes abierta en el navegador** —Faro no guarda ni pide ningún token
+   para esto—, son **siempre de lectura** (GET, nunca se escribe nada), sólo al
+   sitio en el que estás y con la consulta que escribe la propia extensión a
+   partir de una plantilla fija; si la API no contesta, el camino de siempre
+   sigue entero.
 
-   De momento **no se nota nada**: esta versión trae sólo el cimiento —el
-   transporte, las consultas y el banco de pruebas que lo ejercita—, y todavía
-   no hay ningún botón que lo use. Lo usarán la lista de resultados dentro de la
-   tarjeta de una búsqueda, las sugerencias de qué buscar, el contexto del sitio
-   leído de la API y las recomendaciones de qué mirar hoy. Cuando lleguen, un
-   solo interruptor en Ajustes las apagará todas de golpe; en Jira Cloud no se
-   consulta la API en ningún caso (Atlassian la retiró: allí todo sigue por el
-   MCP).
+   Lo que ya se nota, en un Jira propio (Data Center):
+
+   - **La tarjeta de una búsqueda trae la lista dentro.** Decía «Los 37
+     resultados de la búsqueda en Jira» y para ver cuáles había que irse a Jira;
+     ahora vienen con su clave, su resumen, su estado y de quién son, leídos de
+     tu sitio en el momento y sin un token. Pulsar una fila te lleva a esa
+     incidencia por el mismo camino que cualquier destino: la clave entra en el
+     índice y se valida antes de abrir nada, no se pega una URL a mano.
+   - **El chat vacío ofrece hasta cuatro búsquedas al instante.** «Misma épica
+     ENG-1», «Mis abiertas de ENG», «Filtro: API en revisión»… Las tres
+     sugerencias de al lado son preguntas para el modelo; estas no pasan por él.
+     Salen de los campos de la incidencia que tienes delante, de los filtros que
+     tú tienes marcados en tu Jira y de las últimas que ejecutaste. Ninguna se
+     deduce de lo que escribas: son plantillas fijas con los valores
+     entrecomillados, o consultas tuyas.
+
+   Todo esto se apaga con **un solo interruptor** en Ajustes → *Consultar tu
+   sitio*, y si falla —sesión caducada, sin permiso, consulta rechazada— la
+   tarjeta se queda entera con un aviso que dice el motivo. En **Jira Cloud** no
+   se consulta la API en ningún caso (Atlassian la retiró: allí todo sigue por el
+   MCP), y en Confluence no hay búsquedas al instante. Lo que falta por llegar:
+   el contexto del sitio leído de la API y las recomendaciones de qué mirar hoy.
 
 ---
 
 ## Comprobaciones
 
 ```bash
-npm run check              # sintaxis + orden + manifest + 1046 pruebas unitarias + docs
+npm run check              # sintaxis + orden + manifest + 1069 pruebas unitarias + docs
 npm run check:docs         # sólo el paso docs: número de pruebas, títulos del registro, mensajes y ficheros del mapa
 npm run test:integration   # contra un opencode real que arranca la propia prueba
 npm run harness            # banco de pruebas visual en http://127.0.0.1:5175
@@ -467,18 +481,20 @@ Con el banco levantado hay dos páginas:
 
 - <http://127.0.0.1:5175/> — la Confluence de mentira, para ver el foco, el
   anillo, el cartel y el recorrido asistido funcionando de verdad.
-- <http://127.0.0.1:5175/harness/panel-preview.html> — el panel real con dos
-  conversaciones de ejemplo (una de Confluence y una de Jira), para recorrer sus
-  nueve pantallas sin tener que instalar nada. Sus mandos cambian el tema
+- <http://127.0.0.1:5175/harness/panel-preview.html> — el panel real con cinco
+  conversaciones de ejemplo (una de Confluence, una de Jira, la de una búsqueda
+  de Jira con su lista dentro, y los dos chats vacíos), para recorrer sus nueve
+  pantallas sin tener que instalar nada. Sus mandos cambian el tema
   (claro/oscuro), la anchura (320, 360 y 420), el estado del faro y la pantalla
   abierta, y `faroPreview.check()` mide en cada combinación lo que hay que mirar:
   que haya panel que medir, que nada se salga a lo ancho, que la cabecera y la
-  fila del redactor quepan en una línea y que el chat vacío no pase de tres
-  sugerencias. Lo primero no sobra: un selector que no casa mide 0 px, y 0 cabe
-  de sobra en cualquier tope, así que sobre una página vacía la medida decía que
-  todo estaba bien. Si falta el panel, ahora lo dice con su motivo. El rediseño
-  se acepta mirando las cuatro capturas (320 y 420 × claro y oscuro) con esa
-  medida en verde.
+  fila del redactor quepan en una línea, que el chat vacío no pase de tres
+  sugerencias, que ninguna pastilla de búsqueda se recorte y que el estado vacío
+  entero quepa sin desplazar el chat. Lo primero no sobra: un selector que no
+  casa mide 0 px, y 0 cabe de sobra en cualquier tope, así que sobre una página
+  vacía la medida decía que todo estaba bien. Si falta el panel, ahora lo dice
+  con su motivo. El rediseño se acepta mirando las capturas de cada conversación
+  (320 y 420 × claro y oscuro) con esa medida en verde.
 
 - **`npm run check`** no necesita nada instalado. Valida que todos los ficheros
   parsean, que **nada se usa antes de declararse**, que el manifest es MV3
@@ -716,7 +732,11 @@ de que el modelo se porte bien:
   un botón que la extensión arma escapando los valores, o la de un filtro que
   guardaste tú. Todas salen por el mismo y único punto —siempre `GET`, siempre
   al sitio en el que estás, con campos fijos, tope de resultados y tope de
-  tiempo—, y en Jira Cloud no se pide nada en absoluto.
+  tiempo—, y en Jira Cloud no se pide nada en absoluto. Una sola casilla,
+  **Ajustes → Consultar tu sitio**, las apaga todas; y lo que devuelvan se pinta
+  con `textContent` y se valida antes de usarse para nada: la clave de una fila
+  de resultados entra en el índice del sitio y pasa por la misma comprobación
+  que cualquier destino antes de que nadie pueda abrirla.
 
 **Y el modelo no puede tocar tu máquina.** El agente por defecto de opencode
 trae herramientas de shell y de ficheros, y las usa: comprobado, ejecutaba
@@ -878,6 +898,7 @@ src/
     setup.js                claves por producto → bloque MCP; hosts enlazados (puro salvo las llamadas a opencode)
     sources.js              páginas base del análisis: forma, alcance, autocompletado desde el índice, URL pegada, vigilancia del alcance (puro)
     suggestions.js          las tres sugerencias del chat vacío, por producto y por Skill (puro)
+    search-chips.js         las búsquedas al instante: qué consultas se ofrecen y cuáles ejecuta Faro (puro)
     notes.js                observaciones numeradas: el bloque JSON de anclas, su validación, la segunda pasada (puro)
     issue-profile.js        qué ticket es: tipo y estado leídos de sus campos → qué comprobar en el análisis (puro)
     prompts.js              plantillas, incluido el bloque de lo señalado y la página en bloques
