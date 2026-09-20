@@ -101,6 +101,25 @@ export const ISSUE_CHROME = [
 ].join(', ')
 
 /**
+ * De qué parte de la incidencia viene un enlace, para poder decir por qué se
+ * sugiere una página («enlazada desde la descripción», «desde un comentario»).
+ *
+ * Vive aquí, con `ISSUE_CHROME` y con los ids de los campos, porque qué es una
+ * incidencia en pantalla se decide en UN sitio (§8.17): `page-links.js` sólo
+ * pregunta. El orden importa y lo usa quien lee —un comentario está dentro del
+ * módulo de actividad, así que la región más concreta va primero—, y lo que no
+ * case con ninguna es «pagina», que es lo que pasa en Confluence entero.
+ */
+export const ISSUE_LINK_REGIONS = {
+  descripcion: '#description-val, #descriptionmodule',
+  enlaces: '#linkingmodule',
+  comentario: '#issue_actions_container, .action-body',
+}
+
+/** Dónde pinta Jira la clave de la incidencia abierta (Data Center). */
+const KEY_EL = ['#key-val', '.issue-header-keys a']
+
+/**
  * Los puntos de lectura de la incidencia abierta, o null si esta página no es
  * una incidencia de Jira.
  *
@@ -277,4 +296,30 @@ export function jiraIssueFields(doc = document) {
   // «Misma épica ENG-1» sin pedirle nada al modelo.
   out.epicKey = claveDeEnlace(epicEl)
   return out
+}
+
+/**
+ * La clave de la incidencia abierta, o '' si esta página no es una.
+ *
+ * Primero la de la pantalla (`#key-val`, donde el Data Center la pinta) y, si
+ * no está, la del `/browse/…` de la URL, con la MISMA regex con la que se saca
+ * la clave del enlace de un campo. Las dos pasan por `validIssueKey`, que es
+ * donde se decide qué tiene forma de clave: lo que salga de aquí acaba en la
+ * ruta de un GET a la API del propio Jira (`remoteLinksPath`), así que no puede
+ * ser lo que ponga el DOM sin más.
+ *
+ * El `href` se pasa aparte y no se lee de `location` para que esto siga siendo
+ * DOM puro y comprobable en el banco con una URL cualquiera.
+ *
+ * @param {Document} [doc]
+ * @param {string} [href] la URL de la pestaña, como respaldo
+ */
+export function jiraIssueKey(doc = document, href = '') {
+  if (!VIEW.some((s) => doc.querySelector(s))) return ''
+  for (const sel of KEY_EL) {
+    const key = validIssueKey(texto(doc.querySelector(sel)))
+    if (key) return key
+  }
+  const m = BROWSE_KEY.exec(String(href || ''))
+  return m ? validIssueKey(m[1]) : ''
 }

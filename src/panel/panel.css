@@ -1221,6 +1221,34 @@ html.faro-still .busy-bar i { animation: none; width: 100%; }
 /* «Añadir la página 123456»: no es un resultado, es una acción, y se ve distinta. */
 .suggest-row.add .suggest-title { color: var(--gold); }
 
+/* «Sugeridas» (H10). No es la lista del campo: no cuelga de lo que se escribe,
+   no se recorre con las flechas y cada fila es una tarjeta con tres líneas
+   (título, de dónde es, por qué se propone). Por eso son fichas separadas como
+   las de «Páginas elegidas» (.source-row) y no filas pegadas dentro de una caja
+   con borde: puestas juntas, las dos listas del panel se confundían. */
+#sources-suggested { margin-bottom: var(--s4); }
+.suggest-list { display: flex; flex-direction: column; gap: var(--s1); margin-bottom: var(--s2); }
+.suggest-row.suggested {
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+.suggest-row.suggested:hover { background: var(--surface-2); }
+/* El motivo, en el acento de texto: es lo que hace que la sugerencia se pueda
+   aceptar o descartar de un vistazo (§8.20, «cada una dice de dónde sale»), y
+   va en una línea con elipsis porque son dos motivos como mucho. */
+.suggest-why {
+  display: block;
+  font-size: var(--text-xs);
+  color: var(--gold);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Los dos botones de la sección no son del flujo de lectura: van juntos, chicos
+   y sin separarse de la lista que gobiernan. */
+.suggest-actions { margin-top: 0; margin-bottom: var(--s2); }
+
 .source-list { display: flex; flex-direction: column; gap: var(--s1); margin-bottom: var(--s3); }
 .source-list:empty::after {
   content: "Todavía ninguna. Pega una URL o busca por título.";

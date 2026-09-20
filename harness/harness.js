@@ -16,7 +16,8 @@ import { scrollWithinScrollers } from '../src/content/dom-utils.js'
 import { imagesWithin } from '../src/content/anchor.js'
 import { Picker } from '../src/content/picker.js'
 import { pageDigest, digestScope, resolveBlockQuote } from '../src/content/digest.js'
-import { jiraIssueFields } from '../src/content/jira-issue.js'
+import { jiraIssueFields, jiraIssueKey } from '../src/content/jira-issue.js'
+import { pageLinks } from '../src/content/page-links.js'
 import { formatDigest, blockHint, DIGEST_LIMITS } from '../src/shared/digest.js'
 
 // --------------------------------------------------------------- contenido
@@ -125,11 +126,11 @@ const PAGES = {
       <p>Adoptamos la rotación automática. Por política de seguridad el token expira a los 90 días naturales y debe rotarse desde el panel de administración, sin intervención manual del equipo de guardia.</p>
       <p>La rotación se solapa: durante las últimas 48 horas conviven el token viejo y el nuevo, de modo que un despliegue a medias no deja fuera a nadie.</p>
       <h2>Consecuencias</h2>
-      <p>Cada servicio necesita releer su credencial sin reiniciar. Los que no puedan hacerlo quedan documentados como excepción en el runbook de guardia.</p>
+      <p>Cada servicio necesita releer su credencial sin reiniciar. Los que no puedan hacerlo quedan documentados como excepción en el <a href="/wiki/spaces/ENG/pages/301/Runbook">runbook de guardia</a>.</p>
       <h3>Excepciones conocidas</h3>
       <p>El exportador de métricas heredado sigue con token fijo hasta que se retire, previsto para el próximo trimestre.</p>
       <h2>Seguimiento</h2>
-      <p>El cumplimiento se revisa cada trimestre. Los incumplimientos se registran en el proyecto ENG.</p>
+      <p>El cumplimiento se revisa cada trimestre. Los incumplimientos se registran en <a href="/browse/ENG-7">el proyecto ENG</a>.</p>
       <h2>Ejemplo de configuración</h2>
       <pre class="code"><code><span class="k">apiVersion</span>: networking.k8s.io/v1
 <span class="k">kind</span>: <span class="s">Ingress</span>
@@ -246,6 +247,10 @@ const PAGES = {
                   <li><a href="#" class="tb-btn">Añadir comentario</a></li>
                   <li><a href="#" class="tb-btn">Asignar</a></li>
                   <li><a href="#" class="tb-btn">Más</a></li>
+                  <!-- Un enlace de verdad a Confluence, pero en la barra de
+                       acciones: lo trae Jira en todas las incidencias, así que
+                       no es una página que nadie haya elegido para ésta. -->
+                  <li><a href="/wiki/spaces/ENG/pages/999/Ayuda" class="tb-btn">Ayuda</a></li>
                 </ul>
               </div>
               <div id="issue-header-pager">1 de 45196 · <a href="#">Siguiente incidencia</a></div>
@@ -265,13 +270,13 @@ const PAGES = {
                   </ul>
                   <ul class="tabs-menu"><li class="menu-item active-tab"><a href="#">Main</a></li><li class="menu-item"><a href="#">Planning</a></li></ul>
                   <div class="tabs-pane active-pane"><ul class="property-list"><li class="item"><div class="wrap"><strong class="name">Epic Link:</strong> <span class="value"><a class="issue-link" href="/browse/ENG-1">Rotación de credenciales</a></span></div></li></ul></div>
-                  <div class="tabs-pane" style="display:none"><ul class="property-list"><li class="item"><div class="wrap"><strong class="name">Sprint:</strong> <span class="value">S37 Infra</span></div></li></ul></div>
+                  <div class="tabs-pane" style="display:none"><ul class="property-list"><li class="item"><div class="wrap"><strong class="name">Sprint:</strong> <span class="value"><a href="/wiki/spaces/ENG/pages/998/Sprint37">S37 Infra</a></span></div></li></ul></div>
                 </div>
               </div>
               <div id="descriptionmodule" class="module toggle-wrap">
                 <div class="mod-header"><h3 class="toggle-header">Descripción</h3><button class="aui-button toggle-title" type="button"><span>Contraer Descripción</span></button></div>
-                <div class="mod-content"><div id="description-val" class="field-ignore-highlight"><div class="user-content-block">
-                  <p><b>Objetivo:</b> rotar los tokens de servicio de todos los componentes antes del despliegue de marzo, sin ventana de corte.</p>
+                <div class="mod-content"><a href="/wiki/spaces/ENG/pages/997/Plantilla" role="button" class="aui-button">Usar plantilla</a><div id="description-val" class="field-ignore-highlight"><div class="user-content-block">
+                  <p><b>Objetivo:</b> rotar los <a href="/wiki/spaces/ENG/pages/200/ADR-014">tokens de servicio</a> de todos los componentes antes del despliegue de marzo, sin ventana de corte.</p>
                   <p>Por política de seguridad el token expira a los 90 días naturales y debe rotarse desde el panel de administración.</p>
                   <p><b>Criterios de aceptación:</b></p>
                   <ul>
@@ -286,7 +291,7 @@ const PAGES = {
               </div>
               <div id="linkingmodule" class="module toggle-wrap">
                 <div class="mod-header"><h3 class="toggle-header">Enlace a Incidencias</h3></div>
-                <div class="mod-content"><dl class="links-list"><dt>relates to</dt><dd><div class="link-content"><a href="/browse/ENG-8">ENG-8</a> Revisar permisos del exportador</div></dd></dl></div>
+                <div class="mod-content"><dl class="links-list"><dt>relates to</dt><dd><div class="link-content"><a href="/browse/ENG-8">ENG-8</a> Revisar permisos del exportador</div></dd></dl><dl class="links-list"><dt>Wiki Page</dt><dd><div class="link-content"><a class="link-title" href="/display/ENG/Runbook+de+guardia">Runbook de guardia</a></div></dd></dl></div>
               </div>
               <div id="activitymodule" class="module toggle-wrap">
                 <div class="mod-header"><h3 class="toggle-header">Actividad</h3></div>
@@ -299,7 +304,7 @@ const PAGES = {
                           <button class="twixi icon-default" type="button"><span>Contraer el comentario: Ana Ruiz</span></button>
                           <div class="action-details"><a class="user-hover" href="#">Ana Ruiz</a> añadió un comentario - <span class="date">14/ago/26 6:18 AM</span></div>
                         </div>
-                        <div class="action-body flooded"><p>El exportador de métricas heredado no admite recarga en caliente: la rotación de su token tiene que ser a mano, en ventana de mantenimiento.</p></div>
+                        <div class="action-body flooded"><p>El exportador de métricas heredado no admite recarga en caliente: la rotación de su token tiene que ser a mano, en <a href="/wiki/spaces/ENG/pages/100/Arquitectura">ventana de mantenimiento</a>.</p></div>
                         <div class="action-links action-comment-actions"><button class="pinbutton" type="button">Anclar</button><a href="#">Editar</a><a href="#">Borrar</a></div>
                       </div>
                     </div>
@@ -309,7 +314,7 @@ const PAGES = {
                           <button class="twixi icon-default" type="button"><span>Contraer el comentario: Marco</span></button>
                           <div class="action-details"><a class="user-hover" href="#">Marco</a> añadió un comentario - <span class="date">15/ago/26 9:02 AM</span></div>
                         </div>
-                        <div class="action-body flooded"><p>De acuerdo. Entonces el criterio de «ningún servicio queda fuera» no se cumple para el exportador: hay que decirlo en la descripción.</p></div>
+                        <div class="action-body flooded"><p>De acuerdo. Entonces el criterio de «ningún servicio queda fuera» no se cumple para <a href="https://git.example.com/eng/exporter">el exportador</a>: hay que decirlo en la descripción.</p></div>
                         <div class="action-links action-comment-actions"><button class="pinbutton" type="button">Anclar</button></div>
                       </div>
                     </div>
@@ -1092,6 +1097,50 @@ const actions = {
     say(`  convenciones: ${perfil.prefixes.map((p) => `${p.pattern} ${p.count} (p. ej. ${p.examples[0]?.key})`).join(' · ')}`)
     const chips = searchChips({ product: 'jira', cloud: false, projectKey: 'ENG' }, { profile: perfil })
     say(`  chips que salen del perfil: ${chips.map((c) => c.label).join(' · ') || 'ninguno'}`)
+  },
+
+  /**
+   * De dónde sale una página base sugerida (H10): los enlaces que esta página
+   * o esta incidencia tienen EN SU CONTENIDO, cuáles de ellos llevan a una
+   * página que se puede añadir y cuáles se descartan.
+   *
+   * Es la acción que enseña por qué la sección «Sugeridas» no le pregunta nada
+   * al modelo: todo lo que pinta está aquí, en la pantalla y en la API del
+   * propio sitio.
+   */
+  async links() {
+    const enlaces = pageLinks()
+    const clave = jiraIssueKey(document, location.href)
+    say(`${enlaces.length} enlaces en el contenido${clave ? ' de ' + clave : ' de esta página'}`)
+    for (const l of enlaces) say(`  [${l.where}] ${l.text} → ${l.href}`)
+    if (!enlaces.length) return say('no hay enlaces en el contenido de esta página', 'bad')
+
+    const jiraRest = await import('/src/shared/jira-rest.js')
+    const { confluenceLinksIn } = await import('/src/panel/source-suggest.js')
+    const { normalizeIndex } = await import('/src/atlassian/index-store.js')
+    const indice = normalizeIndex(
+      {
+        pages: Object.entries(PAGES)
+          .map(([k, p]) => ({ id: k.replace('page:', ''), title: p.title, spaceKey: 'ENG', url: p.path }))
+          .filter((p) => /^\d+$/.test(p.id)),
+      },
+      location.hostname,
+      { kind: 'space', key: 'ENG' },
+      { wikiPrefix: '/wiki' }
+    )
+    let remoto = null
+    if (clave) {
+      remoto = await jiraRest.fetchRemoteLinks((u, o) => fetch(u, o), { origin: location.origin, jiraPrefix: '', cloud: false }, clave, {
+        hosts: [location.hostname],
+      })
+      say(remoto.ok ? `remotos: ${remoto.links.length} a Confluence` : `remotos: ${remoto.reason}`, remoto.ok ? 'ok' : 'bad')
+    }
+    const site = { host: location.hostname, origin: location.origin, product: clave ? 'jira' : 'confluence', cloud: false }
+    const quedan = confluenceLinksIn(enlaces, remoto, { site, linkedHost: location.hostname, index: indice })
+    say(`${quedan.length} llevan a una página que se puede añadir:`, quedan.length ? 'ok' : 'bad')
+    for (const c of quedan) say(`  ${c.id} · ${c.title} · desde ${c.where}`)
+    const fuera = enlaces.length - quedan.length
+    say(`${fuera} descartados: otro producto, otro host o sin id que se pueda resolver con el índice`)
   },
 
   unsafe() {
@@ -1969,7 +2018,11 @@ const actions = {
     const dj2 = pageDigest()
     const textosJira = dj1.blocks.map((b) => b.text)
     const lineaJira = (i) => formatDigest(dj1.blocks).split('\n')[i]
-    const interfaz = ['Editar', 'Añadir comentario', 'Asignar', 'Contraer', 'Main', 'Planning', 'Anclar', 'Suelte los archivos', 'Consejo de expertos', 'Sprint:', 'Git Integration', 'Create branch', '45196', 'Opciones']
+    // «Ayuda» y «Usar plantilla» son de H10: dos enlaces a Confluence puestos a
+    // propósito en la interfaz (la barra de acciones y un botón del módulo de
+    // descripción). Los lee el 53 para comprobar que NO salen como enlaces de
+    // la incidencia; aquí, que tampoco se cuelan en los bloques.
+    const interfaz = ['Editar', 'Añadir comentario', 'Asignar', 'Contraer', 'Main', 'Planning', 'Anclar', 'Suelte los archivos', 'Consejo de expertos', 'Sprint:', 'Git Integration', 'Create branch', '45196', 'Opciones', 'Ayuda', 'Usar plantilla']
     const colada = interfaz.filter((t) => textosJira.some((x) => x.includes(t)))
     ok(
       'jira: la incidencia en bloques empieza por su titulo y trae campos, descripcion y comentarios',
@@ -2765,6 +2818,195 @@ const actions = {
         'ningún chip de estado'
     )
 
+    // ------------------------------------------------------------------
+    // 53-55: las páginas base que Faro propone sin preguntarle al modelo
+    // (H10). De dónde salen es lo que hay que comprobar aquí: los enlaces que
+    // la incidencia o la página tienen EN SU CONTENIDO —no en su interfaz, no
+    // en una pestaña que no se ve—, que es justo lo que `page-links.js` no
+    // puede probar en Node; y, con ellos, el historial y el contexto, la lista
+    // que la pantalla ofrecerá. Ninguna de las tres fuentes gasta un token.
+    // ------------------------------------------------------------------
+
+    // 53. Los enlaces de una incidencia, con la parte de la que vienen. La
+    //     descripción, el módulo de enlaces y los comentarios sí; la barra de
+    //     acciones, el botón del módulo y la pestaña de campos plegada no,
+    //     aunque los tres enlacen a Confluence a propósito en la fixture.
+    runner.clear()
+    renderPage('issue:ENG-7')
+    await wait(320)
+    const enlaces53 = pageLinks()
+    const otraVez53 = pageLinks()
+    // La URL entera si es de fuera, y la ruta si es de aquí: así se lee.
+    const corto53 = (l) => l.href.replace(location.origin, '') + ' ' + l.where
+    const mapa53 = enlaces53.map(corto53).sort().join(' | ')
+    const esperado53 = [
+      '/browse/ENG-1 pagina',
+      '/browse/ENG-8 enlaces',
+      '/display/ENG/Runbook+de+guardia enlaces',
+      '/wiki/spaces/ENG/pages/100/Arquitectura comentario',
+      '/wiki/spaces/ENG/pages/200/ADR-014 descripcion',
+      'https://git.example.com/eng/exporter comentario',
+    ].join(' | ')
+    ok(
+      'jira: los enlaces de la incidencia salen con la parte de la que vienen, y el filtrado es del panel',
+      mapa53 === esperado53 && mapa53 === otraVez53.map(corto53).sort().join(' | ') && jiraIssueKey(document, location.href) === 'ENG-7',
+      mapa53 || 'ningún enlace'
+    )
+    // Las tres trampas de la fixture, cada una por un motivo distinto: la 999
+    // está en la barra de acciones (fuera de los puntos de lectura), la 997 en
+    // un `role="button"` DENTRO del módulo de descripción (interfaz según el
+    // ámbito) y la 998 en la pestaña de campos que está plegada (no se ve).
+    const trampas53 = ['/pages/999/', '/pages/997/', '/pages/998/'].filter((t) => enlaces53.some((l) => l.href.includes(t)))
+    ok(
+      'jira: ni la barra de acciones, ni un boton del modulo, ni una pestana plegada cuentan como enlaces de la incidencia',
+      trampas53.length === 0 && document.querySelectorAll('a[href*="/pages/99"]').length === 3 && enlaces53.every((l) => l.text && !/\n/.test(l.text)),
+      trampas53.length ? 'se colaron: ' + trampas53.join(', ') : `${enlaces53.length} enlaces, 3 trampas fuera`
+    )
+
+    // 54. Y en una página de Confluence, sólo los del contenido: el árbol
+    //     lateral tiene decenas de enlaces y ninguno lo puso nadie para ESTA
+    //     página. Salen sin región, porque en Confluence no hay regiones.
+    renderPage('page:200')
+    await wait(320)
+    const enlaces54 = pageLinks()
+    const delArbol54 = [...document.querySelectorAll('.sidebar a[href]')].map((a) => a.href)
+    // Lo que se comprueba es que del árbol no se cuela NADA de más, no que ningún
+    // href coincida: el Runbook (301) está enlazado en el contenido Y es una fila
+    // del árbol —es la misma página—, así que comparar por href daba un falso
+    // fallo (lo vio el orquestador al correr el tramo en el navegador; el ensayo
+    // en Node no tenía barra lateral). Se cuentan los del árbol que NO están en
+    // el contenido: de ésos no puede salir ninguno.
+    const soloDelArbol54 = delArbol54.filter((h) => !/\/pages\/301\//.test(h))
+    ok(
+      'confluence: los enlaces son los del contenido, y ninguno de los del arbol lateral',
+      enlaces54.map(corto53).sort().join(' | ') === '/browse/ENG-7 pagina | /wiki/spaces/ENG/pages/301/Runbook pagina' &&
+        delArbol54.length > 10 &&
+        soloDelArbol54.length === delArbol54.length - 1 &&
+        !enlaces54.some((l) => soloDelArbol54.includes(l.href)),
+      `${enlaces54.length} del contenido · ${delArbol54.length} en el arbol lateral · ${soloDelArbol54.length} sólo del árbol, ninguno leído`
+    )
+
+    // 55. Y con esos enlaces, los enlaces remotos que da la API, un historial
+    //     de dos análisis anteriores y un contexto que nombra páginas con su
+    //     id: la lista que la pantalla ofrece, puntuada y explicada. Ningún
+    //     turno del modelo en todo el camino.
+    renderPage('issue:ENG-7')
+    await wait(320)
+    const { confluenceLinksIn, suggestSources, reasonText } = await import('/src/panel/source-suggest.js')
+    const { referencesFromContext } = await import('/src/panel/references.js')
+    const { emptyHistory, historyEntry, recordAnalysis } = await import('/src/panel/source-history.js')
+    const { normalizeIndex } = await import('/src/atlassian/index-store.js')
+
+    // El índice sale de las páginas del propio banco, no de una lista escrita
+    // a mano: si mañana cambia un título, cambia el índice con él.
+    const indice55 = normalizeIndex(
+      {
+        pages: Object.entries(PAGES)
+          .map(([clave, p]) => ({ id: clave.replace('page:', ''), title: p.title, spaceKey: 'ENG', url: p.path }))
+          .filter((p) => /^\d+$/.test(p.id)),
+      },
+      location.hostname,
+      { kind: 'space', key: 'ENG' },
+      { wikiPrefix: '/wiki' }
+    )
+    const remoto55 = await jiraRest.fetchRemoteLinks(pideApi, sitioJira, 'ENG-7', { hosts: [location.hostname] })
+    // En el banco la Jira y la Confluence de mentira comparten origen, así que
+    // el «Confluence enlazado» es este mismo host.
+    const sitio55 = { host: location.hostname, origin: location.origin, product: 'jira', cloud: false, issueKey: 'ENG-7', projectKey: 'ENG' }
+    const candidatas55 = confluenceLinksIn(pageLinks(), remoto55, { site: sitio55, linkedHost: location.hostname, index: indice55 })
+    const dondeSale55 = (id) => candidatas55.find((c) => c.id === id)?.where || '(no está)'
+    ok(
+      'de los enlaces leidos solo quedan los que llevan a una pagina, y el /display/ se resuelve por el INDICE',
+      candidatas55.length === 3 &&
+        dondeSale55('200') === 'remoto' &&
+        dondeSale55('301') === 'enlaces' &&
+        dondeSale55('100') === 'comentario' &&
+        candidatas55.find((c) => c.id === '301').title === 'Runbook de guardia' &&
+        !candidatas55.some((c) => c.title.startsWith('Página ')),
+      candidatas55.map((c) => `${c.id}:${c.where}`).join(' ') + ` · remotos ${remoto55.ok ? remoto55.links.length : remoto55.reason}`
+    )
+
+    // Dos análisis anteriores de la misma clase de trabajo y del mismo
+    // proyecto, con la misma página elegida: es la señal de «esto es lo que
+    // usas para esto». Los campos y el título los lee del DOM, como el panel.
+    const campos55 = normalizeIssueFields(jiraIssueFields())
+    const titulo55 = pageDigest().blocks[0]?.text || ''
+    const ahora55 = Date.UTC(2026, 8, 20, 12, 0, 0)
+    let historial55 = emptyHistory()
+    for (const clave of ['ENG-20', 'ENG-21']) {
+      historial55 = recordAnalysis(
+        historial55,
+        historyEntry({
+          sources: { mode: 'open', pages: [{ id: '100', title: 'Arquitectura', spaceKey: 'ENG' }] },
+          issue: campos55,
+          summary: 'Rotar credenciales del exportador',
+          issueKey: clave,
+          projectKey: 'ENG',
+          product: 'jira',
+          now: ahora55 - 86400000,
+        }),
+        { host: location.hostname, now: ahora55 }
+      )
+    }
+    // Y un contexto como el que escribe el indexador: una página con su id bajo
+    // un apartado que dice de qué sirve, y tres señuelos que NO son ids.
+    const contexto55 = [
+      '## 6. Dónde está documentado en Confluence',
+      '',
+      '**Arquitectura**',
+      '',
+      '- «1080 - Architecture» (id 1080) — el índice de las vistas de arquitectura del programa.',
+      '',
+      '**Procesos**',
+      '',
+      '- «ACV Static - Identity Provider Service» (id 2003) — cómo se despliega el proveedor de identidad.',
+      '- La página de bienvenida (id 123) no vale: tres cifras no son un id de página.',
+      '- SIMPL-1234 tampoco, que es una incidencia.',
+    ].join('\n')
+    const refs55 = referencesFromContext(contexto55, { index: indice55 })
+
+    const ctx55 = {
+      index: indice55,
+      references: refs55,
+      history: historial55,
+      links: candidatas55,
+      issue: campos55,
+      summary: titulo55,
+      projectKey: 'ENG',
+      issueKey: 'ENG-7',
+      product: 'jira',
+      now: ahora55,
+    }
+    const sugeridas55 = suggestSources(ctx55)
+    const linea55 = (s) => `${s.id} ${s.score} ${reasonText(s.reasons)}`
+    ok(
+      'paginas base sugeridas: del enlace, del historial y del contexto, cada una con su motivo y sin gastar un token',
+      sugeridas55.length === 5 &&
+        sugeridas55.map((s) => s.id).join(' ') === '100 200 301 1080 2003' &&
+        linea55(sugeridas55[0]) === '100 65 desde un comentario · la usaste en 2 análisis de tareas en ENG' &&
+        linea55(sugeridas55[1]) === '200 62 enlazada en Jira a esta incidencia · el título la señala como referencia' &&
+        linea55(sugeridas55[2]) === '301 45 desde los enlaces de la incidencia' &&
+        linea55(sugeridas55[3]) === '1080 25 el contexto la nombra como arquitectura' &&
+        linea55(sugeridas55[4]) === '2003 25 el contexto la nombra como proceso' &&
+        Object.keys(refs55.items).sort().join(',') === '1080,2003',
+      sugeridas55.map(linea55).join(' | ') || 'ninguna sugerencia'
+    )
+    // Determinista, sin las que ya están elegidas, y desde un Jira las páginas
+    // son del Confluence ENLAZADO: su ruta no es de este sitio y se vacía.
+    const otraVez55 = suggestSources(ctx55)
+    const sinLa100 = suggestSources({ ...ctx55, exclude: ['100'] })
+    const delEnlazado55 = suggestSources({ ...ctx55, linked: true })
+    ok(
+      'la misma lista dos veces, sin las ya elegidas, y desde Jira sin ruta de este sitio',
+      JSON.stringify(otraVez55) === JSON.stringify(sugeridas55) &&
+        !sinLa100.some((s) => s.id === '100') &&
+        sinLa100.length === 4 &&
+        delEnlazado55.every((s) => s.path === '') &&
+        sugeridas55.some((s) => s.path.startsWith('/wiki/')) &&
+        suggestSources({ product: 'jira', now: ahora55 }).length === 0,
+      `${sinLa100.map((s) => s.id).join(' ')} sin la 100 · rutas del enlazado «${delEnlazado55.map((s) => s.path).join('')}»`
+    )
+
     renderPage('page:200')
     await wait(320)
 
@@ -2805,6 +3047,10 @@ window.faroHarness = {
   OBSERVACIONES,
   pageDigest,
   jiraIssueFields,
+  jiraIssueKey,
+  // De H10, lo que se lee de la pantalla para sugerir páginas base: es DOM
+  // puro, así que se expone entero y no a demanda como los módulos del panel.
+  pageLinks,
   formatDigest,
   observacionesPorBloques,
   observacionesDeIncidencia,
@@ -2830,5 +3076,11 @@ window.faroHarness = {
   // pasar por los cuarenta de antes.
   indexer: () => import('/src/panel/indexer.js'),
   treeScan: () => import('/src/content/tree-scan.js'),
+  // Y de H10, los tres módulos que puntúan y explican una sugerencia. Viven en
+  // src/panel/, así que a demanda como los demás: el banco no los necesita
+  // para pintar, y quien dirija el tramo 55 desde fuera los quiere enteros.
+  sourceSuggest: () => import('/src/panel/source-suggest.js'),
+  references: () => import('/src/panel/references.js'),
+  sourceHistory: () => import('/src/panel/source-history.js'),
 }
 say('banco listo')

@@ -133,6 +133,9 @@ test('el content script del manifest es bootstrap.js y carga sus módulos por ur
     // contexto de ESTA pestaña).
     'src/shared/jira-rest.js',
     'src/atlassian/site.js',
+    // H10: los enlaces del contenido de la página o de la incidencia, que es
+    // de donde salen las páginas base sugeridas que vienen de la pantalla.
+    'src/content/page-links.js',
   ]) {
     assert(entradas.includes(esperado), `bootstrap.js ya no carga ${esperado} con url('src/…'): ¿cambió la forma del import()?`)
   }

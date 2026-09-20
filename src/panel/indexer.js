@@ -506,7 +506,18 @@ function safeJson(v) {
   }
 }
 
-function decodeSlug(slug) {
+/**
+ * El último segmento de la URL de una página, convertido en su título: los «+»
+ * son espacios y lo codificado se decodifica (un «%» mal escrito no lanza,
+ * devuelve el texto tal cual).
+ *
+ * Se exporta desde H10 porque `source-suggest.js` lo necesita para lo mismo:
+ * un enlace `/display/ESPACIO/Runbook+de+guardia` no lleva id, y la única
+ * forma admitida de resolverlo es buscar ese título en el índice —nunca
+ * mandárselo a la API como consulta (§8.12)—. Copiarlo allí habría dejado dos
+ * reglas de decodificación que se separarían. Pura.
+ */
+export function decodeSlug(slug) {
   try {
     return decodeURIComponent(slug).replace(/\+/g, ' ').trim() || slug
   } catch {

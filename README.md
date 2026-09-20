@@ -111,6 +111,16 @@ la respuesta**.
   y las que el modelo decida consultar. Se recuerdan por sitio y se ven siempre
   en un chip sobre el cuadro de texto.
 
+  Esa pantalla además **propone**: encima de la lista sale «Sugeridas» con
+  hasta cinco páginas y, cada una, **por qué** («enlazada en Jira a esta
+  incidencia», «la usaste en 2 análisis de API en SIMPL», «el contexto la
+  nombra como guía»). Sale de cuatro sitios que no cuestan nada: lo que la
+  página o la incidencia abierta enlaza, lo que el contexto del sitio nombra
+  con su id, lo que tú mismo elegiste en análisis parecidos, y el título en el
+  índice. **Ninguna sugerencia le pregunta al modelo, y Faro no añade ninguna
+  por su cuenta**: hay que pulsarla, y debajo lo dice. Lo que has elegido antes
+  se apunta en tu navegador y sólo ahí; se borra con «Olvidar el historial».
+
 ---
 
 ## Requisitos
@@ -477,7 +487,7 @@ Trece decisiones que sostienen el diseño:
 ## Comprobaciones
 
 ```bash
-npm run check              # sintaxis + orden + manifest + 1101 pruebas unitarias + docs
+npm run check              # sintaxis + orden + manifest + 1171 pruebas unitarias + docs
 npm run check:docs         # sólo el paso docs: número de pruebas, títulos del registro, mensajes y ficheros del mapa
 npm run test:integration   # contra un opencode real que arranca la propia prueba
 npm run harness            # banco de pruebas visual en http://127.0.0.1:5175
@@ -714,6 +724,26 @@ de que el modelo se porte bien:
   instrucciones», y al escribir el contexto o el resumen se le pide que no
   copie nada que una página le «pida» anotar. La clave del espacio y las de
   Jira se validan antes de entrar en la cabecera del prompt.
+- **Lo que Faro propone sale de tu navegador, no de la nube.** Para sugerir
+  páginas base, Faro guarda en tu navegador —en `chrome.storage.local`, bajo
+  una clave por sitio— qué páginas usaste para analizar qué: claves de
+  incidencia, ids de página, títulos y rutas relativas. **Nunca el texto de
+  una página, de una incidencia ni de tu pregunta**, nunca personas, y nunca
+  sale del navegador: no viaja a opencode, no entra en ningún prompt y no lo
+  ve ningún modelo. Son como mucho 60 análisis y caduca a los 90 días. Lo ves
+  en la propia pantalla de páginas base —cada sugerencia dice de dónde sale— y
+  lo borras con «Olvidar el historial» o con «Olvidar este sitio», que se lo
+  lleva entero junto al índice y al contexto.
+- **Los enlaces de la página se leen, no se consultan.** Para proponer una
+  página base, Faro mira los enlaces que la página o la incidencia tiene en su
+  contenido (no en la barra de acciones ni en un menú) y, en una incidencia de
+  Jira Data Center, sus «enlaces remotos» por la API del propio Jira con tu
+  sesión. Un enlace de tipo `/display/ESPACIO/Título`, que no lleva id, se
+  resuelve **contra el índice** o por el id que da ese enlace remoto: el título
+  de una página jamás se manda a ninguna API como consulta. Lo que no se
+  resuelva, no se sugiere. La casilla de las lecturas por API de Ajustes apaga
+  la parte de la API; los enlaces del contenido siguen leyéndose, porque leer
+  el DOM no habla con nadie.
 - **Lista blanca de clics.** Sólo enlaces de navegación del propio sitio y
   botones de desplegar. Nunca «Guardar», «Publicar», «Comentar»,
   «Transicionar» ni «Eliminar». La navegación asistida navega; no actúa.
@@ -908,6 +938,9 @@ src/
     setup.js                claves por producto → bloque MCP; hosts enlazados (puro salvo las llamadas a opencode)
     sources.js              páginas base del análisis: forma, alcance, autocompletado desde el índice, URL pegada, vigilancia del alcance (puro)
     suggestions.js          las tres sugerencias del chat vacío, por producto y por Skill (puro)
+    source-history.js       qué páginas base usaste para analizar qué: el historial local que permite volver a proponerlas (puro + su almacén)
+    references.js           las páginas que el contexto del sitio nombra como guía, plantilla o decisión, con su papel (puro)
+    source-suggest.js       qué páginas base proponer y por qué, sin preguntarle al modelo (puro)
     rest-notice.js          cuándo se te avisa de que una lectura de la API no salió (una vez por sitio, sesión y motivo) y con qué palabras (puro)
     search-chips.js         las búsquedas al instante: qué consultas se ofrecen y cuáles ejecuta Faro (puro)
     notes.js                observaciones numeradas: el bloque JSON de anclas, su validación, la segunda pasada (puro)
@@ -920,6 +953,7 @@ src/
     anchor-match.js         localización de citas (puro)
     digest.js               la página en bloques numerados, y de «¶7 + cita» a un Range
     jira-issue.js           qué es una incidencia de Jira en pantalla: título, campos, descripción, comentarios; y qué es interfaz
+    page-links.js           los enlaces que la página tiene en su CONTENIDO, y de qué parte viene cada uno (nunca los de la interfaz)
     overlay/rects.js        funde por línea y recorta a su caja (puro)
     tree-dom.js             qué es el árbol, una fila y su control · diagnóstico
     locators.js             cascada href → rol → texto + lista blanca de clics

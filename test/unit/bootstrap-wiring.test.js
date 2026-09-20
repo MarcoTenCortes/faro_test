@@ -110,8 +110,45 @@ test('SEGURIDAD: toda petición del content script sale por el fetch que se le p
   // Ningún `fetch('…')` propio: la única forma es la flecha que se entrega a
   // getJson, que es quien comprueba el origen de la URL ya montada.
   const propias = cuenta(JS, 'fetch(')
-  assert(propias >= 7, 'los siete lectores REST siguen ahí')
+  assert(propias >= 8, 'los ocho lectores REST siguen ahí (siete de H7 y el remotelink de H10)')
   eq(cuenta(JS, '(u, o) => fetch(u, o)'), propias, 'un fetch que no es la flecha de un lector REST')
+})
+
+// --------------------------------------------------------------------- H10
+// Los enlaces de la página. Es el único `case` que junta las dos mitades —leer
+// el DOM y, en una incidencia, pedir a la API— y las dos garantías que no
+// pueden dar los módulos puros están aquí: de QUÉ incidencia se piden los
+// enlaces remotos lo dice la pantalla, y a qué hosts se admite que apunten lo
+// dice el registro del sitio, nunca el enlace que vuelve.
+
+test('SEGURIDAD: los enlaces se leen del ámbito de la PESTAÑA y la clave de la incidencia sale de la pantalla', () => {
+  const caso = entre('case MSG.PAGE_LINKS: {', 'case MSG.JQL_SEARCH: {')
+  assert(caso.includes('pageLinks({ scope: digestScope() })'), 'se lee por el ámbito de siempre')
+  assert(caso.includes('jiraIssueKey(document, location.href)'), 'la clave la decide la pantalla, no el mensaje')
+  assert(!caso.includes('msg.issueKey'), 'el panel no puede decir de qué incidencia se piden los enlaces remotos')
+  assert(!caso.includes('msg.links') && !caso.includes('msg.scope'), 'aquí no llega nada que ya esté leído')
+  // Y el content script sigue sin tocar la página: lee y contesta.
+  for (const prohibido of ['setAttribute(', 'appendChild(', '.click()', 'innerHTML']) {
+    assert(!caso.includes(prohibido), `el case de los enlaces no debería usar ${prohibido}`)
+  }
+})
+
+test('SEGURIDAD: el remotelink sólo se pide con una incidencia delante, sólo si el panel no lo apagó, y filtrado por host', () => {
+  const caso = entre('case MSG.PAGE_LINKS: {', 'case MSG.JQL_SEARCH: {')
+  assert(caso.includes('if (issueKey && msg.remote !== false) {'), 'sin incidencia o con restTools apagado no hay petición')
+  const guarda = caso.indexOf('if (issueKey && msg.remote !== false) {')
+  const peticion = caso.indexOf('jira.fetchRemoteLinks(')
+  assert(guarda >= 0 && peticion > guarda, 'la guarda va ANTES de pedir nada')
+  assert(caso.includes('sitioJira(msg)'), 'el sitio se deduce de la pestaña, como en las demás lecturas')
+  assert(caso.includes('const enlazado = hostValido(msg.confluenceHost)'), 'el host enlazado que propone el panel se valida')
+  assert(
+    caso.includes('hosts: enlazado ? [location.hostname, enlazado] : [location.hostname]'),
+    'un enlace remoto sólo puede apuntar al sitio o a su Confluence enlazado'
+  )
+  // El enlace del DOM no depende de la API: si la petición falla, `remote` trae
+  // su motivo y lo leído sigue yendo en la respuesta (§8.14).
+  assert(caso.includes('let remote = null'), 'sin incidencia, remote es null y no un fallo')
+  assert(/sendResponse\(\{ ok: true, links, issue, issueKey, remote,/.test(caso), 'la respuesta lleva las dos mitades')
 })
 
 test('el árbol de un espacio no acepta topes por mensaje: los pone el módulo', () => {

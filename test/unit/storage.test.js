@@ -61,7 +61,8 @@ async function conChrome(inicial, fn) {
         remove: async (k) => {
           diario.removed.push(k)
           // `chrome.storage.local.remove` acepta una clave o una lista, y
-          // `forgetSite` borra dos de golpe: el índice y el perfil.
+          // `forgetSite` borra varias de golpe: el índice, el perfil y el
+          // historial de páginas base.
           for (const clave of Array.isArray(k) ? k : [k]) delete local[clave]
         },
       },
@@ -80,15 +81,16 @@ const INDICE = { version: INDEX_VERSION, host: HOST, pages: {}, spaces: {}, proj
 
 // ---- las claves que se leen -------------------------------------------------
 
-test('bundle: las claves del paquete son las cuatro de siempre más el perfil, sin repetir', () => {
+test('bundle: las claves del paquete son las cuatro de siempre más el perfil y el historial, sin repetir', () => {
   eq(bundleKeys(HOST), [
     'faro:sites',
     `faro:index:${HOST}`,
     `faro:context:${HOST}`,
     `faro:memory:${HOST}`,
     `faro:profile:${HOST}`,
+    `faro:source-history:${HOST}`,
   ])
-  eq(new Set(bundleKeys(HOST)).size, 5, 'ninguna clave se pide dos veces')
+  eq(new Set(bundleKeys(HOST)).size, 6, 'ninguna clave se pide dos veces')
 })
 
 test('H9: el perfil viaja en el paquete, y una clave que no existe se ignora', () => {
@@ -104,10 +106,15 @@ test('H9: el perfil viaja en el paquete, y una clave que no existe se ignora', (
   // La regla para quien añada la suya: el nombre tiene que existir y tiene que
   // ser por host (STORAGE_KEYS.sites es una cadena, no vale).
   assert(Array.isArray(BUNDLE_EXTRA_KEYS), 'BUNDLE_EXTRA_KEYS es una lista')
-  eq(BUNDLE_EXTRA_KEYS, ['profile'], 'la primera es la de H9; H10 (historial y referencias) y H11 (actividad) añaden las suyas')
+  eq(BUNDLE_EXTRA_KEYS, ['profile', 'sourceHistory'], 'la de H9 y la de H10; H11 (actividad) añade la suya')
   for (const name of BUNDLE_EXTRA_KEYS) {
     eq(typeof STORAGE_KEYS[name], 'function', `STORAGE_KEYS.${name} tiene que ser una clave por host`)
   }
+  // Las páginas de referencia del contexto NO tienen clave: docs/PLAN.md §3.2
+  // descartó la lista estructurada del indexador y el parser de prosa las saca
+  // del CONTEXT.md, que ya viaja en este mismo paquete. Una clave que nadie
+  // escribe sería una promesa falsa.
+  eq('references' in STORAGE_KEYS, false, 'las referencias se calculan al vuelo, no se guardan')
 })
 
 // ---- una sola lectura -------------------------------------------------------
@@ -130,7 +137,7 @@ test('bundle: todo lo del sitio sale de UNA lectura, con claves exactas', async 
       eq(bundle.stale, false)
       eq(bundle.contextMd, '# Contexto')
       eq(bundle.memoryRaw, { entries: [{ at: 1, text: 'algo' }] }, 'la memoria sale tal cual: la normaliza quien la usa')
-      eq(bundle.extras, { profile: null })
+      eq(bundle.extras, { profile: null, sourceHistory: null })
       eq(diario.sets, [], 'leer no escribe nada')
     }
   )
@@ -139,7 +146,7 @@ test('bundle: todo lo del sitio sale de UNA lectura, con claves exactas', async 
 test('bundle: sin nada guardado no hay sitio, ni índice, ni contexto, ni memoria', async () => {
   await conChrome({}, async (diario) => {
     const bundle = await getSiteBundle(HOST)
-    eq(bundle, { site: null, index: null, stale: false, contextMd: '', memoryRaw: null, extras: { profile: null } })
+    eq(bundle, { site: null, index: null, stale: false, contextMd: '', memoryRaw: null, extras: { profile: null, sourceHistory: null } })
     eq(diario.removed, [], 'y no se borra nada')
   })
 })
@@ -152,7 +159,7 @@ test('bundle: el sitio es el de ESTE host, no el mapa entero', async () => {
       stale: false,
       contextMd: '',
       memoryRaw: null,
-      extras: { profile: null },
+      extras: { profile: null, sourceHistory: null },
     })
     const bundle = await getSiteBundle(OTRO)
     eq(bundle.site, { host: OTRO, configured: true })
@@ -259,21 +266,31 @@ test('H9: guardar el perfil lo normaliza antes, y guardar nada quita la clave', 
   })
 })
 
-test('H9: «Olvidar este sitio» se lleva también el perfil', async () => {
+test('H9/H10: «Olvidar este sitio» se lleva también el perfil y el historial de páginas base', async () => {
   // Si no, el turno siguiente en ese host volvería a meter en el prompt los
-  // tipos y estados de un sitio que el usuario acaba de tirar.
+  // tipos y estados de un sitio que el usuario acaba de tirar, y la pantalla de
+  // páginas base seguiría sugiriendo por lo que analizó ahí.
+  const HISTORIAL = `faro:source-history:${HOST}`
   await conChrome(
-    { 'faro:sites': { [HOST]: SITIO, [OTRO]: { host: OTRO } }, [`faro:index:${HOST}`]: INDICE, [CLAVE_PERFIL]: PERFIL, [`faro:profile:${OTRO}`]: PERFIL },
+    {
+      'faro:sites': { [HOST]: SITIO, [OTRO]: { host: OTRO } },
+      [`faro:index:${HOST}`]: INDICE,
+      [CLAVE_PERFIL]: PERFIL,
+      [`faro:profile:${OTRO}`]: PERFIL,
+      [HISTORIAL]: { version: 1, host: HOST, entries: [] },
+      [`faro:source-history:${OTRO}`]: { version: 1, host: OTRO, entries: [] },
+    },
     async (diario, local) => {
       await forgetSite(HOST)
       eq(HOST in local['faro:sites'], false)
       eq(`faro:index:${HOST}` in local, false)
       eq(CLAVE_PERFIL in local, false)
+      eq(HISTORIAL in local, false)
       eq(`faro:profile:${OTRO}` in local, true, 'el de otro host no se toca')
-      assert(
-        diario.removed.flat().includes(CLAVE_PERFIL),
-        'el perfil se borra junto al índice: ' + JSON.stringify(diario.removed)
-      )
+      eq(`faro:source-history:${OTRO}` in local, true)
+      for (const clave of [CLAVE_PERFIL, HISTORIAL]) {
+        assert(diario.removed.flat().includes(clave), `${clave} se borra junto al índice: ` + JSON.stringify(diario.removed))
+      }
     }
   )
 })

@@ -374,6 +374,36 @@ Junto al selector de modelo, abajo, hay otras dos cosas:
   sobre el cuadro de texto y en la nota bajo cada pregunta («con 2 páginas
   base (sólo estas)»).
 
+  Sobre esa lista, **Sugeridas**: hasta cinco páginas que Faro propone con el
+  motivo a la vista. No le pregunta al modelo ni gasta un token, y **no añade
+  ninguna sola**: hay que pulsarla. Cada motivo necesita algo distinto, y por
+  eso al principio pueden salir pocas o ninguna:
+
+  - «enlazada desde la descripción / desde los enlaces de la incidencia / desde
+    un comentario / enlazada en Jira a esta incidencia» — Faro lee los enlaces
+    que la página o la incidencia tiene **en su contenido** (los de la barra de
+    acciones y los menús no cuentan) y, en una incidencia de Jira Data Center,
+    sus enlaces remotos por la API con tu sesión. Un enlace `/display/…` sin id
+    sólo se reconoce si esa página está en el índice del sitio o si el enlace
+    remoto trae su id: el título nunca se manda a ninguna API.
+  - «el contexto la nombra como guía / como decisión…» — sale del CONTEXT.md
+    del sitio, y sólo de las páginas que ahí aparecen **con su id numérico**.
+    Los contextos generados antes de que Faro empezara a pedir ese id casi
+    nunca lo llevan: vuelve a generar el contexto desde Ajustes y este motivo
+    empieza a aparecer.
+  - «la usaste en N análisis de …» — sale de tu propio historial: cada vez que
+    terminas un análisis **con páginas base**, Faro apunta en tu navegador qué
+    páginas usaste y para qué ticket (su clave, su tipo, su proyecto, sus
+    componentes y las palabras de su título). Lo primero que analices no tiene
+    historial que mirar; a partir del tercero o cuarto empieza a acertar. En
+    Confluence sólo puntúa «la usaste en esta página», porque sin campos de
+    incidencia no hay tipo ni etiquetas que comparar.
+
+  Escribir dos letras en el campo esconde las sugeridas y enseña la búsqueda;
+  vaciarlo las devuelve. «Añadir las N» las añade todas de golpe (respetando el
+  tope de seis) y **«Olvidar el historial»** borra lo apuntado de este sitio:
+  las sugerencias que vinieran de ahí desaparecen y las demás se quedan.
+
   Las páginas base las lee el modelo por el MCP, enteras, antes de responder:
   cada una es una consulta, y sin el MCP conectado no puede leerlas (la
   pantalla y la respuesta lo dicen). Sólo se subraya la página abierta: una
@@ -553,11 +583,23 @@ distinta. Se regenera sólo cuando el cambio es intencionado, revisando el
 
 `npm run harness` levanta en <http://127.0.0.1:5175> una Confluence y un Jira de
 mentira con las piezas reales encima. El botón **Autocomprobación completa**
-recorre hoy **50 tramos numerados (92 comprobaciones)**; hay que correrla con el panel del navegador a
+recorre hoy **55 tramos numerados (103 comprobaciones)**; hay que correrla con el panel del navegador a
 la vista y a 1280×900, porque con la ventana oculta Chrome estrangula los
 temporizadores y no ejecuta los fotogramas.
 
-El último tramo (50) junta las dos mitades de las **búsquedas al instante**: lo
+Los tres últimos (53-55) son las **páginas base que Faro propone**: los enlaces que
+una incidencia tiene en su contenido con la parte de la que viene cada uno —y
+tres trampas que NO tienen que salir: uno en la barra de acciones, uno en un
+botón dentro de la descripción y uno en una pestaña de campos plegada—, lo mismo
+en una página de Confluence (ninguno de los trece del árbol lateral entra), y la
+tubería entera: de esos enlaces a las páginas candidatas —una por el id que da
+el enlace remoto, otra resuelta contra el índice desde un `/display/` sin id— y
+de ahí a las cinco sugerencias con su motivo. Tienen botón propio, **«Enlaces
+del contenido y páginas que se pueden sugerir»**. Los tramos 51 y 52 son el mapa
+levantado por la API (el árbol de un espacio comparado con el árbol lateral, y
+el perfil contado de un proyecto).
+
+El tramo 50 junta las dos mitades de las **búsquedas al instante**: lo
 que la extensión lee de la pantalla —los campos de una incidencia, con la clave
 de la épica sacada del enlace y no de su nombre— y lo que hace con ello,
 ejecutando cada pastilla contra la Jira de mentira sin que ninguna dé un error, y
@@ -752,6 +794,21 @@ corto y un detalle. Todos los títulos, por dónde salen:
   estaba en la lista; el detalle dice qué.
 - «Páginas base sin leer» — este sitio no tiene el MCP conectado: el modelo no
   pudo leerlas.
+- «Historial de páginas base» — terminaste un análisis con páginas base y Faro
+  apuntó cuáles usaste y para qué (la clave o el id, el tipo de ticket, cuántas
+  páginas y cuántas entradas quedan), que es de lo que salen las sugerencias.
+  Se guarda **sólo en tu navegador** y nunca entra en un prompt. También sale
+  cuando lo borras («borrado · N entradas de …»), cuando el turno terminó con
+  el panel ya en otro sitio y no se apunta nada, y en amarillo si
+  `chrome.storage` no dejó guardarlo: lo que se pierde entonces es una
+  sugerencia futura, no la respuesta.
+- «Enlaces de la página» — al abrir Páginas base, cuántos enlaces se leyeron
+  del contenido, cuántos de ellos son páginas de Confluence y qué pasó con los
+  enlaces remotos de la incidencia (su número, «no es una incidencia»,
+  «apagados en Ajustes» o el motivo del fallo), más lo que costó leer la
+  página. En amarillo si la pestaña no contestó: entonces las sugerencias
+  siguen saliendo del contexto, del historial y del índice, y el texto de la
+  pantalla lo dice.
 
 **Navegación**
 
@@ -1302,6 +1359,21 @@ permiso permanente de la sesión. Por eso, al terminar, mira qué herramientas
 llamó el modelo y, si buscó, recorrió el árbol o leyó una página fuera de la
 lista, lo dice bajo la respuesta y en el registro («Fuera del alcance», con lo
 que consultó). Con otro modelo suele respetarse mejor.
+
+**No me sugiere ninguna página base**
+La sección «Sugeridas» de esa pantalla sólo propone lo que puede explicar, y
+cada motivo necesita algo distinto. Si sale vacía: (1) mira el registro —«Enlaces
+de la página» dice cuántos enlaces se leyeron y cuántos eran de Confluence; si
+sale en amarillo, la pestaña no contestó (recarga la página y vuelve a abrir la
+pantalla)—; (2) si esta página o esta incidencia no enlaza ninguna página de
+Confluence **en su contenido**, ahí no hay nada que leer: los enlaces de la
+barra de acciones y de los menús no cuentan a propósito; (3) el contexto del
+sitio sólo aporta páginas que nombre **con su id numérico**, y los contextos
+generados hace tiempo casi nunca lo llevan (vuelve a generarlo desde Ajustes);
+(4) el historial empieza vacío: se llena solo, un análisis con páginas base cada
+vez, y en Confluence sólo distingue «la usaste en esta página». Y si la página
+está abierta en el **editor**, la fuente de los enlaces no funciona mientras
+editas, igual que no se puede leer la página en bloques.
 
 **Las páginas base no se han podido leer**
 Este sitio no tiene el MCP conectado, así que el modelo no llega a ellas y el

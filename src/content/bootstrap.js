@@ -85,6 +85,16 @@
   const tope = (v, max) => (Number.isInteger(v) && v >= 1 ? Math.min(v, max) : max)
 
   /**
+   * La forma de un host. El panel PROPONE el del Confluence enlazado (el que
+   * guardó `siteRecords`, §4.8) y aquí se vuelve a comprobar antes de usarlo,
+   * igual que el prefijo del wiki: no decide a dónde se pide nada —eso sale
+   * siempre de `location`—, sólo a qué hosts se admite que apunte un enlace que
+   * devuelve la API.
+   */
+  const HOST = /^[a-z0-9.-]{1,255}$/i
+  const hostValido = (v) => (HOST.test(String(v ?? '').trim()) ? String(v).trim().toLowerCase() : '')
+
+  /**
    * El sitio de ESTA pestaña para las lecturas REST de Jira.
    *
    * La ruta de contexto (`/jira`) se deduce de la URL del navegador con
@@ -309,6 +319,51 @@
                 { limit: msg.limit }
               )
             )
+            return
+          }
+
+          case MSG.PAGE_LINKS: {
+            // Los enlaces que la página o la incidencia tiene EN SU CONTENIDO,
+            // para que el panel pueda sugerir páginas base sin preguntarle al
+            // modelo (§8.20). Leer el DOM es gratis y no toca nada; lo único
+            // que sale a la red es, en una incidencia de Jira Data Center, la
+            // lista de enlaces remotos de ESA incidencia, y sólo si el panel no
+            // la ha apagado (`remote: false`, que es lo que hace el interruptor
+            // `restTools` de los ajustes). Si esa lectura falla, `remote` trae
+            // su motivo y lo leído del DOM sigue valiendo: la sección vive de
+            // lo demás (§8.14).
+            const [{ pageLinks }, { jiraIssueFields, jiraIssueKey }, { digestScope }, { isEditing }] = await Promise.all([
+              import(url('src/content/page-links.js')),
+              import(url('src/content/jira-issue.js')),
+              import(url('src/content/digest.js')),
+              import(url('src/content/dom-utils.js')),
+            ])
+            if (isEditing()) {
+              sendResponse({ ok: false, reason: 'editando' })
+              return
+            }
+            // Lo que cuesta LEER la página, como en PAGE_DIGEST: lo que tarde
+            // la API va en el `ms` del propio `remote` y no se suma aquí.
+            const t0 = performance.now()
+            const links = pageLinks({ scope: digestScope() })
+            const issueKey = jiraIssueKey(document, location.href)
+            const issue = jiraIssueFields()
+            const ms = Math.round(performance.now() - t0)
+
+            let remote = null
+            if (issueKey && msg.remote !== false) {
+              const [jira, sitio] = await Promise.all([import(url('src/shared/jira-rest.js')), sitioJira(msg)])
+              // A qué hosts se admite que apunte un enlace remoto: el de esta
+              // pestaña y el Confluence que el panel tiene guardado para este
+              // sitio. Sin ese filtro, un enlace remoto a OTRA Confluence
+              // colaría su `pageId`, y un id se resuelve contra el origen de
+              // aquí: sería sugerir otra página con el mismo número.
+              const enlazado = hostValido(msg.confluenceHost)
+              remote = await jira.fetchRemoteLinks((u, o) => fetch(u, o), sitio, issueKey, {
+                hosts: enlazado ? [location.hostname, enlazado] : [location.hostname],
+              })
+            }
+            sendResponse({ ok: true, links, issue, issueKey, remote, title: document.title, url: location.href, ms })
             return
           }
 

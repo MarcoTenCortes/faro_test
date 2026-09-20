@@ -13,7 +13,15 @@
 import { OpencodeClient, OpencodeError } from '../opencode/client.js'
 import { suggestsAnotherModel, sortMessages, dropOrphans, toolOutputSize } from '../opencode/turn.js'
 import { pickDefaultModel, pickAlternativeModel, pickPlannerModel, modelKey, parseModelKey } from '../shared/models.js'
-import { parseAtlassianUrl, describeLocation, defaultScope, locationParts, samePage, wikiPrefix as wikiPrefixOf } from '../atlassian/site.js'
+import {
+  parseAtlassianUrl,
+  cleanTabTitle,
+  describeLocation,
+  defaultScope,
+  locationParts,
+  samePage,
+  wikiPrefix as wikiPrefixOf,
+} from '../atlassian/site.js'
 import { mergeIndex, mergeIndexKeepingTree, indexSize, normalizeIndex, ancestryOf } from '../atlassian/index-store.js'
 import { CORS_ORIGIN, DEFAULT_SETTINGS, INDEX_LIMITS, PROFILE_LIMITS, RESTORE_LIMITS, SESSION_LIMITS, mcpNameForHost } from '../shared/config.js'
 import { MSG } from '../shared/messages.js'
@@ -78,6 +86,16 @@ import { suggestionsFor } from './suggestions.js'
 import { searchChips } from './search-chips.js'
 import { restFailureDue, jqlFailText } from './rest-notice.js'
 import { normalizeIssueFields } from './issue-profile.js'
+import {
+  clearSourceHistory,
+  emptyHistory,
+  historyEntry,
+  normalizeHistory,
+  recordAnalysis,
+  saveSourceHistory,
+} from './source-history.js'
+import { normalizeReferences, referencesFromContext } from './references.js'
+import { confluenceLinksIn, reasonText, suggestSources } from './source-suggest.js'
 import { searchPages, fetchAncestors } from '../shared/confluence-rest.js'
 import {
   collectNotes,
@@ -163,6 +181,25 @@ const state = {
   // La búsqueda de páginas base en curso: un testigo para descartar la
   // respuesta tardía de una consulta que el usuario ya ha reescrito.
   sourcesSearch: { token: 0, timer: 0, suggestions: [], active: -1 },
+  // Y las páginas base SUGERIDAS de la pantalla abierta (H10): el testigo tiene
+  // el mismo trabajo que el de la búsqueda —los enlaces los pide la pestaña y
+  // pueden llegar con la pantalla ya cerrada, en otro host o con la lista
+  // cambiada—, `list` es lo que está pintado (y lo que añade «Añadir las N») y
+  // `links`/`remote` son lo que contestó la pestaña, guardado para poder
+  // repintar tras añadir una sin volver a preguntárselo, y `estado` es qué
+  // fuentes llegaron: un repintado no puede decir que se leyeron los enlaces
+  // cuando la pestaña no contestó.
+  sourcesSuggest: { token: 0, list: [], links: [], remote: null, estado: 'listo' },
+  // Las páginas de referencia que el CONTEXT.md nombra con su id, calculadas al
+  // vuelo: no hay ninguna clave de almacenamiento que las guarde (§ references.js).
+  // Se memorizan mientras los dos contextos y el índice sean los MISMOS objetos;
+  // reindexar, subir un contexto a mano o cambiar de sitio los reemplaza y se
+  // vuelven a leer solas.
+  references: { propio: null, enlazado: null, index: null, items: null },
+  // Qué páginas base eligió el usuario para analizar qué, en este host. Viaja en
+  // el paquete del sitio (`BUNDLE_EXTRA_KEYS`) y se reconstruye al leerlo; es la
+  // señal más fuerte de las sugerencias y NUNCA entra en un prompt.
+  sourceHistory: emptyHistory(),
   notes: [],
   noteRows: new Map(),
   notesCard: null,
@@ -446,6 +483,14 @@ async function refreshTab() {
     state.favouriteFilters = null
     state.recentJql = []
     state.profile = null
+    // Y lo que alimenta las páginas base sugeridas, que también es de ESTE
+    // host: el historial de análisis (lo recarga `bootForSite` con el paquete
+    // del sitio nuevo), las referencias de su contexto y lo que la pestaña
+    // contestó de los enlaces. El testigo se sube, para que una respuesta en
+    // vuelo de la pestaña anterior no pinte sugerencias del sitio de antes.
+    state.sourceHistory = emptyHistory()
+    state.references = { propio: null, enlazado: null, index: null, items: null }
+    state.sourcesSuggest = { token: state.sourcesSuggest.token + 1, list: [], links: [], remote: null, estado: 'listo' }
     paintSourcesUi()
   }
   state.site = site
@@ -639,6 +684,11 @@ async function bootForSite() {
   // contarlo es una petición con la sesión del usuario y eso NO va aquí: se
   // hace al final, en segundo plano (P4 dejó el arranque en una sola lectura).
   state.profile = normalizeProfile(bundle.extras?.profile)
+  // Y el historial de análisis con páginas base, que viaja en ese MISMO paquete
+  // (H10): sale crudo de `getSiteBundle` —`shared/storage.js` no puede importar
+  // de `src/panel/`, igual que con la memoria— y se reconstruye aquí, con el
+  // reloj de ahora, así que lo caducado no llega a entrar en el estado.
+  state.sourceHistory = normalizeHistory(bundle.extras?.sourceHistory, { host: state.site.host })
   paintSourcesUi()
 
   if (!status.connected && !saved?.skippedKeys) {
@@ -846,6 +896,37 @@ function sourcesIndex() {
 /** El host del Confluence enlazado, si estamos en un Jira que lo tiene. */
 function linkedHost() {
   return state.site?.product === 'jira' ? state.linkedContext?.host || '' : ''
+}
+
+/**
+ * Las páginas de referencia que el contexto del sitio nombra con su id: las que
+ * un análisis debería tener delante según lo que el indexador escribió.
+ *
+ * Se leen del CONTEXT.md que el panel ya tiene cargado, no de ninguna clave:
+ * docs/PLAN.md §3.2 descartó la lista estructurada del indexador y con ella la
+ * clave que la guardaría (`references.js` lo explica). Desde un Jira se miran
+ * los DOS contextos —el del propio Jira, que dice dónde está documentado cada
+ * cosa en Confluence, y el del Confluence enlazado— porque los dos hablan de
+ * páginas de ese mismo Confluence; se funden por id y gana el primero.
+ *
+ * Memorizado por identidad de los objetos que lo producen: un contexto nuevo es
+ * otra cadena, y entonces se vuelve a leer. Sin eso, abrir la pantalla recorría
+ * dos veces el contexto entero por cada pasada.
+ */
+function currentReferences() {
+  const propio = state.contextMd || ''
+  const enlazado = state.linkedContext?.contextMd || ''
+  const index = sourcesIndex()
+  const memo = state.references
+  if (memo.items && memo.propio === propio && memo.enlazado === enlazado && memo.index === index) return memo.items
+
+  const items = [
+    ...Object.values(referencesFromContext(propio, { index }).items),
+    ...(enlazado ? Object.values(referencesFromContext(enlazado, { index }).items) : []),
+  ]
+  const fundidas = normalizeReferences({ items }, { index })
+  state.references = { propio, enlazado, index, items: fundidas }
+  return fundidas
 }
 
 /**
@@ -2061,10 +2142,29 @@ async function send() {
     // proveedor por defecto está caducado, no hay que volver a tropezar.
     if (state.site && state.model) await saveSite(state.site.host, { model: state.model })
 
+    // Y qué páginas base sirvieron para analizar ESTO: es lo único que hace
+    // falta para que la próxima incidencia parecida las traiga sugeridas sin
+    // gastar un token (§8.20). Con lo capturado al mandar, igual que el aviso
+    // de las páginas base de arriba.
+    await recordAnalysisTurn({
+      skill,
+      sources,
+      ok: !!turn.ok,
+      host: hostAlPedir,
+      sessionID: sesionAlPedir,
+      issue: digest?.issue || null,
+      pageUrl: digest?.url || tabUrlAlPedir,
+      summary: tituloAlPedir,
+      issueKey: issueKeyAlPedir,
+      pageId: pageIdAlPedir,
+      site: sitioAlPedir,
+      product: productoAlPedir,
+    })
+
     // Lo que cuesta ENSEÑAR la respuesta: el repintado final, el aviso de las
-    // páginas base, apuntar lo que pesa la sesión y guardar el modelo. Iba
-    // dentro de «índice» y los dos números salían sumados bajo una etiqueta que
-    // era de otra cosa.
+    // páginas base, apuntar lo que pesa la sesión, guardar el modelo y apuntar
+    // el análisis en el historial. Iba dentro de «índice» y los dos números
+    // salían sumados bajo una etiqueta que era de otra cosa.
     cron.mark('pintar')
 
     // En el modo Análisis, subrayar en la página de qué habla cada punto. Va
@@ -4048,6 +4148,11 @@ async function showSourcesScreen() {
   setSourcesStatus('')
   clearSourceSuggestions()
   paintSourceList()
+  // Las sugeridas: la primera pasada es local y se pinta ya; la segunda le pide
+  // los enlaces a la pestaña y repinta cuando lleguen. Sin `await`: lo que queda
+  // de esta función es el estado de los permisos y no puede esperar a una
+  // pestaña que quizá no conteste (§8.14).
+  paintSuggestedSources().catch(console.error)
   showScreen('screen-sources')
   $('sources-query').focus()
 
@@ -4134,6 +4239,326 @@ function paintSourceList() {
   }
 }
 
+// ------------------------------------------------ páginas base sugeridas
+
+/**
+ * Apunta qué páginas base sirvieron para analizar esta incidencia o esta
+ * página, que es lo único que hace falta para proponerlas la próxima vez.
+ *
+ * Nada de esto llama al modelo ni viaja a ningún prompt (§8.20): se guarda lo
+ * que el usuario ELIGIÓ —ids, títulos, la clave, la familia y la fase que la
+ * extensión ya leía de los campos— en una clave local por host, borrable desde
+ * la propia pantalla. Se llama con lo capturado al mandar, como el aviso de las
+ * páginas base, y sólo apunta un análisis que salió bien y que se hizo con
+ * páginas base: un turno sin ellas no dice nada que sugerir.
+ *
+ * El gancho es UNO y se comparte: H11 colgará aquí lo que necesite de un turno
+ * terminado, en vez de recorrer `send()` otra vez.
+ */
+async function recordAnalysisTurn({
+  skill,
+  sources,
+  ok = false,
+  host = '',
+  sessionID = null,
+  issue = null,
+  pageUrl = '',
+  summary = '',
+  issueKey = '',
+  pageId = '',
+  site = null,
+  product = '',
+} = {}) {
+  if (skill !== 'analisis' || !ok || !host || !sources?.pages?.length) return
+  // §8.22: entre la pregunta y aquí está `offerNotes`, que puede durar un turno
+  // entero del modelo. El historial es de un HOST y sus entradas de una
+  // incidencia: apuntarlo con el panel ya en otro sitio sería sugerir allí lo
+  // que se eligió aquí, y bajo la clave equivocada.
+  if ((state.site?.host ?? state.lastHost) !== host || state.sessionID !== sessionID) {
+    log.info('Historial de páginas base', `sin apuntar: el panel ya no está en ${host}`)
+    return
+  }
+
+  // Los campos de la incidencia: los del digest de este turno si lo hubo y, si
+  // no, los que se leyeron de la pantalla, cruzados con la página del turno.
+  // `state.issueFields` es de UNA página y se guarda con su URL justo para
+  // esto (lección de H8: lo que se guarda por host se cruza donde se consume).
+  const campos = issue || (state.issueFields && samePage(state.issueFields.url, pageUrl) ? state.issueFields.fields : null)
+  const entrada = historyEntry({
+    sources,
+    issue: campos,
+    summary: cleanTabTitle(summary, site),
+    issueKey,
+    pageId,
+    projectKey: site?.projectKey || '',
+    spaceKey: site?.spaceKey || '',
+    product,
+  })
+  // Sin identidad (ni clave ni id de página) no hay entrada: no se podría
+  // deduplicar, y analizar tres veces lo mismo contaría como tres usos.
+  if (!entrada) return
+
+  // Se escribe primero y se recoge después lo que quedó GUARDADO: así el estado
+  // del panel es lo que hay en disco y no una versión optimista que habría que
+  // deshacer. Una cuota llena no puede llevarse la respuesta por delante: el
+  // historial es un extra, y lo que se pierde es una sugerencia futura.
+  let guardado = null
+  try {
+    guardado = await saveSourceHistory(host, recordAnalysis(state.sourceHistory, entrada, { host }))
+  } catch (err) {
+    log.warn('Historial de páginas base', 'no se pudo guardar · ' + String(err?.message || err))
+    return
+  }
+  // Y sólo entra en el estado si el panel sigue en ese host: escribir en disco
+  // tarda, y el de otro sitio no es éste (§8.22).
+  if ((state.site?.host ?? state.lastHost) === host) state.sourceHistory = guardado
+  log.ok(
+    'Historial de páginas base',
+    `${entrada.issueKey || 'página ' + entrada.pageId} · ${entrada.family || 'sin familia'} · ` +
+      `${entrada.pages.length} página(s) base · ${guardado.entries.length} entradas`
+  )
+}
+
+/**
+ * Las páginas base que Faro propone AHORA, con los enlaces que la pestaña haya
+ * contestado ya. Devuelve también los enlaces resueltos porque es lo que se
+ * registra: cuántos llevaban a una página que se puede añadir.
+ */
+function computeSuggested() {
+  const site = state.site
+  if (!site) return { list: [], enlaces: [] }
+  const index = sourcesIndex()
+  const enlazado = linkedHost()
+  const enlaces = confluenceLinksIn(state.sourcesSuggest.links, state.sourcesSuggest.remote, {
+    site,
+    linkedHost: enlazado,
+    index,
+  })
+  const list = suggestSources({
+    index,
+    references: currentReferences(),
+    history: state.sourceHistory,
+    links: enlaces,
+    // Los campos de la pantalla de AHORA, cruzados por página como en los chips.
+    issue: state.issueFields && samePage(state.issueFields.url, state.tabUrl) ? state.issueFields.fields : null,
+    summary: cleanTabTitle(state.tabTitle, site),
+    projectKey: site.projectKey || '',
+    spaceKey: site.spaceKey || '',
+    pageId: site.pageId || currentPageId(state.index, state.tabUrl) || '',
+    issueKey: site.issueKey || '',
+    exclude: state.sources.pages.map((p) => p.id),
+    product: site.product,
+    // Desde un Jira Data Center las páginas son del Confluence ENLAZADO: su
+    // ruta no es de este sitio y se vacía (§4.8).
+    linked: !!enlazado,
+  })
+  return { list, enlaces }
+}
+
+/**
+ * La sección «Sugeridas», en dos pasadas.
+ *
+ * La primera es LOCAL y se pinta en el acto: el índice, el contexto, el
+ * historial y los campos que ya se habían leído de la pantalla. La segunda le
+ * pide a la pestaña los enlaces de la página o de la incidencia y repinta. Con
+ * testigo, como la búsqueda: una respuesta que llega con la pantalla cerrada, en
+ * otro host o después de otra pasada no pinta nada (§8.22).
+ *
+ * Si la pestaña no contesta —o no hay permiso sobre el dominio, o la API de los
+ * enlaces remotos falla— la sección vive de lo demás y el texto de arriba lo
+ * dice (§8.14). Ninguna de las dos pasadas gasta un token.
+ */
+async function paintSuggestedSources() {
+  if (!state.site) return
+  const token = ++state.sourcesSuggest.token
+  const host = state.site.host
+  state.sourcesSuggest.links = []
+  state.sourcesSuggest.remote = null
+
+  const conPestana = state.tabId != null
+  paintSuggestedList(computeSuggested().list, { estado: conPestana ? 'esperando' : 'sin-pestana' })
+  if (!conPestana) return
+
+  const puede = await ensureContentAccess({ announce: false })
+  if (token !== state.sourcesSuggest.token || state.site?.host !== host) return
+  if (!puede) {
+    paintSuggestedList(computeSuggested().list, { estado: 'sin-pestana' })
+    return
+  }
+
+  const r = await chrome.tabs
+    .sendMessage(state.tabId, {
+      type: MSG.PAGE_LINKS,
+      // El interruptor maestro de las lecturas REST manda sobre la única que
+      // hay aquí: los enlaces remotos de la incidencia. Apagado, el content
+      // script no pide nada y los enlaces del DOM siguen llegando igual (no son
+      // una lectura REST).
+      remote: !!state.settings.restTools,
+      // El Confluence que el panel tiene guardado para este Jira: sirve para
+      // que el content script no admita un enlace remoto a OTRA Confluence.
+      confluenceHost: linkedHost(),
+      cloud: !!state.site.cloud,
+    })
+    .catch(() => null)
+  if (token !== state.sourcesSuggest.token || state.site?.host !== host) return
+
+  if (!r?.ok) {
+    log.warn('Enlaces de la página', r?.reason || 'la pestaña no contestó')
+    paintSuggestedList(computeSuggested().list, { estado: 'sin-enlaces' })
+    return
+  }
+
+  state.sourcesSuggest.links = Array.isArray(r.links) ? r.links : []
+  state.sourcesSuggest.remote = r.remote || null
+  // Los campos vienen con los enlaces y son de la pantalla de ahora: se guardan
+  // como los de `readIssueFieldsQuick`, con su URL, para que la puntuación por
+  // familia no dependa de haber analizado antes.
+  if (r.issue && samePage(r.url || state.tabUrl, state.tabUrl)) {
+    state.issueFields = { url: r.url || state.tabUrl, fields: normalizeIssueFields(r.issue) }
+  }
+
+  const { list, enlaces } = computeSuggested()
+  paintSuggestedList(list, { estado: 'listo' })
+  const remotos = !r.issueKey
+    ? 'no es una incidencia'
+    : !state.settings.restTools
+      ? 'apagados en Ajustes'
+      : r.remote?.ok
+        ? String(r.remote.links.length)
+        : r.remote?.reason || 'sin respuesta'
+  log.info(
+    'Enlaces de la página',
+    `${state.sourcesSuggest.links.length} leídos · ${enlaces.length} a Confluence · remotos: ${remotos}` +
+      (Number.isFinite(r.ms) ? ` · ${r.ms} ms` : '')
+  )
+}
+
+/**
+ * De dónde salen las sugerencias, dicho arriba de la lista. Lo escribe la
+ * extensión y nombra la fuente que falta cuando falta: sin permiso sobre el
+ * dominio no hay enlaces que leer, y quien mira la sección tiene que saber que
+ * lo que ve es sólo la mitad.
+ */
+function suggestedHint(estado) {
+  const enJira = state.site?.product === 'jira'
+  const cosa = enJira ? 'esta incidencia' : 'esta página'
+  if (estado === 'sin-pestana') {
+    return `Sin permiso sobre ${state.site?.host || 'este dominio'} no leo los enlaces de ${cosa}: sugiero con el contexto del sitio y lo que usaste antes.`
+  }
+  if (estado === 'sin-enlaces') {
+    return `No he podido leer los enlaces de ${cosa}: sugiero con el contexto del sitio y lo que usaste antes.`
+  }
+  const campos = state.issueFields && samePage(state.issueFields.url, state.tabUrl) ? state.issueFields.fields : null
+  const base =
+    enJira && campos?.type
+      ? `Por esta incidencia (tipo «${campos.type}»), el contexto del sitio y lo que usaste antes.`
+      : enJira
+        ? 'Por lo que enlaza esta incidencia, el contexto del sitio y lo que usaste antes.'
+        : 'Por los enlaces de esta página, el contexto del sitio y lo que usaste antes.'
+  return estado === 'esperando' ? base + ' Mirando los enlaces…' : base
+}
+
+/**
+ * Las filas de «Sugeridas»: título, de dónde es y por qué se propone.
+ *
+ * Cada fila es un botón con su propio nombre («Añadir «X»»), no una opción de
+ * una lista: no hay campo que las gobierne y pulsarlas es una acción. El motivo
+ * lo escribe la extensión (`reasonText`), nunca el modelo ni la página.
+ */
+function paintSuggestedList(list, { estado = state.sourcesSuggest.estado } = {}) {
+  state.sourcesSuggest.list = list
+  state.sourcesSuggest.estado = estado
+  const box = $('sources-suggested-list')
+  box.textContent = ''
+  const enlazado = linkedHost()
+
+  for (const s of list) {
+    const motivo = reasonText(s.reasons)
+    const row = document.createElement('button')
+    row.className = 'suggest-row suggested'
+    row.type = 'button'
+    // El nombre del botón lleva el motivo: sin él, quien usa lector de pantalla
+    // oiría «Añadir «Guía de API», botón» y se quedaría sin lo único que
+    // permite aceptarla o descartarla (§8.20).
+    row.setAttribute('aria-label', motivo ? `Añadir «${s.title}» · ${motivo}` : `Añadir «${s.title}»`)
+
+    const title = document.createElement('span')
+    title.className = 'suggest-title'
+    title.textContent = s.title
+
+    const meta = document.createElement('span')
+    meta.className = 'suggest-meta'
+    meta.textContent = [s.spaceKey, `id ${s.id}`, enlazado ? `desde ${enlazado}` : ''].filter(Boolean).join(' · ')
+
+    row.append(title, meta)
+    if (motivo) {
+      const why = document.createElement('span')
+      why.className = 'suggest-why'
+      why.textContent = motivo
+      why.title = motivo
+      row.appendChild(why)
+    }
+    row.addEventListener('click', () => chooseSuggestion(s).catch(console.error))
+    box.appendChild(row)
+  }
+
+  $('sources-suggested-hint').textContent = list.length ? suggestedHint(estado) : ''
+  // «Añadir las N» sólo con dos o más y con hueco para dos: para una sola ya
+  // está su fila, y sin hueco el botón prometería algo que el tope no deja.
+  const hueco = SOURCE_LIMITS.maxPages - state.sources.pages.length
+  const todas = $('btn-sources-add-suggested')
+  todas.textContent = `Añadir las ${Math.min(list.length, hueco)}`
+  todas.classList.toggle('hidden', list.length < 2 || hueco < 2)
+  // Y «Olvidar el historial» sólo si hay historial que olvidar.
+  $('btn-sources-forget').classList.toggle('hidden', !state.sourceHistory.entries.length)
+  refreshSuggestedVisibility()
+}
+
+/**
+ * La sección se esconde mientras se escribe en el campo: la lista de la
+ * búsqueda sale justo debajo del campo, y dos listas apiladas en 320 px no se
+ * leen. Al vaciar el campo vuelve, sin recalcular nada.
+ */
+function refreshSuggestedVisibility() {
+  const escribiendo = $('sources-query').value.trim().length >= SOURCE_LIMITS.queryMin
+  $('sources-suggested').classList.toggle('hidden', escribiendo || !state.sourcesSuggest.list.length)
+}
+
+/** Repinta «Sugeridas» con las páginas base de ahora, sin volver a preguntarle a la pestaña. */
+function repaintSuggested() {
+  if (!state.site || $('screen-sources').classList.contains('hidden')) return
+  paintSuggestedList(computeSuggested().list)
+}
+
+/** «Añadir las N»: en orden de puntuación y hasta donde llegue el tope de siempre. */
+async function addSuggested() {
+  const lista = [...state.sourcesSuggest.list]
+  if (!lista.length) return
+  const antes = state.sources.pages.length
+  for (const s of lista) {
+    if (state.sources.pages.length >= SOURCE_LIMITS.maxPages) break
+    await chooseSuggestion(s)
+  }
+  const n = state.sources.pages.length - antes
+  const texto = n ? `Añadidas ${n} ${n === 1 ? 'página base' : 'páginas base'}.` : 'No he podido añadir ninguna.'
+  setSourcesStatus(texto)
+  announce(texto)
+  $('sources-query').focus()
+}
+
+/** «Olvidar el historial»: se va la clave de este host y con ella esa fuente. */
+async function forgetSourceHistory() {
+  if (!state.site) return
+  const n = state.sourceHistory.entries.length
+  await clearSourceHistory(state.site.host)
+  state.sourceHistory = emptyHistory()
+  log.info('Historial de páginas base', `borrado · ${n} entradas de ${state.site.host}`)
+  repaintSuggested()
+  const texto = 'Historial borrado: las sugerencias ya no se apoyan en análisis anteriores.'
+  setSourcesStatus(texto)
+  announce(texto)
+}
+
 /**
  * Lo que escribe el usuario en el campo único. Una URL o un id no se buscan:
  * se resuelven, o se explica por qué no valen. Lo demás es una búsqueda: al
@@ -4143,6 +4568,8 @@ function onSourcesInput() {
   clearTimeout(state.sourcesSearch.timer)
   state.sourcesSearch.token++
   const text = $('sources-query').value
+  // Con algo escrito, las sugeridas se apartan: quien busca ya sabe qué quiere.
+  refreshSuggestedVisibility()
   // La pestaña ha podido salir de Atlassian con la pantalla abierta.
   if (!state.site) {
     clearSourceSuggestions()
@@ -4367,7 +4794,12 @@ function onSourcesKeydown(ev) {
 
 async function chooseSuggestion(s) {
   if (s.source === 'add') return addSourceById(s.id, s.path)
-  return addSource({ id: s.id, title: s.title, path: s.path, spaceKey: s.spaceKey }, { from: s.source })
+  // Una sugerida trae además POR QUÉ se propuso, y eso se apunta al añadirla:
+  // en el registro queda por qué acabó ahí una página que Faro propuso.
+  return addSource(
+    { id: s.id, title: s.title, path: s.path, spaceKey: s.spaceKey },
+    { from: s.source, reason: s.source === 'suggested' ? reasonText(s.reasons) : '' }
+  )
 }
 
 /**
@@ -4468,7 +4900,7 @@ async function mergePagesIntoIndex(pages) {
   await saveIndex(state.site.host, state.index)
 }
 
-async function addSource(page, { from = 'index' } = {}) {
+async function addSource(page, { from = 'index', reason = '' } = {}) {
   if (!state.site) return
   const r = addSourcePage(state.sources, page, { host: state.site.host })
   if (!r.added) {
@@ -4488,8 +4920,19 @@ async function addSource(page, { from = 'index' } = {}) {
   if (from === 'confluence') await mergePagesIntoIndex([page])
 
   const añadida = state.sources.pages[state.sources.pages.length - 1]
-  const origen = { index: 'del índice', confluence: 'de Confluence', linked: `de ${linkedHost() || 'el Confluence enlazado'}` }
-  log.ok('Página base añadida', `${añadida.title} (id ${añadida.id}) · ${origen[from] || 'por su id'}`)
+  const origen = {
+    index: 'del índice',
+    confluence: 'de Confluence',
+    linked: `de ${linkedHost() || 'el Confluence enlazado'}`,
+    suggested: 'sugerida',
+  }
+  log.ok(
+    'Página base añadida',
+    `${añadida.title} (id ${añadida.id}) · ${origen[from] || 'por su id'}` + (from === 'suggested' && reason ? `: ${reason}` : '')
+  )
+  // Una sugerida se añade desde una fila que desaparece al instante: sin decirlo
+  // en voz alta, quien usa lector de pantalla no sabe qué ha pasado.
+  if (from === 'suggested') announce(`Añadida «${añadida.title}».`)
   // La búsqueda que estuviera en marcha era de lo que había en el campo, que
   // se vacía ahora: si llegara después, volvería a pintar la lista —con la
   // página recién añadida dentro— bajo un campo vacío.
@@ -4500,6 +4943,9 @@ async function addSource(page, { from = 'index' } = {}) {
   setSourcesStatus(`Añadida «${añadida.title}».`)
   paintSourceList()
   paintSourcesUi()
+  // Y las sugeridas, que acaban de perder una y tienen un hueco menos: se
+  // vuelven a puntuar con `exclude` al día, sin preguntarle nada a la pestaña.
+  repaintSuggested()
   $('sources-query').focus()
 }
 
@@ -4509,6 +4955,10 @@ async function removeSource(id) {
   state.sources = removeSourcePage(state.sources, id)
   paintSourceList()
   paintSourcesUi()
+  // Quitar una devuelve su hueco, y con él la página a la lista de sugeridas si
+  // sigue puntuando: dejarlo sin repintar enseñaría «Añadir las 2» con sitio
+  // para cuatro.
+  repaintSuggested()
   await saveSite(state.site.host, { analysisSources: state.sources })
   log.info('Página base quitada', antes ? `${antes.title} (id ${antes.id})` : String(id))
 }
@@ -4524,6 +4974,9 @@ async function setSourcesMode(mode) {
 function closeSourcesScreen() {
   clearTimeout(state.sourcesSearch.timer)
   state.sourcesSearch.token++
+  // Y lo de las sugeridas: la pestaña puede seguir contestando sus enlaces, y
+  // eso ya no tiene pantalla donde pintarse. Al volver a abrir se recalculan.
+  state.sourcesSuggest = { token: state.sourcesSuggest.token + 1, list: [], links: [], remote: null, estado: 'listo' }
   hideScreens()
   paintSourcesUi()
   el.input.focus()
@@ -5290,6 +5743,8 @@ function wireEvents() {
     paintSourcesUi()
     setSourcesStatus('')
   })
+  $('btn-sources-add-suggested').addEventListener('click', () => addSuggested().catch(console.error))
+  $('btn-sources-forget').addEventListener('click', () => forgetSourceHistory().catch(console.error))
   $('btn-sources-permission').addEventListener('click', async () => {
     const btn = $('btn-sources-permission')
     btn.disabled = true
@@ -5476,6 +5931,11 @@ function wireEvents() {
     state.recentJql = []
     state.favouriteFilters = null
     state.profile = null
+    // Y el historial de análisis con páginas base, que `forgetSite` acaba de
+    // borrar del almacén: dejarlo en memoria seguiría sugiriendo en este sitio
+    // lo que el usuario ha pedido olvidar, y el turno siguiente lo reescribiría.
+    state.sourceHistory = emptyHistory()
+    state.references = { propio: null, enlazado: null, index: null, items: null }
     paintSourcesUi()
     hideScreens()
     await bootForSite()

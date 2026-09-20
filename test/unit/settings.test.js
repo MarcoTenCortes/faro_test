@@ -102,6 +102,27 @@ test('H9: el perfil del proyecto tiene su clave POR HOST, distinta de las demás
   assert(!otras.includes(STORAGE_KEYS.profile(host)), 'y no pisa ninguna de las que ya había')
 })
 
+// ------------------------------------------------------------------ H10
+
+test('H10: el historial de páginas base tiene su clave POR HOST, y las referencias NO tienen clave', () => {
+  eq(typeof STORAGE_KEYS.sourceHistory, 'function', 'es una clave por host, como el índice o el perfil')
+  eq(STORAGE_KEYS.sourceHistory('jira.simplprogramme.eu'), 'faro:source-history:jira.simplprogramme.eu')
+  const host = 'x.eu'
+  const otras = [
+    STORAGE_KEYS.index(host),
+    STORAGE_KEYS.context(host),
+    STORAGE_KEYS.memory(host),
+    STORAGE_KEYS.session(host),
+    STORAGE_KEYS.sessionWeight(host),
+    STORAGE_KEYS.profile(host),
+  ]
+  assert(!otras.includes(STORAGE_KEYS.sourceHistory(host)), 'y no pisa ninguna de las que ya había')
+  // docs/PLAN.md §3.2 descartó la lista estructurada de páginas de referencia
+  // del indexador: sin nada que guardar, una clave que nadie escribe sería una
+  // promesa falsa. El parser de prosa las saca del CONTEXT.md al vuelo.
+  eq('references' in STORAGE_KEYS, false, 'las páginas de referencia se calculan, no se guardan')
+})
+
 test('H9: del perfil guardado, aquí sólo vive lo que es de almacenamiento', () => {
   // La FORMA (cuántos tipos, cuántos prefijos, cuánto mide un nombre) la decide
   // `JIRA_REST_LIMITS` en el módulo que lo cuenta: dos topes de lo mismo en dos

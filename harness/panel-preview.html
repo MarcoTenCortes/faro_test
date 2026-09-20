@@ -222,6 +222,9 @@ async function arrancar() {
     { suggestionsFor },
     { searchChips },
     { jqlLink, jqlPlan },
+    { suggestSources, reasonText },
+    { normalizeHistory },
+    { referencesFromContext },
   ] = await Promise.all([
     import('/src/panel/markdown.js'),
     import('/src/panel/skills.js'),
@@ -231,6 +234,9 @@ async function arrancar() {
     import('/src/panel/suggestions.js'),
     import('/src/panel/search-chips.js'),
     import('/src/panel/planner.js'),
+    import('/src/panel/source-suggest.js'),
+    import('/src/panel/source-history.js'),
+    import('/src/panel/references.js'),
   ])
 
   const $ = (id) => doc.getElementById(id)
@@ -331,6 +337,65 @@ async function arrancar() {
     // `chipsClipped`. Aquí se enseña una que cabe; el caso largo se ve en el
     // Jira real, y si sale recortado el veredicto lo dirá.
     recentJql: [{ jql: 'text ~ "cuotas"', at: 1, count: 12 }],
+  }
+
+  // H10 · lo que alimenta «Sugeridas». Las tres fuentes que no gastan un token
+  // —lo que la página o la incidencia ENLAZA, lo que el CONTEXT.md del sitio
+  // nombra con su id y lo que el usuario eligió en análisis anteriores— se le
+  // pasan al módulo de verdad (`suggestSources`), y los motivos los escribe él:
+  // una lista copiada aquí seguiría diciendo lo de antes en cuanto cambiara la
+  // tabla de puntos o una frase. Los ids llevan cuatro cifras porque los de tres
+  // no cuentan como id de página (`SOURCE_LIMITS.bareIdMin`, § references.js).
+  const PAGINAS_SUGERIDAS = {
+    2001: { id: '2001', title: 'ADR-014 Rotación de tokens de servicio', spaceKey: 'ENG', path: '/spaces/ENG/pages/2001/ADR-014' },
+    3001: { id: '3001', title: 'Runbook de guardia', spaceKey: 'ENG', path: '/spaces/ENG/pages/3001/Runbook' },
+    4501: { id: '4501', title: 'Guía de API del programa', spaceKey: 'ENG', path: '/spaces/ENG/pages/4501/Guia' },
+  }
+  const INDICE_SUGERIDAS = { pages: PAGINAS_SUGERIDAS }
+  const CONTEXTO_SUGERIDAS = [
+    '## 6. Dónde está documentado en Confluence',
+    '',
+    '- Las convenciones de API están en «Guía de API del programa» (id 4501).',
+  ].join('\n')
+  /** La página de Confluence abierta en la conversación de ejemplo. */
+  const PAGINA_ABIERTA = '201'
+  const DIA = 24 * 60 * 60 * 1000
+  const HISTORIAL_SUGERIDAS = {
+    entries: [
+      // Dos análisis de API del mismo proyecto con la misma guía: de ahí sale
+      // «la usaste en 2 análisis de API en SIMPL» cuando se mira desde Jira.
+      ...['SIMPL-1198', 'SIMPL-1102'].map((issueKey, i) => ({
+        at: Date.now() - (i + 2) * DIA,
+        components: ['federacion'],
+        family: 'api',
+        issueKey,
+        labels: ['api'],
+        mode: 'exclusive',
+        pageId: '',
+        pages: [PAGINAS_SUGERIDAS[4501]],
+        phase: 'en-revision',
+        product: 'jira',
+        projectKey: 'SIMPL',
+        spaceKey: null,
+        words: [],
+      })),
+      // Y un análisis de ESTA misma página de Confluence: «la usaste en esta página».
+      {
+        at: Date.now() - DIA,
+        components: [],
+        family: '',
+        issueKey: '',
+        labels: [],
+        mode: 'open',
+        pageId: PAGINA_ABIERTA,
+        pages: [PAGINAS_SUGERIDAS[2001]],
+        phase: '',
+        product: 'confluence',
+        projectKey: '',
+        spaceKey: 'ENG',
+        words: [],
+      },
+    ],
   }
 
   const estado = { chat: 'confluence', pantalla: '', status: 'ok', pick: 'off', sources: 'off', ancho: 360, tema: 'dark', quinto: false }
@@ -438,6 +503,67 @@ async function arrancar() {
     $('sources-count').classList.toggle('hidden', !s.pages.length)
     $('sources-chip').classList.toggle('hidden', !etiqueta)
     $('sources-chip-text').textContent = etiqueta
+    pintarSugeridas()
+  }
+
+  /**
+   * H10 · «Sugeridas», calculadas con `suggestSources` y pintadas como lo hace
+   * `paintSuggestedList`: fila-botón con título, de dónde es y por qué.
+   *
+   * Cambia con la conversación (en Jira las páginas son del Confluence enlazado
+   * y la fila lo dice) y con las páginas base ya elegidas, que salen de la lista
+   * por `exclude` y le quitan hueco a «Añadir las N»: las dos cosas que hay que
+   * mirar en la captura.
+   */
+  function pintarSugeridas() {
+    const s = sitio()
+    const enJira = s.product === 'jira'
+    const enlazado = enJira ? 'confluence.simplprogramme.eu' : ''
+    const elegidas = paginasBase().pages.map((p) => p.id)
+    const issue = enJira ? FUENTES_CHIPS.issueFields : null
+    const lista = suggestSources({
+      index: INDICE_SUGERIDAS,
+      references: referencesFromContext(CONTEXTO_SUGERIDAS, { index: INDICE_SUGERIDAS }),
+      history: normalizeHistory(HISTORIAL_SUGERIDAS, { host: s.host }),
+      links: [
+        { ...PAGINAS_SUGERIDAS[2001], where: enJira ? 'descripcion' : 'pagina' },
+        { ...PAGINAS_SUGERIDAS[3001], where: enJira ? 'enlaces' : 'pagina' },
+      ],
+      issue,
+      summary: s.titulo,
+      projectKey: enJira ? s.projectKey : '',
+      spaceKey: enJira ? '' : s.clave,
+      pageId: enJira ? '' : PAGINA_ABIERTA,
+      issueKey: enJira ? s.issueKey : '',
+      exclude: elegidas,
+      product: s.product,
+      linked: !!enlazado,
+    })
+
+    const box = $('sources-suggested-list')
+    box.textContent = ''
+    for (const sug of lista) {
+      const motivo = reasonText(sug.reasons)
+      const fila = mk('button', 'suggest-row suggested')
+      fila.type = 'button'
+      fila.setAttribute('aria-label', motivo ? `Añadir «${sug.title}» · ${motivo}` : `Añadir «${sug.title}»`)
+      fila.append(
+        mk('span', 'suggest-title', sug.title),
+        mk('span', 'suggest-meta', [sug.spaceKey, `id ${sug.id}`, enlazado ? `desde ${enlazado}` : ''].filter(Boolean).join(' · ')),
+        mk('span', 'suggest-why', motivo)
+      )
+      box.appendChild(fila)
+    }
+    if (!lista.length) console.warn('[faroPreview] suggestSources no propone nada: la sección quedaría vacía')
+
+    $('sources-suggested-hint').textContent = enJira
+      ? `Por esta incidencia (tipo «${issue.type}»), el contexto del sitio y lo que usaste antes.`
+      : 'Por los enlaces de esta página, el contexto del sitio y lo que usaste antes.'
+    const hueco = 6 - elegidas.length
+    $('btn-sources-add-suggested').textContent = `Añadir las ${Math.min(lista.length, hueco)}`
+    $('btn-sources-add-suggested').classList.toggle('hidden', lista.length < 2 || hueco < 2)
+    $('btn-sources-forget').classList.remove('hidden')
+    $('sources-suggested').classList.toggle('hidden', !lista.length)
   }
 
   function pintarSeleccion() {
@@ -1121,8 +1247,13 @@ async function arrancar() {
     elegidas.appendChild(fila)
   }
 
+  // La lista de la BÚSQUEDA (el listbox del campo) se rellena pero se queda
+  // plegada, y el campo vacío: desde H10 las dos listas de esta pantalla no se
+  // ven nunca a la vez —escribir dos letras esconde «Sugeridas»— y la que hay
+  // que mirar en la captura es la nueva. Las filas siguen en el DOM para poder
+  // enseñarlas desde la consola (`sources-suggest.classList.remove('hidden')`)
+  // cuando lo que se revise sea el estilo del listbox.
   const sugerencias = $('sources-suggest')
-  sugerencias.classList.remove('hidden')
   for (const [titulo, meta, extra] of [
     ['ADR-014 Rotación de tokens de servicio', 'ENG · id 200 · en el índice', 'active'],
     ['Rotación de credenciales del clúster de métricas', 'desde confluence.simplprogramme.eu', ''],
@@ -1135,10 +1266,10 @@ async function arrancar() {
     fila.append(mk('span', 'suggest-title', titulo), mk('span', 'suggest-meta', meta))
     sugerencias.appendChild(fila)
   }
-  $('sources-query').value = 'rotación'
-  $('sources-query').setAttribute('aria-expanded', 'true')
+  $('sources-query').value = ''
+  $('sources-query').setAttribute('aria-expanded', 'false')
   $('sources-mode-exclusive').checked = true
-  $('sources-status').textContent = 'Buscando en Confluence…'
+  $('sources-status').textContent = ''
 
   // Registro de ejemplo, con los cinco niveles a la vista: ok, info, warn,
   // error y debug tienen cada uno su color, y sin una fila de cada no hay forma
@@ -1351,8 +1482,22 @@ async function arrancar() {
    */
   // `.result-row` y `.search-chip-row` son las dos piezas de H8 que podrían no
   // caber a lo ancho: la fila de un resultado (clave que no cede + resumen que
-  // sí) y la de los chips (que envuelve).
-  const CAJAS = ['.top', '.brand', '.top-actions', '.composer', '.composer-meta', '.composer-row', '.chat', '.result-row', '.search-chip-row']
+  // sí) y la de los chips (que envuelve). Y de H10, la fila de una sugerencia:
+  // su título y su motivo se recortan con elipsis, pero su meta («ENG · id 4501
+  // · desde confluence.simplprogramme.eu») ENVUELVE, y basta con que alguien le
+  // ponga un `white-space: nowrap` para que la fila empuje a lo ancho.
+  const CAJAS = [
+    '.top',
+    '.brand',
+    '.top-actions',
+    '.composer',
+    '.composer-meta',
+    '.composer-row',
+    '.chat',
+    '.result-row',
+    '.search-chip-row',
+    '.suggest-row.suggested',
+  ]
 
   function check() {
     const raiz = doc.documentElement

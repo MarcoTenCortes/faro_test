@@ -2524,3 +2524,230 @@ test('H9: el espejo enseña la pantalla de contexto con el texto nuevo y las dos
   assert(/entradas · 3 petición\(es\)/.test(registro), 'la fila del índice dice entradas y peticiones')
   assert(/muestra de 30 incidencias · 7 tipos · 6 estados/.test(registro), 'y la del perfil, de cuántas incidencias se contó')
 })
+
+test('H10: la pantalla de páginas base propone, y lo que las pinta está cableado', () => {
+  // Los ids de la sección nueva, y dónde va: entre el campo (que acaba en
+  // #sources-perm) y «Páginas elegidas». Puesta debajo de la lista sería una
+  // sugerencia que nadie ve sin desplazarse.
+  for (const id of [
+    'sources-suggested',
+    'sources-suggested-title',
+    'sources-suggested-hint',
+    'sources-suggested-list',
+    'btn-sources-add-suggested',
+    'btn-sources-forget',
+  ]) {
+    assert(htmlIds.has(id), 'falta el id «' + id + '» en panel.html')
+  }
+  assert(HTML.indexOf('id="sources-perm"') < HTML.indexOf('id="sources-suggested"'), 'la sección va después del campo')
+  assert(HTML.indexOf('id="sources-suggested"') < HTML.indexOf('<h2>Páginas elegidas</h2>'), 'y antes de «Páginas elegidas»')
+  // La promesa de §8.20 escrita donde se ve: Faro propone, el usuario añade.
+  assert(HTML.includes('Nada se añade solo: pulsa una para añadirla.'), 'falta la frase fija')
+
+  // Las clases que pinta el JS existen en el CSS (A8: dos clases pintadas y sin
+  // regla se colaron hasta la auditoría del 2026-09-13). Con su llave, no el
+  // nombre suelto: renombrar la regla a «.suggest-whyX» dejaba el pin en verde
+  // con la fila sin estilo, que es la misma trampa que la de `.older-turns` en H6.
+  for (const clase of ['.suggest-list', '.suggest-row.suggested', '.suggest-why', '.suggest-actions']) {
+    assert(CSS_LIMPIO.includes(clase + ' {'), 'clase sin regla en el CSS: ' + clase)
+  }
+
+  const pantalla = sinComentarios(JS.slice(JS.indexOf('async function showSourcesScreen'), JS.indexOf('function setSourcesStatus')))
+  assert(
+    pantalla.indexOf('paintSourceList()') < pantalla.indexOf('paintSuggestedSources()'),
+    'las sugeridas se pintan después de las elegidas'
+  )
+  assert(/paintSuggestedSources\(\)\.catch\(/.test(pantalla), 'sin await: lo que queda de la pantalla no espera a la pestaña')
+
+  const pintar = sinComentarios(JS.slice(JS.indexOf('async function paintSuggestedSources'), JS.indexOf('function suggestedHint')))
+  assert(/const token = \+\+state\.sourcesSuggest\.token/.test(pintar), 'testigo, como el de la búsqueda')
+  assert((pintar.match(/token !== state\.sourcesSuggest\.token/g) || []).length >= 2, 'y se comprueba tras cada await')
+  assert((pintar.match(/state\.site\?\.host !== host/g) || []).length >= 2, 'y también el host con el que se empezó (§8.22)')
+  assert(/type: MSG\.PAGE_LINKS/.test(pintar), 'los enlaces los pide la pestaña')
+  assert(/\.catch\(\(\) => null\)/.test(pintar), 'un sendMessage a la pestaña nunca lanza')
+  assert(/remote: !!state\.settings\.restTools/.test(pintar), 'el interruptor de las lecturas REST manda sobre el remotelink')
+  assert(/confluenceHost: linkedHost\(\)/.test(pintar), 'y el content script sabe a qué Confluence se admite un enlace remoto')
+  // Lo que llegó de la pestaña se registra, y lo que NO llegó también: son las
+  // dos mitades de §8.14 y las dos tienen que estar (con una sola, quitar la
+  // otra no se notaba).
+  assert(/log\.warn\('Enlaces de la página'/.test(pintar), 'si la pestaña no contesta, se dice')
+  assert(/log\.info\(\s*'Enlaces de la página',/.test(pintar), 'y lo que llegó, también')
+  assert(
+    /leídos · \$\{enlaces\.length\} a Confluence · remotos: \$\{remotos\}/.test(pintar),
+    'con cuántos enlaces llevaban a una página y qué pasó con los remotos'
+  )
+  // §8.14: si la pestaña no contesta, la sección vive de lo demás y lo dice.
+  assert(/paintSuggestedList\(computeSuggested\(\)\.list, \{ estado: 'sin-enlaces' \}\)/.test(pintar))
+  assert(/paintSuggestedList\(computeSuggested\(\)\.list, \{ estado: 'sin-pestana' \}\)/.test(pintar))
+
+  const calcular = sinComentarios(JS.slice(JS.indexOf('function computeSuggested'), JS.indexOf('async function paintSuggestedSources')))
+  assert(/suggestSources\(\{/.test(calcular) && /confluenceLinksIn\(/.test(calcular), 'puntúa con los módulos puros')
+  assert(/const index = sourcesIndex\(\)/.test(calcular), 'con el índice que toca (el del enlazado desde Jira)')
+  assert(/const enlazado = linkedHost\(\)/.test(calcular), 'y con el Confluence enlazado')
+  assert(/exclude: state\.sources\.pages\.map/.test(calcular), 'lo ya elegido no se propone')
+  assert(/linked: !!enlazado/.test(calcular), 'desde un Jira, las páginas son del enlazado y van sin ruta (§4.8)')
+  assert(
+    /issue: state\.issueFields && samePage\(state\.issueFields\.url, state\.tabUrl\)/.test(calcular),
+    'los campos de la pantalla se cruzan por página, como en los chips'
+  )
+
+  const filas = sinComentarios(JS.slice(JS.indexOf('function paintSuggestedList'), JS.indexOf('function refreshSuggestedVisibility')))
+  // Un repintado (añadir o quitar una página base) conserva QUÉ fuentes
+  // llegaron: si volviera a «listo», la sección diría que leyó los enlaces de
+  // la página justo después de decir que no pudo.
+  assert(
+    /function paintSuggestedList\(list, \{ estado = state\.sourcesSuggest\.estado \} = \{\}\)/.test(filas),
+    'el estado por defecto es el último de verdad, no «listo»'
+  )
+  assert(!/innerHTML|insertAdjacentHTML/.test(filas), 'las filas se construyen con createElement')
+  assert(/createElement\('button'\)/.test(filas) && /'suggest-row suggested'/.test(filas), 'cada fila es un botón')
+  assert(
+    /setAttribute\('aria-label', motivo \? `Añadir «\$\{s\.title\}» · \$\{motivo\}` : `Añadir «\$\{s\.title\}»`\)/.test(filas),
+    'con su nombre para el lector de pantalla, y con el motivo dentro'
+  )
+  assert(/reasonText\(s\.reasons\)/.test(filas), 'y el motivo lo escribe la extensión')
+  assert(/chooseSuggestion\(s\)/.test(filas), 'pulsar una la añade por el camino de siempre')
+
+  // Escribir en el campo esconde la sección: dos listas apiladas en 320 px.
+  const visible = sinComentarios(JS.slice(JS.indexOf('function refreshSuggestedVisibility'), JS.indexOf('function repaintSuggested')))
+  assert(/SOURCE_LIMITS\.queryMin/.test(visible), 'el umbral es el de la búsqueda, no un número a mano')
+  assert(/\$\('sources-suggested'\)\.classList\.toggle\('hidden'/.test(visible))
+  const entrada = sinComentarios(JS.slice(JS.indexOf('function onSourcesInput'), JS.indexOf('function refReasonText')))
+  assert(/refreshSuggestedVisibility\(\)/.test(entrada), 'y se aplica en cuanto se escribe')
+
+  // Añadir una sugerida pasa por el addSource de siempre, con su tope y su
+  // motivo; y nunca se funde en el índice (`from` no es 'confluence').
+  const elegir = sinComentarios(JS.slice(JS.indexOf('async function chooseSuggestion'), JS.indexOf('async function addSourceById')))
+  assert(/from: s\.source/.test(elegir) && /reason: s\.source === 'suggested' \? reasonText\(s\.reasons\) : ''/.test(elegir))
+  const alta = sinComentarios(JS.slice(JS.indexOf('async function addSource('), JS.indexOf('async function removeSource')))
+  assert(/async function addSource\(page, \{ from = 'index', reason = '' \} = \{\}\)/.test(alta))
+  assert(/suggested: 'sugerida'/.test(alta) && /from === 'suggested' && reason/.test(alta), 'el registro dice por qué se propuso')
+  assert(/repaintSuggested\(\)/.test(alta), 'y la sección se repinta sin volver a preguntarle a la pestaña')
+
+  // Los dos botones de la sección están conectados.
+  assert(/\$\('btn-sources-add-suggested'\)\.addEventListener/.test(JS))
+  assert(/\$\('btn-sources-forget'\)\.addEventListener/.test(JS))
+  const olvidar = sinComentarios(JS.slice(JS.indexOf('async function forgetSourceHistory'), JS.indexOf('function onSourcesInput')))
+  assert(/clearSourceHistory\(state\.site\.host\)/.test(olvidar) && /'Historial de páginas base'/.test(olvidar))
+})
+
+test('H10: el historial se apunta al terminar un análisis, y sólo bajo el host que preguntó', () => {
+  const envio = sinComentarios(JS.slice(JS.indexOf('async function send('), JS.indexOf('function paintTurn(')))
+  // Orden RELATIVO, no adyacencia: entre los dos hay más cosas y H11 colgará
+  // aquí lo suyo. Lo que no puede cambiar es que el historial se apunte con la
+  // respuesta ya avisada y antes de la pasada de marcas, que dura un turno.
+  assert(envio.indexOf('warnAboutSources(') < envio.indexOf('recordAnalysisTurn('), 'después del aviso de las páginas base')
+  assert(envio.indexOf('recordAnalysisTurn(') < envio.indexOf('offerNotes('), 'y antes de las marcas')
+  // Con lo capturado al mandar (§8.22), no con el estado de ahora.
+  const llamada = envio.slice(envio.indexOf('recordAnalysisTurn('), envio.indexOf("cron.mark('pintar')"))
+  for (const campo of [
+    'host: hostAlPedir',
+    'sessionID: sesionAlPedir',
+    'issueKey: issueKeyAlPedir',
+    'pageId: pageIdAlPedir',
+    'site: sitioAlPedir',
+    'product: productoAlPedir',
+  ]) {
+    assert(llamada.includes(campo), 'recordAnalysisTurn no recibe «' + campo + '»')
+  }
+
+  const apuntar = sinComentarios(JS.slice(JS.indexOf('async function recordAnalysisTurn'), JS.indexOf('function computeSuggested')))
+  assert(
+    /if \(skill !== 'analisis' \|\| !ok \|\| !host \|\| !sources\?\.pages\?\.length\) return/.test(apuntar),
+    'sólo un Análisis con páginas base que salió bien'
+  )
+  assert(
+    /\(state\.site\?\.host \?\? state\.lastHost\) !== host \|\| state\.sessionID !== sessionID/.test(apuntar),
+    'si el panel ya no está donde preguntó, no se apunta (§8.22)'
+  )
+  assert(
+    /state\.issueFields && samePage\(state\.issueFields\.url, pageUrl\)/.test(apuntar),
+    'los campos de la pantalla se cruzan con la página del turno (lección de H8)'
+  )
+  assert(/historyEntry\(\{/.test(apuntar), 'la entrada la construye el módulo puro')
+  assert(
+    /saveSourceHistory\(host, recordAnalysis\(state\.sourceHistory, entrada, \{ host \}\)\)/.test(apuntar),
+    'se guarda bajo el host que preguntó, y por el normalize de su módulo'
+  )
+  // El estado sólo recoge lo que quedó guardado, y sólo si el panel sigue ahí:
+  // escribir tarda, y una versión optimista habría que deshacerla.
+  assert(/catch \(err\)/.test(apuntar) && /'no se pudo guardar · '/.test(apuntar), 'una cuota llena no se lleva la respuesta')
+  assert(
+    /if \(\(state\.site\?\.host \?\? state\.lastHost\) === host\) state\.sourceHistory = guardado/.test(apuntar),
+    'y lo guardado no entra en el estado de otro sitio (§8.22)'
+  )
+
+  // Se carga con el paquete del sitio, sin una lectura más (P4 de H6).
+  const arranque = sinComentarios(JS.slice(JS.indexOf('async function bootForSite'), JS.indexOf('async function ensureContentAccess')))
+  assert(/state\.sourceHistory = normalizeHistory\(bundle\.extras\?\.sourceHistory, \{ host: state\.site\.host \}\)/.test(arranque))
+  // Con `\b`: `forgetSourceHistory(` contiene esas letras y dejaba el pin en
+  // rojo sobre un fichero que no lee nada aparte.
+  assert(!/\bgetSourceHistory\(/.test(JS), 'y no hace falta una lectura aparte del almacén')
+
+  // Y es del SITIO: cambiar de host lo vacía, y «Olvidar este sitio» también.
+  const refresco = sinComentarios(JS.slice(JS.indexOf('async function refreshTab'), JS.indexOf('async function bootForSite')))
+  assert(/state\.sourceHistory = emptyHistory\(\)/.test(refresco))
+  assert(
+    /state\.sourcesSuggest = \{ token: state\.sourcesSuggest\.token \+ 1/.test(refresco),
+    'y el testigo sube: lo que llegue tarde es de otro sitio'
+  )
+  const olvidarSitio = sinComentarios(JS.slice(JS.indexOf("$('btn-forget').addEventListener"), JS.indexOf("$('mem-enabled').addEventListener")))
+  assert(/state\.sourceHistory = emptyHistory\(\)/.test(olvidarSitio), 'olvidar el sitio se lleva su historial de la memoria del panel')
+  const almacen = readFileSync(join(ROOT, 'src/shared/storage.js'), 'utf8')
+  assert(/STORAGE_KEYS\.sourceHistory\(host\)/.test(almacen), 'y forgetSite, su clave del almacén')
+
+  // Cerrar la pantalla sube el testigo: los enlaces que lleguen después no
+  // tienen dónde pintarse.
+  const cerrar = sinComentarios(JS.slice(JS.indexOf('function closeSourcesScreen'), JS.indexOf('function onRuntimeMessage')))
+  assert(/state\.sourcesSuggest = \{ token: state\.sourcesSuggest\.token \+ 1/.test(cerrar))
+})
+
+test('H10 SEGURIDAD: sugerir no llama al modelo y el historial no entra en ningún prompt', () => {
+  // §8.20: ninguna de las cuatro fuentes gasta un token. En todo lo que pinta o
+  // puntúa una sugerencia no puede haber un turno.
+  const bloque = sinComentarios(JS.slice(JS.indexOf('async function recordAnalysisTurn'), JS.indexOf('function onSourcesInput')))
+  assert(bloque.length > 2000, 'el bloque de las sugeridas existe entero')
+  for (const prohibido of ['runTurn(', 'promptStructured(', 'createSession(', 'baseSystem(', 'skillSystem(']) {
+    assert(!bloque.includes(prohibido), 'sugerir no puede llamar al modelo: «' + prohibido + '»')
+  }
+  // Y nada de esto viaja al modelo: la petición del turno no lo lleva.
+  const envio = sinComentarios(JS.slice(JS.indexOf('async function send('), JS.indexOf('function paintTurn(')))
+  const peticion = envio.slice(envio.indexOf('const peticion = {'), envio.indexOf('runTurn('))
+  assert(peticion.length > 200, 'la petición del turno sigue construyéndose en un objeto')
+  for (const prohibido of ['sourceHistory', 'sourcesSuggest', 'state.references', 'reasonText', 'suggestSources']) {
+    assert(!peticion.includes(prohibido), 'la petición del turno no puede llevar «' + prohibido + '»')
+  }
+  // Ni ningún prompt lo recibe: los dos ficheros que los escriben no lo nombran.
+  for (const fichero of ['src/panel/prompts.js', 'src/panel/skills.js']) {
+    const fuente = readFileSync(join(ROOT, fichero), 'utf8')
+    assert(
+      !/sourceHistory|suggestSources|referencesFromContext/.test(fuente),
+      'un prompt no puede saber nada del historial ni de las sugerencias: ' + fichero
+    )
+  }
+})
+
+test('H10: el espejo enseña «Sugeridas» con sus motivos, en Confluence y en Jira', () => {
+  const espejo = readFileSync(join(ROOT, 'harness/panel-preview.html'), 'utf8')
+
+  // El panel no corre en el banco, así que esta sección sólo se puede mirar
+  // aquí. Y se calcula con el MÓDULO de verdad: una lista copiada a mano
+  // seguiría enseñando los motivos de antes en cuanto cambiara la tabla de puntos.
+  assert(espejo.includes("import('/src/panel/source-suggest.js')"), 'el espejo importa el módulo que puntúa')
+  const pintar = espejo.slice(espejo.indexOf('function pintarSugeridas'), espejo.indexOf('function pintarSeleccion'))
+  assert(pintar.length > 500, 'el espejo pinta las sugeridas')
+  assert(/suggestSources\(\{/.test(pintar) && /reasonText\(sug\.reasons\)/.test(pintar), 'con puntuación y motivos de verdad')
+  assert(/'suggest-row suggested'/.test(pintar) && /'suggest-why'/.test(pintar), 'y con las clases que pinta el panel')
+  assert(/aria-label', motivo \?/.test(pintar), 'y con el mismo nombre accesible, motivo incluido')
+  assert(/exclude: elegidas/.test(pintar), 'las ya elegidas salen de la lista, como en el panel')
+  // Cambia con la conversación: desde Jira las páginas son del Confluence
+  // enlazado y la fila lo dice.
+  const base = espejo.slice(espejo.indexOf('function pintarPaginasBase'), espejo.indexOf('function pintarSugeridas'))
+  assert(/pintarSugeridas\(\)/.test(base), 'se repinta con la conversación y con las páginas base elegidas')
+  assert(/desde \$\{enlazado\}/.test(pintar), 'en Jira la fila dice de qué Confluence es la página')
+
+  // Y el campo queda vacío: con dos letras escritas el panel esconde la
+  // sección, así que la captura no puede enseñar las dos listas a la vez.
+  assert(/\$\('sources-query'\)\.value = ''/.test(espejo), 'el campo de la vista previa va vacío')
+  assert(!/sugerencias\.classList\.remove\('hidden'\)/.test(espejo), 'y el listbox de la búsqueda se queda plegado')
+})

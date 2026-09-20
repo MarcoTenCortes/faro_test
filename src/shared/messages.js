@@ -23,6 +23,7 @@ export const MSG = {
   PAGE_DIGEST: 'faro:page-digest',
   PAGE_ANCESTORS: 'faro:page-ancestors',
   PAGE_SEARCH: 'faro:page-search',
+  PAGE_LINKS: 'faro:page-links',
   ANNOTATE: 'faro:annotate',
   FOCUS_NOTE: 'faro:focus-note',
   CLEAR_NOTES: 'faro:clear-notes',

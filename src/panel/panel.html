@@ -372,6 +372,29 @@
       </div>
     </div>
 
+    <!-- Lo que Faro propone sin preguntarle al modelo: lo que esta página o esta
+         incidencia enlaza, lo que el contexto del sitio nombra como guía y lo
+         que el propio usuario eligió en análisis parecidos. Va ENTRE el campo y
+         «Páginas elegidas» porque es el atajo para llenar esa lista, y la
+         sección entera se esconde mientras se escribe en el campo (dos listas
+         apiladas en 320 px no se leen). La frase final no es decorativa: es la
+         promesa de §8.20 escrita donde se ve. -->
+    <div id="sources-suggested" class="hidden">
+      <h2 id="sources-suggested-title">Sugeridas</h2>
+      <p class="fine" id="sources-suggested-hint"></p>
+      <!-- Un grupo de botones, no un listbox: aquí no hay campo que los
+           controle ni una opción «elegida», y cada fila es una acción con su
+           propio nombre («Añadir «X»»). El `role="list"` del borrador convertía
+           cada botón en un elemento de lista y le quitaba su papel de botón. -->
+      <div class="suggest-list" id="sources-suggested-list" role="group" aria-labelledby="sources-suggested-title"></div>
+      <div class="row suggest-actions">
+        <button class="ghost small hidden" id="btn-sources-add-suggested" type="button">Añadir las 3</button>
+        <button class="ghost small hidden" id="btn-sources-forget" type="button">Olvidar el historial</button>
+        <span class="grow"></span>
+      </div>
+      <p class="fine">Nada se añade solo: pulsa una para añadirla.</p>
+    </div>
+
     <h2>Páginas elegidas</h2>
     <div class="source-list" id="sources-list"></div>
 

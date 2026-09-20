@@ -176,6 +176,17 @@ export const STORAGE_KEYS = {
   // estados, componentes, etiquetas y convenciones de nombre). Es la PRIMERA
   // clave por host que viaja en el paquete del sitio (`BUNDLE_EXTRA_KEYS`).
   profile: (host) => `faro:profile:${host}`,
+  // Qué páginas base eligió el usuario para analizar qué, en este sitio: la
+  // señal con la que se sugieren páginas base sin gastar un token (H10). Es un
+  // rastro local —claves, ids y títulos, nunca texto— y por eso vive en su
+  // propia clave: se borra con «Olvidar el historial» y con «Olvidar este
+  // sitio», sin llevarse por delante el modelo ni el MCP del sitio.
+  //
+  // Las PÁGINAS DE REFERENCIA del contexto no tienen clave: docs/PLAN.md §3.2
+  // descartó la lista estructurada del indexador, así que se sacan del
+  // CONTEXT.md al vuelo (`referencesFromContext`) y no hay nada que guardar.
+  // Una clave que nadie escribe es una promesa falsa.
+  sourceHistory: (host) => `faro:source-history:${host}`,
 }
 
 /**
