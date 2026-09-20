@@ -1922,9 +1922,16 @@ test('H8: la tarjeta de una búsqueda de Jira trae la lista leída de la API, y 
   const nav = sinComentarios(JS.slice(JS.indexOf('async function offerNavigation'), JS.indexOf('async function learnAncestry')))
   assert(/const card = navCard\(jqlPlan\(busqueda\)\)/.test(nav) && /attachToBubble\(bubble, card\)/.test(nav), 'la tarjeta de siempre se pinta primero')
   assert(
-    /await attachJqlResults\(card, busqueda, \{ site: state\.site, sessionID: state\.sessionID, tabId: state\.tabId \}\)/.test(nav),
+    /const sitio = state\.site\s*const lista = await attachJqlResults\(card, busqueda, \{ site: sitio, sessionID: state\.sessionID, tabId: state\.tabId \}\)/.test(nav),
     'y la lista se le añade con el sitio, la sesión y la pestaña capturados al pedir (§8.22)'
   )
+  // Revisión adversaria de H8: la consulta que el modelo ejecutó DE VERDAD también
+  // es «última» (antes sólo la recordaban los chips, contra lo que decía el plan),
+  // sólo si devolvió una lista y bajo el host capturado al pedir.
+  assert(/if \(lista\?\.ok\) \{/.test(nav), 'sólo lo que devolvió una lista')
+  assert(/state\.recentJql = rememberJql\(state\.recentJql, busqueda\.jql, \{ count: lista\.total \}\)/.test(nav))
+  assert(/await saveSite\(sitio\.host, \{ recentJql: state\.recentJql \}\)/.test(nav), 'bajo el host con el que se pidió, no el de ahora')
+  assert(nav.indexOf('await attachJqlResults(') < nav.indexOf('rememberJql('), 'después de la lista, nunca antes')
   assert(
     nav.indexOf('attachToBubble(bubble, card)') < nav.indexOf('await attachJqlResults('),
     'la tarjeta existe antes de que se lea nada: si la API no contesta, ya está puesta'
@@ -1940,13 +1947,20 @@ test('H8: la tarjeta de una búsqueda de Jira trae la lista leída de la API, y 
   assert(/site\.product !== 'jira'/.test(lista), 'sólo en Jira')
   assert(/if \(site\.cloud\) \{/.test(lista), 'en Jira Cloud no hay REST de Jira que leer (410)')
   assert(/await ensureContentAccess\(\{ announce: false \}\)/.test(lista), 'quien pide es el content script, que vive en el origen del sitio')
-  assert(/type: MSG\.JQL_SEARCH, jql, limit: JIRA_REST_LIMITS\.defaultResults/.test(lista), 'la consulta viaja tal cual, con el tope del módulo')
-  assert(!/state\.site\.origin/.test(lista) && !/location\./.test(lista), 'el panel no manda ni el origen ni ninguna ruta: los deduce el content script')
+  // El mensaje ENTERO y no un trozo: el pin viejo sólo prohibía el literal
+  // «state.site.origin», y aquí el sitio vive en la variable `site`, así que
+  // añadir `origin: site.origin, prefix: site.jiraPrefix` dejaba todo en verde
+  // (revisión adversaria de H8). Con la llave cerrada no cabe ninguna clave más.
+  assert(
+    /\.sendMessage\(tabId, \{ type: MSG\.JQL_SEARCH, jql, limit: JIRA_REST_LIMITS\.defaultResults, cloud: site\.cloud \}\)/.test(lista),
+    'la consulta viaja tal cual, con el tope del módulo, y el panel no manda ni el origen ni ninguna ruta: los deduce el content script'
+  )
+  assert(!/\borigin:/.test(lista) && !/\bjiraPrefix\b/.test(lista) && !/location\./.test(lista), 'ni por otro camino')
   // Lo capturado manda al pintar (§8.22), y el chat puede haberse repintado (C7).
   assert(/if \(!card\.isConnected\) return/.test(lista))
   assert(
-    /if \(\(state\.site\?\.host \?\? state\.lastHost\) !== site\.host \|\| state\.sessionID !== sessionID\) \{/.test(lista),
-    'si el panel se fue a otro sitio o abrió otra sesión, no se pinta ni se cosecha'
+    /if \(\(state\.site\?\.host \?\? state\.lastHost\) !== site\.host \|\| \(sessionID && state\.sessionID !== sessionID\)\) \{/.test(lista),
+    'si el panel se fue a otro sitio o abrió OTRA sesión, no se pinta ni se cosecha; una sesión que nace mientras llega la lista no es otra (revisión adversaria de H8)'
   )
   assert(
     lista.indexOf('if (!card.isConnected) return') < lista.indexOf('harvestFromSearch('),
@@ -1959,7 +1973,12 @@ test('H8: la tarjeta de una búsqueda de Jira trae la lista leída de la API, y 
   assert(lista.indexOf('harvestFromSearch(') < lista.indexOf('jqlResultsList('), 'el índice se funde antes de que haya filas que pulsar')
   // Contraparte visible de cada fallo (§8.14), y la tarjeta sigue entera.
   assert(/noticeNode\(/.test(lista) && /'Lista de Jira no disponible'/.test(lista) && /'Lista de Jira leída'/.test(lista))
-  assert(/restFailureDue\(reason, site\.host, sessionID\)/.test(lista), 'con tregua por host y sesión para lo que no cambia por reintentar')
+  assert(/restFailureDue\(state\.restWarned, reason, site\.host, sessionID\)/.test(lista), 'con tregua por host y sesión para lo que no cambia por reintentar')
+  // La REGLA se ejecuta de verdad en rest-notice.test.js; aquí, que el panel la
+  // use y no lleve una copia (cuatro mutaciones que borraban el aviso pasaban).
+  assert(/import \{ restFailureDue, jqlFailText \} from '\.\/rest-notice\.js'/.test(JS))
+  assert(!/function restFailureDue\(/.test(JS) && !/function jqlFailText\(/.test(JS), 'sin copia local de la regla')
+  assert(/announce\(aviso\)/.test(lista), 'y el aviso se anuncia: cuelga de la tarjeta, no pasa por attachToBubble (A2)')
   assert(!/card\.remove\(\)/.test(lista), 'la tarjeta de siempre nunca desaparece: la lista es un añadido')
 })
 
@@ -2011,7 +2030,7 @@ test('H8: la casilla de las lecturas REST se lee y se guarda en Ajustes, y no re
   const deAntes = [
     ['async function fetchPageChain', 'async function mergePagesIntoIndex'],
     ['async function searchSourcesRemote', 'function searchFailText'],
-    ['async function learnAncestry', 'const REST_REASON_ALWAYS'],
+    ['async function learnAncestry', 'async function attachJqlResults'],
   ]
   for (const [desde, hasta] of deAntes) {
     const trozo = sinComentarios(JS.slice(JS.indexOf(desde), JS.indexOf(hasta)))
@@ -2046,7 +2065,7 @@ test('H8: el chat vacío ofrece búsquedas al instante, y pintarlas no vuelve a 
   assert(/if \(!box\?\.isConnected\) return/.test(pintar), 'el chat pudo repintarse entre que se pidió una fuente y llegó')
   assert(/state\.settings\.restTools/.test(pintar), 'el interruptor maestro apaga también los chips')
   assert(
-    /searchChips\(state\.site, \{\s*issueFields: state\.issueFields\?\.fields \|\| null,\s*favouriteFilters: state\.favouriteFilters \|\| \[\],\s*recentJql: state\.recentJql,/.test(
+    /searchChips\(state\.site, \{\s*issueFields: state\.issueFields && samePage\(state\.issueFields\.url, state\.tabUrl\) \? state\.issueFields\.fields : null,\s*favouriteFilters: state\.favouriteFilters \|\| \[\],\s*recentJql: state\.recentJql,/.test(
       pintar
     ),
     'con los campos de la pantalla, los filtros del usuario y sus últimas búsquedas'
@@ -2109,6 +2128,13 @@ test('H8: los campos de la incidencia se leen sin trocear la página y se olvida
   assert(/type: MSG\.PAGE_DIGEST, fieldsOnly: true/.test(rapida), 'sólo los campos: trocear la página cuesta y aquí no se mira ni un bloque')
   assert(/const fields = normalizeIssueFields\(r\.issue\)/.test(rapida), 'y llegan con claves blancas, como con el digest')
   assert(/state\.issueFields = \{ url: r\.url \|\| state\.tabUrl, fields \}/.test(rapida), 'se recuerdan con la URL de la que salieron')
+  // §8.22: la página se captura al pedir y se comprueba al volver; una respuesta
+  // tardía no resucita los campos de la incidencia anterior.
+  assert(/const desde = state\.tabUrl/.test(rapida) && /if \(!samePage\(r\.url \|\| desde, state\.tabUrl\)\) return null/.test(rapida))
+  assert(
+    rapida.indexOf('if (!samePage(r.url || desde, state.tabUrl)) return null') < rapida.indexOf('state.issueFields = { url'),
+    'la guarda va antes de escribir'
+  )
   assert(
     /if \(state\.issueFields && samePage\(state\.issueFields\.url, state\.tabUrl\)\) return state\.issueFields\.fields/.test(rapida),
     'y no se vuelven a pedir para la misma página, ni cuando no había campos que leer'
@@ -2157,12 +2183,12 @@ test('H8: una búsqueda directa no pasa por opencode, y sólo se recuerda si se 
   assert(/await persistIndex\(\)/.test(directa), 'lo que la lista aprende se guarda aunque no haya turno')
   assert(
     directa.indexOf('attachJqlResults(card, destino') < directa.indexOf('await persistIndex()') &&
-      directa.indexOf('await persistIndex()') < directa.indexOf('if (!r?.ok || state.site?.host !== site.host) return'),
+      directa.indexOf('await persistIndex()') < directa.indexOf('if (!r?.ok || (state.site?.host ?? state.lastHost) !== site.host) return'),
     'después de la lista y antes de salir por una lista que no llegó'
   )
   // Sólo se apunta como «última» lo que devolvió una lista, y bajo el host que
   // la ejecutó.
-  assert(/if \(!r\?\.ok \|\| state\.site\?\.host !== site\.host\) return/.test(directa))
+  assert(/if \(!r\?\.ok \|\| \(state\.site\?\.host \?\? state\.lastHost\) !== site\.host\) return/.test(directa), 'la misma pregunta que hace la lista: el sitio del panel es lastHost con la pestaña fuera')
   assert(/rememberJql\(state\.recentJql, chip\.jql, \{ count: r\.total \}\)/.test(directa))
   assert(/await saveSite\(site\.host, \{ recentJql: state\.recentJql \}\)/.test(directa))
   assert(/import \{ JIRA_REST_LIMITS, normalizeRecentJql, rememberJql \} from '\.\.\/shared\/jira-rest\.js'/.test(JS))

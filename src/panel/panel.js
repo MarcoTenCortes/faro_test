@@ -67,6 +67,7 @@ import {
 } from './sources.js'
 import { suggestionsFor } from './suggestions.js'
 import { searchChips } from './search-chips.js'
+import { restFailureDue, jqlFailText } from './rest-notice.js'
 import { normalizeIssueFields } from './issue-profile.js'
 import { searchPages, fetchAncestors } from '../shared/confluence-rest.js'
 import {
@@ -1291,7 +1292,9 @@ function paintSearchChips(box) {
   // decide `searchChips` mirando el sitio.
   const chips = state.settings.restTools
     ? searchChips(state.site, {
-        issueFields: state.issueFields?.fields || null,
+        // Sólo los campos de la página que hay DELANTE: la misma regla con la que
+        // `readIssueFieldsQuick` decide si los que tiene le valen.
+        issueFields: state.issueFields && samePage(state.issueFields.url, state.tabUrl) ? state.issueFields.fields : null,
         favouriteFilters: state.favouriteFilters || [],
         recentJql: state.recentJql,
       })
@@ -1375,9 +1378,15 @@ async function loadSearchChipSources(box) {
 async function readIssueFieldsQuick() {
   if (state.site?.product !== 'jira' || state.tabId == null) return null
   if (state.issueFields && samePage(state.issueFields.url, state.tabUrl)) return state.issueFields.fields
+  const desde = state.tabUrl
   if (!(await ensureContentAccess({ announce: false }))) return null
   const r = await chrome.tabs.sendMessage(state.tabId, { type: MSG.PAGE_DIGEST, fieldsOnly: true }).catch(() => null)
   if (!r?.ok) return null
+  // Lo que se captura al pedir manda al volver (§8.22): si mientras tanto la
+  // pestaña cambió de incidencia, `refreshTab` ya vació `state.issueFields` y
+  // esta respuesta es de la ANTERIOR. Escribirla ofrecería «Misma épica» de una
+  // incidencia que ya no está delante (revisión adversaria de H8).
+  if (!samePage(r.url || desde, state.tabUrl)) return null
   const fields = normalizeIssueFields(r.issue)
   state.issueFields = { url: r.url || state.tabUrl, fields }
   return fields
@@ -1422,6 +1431,7 @@ async function runDirectSearch(chip) {
     nota.className = 'nav-text'
     nota.textContent = 'Esta consulta usa una función que no es de Jira: te la abro allí en vez de ejecutarla yo.'
     card.insertBefore(nota, card.querySelector('.nav-actions'))
+    announce(nota.textContent)
     return
   }
 
@@ -1432,7 +1442,11 @@ async function runDirectSearch(chip) {
   // siguiente pregunta, y se perdía al cerrar el panel. No lanza y sin nada
   // apuntado no hace nada.
   await persistIndex()
-  if (!r?.ok || state.site?.host !== site.host) return
+  // La misma pregunta que acaba de hacer `attachJqlResults` para pintar la lista:
+  // el sitio del PANEL es `state.lastHost` cuando la pestaña está fuera de
+  // Atlassian. Con `state.site?.host` a secas la lista se pintaba y la consulta
+  // no se recordaba (revisión adversaria de H8).
+  if (!r?.ok || (state.site?.host ?? state.lastHost) !== site.host) return
   // Sólo se recuerda lo que se ejecutó de verdad: una consulta que Jira rechaza
   // no merece volver a ofrecerse como «Última: …».
   state.recentJql = rememberJql(state.recentJql, chip.jql, { count: r.total })
@@ -2572,7 +2586,19 @@ async function offerNavigation(answer, bubble, skillId = state.skill, parts = []
       // en otro sitio (§8.22). Se espera aquí a propósito: lo que la lista funde
       // en el índice tiene que estar apuntado antes de `persistIndex()`, que es
       // la única escritura del turno (P3 de H6).
-      await attachJqlResults(card, busqueda, { site: state.site, sessionID: state.sessionID, tabId: state.tabId })
+      const sitio = state.site
+      const lista = await attachJqlResults(card, busqueda, { site: sitio, sessionID: state.sessionID, tabId: state.tabId })
+      // La consulta que el modelo ejecutó DE VERDAD por el MCP es la primera
+      // procedencia admitida (§8.19), y la fuente más rica del chip «Última: …»:
+      // se apunta igual que la de un chip, y sólo si devolvió una lista. Que
+      // `attachJqlResults` devuelva `ok` ya dice que el panel seguía en ese sitio
+      // y en esa sesión: su guarda es lo último que hace antes de pintar, sin
+      // ningún await detrás (revisión adversaria de H8: sólo la recordaban los
+      // chips, contra lo que decían el plan y el JSDoc de `rememberJql`).
+      if (lista?.ok) {
+        state.recentJql = rememberJql(state.recentJql, busqueda.jql, { count: lista.total })
+        await saveSite(sitio.host, { recentJql: state.recentJql })
+      }
       return
     }
   }
@@ -2681,45 +2707,6 @@ async function learnAncestry(destination) {
 }
 
 /**
- * Los motivos de fallo de una lectura REST cuyo aviso SÍ merece repetirse.
- *
- * Un 400 habla de ESA consulta y trae el mensaje del servidor: verlo cada vez es
- * el único modo de saber qué cláusula no acepta esta instancia. Todo lo demás
- * —la sesión no vale, esto es Cloud, no hubo red— diría lo mismo debajo de cada
- * respuesta, así que se dice una vez por host y sesión.
- */
-const REST_REASON_ALWAYS = ['jql']
-
-/**
- * ¿Toca decir este fallo, o ya se dijo? Marca al preguntar, como la tregua de
- * `learnAncestry`: quien pregunta es quien va a pintar el aviso.
- */
-function restFailureDue(reason, host, sessionID) {
-  if (REST_REASON_ALWAYS.includes(reason)) return true
-  const clave = `${host}:${sessionID || ''}:${reason}`
-  if (state.restWarned.has(clave)) return false
-  state.restWarned.add(clave)
-  return true
-}
-
-/**
- * Por qué no se pudo leer la lista, en palabras del usuario.
- *
- * El `reason` que devuelve `jira-rest.js` es un CÓDIGO y `messages` son los
- * mensajes del SERVIDOR (acotados por `REST_ERROR_LIMITS`): se enseñan, no se
- * interpretan. Pura salvo por el host, que se le pasa.
- */
-function jqlFailText(r, host) {
-  const reason = String(r?.reason || '')
-  const delServidor = (Array.isArray(r?.messages) ? r.messages : []).join(' · ')
-  if (reason === 'jql') return `Jira no acepta esta consulta: ${delServidor || 'la ha rechazado sin decir por qué'}.`
-  if (reason === 'sesion') return `Tu sesión de ${host} no vale para su API: recarga la pestaña y vuelve a entrar.`
-  if (reason === 'red') return 'No he podido hablar con la API de Jira: ' + (r?.detail || 'sin respuesta') + '.'
-  if (!r) return 'La pestaña no ha contestado.'
-  return `No he podido leer la lista (${r.detail || reason || 'sin motivo'}).`
-}
-
-/**
  * La lista de una búsqueda de Jira, dentro de la tarjeta que lleva a ella.
  *
  * POR QUÉ EXISTE: la tarjeta decía «Los 37 resultados de la búsqueda en Jira» y
@@ -2764,7 +2751,14 @@ async function attachJqlResults(card, busqueda, { site = state.site, sessionID =
   const fallo = (reason, texto) => {
     estado.remove()
     log.warn('Lista de Jira no disponible', `${reason} · ${texto}`)
-    if (restFailureDue(reason, site.host, sessionID)) card.appendChild(noticeNode(texto + ' La tarjeta te lleva igual.'))
+    if (restFailureDue(state.restWarned, reason, site.host, sessionID)) {
+      const aviso = texto + ' La tarjeta te lleva igual.'
+      card.appendChild(noticeNode(aviso))
+      // Cuelga de la tarjeta y no pasa por `attachToBubble`, así que se anuncia
+      // aquí: sin esto un lector de pantalla no se enteraba de que no hay lista
+      // (A2; `runPlan` anuncia el suyo justo al lado).
+      announce(aviso)
+    }
   }
 
   // En Jira Cloud `GET /rest/api/2/search` está retirado (410 desde octubre de
@@ -2788,7 +2782,13 @@ async function attachJqlResults(card, busqueda, { site = state.site, sessionID =
   // está en el documento y no hay dónde pintar (C7); y si el panel se fue a otro
   // sitio o abrió otra sesión, esto no se pinta NI se cosecha (§8.22).
   if (!card.isConnected) return null
-  if ((state.site?.host ?? state.lastHost) !== site.host || state.sessionID !== sessionID) {
+  // «Otra sesión» es que la que había ya no sea la de ahora. Si al pedir no había
+  // ninguna —un chip pulsado en el chat vacío— y mientras tanto el usuario
+  // escribe, `send()` CREA la sesión sin vaciar el chat: la tarjeta sigue a la
+  // vista y en el mismo sitio, y tirar la lista ahí era un fallo silencioso con
+  // un registro que decía algo falso (revisión adversaria de H8). «Sesión
+  // nueva» sí vacía el chat, y eso lo cubre `card.isConnected`.
+  if ((state.site?.host ?? state.lastHost) !== site.host || (sessionID && state.sessionID !== sessionID)) {
     estado.remove()
     log.info('Lista de Jira no disponible', `el panel ya no está en ${site.host} con esa sesión`)
     return null
@@ -2886,7 +2886,9 @@ async function openIssueFromResults(key, { site, card }) {
   if (!r.ok || !r.plan?.navigate) {
     const motivo = r.reason || 'el plan no vale'
     log.warn('Navegación fallida', `${key} · ${motivo}`)
-    card.appendChild(noticeNode(`No puedo abrir ${key}: ${motivo}`, true))
+    const aviso = `No puedo abrir ${key}: ${motivo}`
+    card.appendChild(noticeNode(aviso, true))
+    announce(aviso)
     return
   }
   await runPlan(r.plan, 'direct', card)

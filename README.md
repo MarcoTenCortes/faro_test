@@ -467,7 +467,7 @@ Trece decisiones que sostienen el diseño:
 ## Comprobaciones
 
 ```bash
-npm run check              # sintaxis + orden + manifest + 1069 pruebas unitarias + docs
+npm run check              # sintaxis + orden + manifest + 1074 pruebas unitarias + docs
 npm run check:docs         # sólo el paso docs: número de pruebas, títulos del registro, mensajes y ficheros del mapa
 npm run test:integration   # contra un opencode real que arranca la propia prueba
 npm run harness            # banco de pruebas visual en http://127.0.0.1:5175
@@ -898,6 +898,7 @@ src/
     setup.js                claves por producto → bloque MCP; hosts enlazados (puro salvo las llamadas a opencode)
     sources.js              páginas base del análisis: forma, alcance, autocompletado desde el índice, URL pegada, vigilancia del alcance (puro)
     suggestions.js          las tres sugerencias del chat vacío, por producto y por Skill (puro)
+    rest-notice.js          cuándo se te avisa de que una lectura de la API no salió (una vez por sitio, sesión y motivo) y con qué palabras (puro)
     search-chips.js         las búsquedas al instante: qué consultas se ofrecen y cuáles ejecuta Faro (puro)
     notes.js                observaciones numeradas: el bloque JSON de anclas, su validación, la segunda pasada (puro)
     issue-profile.js        qué ticket es: tipo y estado leídos de sus campos → qué comprobar en el análisis (puro)
