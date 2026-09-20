@@ -447,7 +447,10 @@ test('EL CAMBIO: desde un Jira Data Center el panel pregunta al Confluence enlaz
   assert(/needsPermission: true/.test(cadena))
   const porId = JS.slice(JS.indexOf('async function addSourceById'), JS.indexOf('async function fetchPageChain'))
   assert(/if \(!enlazado\) await mergePagesIntoIndex\(r\.pages\)/.test(porId), 'el índice del Confluence enlazado nunca se guarda desde Jira')
-  assert(/from: enlazado \? 'linked' : 'confluence'/.test(porId))
+  assert(/desde\(enlazado \? 'linked' : 'confluence'\)/.test(porId))
+  // `desde` sólo cambia el origen cuando la página venía de una SUGERENCIA (H10):
+  // sin eso, lo de siempre.
+  assert(/const desde = \(from\) => \(suggested \? \{ from: 'suggested', reason \} : \{ from \}\)/.test(porId))
   const alta = JS.slice(JS.indexOf('async function addSource('), JS.indexOf('async function removeSource'))
   assert(/if \(from === 'confluence'\) await mergePagesIntoIndex/.test(alta), 'y tampoco al elegir una sugerencia suya')
   const enlazado = JS.slice(JS.indexOf('async function loadLinkedContext'), JS.indexOf('async function ensureContentAccess'))
@@ -2585,6 +2588,32 @@ test('H10: la pantalla de páginas base propone, y lo que las pinta está cablea
   assert(/const index = sourcesIndex\(\)/.test(calcular), 'con el índice que toca (el del enlazado desde Jira)')
   assert(/const enlazado = linkedHost\(\)/.test(calcular), 'y con el Confluence enlazado')
   assert(/exclude: state\.sources\.pages\.map/.test(calcular), 'lo ya elegido no se propone')
+  // Revisión adversaria de H10: las tres fuentes de §8.20 se podían desconectar
+  // en silencio (quitar el historial o las referencias dejaba todo en verde).
+  assert(/history: state\.sourceHistory,/.test(calcular), 'el historial llega a la puntuación')
+  assert(/references: currentReferences\(\),/.test(calcular), 'las referencias del contexto también')
+  assert(/links: enlaces,/.test(calcular), 'y los enlaces de la página')
+  // Y los enlaces son de UNA página: se cruzan donde se consumen, como los campos.
+  assert(/const deAqui = !!state\.sourcesSuggest\.url && samePage\(state\.sourcesSuggest\.url, state\.tabUrl\)/.test(calcular))
+  assert(
+    /confluenceLinksIn\(deAqui \? state\.sourcesSuggest\.links : \[\], deAqui \? state\.sourcesSuggest\.remote : null, \{/.test(calcular),
+    'los enlaces de otra página no puntúan ésta: el motivo «enlazada desde la descripción» sería mentira'
+  )
+  assert(/const pagina = state\.tabUrl/.test(pintar), 'la página se captura al pedir (§8.22)')
+  assert(/if \(!samePage\(r\.url \|\| pagina, state\.tabUrl\)\) return/.test(pintar), 'y se comprueba al volver')
+  assert(/state\.sourcesSuggest\.links = Array\.isArray\(r\.links\) \? r\.links : \[\]/.test(pintar) && /state\.sourcesSuggest\.remote = r\.remote \|\| null/.test(pintar))
+  assert(/state\.sourcesSuggest\.url = r\.url \|\| pagina/.test(pintar), 'con la URL de la que son')
+  assert(
+    pintar.indexOf('if (!samePage(r.url || pagina, state.tabUrl)) return') < pintar.indexOf('state.sourcesSuggest.links = Array.isArray('),
+    'la guarda va antes de guardar nada'
+  )
+  const pestanaH10 = sinComentarios(JS.slice(JS.indexOf('async function refreshTab'), JS.indexOf('async function bootForSite')))
+  assert(/const otraPagina = !samePage\(tab\.url \|\| '', state\.tabUrl \|\| ''\)/.test(pestanaH10))
+  assert(/if \(otraPagina\) \{\s*state\.sourcesSuggest\.token\+\+\s*state\.sourcesSuggest\.links = \[\]/.test(pestanaH10), 'al cambiar de página se van, y una respuesta en vuelo no los devuelve')
+  assert(
+    /if \(!changedHost && otraPagina && !\$\('screen-sources'\)\.classList\.contains\('hidden'\)\) paintSuggestedSources\(\)/.test(pestanaH10),
+    'y con la pantalla abierta se vuelven a calcular para la página que hay delante'
+  )
   assert(/linked: !!enlazado/.test(calcular), 'desde un Jira, las páginas son del enlazado y van sin ruta (§4.8)')
   assert(
     /issue: state\.issueFields && samePage\(state\.issueFields\.url, state\.tabUrl\)/.test(calcular),
@@ -2592,6 +2621,11 @@ test('H10: la pantalla de páginas base propone, y lo que las pinta está cablea
   )
 
   const filas = sinComentarios(JS.slice(JS.indexOf('function paintSuggestedList'), JS.indexOf('function refreshSuggestedVisibility')))
+  // Revisión adversaria de H10: `#sources-suggested` nace oculta y la ÚNICA línea
+  // que la enseña al abrir la pantalla es ésta; sin ella H10 no existía para el
+  // usuario y las 1171 pruebas seguían en verde. Lo mismo con el texto de arriba.
+  assert(/refreshSuggestedVisibility\(\)\s*\}\s*$/.test(filas.trim()), 'pintar la lista termina enseñando la sección')
+  assert(/\$\('sources-suggested-hint'\)\.textContent = list\.length \? suggestedHint\(estado\) : ''/.test(filas), 'y dice de dónde salen (§8.14)')
   // Un repintado (añadir o quitar una página base) conserva QUÉ fuentes
   // llegaron: si volviera a «listo», la sección diría que leyó los enlaces de
   // la página justo después de decir que no pudo.
@@ -2619,10 +2653,17 @@ test('H10: la pantalla de páginas base propone, y lo que las pinta está cablea
   // motivo; y nunca se funde en el índice (`from` no es 'confluence').
   const elegir = sinComentarios(JS.slice(JS.indexOf('async function chooseSuggestion'), JS.indexOf('async function addSourceById')))
   assert(/from: s\.source/.test(elegir) && /reason: s\.source === 'suggested' \? reasonText\(s\.reasons\) : ''/.test(elegir))
+  // Una sugerida cuyo título es un marcador («Página N») no entra con ese nombre
+  // —el prompt del Análisis nombra las páginas base por su título—: lo lee.
+  assert(
+    /if \(s\.source === 'suggested' && isPlaceholderTitle\(s\.title\)\) \{\s*return addSourceById\(s\.id, s\.path, \{ suggested: true, reason: reasonText\(s\.reasons\) \}\)/.test(elegir),
+    'y conserva el motivo para el registro'
+  )
   const alta = sinComentarios(JS.slice(JS.indexOf('async function addSource('), JS.indexOf('async function removeSource')))
   assert(/async function addSource\(page, \{ from = 'index', reason = '' \} = \{\}\)/.test(alta))
   assert(/suggested: 'sugerida'/.test(alta) && /from === 'suggested' && reason/.test(alta), 'el registro dice por qué se propuso')
   assert(/repaintSuggested\(\)/.test(alta), 'y la sección se repinta sin volver a preguntarle a la pestaña')
+  assert(/if \(from === 'suggested'\) announce\(/.test(alta), 'y se dice en voz alta: la fila desaparece al instante (A2)')
 
   // Los dos botones de la sección están conectados.
   assert(/\$\('btn-sources-add-suggested'\)\.addEventListener/.test(JS))

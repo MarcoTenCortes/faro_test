@@ -22,7 +22,7 @@ import {
   samePage,
   wikiPrefix as wikiPrefixOf,
 } from '../atlassian/site.js'
-import { mergeIndex, mergeIndexKeepingTree, indexSize, normalizeIndex, ancestryOf } from '../atlassian/index-store.js'
+import { mergeIndex, mergeIndexKeepingTree, indexSize, normalizeIndex, ancestryOf, isPlaceholderTitle } from '../atlassian/index-store.js'
 import { CORS_ORIGIN, DEFAULT_SETTINGS, INDEX_LIMITS, PROFILE_LIMITS, RESTORE_LIMITS, SESSION_LIMITS, mcpNameForHost } from '../shared/config.js'
 import { MSG } from '../shared/messages.js'
 import {
@@ -189,7 +189,9 @@ const state = {
   // repintar tras añadir una sin volver a preguntárselo, y `estado` es qué
   // fuentes llegaron: un repintado no puede decir que se leyeron los enlaces
   // cuando la pestaña no contestó.
-  sourcesSuggest: { token: 0, list: [], links: [], remote: null, estado: 'listo' },
+  // `url` es la página de la que son `links` y `remote`: los enlaces son de UNA
+  // página, y la pantalla sigue abierta al pasar a otra del mismo host.
+  sourcesSuggest: { token: 0, list: [], links: [], remote: null, url: '', estado: 'listo' },
   // Las páginas de referencia que el CONTEXT.md nombra con su id, calculadas al
   // vuelo: no hay ninguna clave de almacenamiento que las guarde (§ references.js).
   // Se memorizan mientras los dos contextos y el índice sean los MISMOS objetos;
@@ -399,6 +401,19 @@ async function refreshTab() {
   // marcas, y con la misma identidad de página (Confluence reescribe su URL sin
   // que nadie se mueva).
   if (state.issueFields && !samePage(tab.url || '', state.issueFields.url)) state.issueFields = null
+  // Y los enlaces de la página, que son de ESA página: la pantalla de páginas
+  // base no se cierra al pasar a otra incidencia del mismo host, y los de la
+  // anterior puntuaban la de ahora con un motivo —«enlazada desde la
+  // descripción»— que era mentira (revisión adversaria de H10). Se sube el
+  // testigo para que una respuesta en vuelo tampoco los devuelva.
+  // (`state.tabUrl` sigue siendo la de ANTES: se reasigna más abajo.)
+  const otraPagina = !samePage(tab.url || '', state.tabUrl || '')
+  if (otraPagina) {
+    state.sourcesSuggest.token++
+    state.sourcesSuggest.links = []
+    state.sourcesSuggest.remote = null
+    state.sourcesSuggest.url = ''
+  }
   state.tabId = tab.id
 
   let site = parseAtlassianUrl(tab.url || '')
@@ -516,6 +531,10 @@ async function refreshTab() {
     return
   }
 
+  // Otra página del mismo sitio con la pantalla de páginas base abierta: las
+  // sugeridas se vuelven a calcular para la que hay delante. Va suelto y no
+  // encadenado con el arranque: es independiente de lo que venga detrás.
+  if (!changedHost && otraPagina && !$('screen-sources').classList.contains('hidden')) paintSuggestedSources()
   if (changedHost) await bootForSite()
   // Otro PROYECTO del mismo Jira: no hay arranque, pero el perfil que hay en
   // memoria es del de antes. `currentProfile()` ya no lo deja entrar en ningún
@@ -4329,7 +4348,10 @@ function computeSuggested() {
   if (!site) return { list: [], enlaces: [] }
   const index = sourcesIndex()
   const enlazado = linkedHost()
-  const enlaces = confluenceLinksIn(state.sourcesSuggest.links, state.sourcesSuggest.remote, {
+  // Cruzados por página donde se consumen, como los campos de la incidencia: lo
+  // leído de otra página no cuenta para ésta.
+  const deAqui = !!state.sourcesSuggest.url && samePage(state.sourcesSuggest.url, state.tabUrl)
+  const enlaces = confluenceLinksIn(deAqui ? state.sourcesSuggest.links : [], deAqui ? state.sourcesSuggest.remote : null, {
     site,
     linkedHost: enlazado,
     index,
@@ -4372,8 +4394,10 @@ async function paintSuggestedSources() {
   if (!state.site) return
   const token = ++state.sourcesSuggest.token
   const host = state.site.host
+  const pagina = state.tabUrl
   state.sourcesSuggest.links = []
   state.sourcesSuggest.remote = null
+  state.sourcesSuggest.url = ''
 
   const conPestana = state.tabId != null
   paintSuggestedList(computeSuggested().list, { estado: conPestana ? 'esperando' : 'sin-pestana' })
@@ -4408,8 +4432,12 @@ async function paintSuggestedSources() {
     return
   }
 
+  // Lo que se captura al pedir manda al volver (§8.22): si la pestaña ya está en
+  // otra página, estos enlaces son de la anterior y no se guardan.
+  if (!samePage(r.url || pagina, state.tabUrl)) return
   state.sourcesSuggest.links = Array.isArray(r.links) ? r.links : []
   state.sourcesSuggest.remote = r.remote || null
+  state.sourcesSuggest.url = r.url || pagina
   // Los campos vienen con los enlaces y son de la pantalla de ahora: se guardan
   // como los de `readIssueFieldsQuick`, con su URL, para que la puntuación por
   // familia no dependa de haber analizado antes.
@@ -4794,6 +4822,14 @@ function onSourcesKeydown(ev) {
 
 async function chooseSuggestion(s) {
   if (s.source === 'add') return addSourceById(s.id, s.path)
+  // Una sugerida cuyo título es un marcador («Página 98830281»: un enlace sin
+  // texto, o un enlace remoto sin título, a una página que el índice no conoce)
+  // se añade leyendo su título por el camino de siempre, que es lo que decía el
+  // plan: si no, el prompt del Análisis nombraba la página base como «Página N»
+  // (revisión adversaria de H10). El motivo se conserva para el registro.
+  if (s.source === 'suggested' && isPlaceholderTitle(s.title)) {
+    return addSourceById(s.id, s.path, { suggested: true, reason: reasonText(s.reasons) })
+  }
   // Una sugerida trae además POR QUÉ se propuso, y eso se apunta al añadirla:
   // en el registro queda por qué acabó ahí una página que Faro propuso.
   return addSource(
@@ -4809,12 +4845,15 @@ async function chooseSuggestion(s) {
  * quien la lea, se añade por su id, que es lo que el modelo necesita, y se
  * dice. Un 404 no se añade: no hay página.
  */
-async function addSourceById(id, path = '') {
+async function addSourceById(id, path = '', { suggested = false, reason = '' } = {}) {
+  // De dónde dice el registro que salió: una sugerida lo sigue siendo aunque su
+  // título haya habido que leerlo.
+  const desde = (from) => (suggested ? { from: 'suggested', reason } : { from })
   if (!state.site) return
   // En Jira, el índice que sabe de páginas es el del Confluence enlazado.
   const conocida = sourcesIndex()?.pages?.[id]
   if (conocida) {
-    return addSource({ id, title: conocida.title, path: conocida.path || path, spaceKey: conocida.spaceKey }, { from: 'index' })
+    return addSource({ id, title: conocida.title, path: conocida.path || path, spaceKey: conocida.spaceKey }, desde('index'))
   }
 
   // Desde un Jira Data Center la página es del Confluence enlazado, y se le
@@ -4823,7 +4862,7 @@ async function addSourceById(id, path = '') {
   const target = sourcesTarget()
   if (!target) {
     log.warn('Página base sin título', `${id} · sin Confluence al que preguntar`)
-    await addSource({ id, title: '', path }, { from: 'id' })
+    await addSource({ id, title: '', path }, desde('id'))
     setSourcesStatus(`Añadida por su id ${id}: desde este Jira no puedo leer su título.`)
     return
   }
@@ -4844,7 +4883,7 @@ async function addSourceById(id, path = '') {
     if (!enlazado) await mergePagesIntoIndex(r.pages)
     return addSource(
       { id, title: propia.title, path: enlazado ? '' : propia.url || path, spaceKey: propia.spaceKey },
-      { from: enlazado ? 'linked' : 'confluence' }
+      desde(enlazado ? 'linked' : 'confluence')
     )
   }
   if (r.status === 404) {
@@ -4854,7 +4893,7 @@ async function addSourceById(id, path = '') {
   }
   if (r.needsPermission) $('sources-perm').classList.remove('hidden')
   log.warn('Página base sin título', `${id} · ${r.reason}`)
-  await addSource({ id, title: '', path }, { from: 'id' })
+  await addSource({ id, title: '', path }, desde('id'))
   setSourcesStatus(`Añadida por su id ${id}: no he podido leer su título (${r.reason}).`)
 }
 

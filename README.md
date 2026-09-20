@@ -726,9 +726,12 @@ de que el modelo se porte bien:
   Jira se validan antes de entrar en la cabecera del prompt.
 - **Lo que Faro propone sale de tu navegador, no de la nube.** Para sugerir
   páginas base, Faro guarda en tu navegador —en `chrome.storage.local`, bajo
-  una clave por sitio— qué páginas usaste para analizar qué: claves de
-  incidencia, ids de página, títulos y rutas relativas. **Nunca el texto de
-  una página, de una incidencia ni de tu pregunta**, nunca personas, y nunca
+  una clave por sitio— qué páginas usaste para analizar qué: la clave de la
+  incidencia (o el id de la página), los ids y los títulos de las páginas base
+  que elegiste, y del ticket su tipo, su estado, su proyecto, sus componentes,
+  sus etiquetas y hasta ocho palabras de su título. **Nunca el texto de una
+  página, de una incidencia ni de tu pregunta**, nunca personas, nunca la ruta
+  de una página, y nunca
   sale del navegador: no viaja a opencode, no entra en ningún prompt y no lo
   ve ningún modelo. Son como mucho 60 análisis y caduca a los 90 días. Lo ves
   en la propia pantalla de páginas base —cada sugerencia dice de dónde sale— y
