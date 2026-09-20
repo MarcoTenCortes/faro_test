@@ -242,16 +242,14 @@ test('msgHandlers reconoce las formas reales de mandar: `type:` en varias línea
 const ATENDIDOS = (nombres) => nombres.map((name) => ({ name, handled: true, sent: false, where: ['bootstrap'] }))
 
 test('MSG_SIN_EMISOR_HASTA nombra los mensajes que esperan su hito, y sólo encoge', () => {
-  // De los cinco que sembró H7 ya faltan tres: `attachJqlResults` manda
-  // JQL_SEARCH y `loadSearchChipSources` FAVOURITE_FILTERS desde H8, y
-  // `restIndexFor` manda SPACE_PAGES desde H9. Dejarlos aquí sería ERROR («ya
-  // lo manda alguien»). La lista no puede crecer sin que el hito que la toca lo
-  // escriba.
-  eq(MSG_SIN_EMISOR_HASTA, {
-    RECENT_ISSUES: 'H11',
-    RECENT_PAGES: 'H11',
-  })
-  for (const cableado of ['JQL_SEARCH', 'FAVOURITE_FILTERS', 'SPACE_PAGES']) {
+  // De los cinco que sembró H7 ya no queda ninguno: `attachJqlResults` manda
+  // JQL_SEARCH y `loadSearchChipSources` FAVOURITE_FILTERS desde H8,
+  // `restIndexFor` manda SPACE_PAGES desde H9, y `readToday` manda RECENT_ISSUES
+  // y RECENT_PAGES desde H11. Dejar cualquiera de ellos aquí sería ERROR («ya lo
+  // manda alguien»). La lista no puede crecer sin que el hito que la toca lo
+  // escriba, y hoy está vacía.
+  eq(MSG_SIN_EMISOR_HASTA, {})
+  for (const cableado of ['JQL_SEARCH', 'FAVOURITE_FILTERS', 'SPACE_PAGES', 'RECENT_ISSUES', 'RECENT_PAGES']) {
     assert(!(cableado in MSG_SIN_EMISOR_HASTA), `ya está cableado: ${cableado} tenía que salir de la lista`)
   }
   for (const hito of Object.values(MSG_SIN_EMISOR_HASTA)) assert(/^H\d+$/.test(hito), 'cada entrada dice a qué hito espera: ' + hito)
@@ -489,20 +487,18 @@ test('checkDocs sobre el repo: un mensaje con receptor y sin emisor es aviso, nu
   // «Parar» de la tarjeta de navegación lo manda (`{ type: MSG.CANCEL_PLAN,
   // tabId }` en runPlan), así que no queda ningún mensaje huérfano. Si aparece
   // uno nuevo, esta línea lo dice con su nombre: cablea quien lo manda o bórralo.
-  // Los que H7 sembró sin interfaz no cuentan aquí: van en las notas mientras
-  // esperan a su hito, y salen de la lista en cuanto alguien los manda (H8 ya
-  // se llevó dos).
+  // Los que H7 sembró sin interfaz no cuentan aquí: iban en las notas mientras
+  // esperaban a su hito, y salían de la lista en cuanto alguien los mandaba.
   eq(avisos, [], 'ningún mensaje con receptor y sin emisor fuera de la lista')
+  // H11 cableó los dos últimos (`readToday` manda RECENT_ISSUES y RECENT_PAGES),
+  // así que la lista está VACÍA y el informe no trae ninguna nota. Si vuelve a
+  // haber una, es que un hito ha sembrado un receptor sin emisor y lo ha escrito
+  // en la lista; que el mecanismo entero sigue funcionando —nota con su hito,
+  // aviso sin ella, error en cuanto alguien lo manda— lo prueban las tres de
+  // `pendingSenders` de arriba, que no dependen del repo.
   const notas = r.notes.filter((w) => w.kind === 'msgs')
-  eq(notas.length, 1, 'los mensajes que esperan a su hito van juntos en una nota')
-  eq(
-    notas[0].items.map((item) => item.split(':')[0]).sort(),
-    Object.keys(MSG_SIN_EMISOR_HASTA)
-      .map((n) => `MSG.${n}`)
-      .sort(),
-    'y son exactamente los de la lista, ni uno más'
-  )
-  for (const item of notas[0].items) assert(/ y todavía nadie lo manda \(lo cablea H\d+\)$/.test(item), item)
+  eq(Object.keys(MSG_SIN_EMISOR_HASTA), [], 'la lista sólo encoge, y ya está vacía')
+  eq(notas, [], 'sin mensajes esperando a un hito, el informe no trae ninguna nota')
   // Que un mensaje de la lista ya cableado sea ERROR se prueba arriba con
   // `pendingSenders`; aquí basta con que hoy el repo no tenga ninguno.
   for (const e of r.errors) assert(e.kind !== 'msgs', 'ningún mensaje sin receptor, sin §5 ni cableado con la lista puesta: ' + JSON.stringify(e))

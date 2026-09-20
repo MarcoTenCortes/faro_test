@@ -9,6 +9,13 @@ import { test, eq, assert } from '../harness.js'
 import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { NOTE_KINDS } from '../../src/panel/notes.js'
+// Los números que el panel NO puede copiarse: el presupuesto del estado vacío
+// se reparte entre las sugerencias, las pastillas de H8 y las filas de «hoy»
+// (H11), y cada uno lo dice su módulo.
+import { SUGGESTION_COUNT } from '../../src/panel/suggestions.js'
+import { SEARCH_CHIP_COUNT } from '../../src/panel/search-chips.js'
+import { TODAY_LIMITS } from '../../src/panel/today.js'
+import { ESCAPE_CLOSES } from '../../src/panel/screens.js'
 
 const ROOT = join(import.meta.dirname, '..', '..')
 const HTML = readFileSync(join(ROOT, 'src/panel/panel.html'), 'utf8')
@@ -1208,6 +1215,9 @@ test('H5: cada pantalla lleva su cabecera, y el botón de cerrar vive dentro de 
     'screen-settings': ['btn-settings-close', 'Guardar y volver'],
     'screen-memory': ['btn-memory-close', 'Volver al chat'],
     'screen-sources': ['btn-sources-close', 'Volver al chat'],
+    // H11 trae la quinta pantalla de consulta y sigue la misma regla: se vuelve
+    // por la flecha de su cabecera, con el mismo id que pulsa Escape.
+    'screen-today': ['btn-today-close', 'Volver al chat'],
     'screen-log': ['btn-log-close', 'Volver al chat'],
     'setup-manual': ['btn-setup-back', 'Volver a las claves'],
   }
@@ -1358,7 +1368,10 @@ test('H5: cada observación dice de qué clase es, y la tarjeta viva se puede co
 })
 
 test('H5: el chat vacío sugiere según el producto Y la Skill, y reserva el sitio de lo que viene', () => {
-  assert(/import \{ suggestionsFor \} from '\.\/suggestions\.js'/.test(JS), 'la rama es pura y vive aparte')
+  // Desde H11 el panel importa además `SUGGESTION_COUNT`: el presupuesto del
+  // estado vacío se reparte entre estas tres filas, las de «hoy» y los chips, y
+  // el número de las sugerencias lo dice su módulo, no una copia en panel.js.
+  assert(/import \{ SUGGESTION_COUNT, suggestionsFor \} from '\.\/suggestions\.js'/.test(JS), 'la rama es pura y vive aparte')
   const vacio = JS.slice(JS.indexOf('function showWelcome'), JS.indexOf('function addUserMessage'))
   assert(/suggestionsFor\(state\.site, state\.skill, state\.sources\)/.test(vacio), 'con el sitio, la Skill y las páginas base')
   eq((vacio.match(/'suggestion'/g) || []).length, 1, 'y una sola fábrica de filas')
@@ -1457,7 +1470,11 @@ test('H5: el espejo del panel no copia la paleta, fuerza el tema con data-theme 
   // El veredicto, condición a condición y contadas: una regex de una sola línea
   // dejó de valer cuando H8 añadió las dos suyas, y lo que hay que impedir es
   // que alguna se caiga o que entre un término que lo ponga verde por su cuenta.
-  const veredicto = medida.slice(medida.indexOf('const ok ='), medida.indexOf('return { ok,'))
+  // El corte es hasta el `return {` a secas: desde H11 el resultado tiene doce
+  // claves y no cabe en una línea, y con el corte viejo («return { ok,») el
+  // indexOf daba -1, el trozo se comía el objeto devuelto entero y el
+  // `!veredicto.includes('chipRows')` de abajo fallaba por donde no era.
+  const veredicto = medida.slice(medida.indexOf('const ok ='), medida.indexOf('return {'))
   for (const condicion of [
     'presente',
     '!overflowX',
@@ -1483,7 +1500,7 @@ test('H5: el espejo del panel no copia la paleta, fuerza el tema con data-theme 
   // verdad— devolvía `ok: true` sin nada que medir (revisión adversaria de H5).
   assert(/\['#app', '\.top', '\.composer-meta'\]\.filter\(\(s\) => !doc\.querySelector\(s\)\)/.test(medida), 'las tres piezas tienen que existir')
   assert(/topHeight < 1 \|\| composerMetaHeight < 1/.test(medida), 'y medir algo: un 0 px no es «cabe de sobra»')
-  assert(/const presente = !motivo/.test(medida) && /return \{ ok, motivo,/.test(medida), 'y la ausencia sale con su motivo en el resultado')
+  assert(/const presente = !motivo/.test(medida) && /return \{\s*ok,\s*motivo,/.test(medida), 'y la ausencia sale con su motivo en el resultado')
 
   // Las dos conversaciones: la de Confluence de siempre y la de Jira, que es la
   // que enseña las ocho observaciones con su clase, la que no se pudo situar, la
@@ -1502,11 +1519,16 @@ test('H5: el espejo del panel no copia la paleta, fuerza el tema con data-theme 
   ]) {
     assert(espejo.includes(pieza), `el espejo enseña ${pieza}`)
   }
-  // El quinto botón de la cabecera es un HUECO: lo crea H11, así que el espejo
-  // pone un bulto del mismo tamaño y NO se adelanta a su id.
-  assert(espejo.includes("b.dataset.hueco = '1'"), 'el hueco del quinto botón se marca con data-hueco')
-  assert(!/['"]btn-today['"]/.test(espejo), 'y el espejo no se adelanta al id del botón de H11')
-  assert(!htmlIds.has('btn-today'), 'que tampoco está en panel.html')
+  // El quinto botón de la cabecera era un HUECO hasta H11, que lo llenó con
+  // «Qué mirar hoy». Desde entonces el espejo no fabrica ningún bulto: el botón
+  // viene en panel.html —que es lo que el espejo carga— y lo único que hay que
+  // pintarle es su insignia, que es lo que ahora enciende y apaga `setFifth`.
+  // Las dos formas del atributo: el `dataset.hueco` con el que se escribía y el
+  // `data-hueco` con el que se buscaba.
+  assert(!/data-hueco|dataset\.hueco/.test(espejo), 'el espejo ya no fabrica un hueco: el quinto botón es el de verdad')
+  assert(htmlIds.has('btn-today'), 'y ese quinto botón es «Qué mirar hoy» (H11)')
+  const quinto = espejo.slice(espejo.indexOf('function pintarQuinto()'), espejo.indexOf('function filasDeHoy()'))
+  assert(/\$\('today-count'\)/.test(quinto) && /\$\('btn-today'\)/.test(quinto), 'y lo que pinta son la insignia y el botón reales')
 })
 
 // Restauración por ventana y peso de la sesión (pasos 4 y 6 del anexo E, P6b).
@@ -2693,9 +2715,20 @@ test('H10: el historial se apunta al terminar un análisis, y sólo bajo el host
   }
 
   const apuntar = sinComentarios(JS.slice(JS.indexOf('async function recordAnalysisTurn'), JS.indexOf('function computeSuggested')))
+  // H11 partió esta guarda en dos: el DIARIO se apunta en cualquier Análisis que
+  // salga bien (la mayoría no llevan páginas base, y «lo analizaste el lunes con
+  // 6 observaciones» es la razón más fuerte de «Qué mirar hoy»), y el historial
+  // sigue pidiendo páginas base. Lo que no puede volver es que el historial se
+  // escriba sin ellas: por eso el segundo `assert` exige que el `return` siga
+  // estando ANTES de `historyEntry(`, que es quien construye la entrada.
   assert(
-    /if \(skill !== 'analisis' \|\| !ok \|\| !host \|\| !sources\?\.pages\?\.length\) return/.test(apuntar),
-    'sólo un Análisis con páginas base que salió bien'
+    /if \(skill !== 'analisis' \|\| !ok \|\| !host\) return/.test(apuntar),
+    'sólo un Análisis que salió bien'
+  )
+  assert(
+    apuntar.indexOf('if (!sources?.pages?.length) return') > 0 &&
+      apuntar.indexOf('if (!sources?.pages?.length) return') < apuntar.indexOf('historyEntry({'),
+    'y el historial, sólo con páginas base'
   )
   assert(
     /\(state\.site\?\.host \?\? state\.lastHost\) !== host \|\| state\.sessionID !== sessionID/.test(apuntar),
@@ -2791,4 +2824,550 @@ test('H10: el espejo enseña «Sugeridas» con sus motivos, en Confluence y en J
   // sección, así que la captura no puede enseñar las dos listas a la vez.
   assert(/\$\('sources-query'\)\.value = ''/.test(espejo), 'el campo de la vista previa va vacío')
   assert(!/sugerencias\.classList\.remove\('hidden'\)/.test(espejo), 'y el listbox de la búsqueda se queda plegado')
+})
+
+// ---------------------------------------------------------------------------
+// H11 · «Qué mirar hoy»
+// ---------------------------------------------------------------------------
+
+/** Todo el bloque de «hoy», que va al final de panel.js y sin comentarios. */
+const HOY = sinComentarios(JS.slice(JS.indexOf('function emptyToday()')))
+/** Un trozo del bloque, por sus dos funciones. Sin comentarios, como el resto. */
+const hoyEntre = (desde, hasta) => sinComentarios(JS.slice(JS.indexOf(desde), JS.indexOf(hasta)))
+
+test('H11: «Qué mirar hoy» se lee fuera del arranque, con sus dos interruptores y con testigo', () => {
+  // `refreshProfileSoon` NO es `async` (lanza y no espera, como `loadTodaySoon`):
+  // con «async» delante el corte era -1, el trozo llegaba hasta el final del
+  // fichero y el «no lo espera» de abajo se cumplía por vacío — hasta que H11
+  // escribió un `await loadToday(` legítimo en «Actualizar», a 300 000 caracteres
+  // de aquí, y lo destapó.
+  const arranque = sinComentarios(JS.slice(JS.indexOf('async function bootForSite'), JS.indexOf('function refreshProfileSoon')))
+  // Fuera del camino crítico (H6 P4): se lanza sin `await` y DESPUÉS de que el
+  // chat esté puesto. Con `await` aquí, seis peticiones a la API del sitio se
+  // meterían delante de la conversación.
+  assert(/\bloadTodaySoon\(testigo\)/.test(arranque), 'el arranque lanza «hoy» con su testigo')
+  assert(!/await loadToday\(/.test(arranque), 'y no lo espera')
+  assert(
+    arranque.includes('await restoreConversation(testigo)') &&
+      arranque.indexOf('await restoreConversation(testigo)') < arranque.indexOf('loadTodaySoon(testigo)'),
+    'y va después de restaurar la conversación'
+  )
+
+  const cargar = hoyEntre('async function loadToday', 'async function fetchTodayTarget')
+  assert(cargar.length > 1500, 'el cuerpo de loadToday existe entero')
+  // Los dos interruptores, en una sola condición: el maestro de las lecturas
+  // REST y el de esta función. Con cualquiera apagado no sale ni una petición.
+  assert(
+    /if \(!state\.settings\.restTools \|\| !state\.settings\.todaySuggestions\) return/.test(cargar),
+    'los dos interruptores paran la lectura entera'
+  )
+  // Y el de este SITIO, normalizado al leer: lo que no sea `true` no lo escribió
+  // Faro y no apaga nada.
+  assert(/if \(saved\?\.todayOff === true\) return/.test(cargar), 'y el interruptor por sitio, comparado con true')
+  // §8.22: el testigo del arranque y el host capturado, antes y después de las
+  // peticiones. Sin la segunda comprobación, lo leído de un sitio se pintaría
+  // encima de otro.
+  const guardas = cargar.match(/state\.bootToken !== testigo \|\| \(state\.site\?\.host \?\? state\.lastHost\) !== host/g) || []
+  assert(guardas.length >= 2, 'el testigo y el host se comprueban antes y después de leer, no una sola vez')
+  // La caché de sesión, con el plazo del módulo y no con un número a mano.
+  assert(/getTodayCache\(host\)/.test(cargar) && /TODAY_LIMITS\.cacheMs/.test(cargar), 'la caché de sesión con el plazo de TODAY_LIMITS')
+  assert(/saveTodayCache\(host, \{ fetchedAt, reads, errors: fallos \}\)/.test(cargar), 'se guarda lo LEÍDO, no lo ordenado')
+  assert(/if \(!force\) \{/.test(cargar), 'y «Actualizar» se la salta')
+  // Un objetivo caído no se lleva a los demás.
+  assert(/Promise\.allSettled\(targets\.map\(/.test(cargar), 'los objetivos van a la vez y ninguno tumba al otro')
+  assert(/todayTargets\(sitio, saved, \{ linked: state\.linkedContext, pageIds: ids \}\)/.test(cargar), 'a quién preguntar lo decide el módulo puro')
+  assert(/buildCandidates\(\{ reads, activity: diarios, here: todayHere\(\), now \}\)/.test(cargar), 'y los candidatos también')
+  // Los dos diarios: el de la pestaña y el del Confluence enlazado. Cada
+  // candidato se cruza con el SUYO (§8.22).
+  assert(/const diarios = \{ \[host\]: await getActivity\(host\) \}/.test(cargar) && /diarios\[enlazado\.host\] = await getActivity\(enlazado\.host\)/.test(cargar))
+  // Los avisos, por la tregua de rest-notice.js y no por una copia local.
+  assert(/restFailureDue\(state\.restWarned, e\.reason, e\.host, sessionID\)/.test(cargar), 'un fallo se dice una vez por host, sesión y motivo')
+  assert(/'Qué mirar hoy'/.test(cargar) && /'Qué mirar hoy no disponible'/.test(cargar), 'y los dos títulos del Registro')
+
+  // Es del SITIO: cambiar de host lo vacía. La intención de «Analizar» NO, que
+  // puede apuntar justo al host al que se acaba de llegar.
+  const refresco = sinComentarios(JS.slice(JS.indexOf('async function refreshTab'), JS.indexOf('async function bootForSite')))
+  assert(/state\.today = emptyToday\(\)/.test(refresco), 'cambiar de host vacía lo leído')
+  assert(!/state\.pendingIntent = null/.test(refresco.slice(0, refresco.indexOf('state.site = site'))), 'y no tira la intención de «Analizar»')
+})
+
+test('H11 SEGURIDAD: las lecturas de «hoy» van por plantilla, por su `kind` y sin salir del sitio', () => {
+  const leer = hoyEntre('async function readToday', 'function todayFailText')
+  assert(leer.length > 800, 'el cuerpo de readToday existe entero')
+  // Lo que viaja es un `kind` y sus parámetros validados, NUNCA el texto de una
+  // consulta: la JQL la escribe el content script con sus plantillas (§8.12).
+  assert(/type: MSG\.RECENT_ISSUES/.test(leer) && /type: MSG\.RECENT_PAGES/.test(leer), 'los dos mensajes de H7, cableados aquí')
+  const porPestana = leer.slice(leer.indexOf('const msg ='))
+  assert(porPestana.length > 300, 'el mensaje se construye en un objeto')
+  for (const prohibido of ['jql', 'cql', 'origin:', 'url:', 'path:', 'host:']) {
+    assert(!porPestana.includes(prohibido), 'el mensaje a la pestaña no puede llevar «' + prohibido + '»')
+  }
+  assert(/kind,/.test(porPestana), 'sólo el `kind` y sus parámetros')
+  assert(/projectKey: sitio\.projectKey/.test(porPestana) && /issueKey: sitio\.issueKey/.test(porPestana), 'del sitio CAPTURADO, no del de ahora')
+  // El Confluence enlazado: plantillas del módulo, nunca una cadena montada
+  // aquí, y sólo con el permiso YA concedido (nada de diálogos en segundo plano).
+  assert(/viewedCql\(/.test(leer) && /mineCql\(/.test(leer) && /idsCql\(ids\)/.test(leer), 'el CQL sale de las tres plantillas')
+  assert(!/`type ?=/.test(leer) && !/'type = page/.test(leer), 'y no se monta ninguna consulta a mano')
+  assert(
+    leer.indexOf('hasHostPermission(target.site.origin)') > 0 &&
+      leer.indexOf('hasHostPermission(target.site.origin)') < leer.indexOf('searchContent('),
+    'sin permiso sobre el dominio enlazado no se pide nada'
+  )
+  assert(/credentials: 'include'/.test(leer), 'y con las cookies de su sesión, que es lo que ya hacen las páginas base')
+  // Un `kind` sin su parámetro sería una consulta que el content script rechaza.
+  assert(/if \(!cql\) return \{ ok: false, reason: 'consulta no permitida' \}/.test(leer))
+
+  // Una vez cada uno en todo el panel: dos emisores del mismo mensaje acabarían
+  // mandando cosas distintas.
+  eq((JS.match(/MSG\.RECENT_ISSUES/g) || []).length, 1, 'MSG.RECENT_ISSUES se manda desde un solo sitio')
+  eq((JS.match(/MSG\.RECENT_PAGES/g) || []).length, 1, 'MSG.RECENT_PAGES también')
+
+  // Y nada de todo esto llama al modelo ni gasta un token (§8.20).
+  for (const prohibido of ['runTurn(', 'promptStructured(', 'createSession(', 'baseSystem(', 'skillSystem(', 'send()']) {
+    assert(!HOY.includes(prohibido), 'recomendar no puede llamar al modelo: «' + prohibido + '»')
+  }
+  // Ni entra en ningún prompt: ni en la petición del turno ni en los dos
+  // ficheros que los escriben.
+  const envio = sinComentarios(JS.slice(JS.indexOf('async function send('), JS.indexOf('function paintTurn(')))
+  const peticion = envio.slice(envio.indexOf('const peticion = {'), envio.indexOf('runTurn('))
+  for (const prohibido of ['state.today', 'activity', 'todayRows', 'buildCandidates']) {
+    assert(!peticion.includes(prohibido), 'la petición del turno no puede llevar «' + prohibido + '»')
+  }
+  for (const fichero of ['src/panel/prompts.js', 'src/panel/skills.js']) {
+    const fuente = readFileSync(join(ROOT, fichero), 'utf8')
+    assert(!/activity|todayRows|rankToday|analyzeQuestion/.test(fuente), 'un prompt no puede saber nada del diario: ' + fichero)
+  }
+})
+
+test('H11: abrir una fila pasa por el índice y validatePlan; una del enlazado abre pestaña nueva', () => {
+  const abrir = hoyEntre('async function openTodayItem', 'async function learnTodayItem')
+  assert(abrir.length > 600, 'el cuerpo de openTodayItem existe entero')
+  // El host ENLAZADO es otro origen: pestaña nueva y por `openUrl`, que sólo
+  // abre orígenes conocidos. Nunca `NAVIGATE_DIRECT`, que se llevaría de sitio
+  // la pestaña en la que el usuario está trabajando.
+  assert(/linkedSite\(state\.linkedContext\)/.test(abrir))
+  assert(/openUrl\(enlazado\.origin \+ canonicalPagePath\(enlazado, item\.id\)\)/.test(abrir), 'el enlazado se abre con canonicalPagePath')
+  assert(/\/\^\\d\{1,19\}\$\//.test(abrir), 'y con el id validado: de aquí sale una URL')
+  assert(!/NAVIGATE_DIRECT/.test(abrir), 'el enlazado nunca cambia de sitio la pestaña')
+  assert(
+    abrir.includes('validatePlan(') && abrir.indexOf('openUrl(enlazado.origin') < abrir.indexOf('validatePlan('),
+    'y se sale antes de llegar al plan: su id no está en el índice de este sitio'
+  )
+  // El host PROPIO: al índice primero y el destino por la barrera de siempre
+  // (§8.3). Aquí no se concatena ninguna URL.
+  assert(
+    abrir.includes('await learnTodayItem(item, site)') &&
+      abrir.indexOf('await learnTodayItem(item, site)') < abrir.indexOf('validatePlan('),
+    'lo que se abre se funde en el índice ANTES de validar el plan'
+  )
+  assert(/validatePlan\(\s*\{ navigate: true, mode: 'direct', destination: \{ kind: item\.kind, id: item\.id \} \}/.test(abrir))
+  assert(/index: state\.index, origin: site\.origin, host: site\.host, here: state\.tabUrl, site/.test(abrir))
+  assert(/runPlan\(r\.plan, 'direct', caja\)/.test(abrir), 'y lo lanza el mismo runPlan de siempre')
+  // Todo fallo silencioso tiene contraparte visible (§8.14): sin tarjeta donde
+  // colgarlo, al chat.
+  assert(/showNotice\(aviso, true, \{ force: true \}\)/.test(abrir) && /announce\(aviso\)/.test(abrir))
+  assert(/if \(!card && caja\.textContent\) showNotice\(caja\.textContent, true, \{ force: true \}\)/.test(abrir))
+
+  // Y se funde con las MISMAS funciones que la lista de una búsqueda y la
+  // pantalla de páginas base: una tercera forma de meter algo en el índice sería
+  // una tercera forma de equivocarse.
+  const aprender = hoyEntre('async function learnTodayItem', 'async function analyzeTodayItem')
+  assert(/harvestFromSearch\(\[\{ key: item\.id, summary: item\.title \}\], \{ site, index: state\.index \}\)/.test(aprender))
+  assert(/mergePagesIntoIndex\(\[\{ id: item\.id, title: item\.title \}\]\)/.test(aprender))
+  // Es un clic fuera de un turno, así que se escribe aquí: `persistIndex()` sólo
+  // corre al final de uno (P3 de H6).
+  assert(/saveIndex\(site\.host, index\)/.test(aprender) && !/markIndexDirty\(/.test(aprender))
+})
+
+test('H11: «Analizar» navega y deja la pregunta escrita, y nunca la manda', () => {
+  const analizar = hoyEntre('async function analyzeTodayItem', 'async function consumePendingIntent')
+  assert(/analyzeQuestion\(item, diario\)/.test(analizar), 'la pregunta la escribe el módulo puro, con el diario de ese host')
+  // La intención se apunta ANTES de navegar: `refreshTab` corre en cuanto la
+  // pestaña cambia, y apuntarla después sería llegar tarde a la página.
+  assert(
+    analizar.includes('await openTodayItem(item)') &&
+      analizar.indexOf('state.pendingIntent = {') < analizar.indexOf('await openTodayItem(item)'),
+    'la intención se apunta antes de navegar'
+  )
+  assert(/if \(!abierto\) state\.pendingIntent = null/.test(analizar), 'y se tira si el viaje no sale')
+
+  const consumir = hoyEntre('async function consumePendingIntent', 'async function dismissTodayItem')
+  assert(/Date\.now\(\) - intent\.at > TODAY_LIMITS\.intentMs/.test(consumir), 'caduca con el plazo del módulo')
+  assert(/site\.host !== intent\.host/.test(consumir), 'y sólo en el host que la dejó')
+  // Host Y identificador: una clave que es prefijo de otra no es la misma
+  // página (M3), y el id se reconstruye con la validadora.
+  assert(/validIssueKey\(site\.issueKey\) === intent\.id/.test(consumir))
+  assert(/String\(site\.pageId \|\| currentPageId\(state\.index, state\.tabUrl\) \|\| ''\) === intent\.id/.test(consumir))
+  assert(/setSkill\('analisis'\)/.test(consumir) && /saveSite\(site\.host, \{ skill: 'analisis' \}\)/.test(consumir), 'la Skill se fija y se guarda')
+  assert(/el\.input\.value = intent\.question/.test(consumir) && /el\.input\.focus\(\)/.test(consumir), 'y la pregunta se DEJA en el cuadro')
+  assert(/announce\(/.test(consumir), 'y se dice en voz alta: un cuadro que se rellena solo, sin voz, es magia (A2)')
+  assert(!/\bsend\(/.test(consumir), 'Faro NUNCA manda una pregunta por su cuenta (§8.20)')
+
+  // Se consume en `refreshTab`, y lo ÚLTIMO: `bootForSite` fija la Skill
+  // guardada del sitio y antes la pisaría.
+  const refresco = sinComentarios(JS.slice(JS.indexOf('async function refreshTab'), JS.indexOf('async function bootForSite')))
+  assert(/await consumePendingIntent\(site\)/.test(refresco))
+  assert(
+    refresco.includes('await bootForSite()') &&
+      refresco.lastIndexOf('await bootForSite()') < refresco.indexOf('await consumePendingIntent(site)'),
+    'después de cualquier arranque, que fija la Skill del sitio'
+  )
+})
+
+test('H11: el panel apunta en el diario sólo lo que sólo él sabe, y se borra con el sitio', () => {
+  // El único escritor de «visto» es el service worker (docs/PLAN.md §3.1): el
+  // panel no apunta ninguna visita.
+  assert(!/'seen'/.test(HOY) && !/event: 'seen'/.test(JS), 'el panel no apunta visitas: de eso hay un solo escritor')
+
+  // Las tres condiciones son las MISMAS que aplica el worker antes de apuntar.
+  const apuntarDiario = hoyEntre('async function noteActivity', 'async function noteAnalyzed')
+  assert(/!state\.settings\.restTools \|\| !state\.settings\.todaySuggestions/.test(apuntarDiario), 'los dos interruptores')
+  assert(/if \(!saved\?\.configured\) return null/.test(apuntarDiario), 'y sólo hosts configurados')
+  assert(/recordActivity\(host, evento\)/.test(apuntarDiario) && /\.catch\(/.test(apuntarDiario), 'y el diario no puede tumbar nada')
+
+  // Un análisis: cuándo, con cuántas observaciones y de qué familia.
+  const analizado = hoyEntre('async function noteAnalyzed', 'function observationCount')
+  assert(/event: 'analyzed'/.test(analizado))
+  assert(/notes: observationCount\(answer, anchors\)/.test(analizado), 'las observaciones, contadas de la respuesta')
+  assert(/issueFamily\(issue, \{ summary: titulo \}\)/.test(analizado), 'y la familia, con la misma función que elige qué pedirle al modelo')
+  assert(!/path:/.test(analizado), 'la ruta la apunta la VISITA, que es quien sabe de qué URL vino')
+  const contar = sinComentarios(JS.slice(JS.indexOf('function observationCount')))
+  assert(/normalizeNumbering\(answer, \{ expected: expectedCount\(anchors\), shortAnswer: NOTE_LIMITS\.shortAnswer \}\)/.test(contar))
+  assert(/observationNumbers\(adaptada\.prose, anchors\)\.numeros\.length/.test(contar), 'la misma escalera que offerNotes')
+
+  // El gancho del turno apunta el diario para CUALQUIER Análisis, también sin
+  // páginas base: la mayoría no las llevan.
+  const apuntar = sinComentarios(JS.slice(JS.indexOf('async function recordAnalysisTurn'), JS.indexOf('function computeSuggested')))
+  assert(
+    apuntar.indexOf('await noteAnalyzed({') > 0 && apuntar.indexOf('await noteAnalyzed({') < apuntar.indexOf('if (!sources?.pages?.length) return'),
+    'el diario se apunta antes del corte por páginas base'
+  )
+  const envio = sinComentarios(JS.slice(JS.indexOf('async function send('), JS.indexOf('function paintTurn(')))
+  const llamada = envio.slice(envio.indexOf('recordAnalysisTurn('), envio.indexOf("cron.mark('pintar')"))
+  assert(/\banswer,/.test(llamada) && /\banchors,/.test(llamada), 'y recibe la prosa y el bloque de anclas para contarlas')
+
+  // Una página base elegida se apunta bajo el host de la PÁGINA: desde un Jira
+  // Data Center, el del Confluence enlazado (§8.22).
+  const alta = sinComentarios(JS.slice(JS.indexOf('async function addSource('), JS.indexOf('async function removeSource')))
+  assert(/noteActivity\(linkedHost\(\) \|\| state\.site\.host, \{/.test(alta) && /event: 'source'/.test(alta))
+
+  // «Ya lo he visto»: se guarda cuándo estaba cambiada la cosa, no cuándo se
+  // descartó, que es lo que la hace volver sola.
+  const descartar = hoyEntre('async function dismissTodayItem', 'async function clearMyActivity')
+  assert(/dismissItem\(actual, clave, item\.updatedAt, \{ host \}\)/.test(descartar))
+  assert(/saveActivity\(host, /.test(descartar) && /activityKey\(item\?\.kind, item\?\.id\)/.test(descartar))
+
+  // «Borrar mi actividad» se lleva el diario y su caché, también los del
+  // Confluence enlazado: sus páginas salen en esta misma lista.
+  const borrar = hoyEntre('async function clearMyActivity', 'async function noteActivity')
+  assert(/clearActivity\(host\)/.test(borrar) && /clearTodayCache\(host\)/.test(borrar))
+  assert(/clearActivity\(enlazado\.host\)/.test(borrar), 'y el del enlazado, que desde Jira nadie más va a borrar')
+  assert(/state\.today = emptyToday\(\)/.test(borrar))
+
+  // Y «Olvidar este sitio» también: `forgetSite` borra la clave del almacén.
+  const olvidarSitio = sinComentarios(JS.slice(JS.indexOf("$('btn-forget').addEventListener"), JS.indexOf("$('mem-enabled').addEventListener")))
+  assert(/clearTodayCache\(state\.site\.host\)/.test(olvidarSitio) && /state\.today = emptyToday\(\)/.test(olvidarSitio))
+  const almacen = readFileSync(join(ROOT, 'src/shared/storage.js'), 'utf8')
+  assert(/STORAGE_KEYS\.activity\(host\)/.test(almacen), 'y forgetSite, su clave del almacén')
+})
+
+// -------------------------------------- «Qué mirar hoy»: la interfaz (H11, paso 9)
+
+/** El trozo de la interfaz de «hoy», sin comentarios y acotado por CÓDIGO. */
+const HOY_UI = sinComentarios(JS.slice(JS.indexOf('const EMPTY_LIMITS = {')))
+const uiEntre = (desde, hasta) => sinComentarios(JS.slice(JS.indexOf(desde), JS.indexOf(hasta)))
+
+test('H11: el quinto botón de la cabecera es «Qué mirar hoy», con su insignia y su pantalla', () => {
+  // El hueco que H5 dejó anotado. Las acciones no se encogen, así que quien
+  // cede a 320 px sigue siendo el chip de ubicación (pinado en el test de H5).
+  const acciones = HTML.slice(HTML.indexOf('<div class="top-actions">'), HTML.indexOf('</header>'))
+  eq((acciones.match(/class="icon-btn"/g) || []).length, 5, 'cinco botones en la cabecera, ni uno más')
+  assert(
+    acciones.indexOf('id="btn-new-session"') < acciones.indexOf('id="btn-today"') &&
+      acciones.indexOf('id="btn-today"') < acciones.indexOf('id="btn-memory"'),
+    '«Qué mirar hoy» va entre «Nueva sesión» y «Memoria»'
+  )
+  // El número es `aria-hidden` y quien lo dice es el NOMBRE del botón: un
+  // `aria-label` fijo tapa al `title`, y un lector de pantalla oiría lo mismo
+  // con tres novedades y con ninguna (la regresión de H5 con #btn-memory).
+  assert(/id="today-count"/.test(acciones) && /class="badge hidden" id="today-count" aria-hidden="true"/.test(acciones))
+  assert(acciones.indexOf('id="today-count"') > acciones.indexOf('id="btn-today"'), 'la insignia vive dentro del botón')
+
+  const insignia = uiEntre('function paintTodayBadge()', 'function paintTodayBlock(')
+  assert(/const n = todayEnabled\(\) \? todayCount\(\) : 0/.test(insignia), 'cuenta lo NUEVO, y sólo si está encendido')
+  assert(/insignia\.classList\.toggle\('hidden', !n\)/.test(insignia), 'sin novedades no queda un hueco vacío')
+  assert(/boton\.title = nombre/.test(insignia) && /boton\.setAttribute\('aria-label', nombre\)/.test(insignia), 'el tooltip y el nombre dicen lo mismo')
+  for (const texto of ['Qué mirar hoy: ${n} ${n === 1 ? \'novedad\' : \'novedades\'}', "'Qué mirar hoy'"]) {
+    assert(insignia.includes(texto), 'falta el nombre del botón: ' + texto)
+  }
+  assert(/boton\.classList\.toggle\('on', n > 0\)/.test(insignia), 'y con algo que mirar el botón se enciende')
+
+  // La pantalla se abre desde el botón y se cierra con la flecha de su cabecera
+  // (el mapa de Escape lo pina screens.test.js).
+  assert(/\$\('btn-today'\)\.addEventListener\('click', \(\) => showTodayScreen\(\)/.test(JS))
+  assert(/showScreen\('screen-today'\)/.test(JS), 'y es una pantalla como las demás')
+  assert(ESCAPE_CLOSES['screen-today'] === 'btn-today-close', 'Escape la cierra por su flecha')
+})
+
+test('H11: el chat vacío enseña hasta tres filas, y si no caben se queda en una línea', () => {
+  // La caja sigue naciendo vacía y oculta: sin nada que enseñar, el estado
+  // vacío es byte a byte el de antes de H11.
+  const vacio = sinComentarios(JS.slice(JS.indexOf('function showWelcome'), JS.indexOf('function paintSearchChips')))
+  assert(/'today hidden'/.test(vacio), 'la caja de «hoy» nace oculta, como la dejó H5')
+  assert(!/paintTodayBlock\(/.test(vacio), 'y no la llena showWelcome: la llenan los chips, que saben cuántos son')
+
+  // El presupuesto se reparte con las pastillas de H8, así que quien las pinta
+  // dice cuántas hay. Va ANTES de su salida temprana: sin pastillas también hay
+  // que repintar «hoy».
+  const chips = sinComentarios(JS.slice(JS.indexOf('function paintSearchChips'), JS.indexOf('async function loadSearchChipSources')))
+  assert(/paintTodayBlock\(null, \{ chips: chips\.length \}\)/.test(chips), 'los chips repintan «hoy» con su cuenta')
+  assert(
+    chips.indexOf('paintTodayBlock(null,') < chips.indexOf('if (!chips.length) return'),
+    'y antes de la salida por «no hay chips», o el bloque no se pintaría nunca sin ellos'
+  )
+
+  const bloque = uiEntre('function paintTodayBlock(', "function todayMoreButton(")
+  assert(/const caja = box \|\| el\.chat\.querySelector\('\.empty \.today'\)/.test(bloque))
+  assert(/if \(!caja\?\.isConnected\) return/.test(bloque), 'el chat pudo repintarse entre que se pidió la lista y llegó')
+  // Sin candidatos y sin diario, el chat vacío es byte a byte el de antes de
+  // H11: la caja se vacía, se esconde y no se le cuelga nada.
+  assert(/caja\.textContent = ''/.test(bloque), 'la caja se vacía antes de decidir nada')
+  assert(/caja\.classList\.toggle\('hidden', !todas\.length\)/.test(bloque), 'sin filas, la caja se queda oculta y vacía')
+  assert(/if \(!todas\.length\) return/.test(bloque), 'y ahí se acaba: ni rótulo, ni «Ver todo», ni una línea')
+  assert(/const todas = todayEnabled\(\) \? todayRows\(\) : \[\]/.test(bloque), 'y con los interruptores apagados no hay filas')
+  assert(/todas\.slice\(0, TODAY_LIMITS\.emptyRows\)/.test(bloque), 'el tope del estado vacío es el del módulo, no un 3 a mano')
+  assert(!/showWelcome\(\)/.test(bloque), 'se repinta sólo esta caja: repintar el estado vacío volvería a anunciarlo (A2)')
+  assert(/`Qué mirar hoy \(\$\{todas\.length\}\)`/.test(bloque), 'degradado: una línea con cuántas hay')
+  assert(/`Ver todo \(\$\{todas\.length\}\)`/.test(bloque), 'y entero: las filas y «Ver todo»')
+
+  // El criterio no mide nada —el panel puede estar oculto al pintar—: cuenta
+  // piezas. Con las cuatro pastillas que puede ofrecer H8 ya no cabe.
+  const cabe = uiEntre('function emptyFits(', 'function paintTodayUi()')
+  assert(/const deHoy = rows > 0 \? rows \+ 2 : 0/.test(cabe), 'las filas más su rótulo y su «Ver todo»')
+  assert(/1 \+ Math\.ceil\(chips \/ EMPTY_LIMITS\.chipsPerLine\)/.test(cabe), 'y las pastillas, que envuelven de dos en dos')
+  assert(/deHoy \+ SUGGESTION_COUNT \+ dePastillas <= EMPTY_LIMITS\.lines/.test(cabe), 'contra el presupuesto, con las tres sugerencias dentro')
+  const lineas = Number(/lines: (\d+)/.exec(HOY_UI)[1])
+  const porLinea = Number(/chipsPerLine: (\d+)/.exec(HOY_UI)[1])
+  const entra = (rows, pastillas) =>
+    (rows > 0 ? rows + 2 : 0) + SUGGESTION_COUNT + (pastillas > 0 ? 1 + Math.ceil(pastillas / porLinea) : 0) <= lineas
+  assert(entra(TODAY_LIMITS.emptyRows, 0), 'en Confluence, sin pastillas, las tres filas caben')
+  assert(!entra(TODAY_LIMITS.emptyRows, SEARCH_CHIP_COUNT), 'con todas las pastillas de H8, no: una línea')
+})
+
+test('H11: cada fila dice de qué es y por qué, y sus botones también', () => {
+  const fila = uiEntre('function todayRowNode(item,', 'async function showTodayScreen()')
+  // Todo con textContent: los títulos son texto de Jira y de Confluence (§8.12).
+  assert(/title\.textContent = item\.title/.test(fila) && /why\.textContent = item\.why/.test(fila))
+  assert(/kind\.textContent = item\.kind === 'jira-issue' \? item\.id : 'Confluence'/.test(fila), 'la clave de la incidencia, o de qué producto es')
+  // El porqué lo escribió today.js: aquí no se compone ninguna razón.
+  assert(!/reasonText\(/.test(HOY_UI) && !/groupOf\(/.test(HOY_UI), 'el motivo y el grupo vienen hechos de la puntuación')
+
+  // Nombres accesibles con el título dentro: sin eso, un lector de pantalla lee
+  // ocho «Abrir, botón» seguidos.
+  for (const nombre of ['`Abrir «${item.title}»`', '`Analizar «${item.title}»`', '`Ya lo he visto: «${item.title}»`']) {
+    assert(fila.includes(nombre), 'falta el nombre accesible: ' + nombre)
+  }
+  // Compacta (chat vacío): la fila entera abre. Completa (pantalla): tres acciones.
+  assert(/row\.addEventListener\('click', \(\) => openTodayItem\(item\)/.test(fila), 'la fila compacta abre lo suyo')
+  assert(/openTodayItem\(item, \{ card: row \}\)/.test(fila), 'y «Abrir» cuelga de la fila lo que falle (§8.14)')
+  assert(/x\.addEventListener\('click', \(\) => forgetTodayRow\(item\)/.test(fila))
+
+  // «Analizar» fija la Skill y escribe en el cuadro: con un turno en vuelo, no.
+  assert(/analizar\.className = 'ghost small ' \+ NEEDS_IDLE/.test(fila) && /analizar\.disabled = state\.streaming/.test(fila))
+  const analizar = uiEntre('async function analyzeFromToday(item)', 'async function forgetTodayRow(item)')
+  assert(/if \(state\.streaming\) \{/.test(analizar) && /showNotice\('Espera a que termine la respuesta\.'/.test(analizar))
+  assert(/await analyzeTodayItem\(item\)/.test(analizar), 'la intención y el viaje los pone la lógica de C')
+  assert(/hideScreens\(\)/.test(analizar), 'y la pantalla se cierra: la pregunta se escribe DEBAJO de ella')
+  // Del camino bueno sólo se sale cerrando: un `return` de más ahí dejaría la
+  // pregunta escrita bajo una pantalla que la tapa, con `#app` inerte.
+  eq(
+    (analizar.slice(analizar.indexOf('const abierto =')).match(/\breturn\b/g) || []).length,
+    1,
+    'el único return es el del fallo'
+  )
+  assert(!/\bsend\b/.test(analizar), 'Faro nunca la manda por su cuenta (§8.20)')
+
+  // Los NEEDS_IDLE de la pantalla no están en el chat, así que `setStreaming`
+  // los recorre aparte: si no, nacerían desactivados y ahí se quedarían.
+  const streaming = sinComentarios(JS.slice(JS.indexOf('function setStreaming(on)'), JS.indexOf('function showBusy(')))
+  assert(/for \(const b of el\.chat\.querySelectorAll\('\.' \+ NEEDS_IDLE\)\) b\.disabled = on/.test(streaming), 'los del chat, como en H6')
+  assert(/for \(const b of \$\('screen-today'\)\.querySelectorAll\('\.' \+ NEEDS_IDLE\)\) b\.disabled = on/.test(streaming), 'y los de la pantalla de «hoy»')
+
+  // La lista, por grupos y con el porqué de que venga corta.
+  const pantalla = uiEntre('async function paintToday(', 'function todayGroupTitle(grupo)')
+  assert(/const TODAY_GROUPS = \['cambio', 'tuyo', 'proyecto'\]/.test(HOY_UI), 'los tres grupos, en el orden en que se leen')
+  assert(/for \(const grupo of TODAY_GROUPS\)/.test(pantalla) && /h\.className = 'today-group'/.test(pantalla))
+  assert(/for \(const aviso of state\.today\.notices\) lista\.appendChild\(noticeNode\(aviso, true\)\)/.test(pantalla), 'y los avisos con tregua de rest-notice.js')
+  const titulos = uiEntre('function todayGroupTitle(grupo)', 'function setTodayStatus(texto)')
+  assert(/'Cambió desde que lo miraste'/.test(titulos) && /'Lo tuyo'/.test(titulos) && /`Nuevo en \$\{ambito\}`/.test(titulos))
+  assert(/state\.site\?\.projectKey \|\| state\.site\?\.spaceKey/.test(titulos), 'el ámbito sale del sitio, ya validado por parseAtlassianUrl')
+
+  // Y todo lo que el JS pinta se ve: la REGLA con su llave, no el nombre suelto
+  // (`.today-loquesea` contiene `.today` y dejaría el pin en verde).
+  for (const clase of ['today', 'today-kicker', 'today-group', 'today-row', 'today-main', 'today-kind', 'today-title', 'today-why', 'today-actions', 'today-more']) {
+    assert(new RegExp('\\.' + clase + '[\\s,{]').test(CSS_LIMPIO), 'clase sin estilo: ' + clase)
+  }
+  assert(/\.today-row\.new\s*\{[^}]*inset 2px 0 0 var\(--mark\)/.test(CSS_LIMPIO), 'lo que ha cambiado desde que miraste lleva el filete de la marca')
+})
+
+test('H11: la pantalla dice qué guarda y dónde, y se puede apagar, actualizar y borrar', () => {
+  // La promesa de §8.20, escrita donde se ve y con las cuentas de este sitio.
+  const diario = uiEntre('async function paintTodayActivity()', 'function activityCounts(activity)')
+  assert(/\$\('today-activity-text'\)\.textContent =/.test(diario))
+  assert(/ACTIVITY_LIMITS\.maxAgeDays/.test(diario), 'los días los dice el módulo del diario, no un 30 a mano')
+  for (const frase of ['no sale de aquí', 'no entra en nada de ', 'Borrarlo no borra nada en Jira ni en Confluence']) {
+    assert(diario.includes(frase), 'falta la promesa: ' + frase)
+  }
+  const cuentas = uiEntre('function activityCounts(activity)', 'async function analyzeFromToday(item)')
+  assert(/entradas: items\.length/.test(cuentas) && /i\?\.analyzedAt/.test(cuentas) && /i\?\.sourceAt/.test(cuentas))
+
+  // El interruptor por sitio: se lee normalizado y se guarda en el registro del
+  // sitio, como `skill` o `model`.
+  const abrir = uiEntre('async function showTodayScreen()', 'async function paintToday(')
+  assert(/\$\('today-off'\)\.checked = saved\?\.todayOff === true/.test(abrir), 'normalizado al leer: lo que no sea true no lo escribió Faro')
+  const apagar = uiEntre('async function setTodayOff(off)', 'function paintTodaySetting()')
+  assert(/saveSite\(host, \{ todayOff: !!off \}\)/.test(apagar) && /state\.today = emptyToday\(\)/.test(apagar))
+  assert(/await refreshToday\(\)/.test(apagar), 'y encenderlo vuelve a mirar en el acto')
+
+  // La insignia cuenta lo nuevo desde que se MIRÓ la lista, y eso sobrevive a
+  // cerrar el panel: si no, cada apertura lo contaría todo como novedad.
+  const visto = uiEntre('async function markTodaySeen()', 'function todaySeenAt(saved)')
+  assert(/state\.today\.seenAt = Date\.now\(\)/.test(visto) && /saveSite\(host, \{ todaySeenAt: state\.today\.seenAt \}\)/.test(visto))
+  const normaliza = uiEntre('function todaySeenAt(saved)', '/**\n * Abrir una fila.')
+  assert(/Number\.isFinite\(at\) && at > 0 \? at : 0/.test(normaliza), 'normalizado al leer, como todo lo que viene del almacén')
+  const cargar = sinComentarios(JS.slice(JS.indexOf('async function loadToday'), JS.indexOf('async function fetchTodayTarget')))
+  assert(/state\.today\.seenAt = todaySeenAt\(saved\)/.test(cargar), 'y se recupera con el sitio')
+  assert(
+    abrir.indexOf('const desde = state.today.seenAt') < abrir.indexOf('await markTodaySeen()'),
+    'lo nuevo se marca contra la visita ANTERIOR: abrir la pantalla no puede borrar la marca que la explica'
+  )
+
+  // «Actualizar» se salta la caché; «Borrar mi actividad» se lleva el diario y
+  // su caché (y el del Confluence enlazado), y las dos repintan.
+  const actualizar = uiEntre('async function refreshToday()', 'async function forgetTodayActivity()')
+  assert(/await loadToday\(\{ force: true \}\)/.test(actualizar) && /btn\.disabled = true/.test(actualizar))
+  const borrar = uiEntre('async function forgetTodayActivity()', 'async function setTodayOff(off)')
+  assert(/await clearMyActivity\(\)/.test(borrar) && /paintTodayBadge\(\)/.test(borrar))
+
+  // El permiso se pide desde aquí, porque esta pantalla tapa la tarjeta del chat.
+  const permiso = uiEntre('async function todayMissingPermission()', 'async function paintTodayActivity()')
+  assert(/hasHostPermission\(site\.origin\)/.test(permiso) && /linkedSite\(state\.linkedContext\)/.test(permiso), 'el del sitio o el del Confluence enlazado')
+  assert(/requestHostPermission\(falta\)/.test(permiso) && /manualPermissionText\(falta\.origin\)/.test(permiso))
+  assert(/fila\.classList\.toggle\('hidden', !falta\)/.test(permiso), 'y la fila sólo sale si de verdad falta')
+
+  // El Registro: cuentas y motivos, nunca títulos ni ids (§8.20).
+  const estado = sinComentarios(JS.slice(JS.indexOf('async function paintState()'), JS.indexOf('async function treeDebug')))
+  assert(/add\(\s*'actividad',/.test(estado) && /add\(\s*'sugerencias',/.test(estado))
+  assert(/todaySummary\(\{ items: todayRows\(\), errors: state\.today\.errors \}\)/.test(estado), 'la línea la escribe la función pura que no imprime títulos')
+  const filasEstado = estado.slice(estado.indexOf("add(\n    'actividad',"))
+  assert(!/\.title\b/.test(filasEstado) && !/item\.id/.test(filasEstado), 'ni un título ni un id en la pantalla de estado')
+})
+
+test('H11: la casilla de Ajustes cuelga del interruptor maestro, y todo se aplica en caliente', () => {
+  const ajustes = HTML.slice(HTML.indexOf('id="screen-settings"'), HTML.indexOf('id="screen-memory"'))
+  assert(
+    ajustes.indexOf('id="set-rest-tools"') < ajustes.indexOf('id="set-today"'),
+    'la casilla de «hoy» va debajo de la de las lecturas REST, que es de quien depende'
+  )
+  assert(htmlIds.has('set-today-hint'), 'y la explicación de por qué no se puede marcar')
+
+  const pantalla = sinComentarios(JS.slice(JS.indexOf('async function showSettingsScreen'), JS.indexOf('function setStatus')))
+  assert(/\$\('set-today'\)\.checked = state\.settings\.todaySuggestions/.test(pantalla), 'al abrir refleja lo guardado')
+  assert(/paintTodaySetting\(\)/.test(pantalla), 'y si el maestro está apagado, lo dice')
+  const cerrar = sinComentarios(JS.slice(JS.indexOf("$('btn-settings-close')"), JS.indexOf("$('btn-reindex')")))
+  assert(/todaySuggestions: \$\('set-today'\)\.checked,/.test(cerrar), 'al cerrar se guarda, como restTools')
+
+  // Es lo último del fichero: se corta desde su firma hasta el final.
+  const casilla = sinComentarios(JS.slice(JS.indexOf('function paintTodaySetting()')))
+  assert(/\$\('set-today'\)\.disabled = !maestro/.test(casilla) && /\$\('set-today-hint'\)\.classList\.toggle\('hidden', maestro\)/.test(casilla))
+  const eventos = sinComentarios(JS.slice(JS.indexOf('function wireEvents'), JS.indexOf('async function saveKeys')))
+  assert(/\$\('set-rest-tools'\)\.addEventListener\('change', paintTodaySetting\)/.test(eventos), 'y se apaga en cuanto se apaga el de arriba')
+  for (const id of ['btn-today-close', 'btn-today-refresh', 'btn-today-forget', 'today-off', 'btn-today-permission']) {
+    assert(eventos.includes(`$('${id}').addEventListener`), 'sin cablear: ' + id)
+  }
+
+  // En caliente, los dos sentidos: apagar el interruptor se lleva la insignia y
+  // el bloque del chat vacío sin cambiar de sitio, y encenderlo los devuelve.
+  const aplicar = sinComentarios(JS.slice(JS.indexOf('function applySettingsToUi'), JS.indexOf('function wireEvents')))
+  assert(/paintTodayUi\(\)/.test(aplicar))
+  const pintarTodo = uiEntre('function paintTodayUi()', 'function paintTodayBadge()')
+  assert(/paintTodayBadge\(\)/.test(pintarTodo) && /paintTodayBlock\(\)/.test(pintarTodo))
+  assert(/if \(!\$\('screen-today'\)\.classList\.contains\('hidden'\)\) paintToday\(\)/.test(pintarTodo), 'y la pantalla, si está delante')
+
+  // Es del SITIO: cambiar de host vacía la lista y la insignia con ella.
+  const refresco = sinComentarios(JS.slice(JS.indexOf('async function refreshTab'), JS.indexOf('async function bootForSite')))
+  assert(
+    refresco.indexOf('state.today = emptyToday()') < refresco.indexOf('paintTodayUi()'),
+    'primero se vacía lo leído y después se repinta: un «3» de otro host es mentira'
+  )
+  // Y lo que llega tarde se pinta cuando llega, sin esperar a nadie.
+  const soon = uiEntre('function loadTodaySoon(testigo)', '/**\n * Lee lo que ha cambiado')
+  assert(/\.finally\(\(\) => paintTodayUi\(\)\)/.test(soon), 'lo leído fuera del arranque acaba en la pantalla')
+})
+
+test('H11: el espejo enseña «Qué mirar hoy» en sus tres sitios, y mide si el chat vacío cabe', () => {
+  const espejo = readFileSync(join(ROOT, 'harness/panel-preview.html'), 'utf8')
+
+  // El panel no corre en el banco, así que la pantalla, el bloque del chat
+  // vacío y la insignia sólo se pueden mirar aquí. Y las filas las puntúa el
+  // MÓDULO de verdad: una lista copiada a mano seguiría enseñando los motivos
+  // de antes en cuanto cambiara la tabla de puntos (la lección de H10).
+  assert(/import\('\/src\/panel\/today\.js'\)/.test(espejo) && /import\('\/src\/atlassian\/activity\.js'\)/.test(espejo), 'el espejo importa quien puntúa y el diario')
+  const filas = espejo.slice(espejo.indexOf('function filasDeHoy()'), espejo.indexOf('const PRESUPUESTO_VACIO'))
+  assert(/buildCandidates\(\{ reads: suyas, activity: DIARIOS_HOY/.test(filas) && /rankToday\(candidatos,/.test(filas), 'con las dos mitades: lo leído y el diario')
+  assert(/preferredFamilies\(d, \{ now: AHORA \}\)/.test(filas), 'y con las familias que más se analizan, como el panel')
+  // Desde una pestaña de Confluence no se consulta el Jira enlazado (v1), así
+  // que esa conversación enseña sólo sus páginas: es lo que decide `todayTargets`.
+  assert(/s\.product === 'confluence' \? LECTURAS_HOY\.filter\(\(r\) => r\.product === 'confluence'\) : LECTURAS_HOY/.test(filas), 'desde Confluence, sólo Confluence')
+  // Las lecturas de ejemplo llevan las claves de los dos parsers, y hay una
+  // cerrada y una página base para ver cada clase de motivo.
+  const fixture = espejo.slice(espejo.indexOf('const LECTURAS_HOY ='), espejo.indexOf('const DIARIOS_HOY'))
+  for (const clave of ['key:', 'summary:', 'statusCategory:', 'lastViewedAt:', 'updatedAt:', 'updatedBy:']) {
+    assert(fixture.includes(clave), 'la lectura de ejemplo no trae ' + clave)
+  }
+  assert(/statusCategory: 'done'/.test(fixture), 'y una cerrada al lado de una viva')
+  const diarios = espejo.slice(espejo.indexOf('const DIARIOS_HOY'), espejo.indexOf('const HOY_VISTO'))
+  assert(/event: 'analyzed'/.test(diarios) && /event: 'source'/.test(diarios) && /recordVisit\(/.test(diarios), 'el diario trae lo analizado, lo usado de base y lo visto')
+
+  // El bloque del chat vacío, con el mismo presupuesto que el panel: aquí se
+  // copia —panel.js arranca solo y no se puede importar— y este pin es lo que
+  // impide que los dos números se separen.
+  const presupuesto = espejo.slice(espejo.indexOf('const PRESUPUESTO_VACIO'), espejo.indexOf('/** «Ver todo (8)»'))
+  const numero = (fuente, clave) => Number(new RegExp(clave + ': (\\d+)').exec(fuente)?.[1])
+  eq(numero(presupuesto, 'lineas'), numero(HOY_UI, 'lines'), 'el espejo y el panel cuentan las mismas líneas de estado vacío')
+  eq(numero(presupuesto, 'pastillasPorLinea'), numero(HOY_UI, 'chipsPerLine'), 'y las mismas pastillas por línea')
+  assert(/deHoy \+ SUGGESTION_COUNT \+ dePastillas <= PRESUPUESTO_VACIO\.lineas/.test(presupuesto), 'con la misma cuenta que emptyFits')
+  const bloque = espejo.slice(espejo.indexOf('function pintarBloqueHoy('), espejo.indexOf('const GRUPOS_HOY'))
+  assert(/todas\.slice\(0, TODAY_LIMITS\.emptyRows\)/.test(bloque), 'el tope lo dice el módulo, no un 3 a mano')
+  assert(/`Qué mirar hoy \(\$\{todas\.length\}\)`/.test(bloque) && /`Ver todo \(\$\{todas\.length\}\)`/.test(bloque), 'las dos formas: degradada y entera')
+  assert(/caja\.classList\.toggle\('hidden', !todas\.length\)/.test(bloque), 'y sin filas la caja se queda vacía y oculta, como en el panel')
+  const vacio = espejo.slice(espejo.indexOf('function estadoVacio()'), espejo.indexOf('function conversacionBusqueda()'))
+  assert(/pintarBloqueHoy\(hoy, chips\.querySelectorAll\('\.search-chip'\)\.length\)/.test(vacio), 'y se pinta con cuántas pastillas hay debajo')
+
+  // La pantalla: los tres grupos con sus títulos, y una fila con las clases que
+  // pinta `todayRowNode`.
+  const pantalla = espejo.slice(espejo.indexOf('const GRUPOS_HOY'), espejo.indexOf('// ------------------------------------------------------------- redactor'))
+  for (const titulo of ['Cambió desde que lo miraste', 'Lo tuyo', 'Nuevo en ']) {
+    assert(pantalla.includes(titulo), 'falta el rótulo de grupo: ' + titulo)
+    assert(JS.includes(titulo), 'y el panel ya no lo dice: los dos textos se han separado — ' + titulo)
+  }
+  const fila = espejo.slice(espejo.indexOf('function filaDeHoy(item,'), espejo.indexOf('function pintarBloqueHoy('))
+  for (const clase of ['today-row', 'today-main', 'today-kind', 'today-title', 'today-why', 'today-actions', 'today-x']) {
+    assert(fila.includes("'" + clase + "'") || fila.includes(clase + "'"), 'el espejo no enseña la clase ' + clase)
+  }
+  assert(/' compact'/.test(fila) && /' new'/.test(fila), 'las dos formas de la fila y el filete de lo que ha cambiado')
+  assert(fila.includes('`Ya lo he visto: «${item.title}»`'), 'con los nombres accesibles del panel, título incluido')
+  // Y la promesa de §8.20 escrita donde se ve, con las mismas palabras que el panel.
+  for (const trozo of ['no sale de aquí', 'Borrarlo no borra nada en Jira ni en Confluence', 'ACTIVITY_LIMITS.maxAgeDays']) {
+    assert(pantalla.includes(trozo), 'el espejo no dice «' + trozo + '»')
+  }
+
+  // Los mandos, y lo que se mide de más en cada captura: cuánto de «hoy» hay
+  // delante, que es lo que explica si el estado vacío cabe.
+  assert(espejo.includes('data-screen="screen-today"') && espejo.includes('data-today="linea"'), 'la pantalla y las dos formas del bloque son mandos')
+  const medida = espejo.slice(espejo.indexOf('const todayRows ='), espejo.indexOf('const falta ='))
+  assert(/doc\.querySelectorAll\('\.empty \.today \.today-row'\)\.length/.test(medida) && /\.today-more/.test(medida), 'check() cuenta las filas y ve la línea')
+  const cajas = espejo.slice(espejo.indexOf('const CAJAS ='), espejo.indexOf('function check() {'))
+  assert(cajas.includes("'.today-row'"), 'y la fila entra en la medida de desbordamiento, como las piezas de H8')
+  assert(/setToday\(modo\)/.test(espejo), 'y setToday es API, como los demás mandos')
 })

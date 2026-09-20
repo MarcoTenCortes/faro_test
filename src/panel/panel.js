@@ -15,11 +15,13 @@ import { suggestsAnotherModel, sortMessages, dropOrphans, toolOutputSize } from 
 import { pickDefaultModel, pickAlternativeModel, pickPlannerModel, modelKey, parseModelKey } from '../shared/models.js'
 import {
   parseAtlassianUrl,
+  canonicalPagePath,
   cleanTabTitle,
   describeLocation,
   defaultScope,
   locationParts,
   samePage,
+  validIssueKey,
   wikiPrefix as wikiPrefixOf,
 } from '../atlassian/site.js'
 import { mergeIndex, mergeIndexKeepingTree, indexSize, normalizeIndex, ancestryOf, isPlaceholderTitle } from '../atlassian/index-store.js'
@@ -82,10 +84,10 @@ import {
   sourcesSearchTarget,
   linkedSite,
 } from './sources.js'
-import { suggestionsFor } from './suggestions.js'
+import { SUGGESTION_COUNT, suggestionsFor } from './suggestions.js'
 import { searchChips } from './search-chips.js'
 import { restFailureDue, jqlFailText } from './rest-notice.js'
-import { normalizeIssueFields } from './issue-profile.js'
+import { issueFamily, normalizeIssueFields } from './issue-profile.js'
 import {
   clearSourceHistory,
   emptyHistory,
@@ -96,7 +98,37 @@ import {
 } from './source-history.js'
 import { normalizeReferences, referencesFromContext } from './references.js'
 import { confluenceLinksIn, reasonText, suggestSources } from './source-suggest.js'
-import { searchPages, fetchAncestors } from '../shared/confluence-rest.js'
+import {
+  CONFLUENCE_REST_LIMITS,
+  fetchAncestors,
+  idsCql,
+  mineCql,
+  searchContent,
+  searchPages,
+  viewedCql,
+} from '../shared/confluence-rest.js'
+// «Qué mirar hoy» (H11): el diario local de actividad y la puntuación pura que
+// lo ordena. Ni uno ni otra tocan la red; quien pide y quien pinta es el panel.
+import { ACTIVITY_LIMITS, activityKey, dismissItem, preferredFamilies } from '../atlassian/activity.js'
+import {
+  clearActivity,
+  clearTodayCache,
+  getActivity,
+  getTodayCache,
+  recordActivity,
+  saveActivity,
+  saveTodayCache,
+} from '../shared/activity-store.js'
+import {
+  TODAY_LIMITS,
+  analyzeQuestion,
+  buildCandidates,
+  countNew,
+  rankToday,
+  recentPagesFromActivity,
+  todaySummary,
+  todayTargets,
+} from './today.js'
 import {
   collectNotes,
   collectSegmentedNotes,
@@ -313,6 +345,19 @@ const state = {
   // Por qué proyecto se preguntó ya el perfil («host:CLAVE»): la tregua del
   // refresco que dispara `refreshTab` al cambiar de proyecto sin cambiar de host.
   profileAsked: '',
+  // «Qué mirar hoy» (H11): lo leído de las API del sitio ya fundido con el
+  // diario local, listo para ordenar. Se guardan los CANDIDATOS y no las filas
+  // porque la puntuación depende de dónde estés (misma épica, hermana de la
+  // página abierta, misma familia) y eso cambia al cambiar de pestaña sin que
+  // haya nada que volver a leer: `todayRows()` las ordena al pedirlas.
+  // Es del SITIO del panel: `refreshTab` lo vacía al cambiar de host.
+  today: emptyToday(),
+  // La intención de «Analizar» que dejó una fila de «hoy»: se navega y, cuando
+  // la pestaña llega a esa página, se fija la Skill Análisis y se deja la
+  // pregunta ESCRITA en el cuadro, sin mandarla (§8.20: Faro nunca manda una
+  // pregunta por su cuenta). `{host, kind, id, question, at}` o null; la
+  // consume `refreshTab` y caduca sola a los `TODAY_LIMITS.intentMs`.
+  pendingIntent: null,
 }
 
 // -------------------------------------------------------------------- init
@@ -506,6 +551,16 @@ async function refreshTab() {
     state.sourceHistory = emptyHistory()
     state.references = { propio: null, enlazado: null, index: null, items: null }
     state.sourcesSuggest = { token: state.sourcesSuggest.token + 1, list: [], links: [], remote: null, estado: 'listo' }
+    // Y lo que «Qué mirar hoy» leyó, que es de ESTE sitio y de su Confluence
+    // enlazado: dejarlo puesto recomendaría en el sitio nuevo lo que cambió en
+    // el anterior. Lo vuelve a leer `loadToday` al final del arranque, de su
+    // caché de sesión si sigue fresca. `state.pendingIntent` NO se toca: puede
+    // apuntar justo al host al que acabamos de llegar (una página del
+    // Confluence enlazado se abre en su propia pestaña) y caduca sola.
+    state.today = emptyToday()
+    // Y la insignia con ellos: el arranque del sitio nuevo tarda segundos en
+    // volver a leer, y hasta entonces un «3» de otro host sería mentira.
+    paintTodayUi()
     paintSourcesUi()
   }
   state.site = site
@@ -555,6 +610,12 @@ async function refreshTab() {
   // la sesión siguen siendo suyos—, pero el chat se había quedado con el «Abre
   // Jira o Confluence»: se vuelve a pintar y ya.
   else if (volviaDeFuera && !state.streaming) await restoreConversation()
+
+  // Y, ya con el sitio puesto, la intención de «Analizar» que dejó una fila de
+  // «Qué mirar hoy» si hemos llegado a la página que la esperaba. Va lo ÚLTIMO
+  // a propósito: `bootForSite` fija la Skill guardada del sitio, y hacerlo
+  // antes sería que la pisara justo la que el usuario acaba de pedir.
+  await consumePendingIntent(site)
 }
 
 /** Arranque completo para un sitio: servidor, claves, contexto. */
@@ -764,6 +825,12 @@ async function bootForSite() {
   // una petición a la API del sitio y el chat no puede esperarla (§8.22 y P4 de
   // H6, que dejó el arranque en una sola lectura del almacén).
   refreshProfileSoon(testigo)
+
+  // Y «Qué mirar hoy» (H11), por lo mismo y con el mismo testigo: son hasta
+  // seis lecturas a la API del sitio con la sesión del navegador, y el chat no
+  // puede esperarlas. Lo que devuelvan llega cuando llegue; si para entonces el
+  // panel está en otro sitio, no se pinta nada (§8.22).
+  loadTodaySoon(testigo)
 }
 
 /**
@@ -1477,11 +1544,12 @@ function showWelcome() {
     : 'Pregúntame lo que quieras sobre este sitio.'
   wrap.appendChild(p)
 
-  // El hueco de «Qué mirar hoy» (H11): hasta tres filas de lo que ha cambiado
-  // desde que lo miraste. Se crea vacío y oculto para que el sitio esté
-  // decidido AQUÍ —entre la explicación y las sugerencias— y el presupuesto del
-  // estado vacío (≤3 filas + 3 sugerencias + chips en una línea, docs/PLAN.md
-  // §3.4) se pueda medir en el espejo antes de que exista lo que lo llena.
+  // «Qué mirar hoy» (H11): hasta `TODAY_LIMITS.emptyRows` filas de lo que ha
+  // cambiado desde que lo miraste, entre la explicación y las sugerencias. Nace
+  // vacío y oculto: lo llena `paintTodayBlock` con lo que YA se ha leído, y si
+  // no hay nada que enseñar el chat vacío queda byte a byte como estaba. Lo
+  // pinta `paintSearchChips` al final de esta función, porque comparte
+  // presupuesto con las pastillas y necesita saber cuántas hay.
   const hoy = document.createElement('div')
   hoy.className = 'today hidden'
   wrap.appendChild(hoy)
@@ -1549,6 +1617,11 @@ function paintSearchChips(box) {
       })
     : []
   box.classList.toggle('hidden', !chips.length)
+  // El bloque de «Qué mirar hoy» comparte el sitio del chat vacío con estas
+  // pastillas: cuantas más haya, menos le queda, y por debajo de su presupuesto
+  // se degrada a una línea (decisión 3 de docs/PLAN.md §3.4). Se le pasa cuántas
+  // hay AQUÍ, porque cuando llega una fuente nueva sólo se repinta esta caja.
+  paintTodayBlock(null, { chips: chips.length })
   if (!chips.length) return
 
   const fine = document.createElement('div')
@@ -2178,6 +2251,11 @@ async function send() {
       pageId: pageIdAlPedir,
       site: sitioAlPedir,
       product: productoAlPedir,
+      // Para contar cuántas observaciones trajo la respuesta (H11): la prosa
+      // ya separada del bloque de anclas y el bloque tal cual, que es lo que
+      // `offerNotes` mira unas líneas más abajo.
+      answer,
+      anchors,
     })
 
     // Lo que cuesta ENSEÑAR la respuesta: el repintado final, el aviso de las
@@ -4268,11 +4346,18 @@ function paintSourceList() {
  * que el usuario ELIGIÓ —ids, títulos, la clave, la familia y la fase que la
  * extensión ya leía de los campos— en una clave local por host, borrable desde
  * la propia pantalla. Se llama con lo capturado al mandar, como el aviso de las
- * páginas base, y sólo apunta un análisis que salió bien y que se hizo con
- * páginas base: un turno sin ellas no dice nada que sugerir.
+ * páginas base, y sólo apunta un análisis que salió bien.
  *
- * El gancho es UNO y se comparte: H11 colgará aquí lo que necesite de un turno
- * terminado, en vez de recorrer `send()` otra vez.
+ * El gancho es UNO y se comparte (H11 lo amplía en vez de añadir otro): de un
+ * turno terminado salen DOS apuntes, y no piden lo mismo.
+ *  - El DIARIO local (`activity.js`): que analizaste esto, cuándo, con cuántas
+ *    observaciones y de qué familia. Se apunta SIEMPRE que el análisis salió
+ *    bien, con páginas base o sin ellas: «lo analizaste el lunes con 6
+ *    observaciones y ha cambiado» es la razón más fuerte de «Qué mirar hoy», y
+ *    la mayoría de los análisis no llevan páginas base.
+ *  - El HISTORIAL de páginas base (H10): qué páginas sirvieron para analizar
+ *    esto. Un turno sin páginas base no dice nada que sugerir, así que ése sí
+ *    se salta.
  */
 async function recordAnalysisTurn({
   skill,
@@ -4287,16 +4372,28 @@ async function recordAnalysisTurn({
   pageId = '',
   site = null,
   product = '',
+  answer = '',
+  anchors = null,
 } = {}) {
-  if (skill !== 'analisis' || !ok || !host || !sources?.pages?.length) return
+  if (skill !== 'analisis' || !ok || !host) return
   // §8.22: entre la pregunta y aquí está `offerNotes`, que puede durar un turno
   // entero del modelo. El historial es de un HOST y sus entradas de una
   // incidencia: apuntarlo con el panel ya en otro sitio sería sugerir allí lo
-  // que se eligió aquí, y bajo la clave equivocada.
+  // que se eligió aquí, y bajo la clave equivocada. El diario se guarda por
+  // host y por clave de ítem, así que escribirlo de todas formas sería
+  // correcto; se deja fuera igual, para que del turno haya UNA sola regla de
+  // «esto ya no es mío» y el Registro diga la verdad con una sola línea.
   if ((state.site?.host ?? state.lastHost) !== host || state.sessionID !== sessionID) {
-    log.info('Historial de páginas base', `sin apuntar: el panel ya no está en ${host}`)
+    log.info('Historial de páginas base', `sin apuntar (ni el diario): el panel ya no está en ${host}`)
     return
   }
+
+  // El diario, primero y para cualquier Análisis: es lo que el usuario verá
+  // mañana en «Qué mirar hoy».
+  await noteAnalyzed({ host, issueKey, pageId, product, issue, summary, site, answer, anchors })
+
+  // Y el historial de páginas base, sólo si las hubo.
+  if (!sources?.pages?.length) return
 
   // Los campos de la incidencia: los del digest de este turno si lo hubo y, si
   // no, los que se leyeron de la pantalla, cruzados con la página del turno.
@@ -4969,6 +5066,20 @@ async function addSource(page, { from = 'index', reason = '' } = {}) {
     'Página base añadida',
     `${añadida.title} (id ${añadida.id}) · ${origen[from] || 'por su id'}` + (from === 'suggested' && reason ? `: ${reason}` : '')
   )
+  // Y en el diario local (H11): elegir una página como base es lo más fuerte
+  // que el usuario dice de ella, y «página base de tus análisis, modificada» es
+  // una de las tres señales grandes de «Qué mirar hoy». Se apunta bajo el host
+  // de la PÁGINA —desde un Jira Data Center las páginas base son del Confluence
+  // ENLAZADO—, que es donde su pestaña la verá (§8.22: lo guardado por host se
+  // consume por host). No se espera a que salga bien: el diario es un extra y
+  // no puede llevarse por delante una página que ya está añadida.
+  await noteActivity(linkedHost() || state.site.host, {
+    event: 'source',
+    kind: 'confluence-page',
+    id: añadida.id,
+    title: añadida.title,
+    path: añadida.path || '',
+  })
   // Una sugerida se añade desde una fila que desaparece al instante: sin decirlo
   // en voz alta, quien usa lector de pantalla no sabe qué ha pasado.
   if (from === 'suggested') announce(`Añadida «${añadida.title}».`)
@@ -5477,6 +5588,26 @@ async function paintState() {
   if (state.linkedContext) add('Confluence enlazado', `${state.linkedContext.host} · ${state.linkedContext.contextMd.length} caracteres`)
   add('memoria', state.settings.crossSessionMemory ? `activa · ${state.memory?.entries?.length || 0} entradas` : 'desactivada')
 
+  // El diario local y lo que se ha sacado de él (H11). Cuentas y motivos, nunca
+  // títulos ni ids: esta pantalla se mira con el panel abierto delante de otra
+  // gente, y el diario es del usuario (§8.20).
+  const diario = state.site ? await getActivity(state.site.host).catch(() => null) : null
+  const cuentas = activityCounts(diario)
+  add(
+    'actividad',
+    todayEnabled()
+      ? `${cuentas.entradas} entradas · ${cuentas.analisis} análisis · ${cuentas.base} páginas base`
+      : '(apagada)'
+  )
+  add(
+    'sugerencias',
+    !todayEnabled()
+      ? '(apagadas)'
+      : state.today.fetchedAt
+        ? `${todaySummary({ items: todayRows(), errors: state.today.errors })} · leídas a las ${clockTime(state.today.fetchedAt)}`
+        : '(sin leer)'
+  )
+
   // Lo que tardó lo último que hizo el panel (H3): pegado aquí, un «va lento»
   // deja de ser una impresión. Se miden en `bootForSite` y en `send()`.
   add('tiempos (arranque)', state.timing.boot || '(sin medir)')
@@ -5551,6 +5682,8 @@ async function showSettingsScreen() {
   $('set-delay').value = state.settings.stepDelayMs
   $('delay-value').textContent = state.settings.stepDelayMs
   $('set-rest-tools').checked = state.settings.restTools
+  $('set-today').checked = state.settings.todaySuggestions
+  paintTodaySetting()
   $('set-url').value = state.settings.serverUrl
   $('set-pass').value = state.settings.password
   $('settings-status').textContent = ''
@@ -5614,6 +5747,12 @@ function setStreaming(on) {
   // conversación»): nacen desactivados dentro del turno que los pintó y vuelven
   // aquí, con el de la cabecera.
   for (const b of el.chat.querySelectorAll('.' + NEEDS_IDLE)) b.disabled = on
+  // Y los de «Qué mirar hoy», que viven en SU pantalla y no en el chat: el
+  // «Analizar» de una fila fija la Skill y escribe en el cuadro, que es
+  // exactamente lo que no puede pasar a mitad de turno. Sin esta segunda
+  // pasada nacerían desactivados y ahí se quedarían, porque la de arriba sólo
+  // recorre el chat.
+  for (const b of $('screen-today').querySelectorAll('.' + NEEDS_IDLE)) b.disabled = on
   // El lector de pantalla: mientras llega la respuesta a trozos, el chat está
   // «ocupado»; lo que hay que decir se dice una vez al final (A2).
   el.chat.setAttribute('aria-busy', on ? 'true' : 'false')
@@ -5694,6 +5833,11 @@ function applySettingsToUi() {
     paintSearchChips(chips)
     loadSearchChipSources(chips).catch(() => {})
   }
+  // Y «Qué mirar hoy», que cuelga de los mismos interruptores: apagarlos tiene
+  // que llevarse la insignia y el bloque del chat vacío en el acto, y no al
+  // cambiar de sitio. Lo que ya se leyó sigue en `state.today` por si se vuelve
+  // a encender; lo que no se hace es enseñarlo.
+  paintTodayUi()
 }
 
 // ------------------------------------------------------------------ eventos
@@ -5804,6 +5948,14 @@ function wireEvents() {
     }
   })
 
+  // --- qué mirar hoy
+  $('btn-today').addEventListener('click', () => showTodayScreen().catch(console.error))
+  $('btn-today-close').addEventListener('click', () => hideScreens())
+  $('btn-today-refresh').addEventListener('click', () => refreshToday().catch(console.error))
+  $('btn-today-forget').addEventListener('click', () => forgetTodayActivity().catch(console.error))
+  $('today-off').addEventListener('change', () => setTodayOff($('today-off').checked).catch(console.error))
+  $('btn-today-permission').addEventListener('click', () => askTodayPermission().catch(console.error))
+
   $('btn-new-session').addEventListener('click', newSession)
   $('btn-memory').addEventListener('click', () => showMemoryScreen())
   $('btn-settings').addEventListener('click', () => showSettingsScreen())
@@ -5905,6 +6057,10 @@ function wireEvents() {
 
   // --- ajustes
   $('set-delay').addEventListener('input', () => ($('delay-value').textContent = $('set-delay').value))
+  // La casilla de «Qué mirar hoy» cuelga de la de las lecturas REST: en cuanto
+  // se apaga la de arriba, ésta se desactiva y dice por qué, sin esperar a que
+  // se guarde nada.
+  $('set-rest-tools').addEventListener('change', paintTodaySetting)
   $('btn-settings-close').addEventListener('click', async () => {
     const antes = state.settings
     state.settings = await saveSettings({
@@ -5916,6 +6072,10 @@ function wireEvents() {
       // que se aplica en caliente como el resto: la próxima tarjeta de búsqueda
       // ya lee la lista, o deja de leerla, sin rearrancar nada.
       restTools: $('set-rest-tools').checked,
+      // Cuelga del de arriba y se guarda igual: desactivada, la casilla conserva
+      // lo que el usuario eligió, así que apagar y volver a encender las
+      // lecturas REST no le cambia esta preferencia por detrás.
+      todaySuggestions: $('set-today').checked,
       serverUrl: $('set-url').value.trim() || DEFAULT_SETTINGS.serverUrl,
       password: $('set-pass').value,
     })
@@ -5975,6 +6135,12 @@ function wireEvents() {
     // lo que el usuario ha pedido olvidar, y el turno siguiente lo reescribiría.
     state.sourceHistory = emptyHistory()
     state.references = { propio: null, enlazado: null, index: null, items: null }
+    // Y el diario de actividad de este sitio, que `forgetSite` acaba de borrar
+    // del almacén (su clave va en la misma `remove`), con la caché de «qué
+    // mirar hoy» que se leyó con él: olvidar un sitio no puede dejar detrás un
+    // rastro de lo que abriste allí ni una lista que lo siga recomendando.
+    await clearTodayCache(state.site.host)
+    state.today = emptyToday()
     paintSourcesUi()
     hideScreens()
     await bootForSite()
@@ -6494,4 +6660,1115 @@ async function newSession() {
   state.turns = []
   el.chat.textContent = ''
   showWelcome()
+}
+
+// ------------------------------------------------------- qué mirar hoy (H11)
+
+/**
+ * «Qué mirar hoy»: qué merece tu atención en este sitio, ordenado y explicado.
+ *
+ * POR QUÉ ESTÁ AQUÍ Y NO EN UN MÓDULO: lo que se puede decidir con una regla ya
+ * está fuera —`today.js` puntúa y escribe los motivos, `activity.js` guarda el
+ * diario, `jira-rest.js` y `confluence-rest.js` montan las consultas—. Lo que
+ * queda en el panel es lo único que no se puede sacar de él: a quién se le
+ * pregunta (la pestaña o el Confluence enlazado), cuándo se puede preguntar
+ * (los dos interruptores, el permiso, la caché) y qué se hace con una fila
+ * (navegar por el índice y `validatePlan`, o abrir pestaña nueva).
+ *
+ * LAS TRES REGLAS QUE NO SE NEGOCIAN (CLAUDE.md §8.19 y §8.20):
+ *  1. NINGUNA recomendación llama al modelo ni gasta un token. De aquí no sale
+ *     ni un `runTurn` ni una sesión: se leen listas por REST con la sesión del
+ *     navegador, se suman puntos enteros y se ordena.
+ *  2. Faro NUNCA manda una pregunta por su cuenta. «Analizar» navega, fija la
+ *     Skill y DEJA la pregunta escrita en el cuadro (`pendingIntent`).
+ *  3. Con `restTools` o `todaySuggestions` apagados no sale NI UNA lectura y no
+ *     se apunta NADA: ni aquí ni en el service worker, que aplica las mismas
+ *     dos condiciones antes de apuntar una visita.
+ */
+
+/** El estado vacío de «hoy». Es del SITIO: cambiar de host lo devuelve a esto. */
+function emptyToday() {
+  return {
+    // El host del PANEL con el que se leyó, para no pintar lo de otro sitio.
+    host: '',
+    // Cuándo se leyó de verdad (o cuándo se guardó la caché que se está usando).
+    fetchedAt: 0,
+    // Lo leído fundido con el diario, SIN ordenar: `todayRows()` lo ordena al
+    // pedirlo, porque la puntuación depende de dónde estés ahora mismo.
+    candidates: [],
+    // Las familias que más analizas, del diario de este host.
+    preferred: [],
+    // Todos los fallos de lectura, para el Registro y para poder decir por qué
+    // la lista viene corta.
+    errors: [],
+    // Y los que toca DECIR: `restFailureDue` deja pasar uno por host, sesión y
+    // motivo, que es la misma tregua de la lista de una búsqueda (H8).
+    notices: [],
+    // Cuándo miró el usuario la lista por última vez: es lo que hace que la
+    // insignia cuente lo NUEVO y no lo que hay. Lo escribe `markTodaySeen` al
+    // abrir la pantalla, en `sites[host].todaySeenAt`, y lo vuelve a leer
+    // `loadToday` normalizado; aquí empieza en 0, que es «nunca la miró» y hace
+    // que cuenten todas.
+    seenAt: 0,
+    loading: false,
+  }
+}
+
+/**
+ * Como `refreshProfileSoon`: se lanza y no se espera; un fallo no tumba nada.
+ *
+ * Pinte lo que pinte la lectura —o no pinte nada, porque el sitio está apagado
+ * o no hay a quién preguntar—, al acabar se repinta lo que se ve: la insignia
+ * del botón y, si el chat está vacío, su bloque. Sin ese repintado la lista
+ * llegaría al estado y no a la pantalla.
+ */
+function loadTodaySoon(testigo) {
+  loadToday({ testigo })
+    .catch((err) => log.info('Qué mirar hoy no disponible', String(err?.message || err)))
+    .finally(() => paintTodayUi())
+}
+
+/**
+ * Lee lo que ha cambiado en este sitio y lo deja puntuado en `state.today`.
+ *
+ * Nunca en el camino crítico del arranque (H6 P4): se llama sin `await` al
+ * final de `bootForSite`, con el testigo de ESE arranque y con el host
+ * capturado. Entre la primera lectura y la última hay seis peticiones, y si
+ * para entonces el panel está en otro sitio no se pinta nada (§8.22).
+ *
+ * @param {{force?: boolean, testigo?: object|null}} opts `force` salta la caché
+ *        de sesión (es lo que hará el «Actualizar» de la pantalla).
+ */
+async function loadToday({ force = false, testigo = state.bootToken } = {}) {
+  const sitio = state.site
+  if (!sitio) return
+  const host = sitio.host
+  const tabId = state.tabId
+  // La tregua de los avisos es por host, sesión y motivo: la sesión con la que
+  // se pide es la que manda al volver, como en la lista de una búsqueda.
+  const sessionID = state.sessionID
+
+  // Los dos interruptores, y en este orden: `restTools` es el maestro de toda
+  // lectura REST nueva y `todaySuggestions` el de esta función. Apagado
+  // cualquiera de los dos no sale ni una petición ni se toca el diario.
+  if (!state.settings.restTools || !state.settings.todaySuggestions) return
+  if (state.today.loading && !force) return
+
+  const saved = await getSite(host)
+  // El interruptor por sitio. Se normaliza al leer: lo que no sea `true` no lo
+  // escribió Faro y no apaga nada (misma regla que `migrateSettings`).
+  if (saved?.todayOff === true) return
+  // Cuándo se miró la lista por última vez en ESTE sitio, para que la insignia
+  // cuente lo nuevo y no lo que hay. Se normaliza al leer: lo que no sea un
+  // instante no lo escribió `markTodaySeen` y cuenta como «nunca».
+  state.today.seenAt = todaySeenAt(saved)
+  if (state.bootToken !== testigo || (state.site?.host ?? state.lastHost) !== host) return
+
+  const hoy = state.today
+  hoy.loading = true
+  try {
+    const t0 = performance.now()
+    // Los diarios: el del sitio de la pestaña y, si lo hay, el del Confluence
+    // enlazado. Son DOS diarios distintos y cada candidato se cruza con el
+    // suyo: lo guardado por host se consume por host (§8.22).
+    const enlazado = linkedSite(state.linkedContext)
+    const diarios = { [host]: await getActivity(host) }
+    if (enlazado && enlazado.host !== host) diarios[enlazado.host] = await getActivity(enlazado.host)
+
+    // Las páginas del diario por las que se pregunta «¿ha cambiado alguna?».
+    // Son las del host de CONFLUENCE al que se va a preguntar, que es el de la
+    // pestaña si estamos en Confluence y el enlazado si estamos en Jira: en
+    // ningún caso hay dos objetivos de Confluence a la vez.
+    const hostPaginas = sitio.product === 'confluence' ? host : enlazado?.host || ''
+    const ids = hostPaginas ? recentPagesFromActivity(diarios[hostPaginas]).map((p) => p.id) : []
+
+    const { targets, skipped } = todayTargets(sitio, saved, { linked: state.linkedContext, pageIds: ids })
+    if (!targets.length) {
+      // Sin nadie a quien preguntar no es un fallo: en Jira Cloud no hay REST
+      // que leer y desde Confluence todavía no se consulta el Jira enlazado.
+      // Se dice una vez en el Registro y se acabó (§8.14).
+      log.info(
+        'Qué mirar hoy no disponible',
+        skipped.map((s) => `${s.host || s.product}: ${s.reason}`).join(' · ') || `${host}: no hay a quién preguntar`
+      )
+      return
+    }
+    // Y si hay objetivos pero alguno se ha quedado fuera, también se dice: una
+    // lista corta sin explicación se lee como «aquí no hay nada» (§8.14).
+    if (skipped.length) {
+      log.info('Qué mirar hoy no disponible', skipped.map((s) => `${s.host || s.product}: ${s.reason}`).join(' · '))
+    }
+
+    let reads = null
+    let fallos = []
+    let deCache = false
+    let fetchedAt = Date.now()
+    if (!force) {
+      const cache = await getTodayCache(host)
+      if (cache && Date.now() - cache.fetchedAt < TODAY_LIMITS.cacheMs && Array.isArray(cache.reads)) {
+        reads = cache.reads
+        fallos = Array.isArray(cache.errors) ? cache.errors : []
+        fetchedAt = cache.fetchedAt
+        deCache = true
+      }
+    }
+
+    if (!reads) {
+      // Todos los objetivos a la vez y ninguno se lleva a los demás: lo que
+      // conteste Confluence sirve aunque Jira esté caído, y al revés.
+      const tandas = await Promise.allSettled(targets.map((t) => fetchTodayTarget(t, { sitio, ids, tabId })))
+      reads = []
+      for (const res of tandas) {
+        if (res.status !== 'fulfilled') continue
+        reads.push(...res.value.reads)
+        fallos.push(...res.value.errors)
+      }
+      fetchedAt = Date.now()
+      // La caché va bajo el host del PANEL y guarda lo LEÍDO, no lo ordenado:
+      // la puntuación se rehace al pintar porque depende de dónde estés.
+      await saveTodayCache(host, { fetchedAt, reads, errors: fallos }).catch(() => {})
+    }
+    const ms = Math.round(performance.now() - t0)
+
+    // Entre la primera lectura y aquí hay segundos: si el panel se fue a otro
+    // sitio, o el arranque ya no manda, esto no es suyo y no se pinta (§8.22).
+    // Lo leído no se pierde: quedó en la caché de sesión de SU host.
+    if (state.bootToken !== testigo || (state.site?.host ?? state.lastHost) !== host) {
+      log.info('Qué mirar hoy no disponible', `lo leído de ${host} llegó con el panel en otro sitio`)
+      return
+    }
+
+    const now = Date.now()
+    hoy.host = host
+    hoy.fetchedAt = fetchedAt
+    hoy.candidates = buildCandidates({ reads, activity: diarios, here: todayHere(), now })
+    hoy.preferred = preferredFamilies(diarios[host], { now })
+    hoy.errors = fallos
+    // Un motivo que no cambia por reintentar se dice UNA vez por host, sesión y
+    // motivo: la misma tregua que la lista de una búsqueda (rest-notice.js).
+    hoy.notices = fallos.filter((e) => restFailureDue(state.restWarned, e.reason, e.host, sessionID)).map(todayFailText)
+
+    if (!reads.length) {
+      log.warn(
+        'Qué mirar hoy no disponible',
+        fallos.map((e) => `${e.host} ${e.kind}: ${e.reason}`).join(' · ') || 'ninguna lectura devolvió nada'
+      )
+      return
+    }
+    log.ok(
+      'Qué mirar hoy',
+      `${todaySummary({ items: todayRows(), errors: fallos })} · ${hoy.candidates.length} candidatos · ` +
+        `de ${targets.map((t) => t.host).join(' y ')}${deCache ? ' · de la caché' : ` · ${ms} ms`}`
+    )
+  } finally {
+    hoy.loading = false
+  }
+}
+
+/**
+ * Las lecturas de un objetivo, todas a la vez. Nunca lanza.
+ *
+ * Un `kind` que falle no se lleva a los otros tres: se apunta su motivo y el
+ * resto de la lista sigue. Devuelve `{reads, errors}` con la forma que espera
+ * `buildCandidates` (`{product, host, kind, items}`).
+ */
+async function fetchTodayTarget(target, { sitio, ids = [], tabId = state.tabId } = {}) {
+  const reads = []
+  const errors = []
+  const hechas = await Promise.allSettled(target.kinds.map((kind) => readToday(target, kind, { sitio, ids, tabId })))
+  target.kinds.forEach((kind, i) => {
+    const res = hechas[i]
+    const r =
+      res.status === 'fulfilled'
+        ? res.value
+        : { ok: false, reason: 'red', detail: String(res.reason?.message || res.reason) }
+    if (!r?.ok) {
+      errors.push({
+        product: target.product,
+        host: target.host,
+        kind,
+        reason: r?.reason || 'sin respuesta',
+        detail: r?.detail || '',
+        // Los del SERVIDOR, tal cual los leyó `errorBody`: se enseñan, no se
+        // interpretan (§6).
+        messages: Array.isArray(r?.messages) ? r.messages : [],
+      })
+      return
+    }
+    const items = target.product === 'jira' ? r.issues : r.pages
+    reads.push({ product: target.product, host: target.host, kind, items: Array.isArray(items) ? items : [] })
+  })
+  return { reads, errors }
+}
+
+/**
+ * UNA lectura: un `kind` de un objetivo. Nunca lanza.
+ *
+ * Lo que viaja es el `kind` y sus parámetros VALIDADOS (una clave de proyecto,
+ * una clave de incidencia, unos días, unos ids), nunca el texto de una consulta:
+ * la JQL y el CQL los escriben las plantillas fijas de `jira-rest.js` y
+ * `confluence-rest.js` (§8.12, §8.19). Por eso el content script elige por
+ * `kind` y un `kind` que no esté en su lista no pide nada.
+ *
+ * Dos caminos, y sólo dos:
+ *  - `tab`: el producto de la PESTAÑA, por el content script, que vive en el
+ *    origen del sitio y deduce de `location` la ruta a la que se pide.
+ *  - `linked`: el Confluence ENLAZADO a este Jira Data Center, desde el panel
+ *    con `credentials: 'include'`, que es lo ya admitido en §4.8 para las
+ *    páginas base. Y sólo con el permiso YA concedido: una carga en segundo
+ *    plano no puede abrir un diálogo de permisos que el usuario no ha pedido
+ *    (la misma regla que `refreshProfile`).
+ */
+async function readToday(target, kind, { sitio, ids = [], tabId = state.tabId } = {}) {
+  if (target.via === 'linked') {
+    if (!(await hasHostPermission(target.site.origin))) {
+      return { ok: false, reason: 'permiso', detail: `sin permiso sobre ${target.site.host}` }
+    }
+    const cql =
+      kind === 'viewed'
+        ? viewedCql(CONFLUENCE_REST_LIMITS.maxResults)
+        : kind === 'mine'
+          ? mineCql(TODAY_LIMITS.daysMine)
+          : idsCql(ids)
+    // `searchContent` lo vuelve a comprobar contra las plantillas antes de pedir
+    // nada; esto sólo evita una petición que ya se sabe que no vale.
+    if (!cql) return { ok: false, reason: 'consulta no permitida' }
+    return searchContent((u, o) => fetch(u, o), target.site, cql, { credentials: 'include' }).catch((err) => ({
+      ok: false,
+      reason: 'red',
+      detail: String(err?.message || err),
+    }))
+  }
+
+  if (tabId == null || !(await ensureContentAccess({ announce: false }))) {
+    return { ok: false, reason: 'permiso', detail: `sin permiso sobre ${target.host}` }
+  }
+  const msg =
+    target.product === 'jira'
+      ? {
+          type: MSG.RECENT_ISSUES,
+          kind,
+          limit: JIRA_REST_LIMITS.defaultResults,
+          cloud: !!sitio.cloud,
+          ...(kind === 'mine' ? { days: TODAY_LIMITS.daysMine } : {}),
+          ...(kind === 'project' ? { projectKey: sitio.projectKey, days: TODAY_LIMITS.daysProject } : {}),
+          ...(kind === 'related' ? { issueKey: sitio.issueKey } : {}),
+        }
+      : {
+          type: MSG.RECENT_PAGES,
+          kind,
+          limit: CONFLUENCE_REST_LIMITS.maxResults,
+          // El prefijo del wiki es lo ÚNICO que el panel propone, porque un Data
+          // Center bajo `/confluence` sólo lo conoce quien lo observó;
+          // `resolveWikiPrefix` lo acepta sólo con forma de ruta y siempre
+          // colgando del origen de la pestaña.
+          wikiPrefix: wikiPrefixOf(sitio),
+          cloud: !!sitio.cloud,
+          ...(kind === 'mine' ? { days: TODAY_LIMITS.daysMine } : {}),
+          ...(kind === 'ids' ? { ids } : {}),
+        }
+  return (await chrome.tabs.sendMessage(tabId, msg).catch(() => null)) || { ok: false, reason: 'sin respuesta' }
+}
+
+/**
+ * Por qué se quedó corta la lista, en palabras del usuario.
+ *
+ * De Jira lo dice `jqlFailText` (rest-notice.js), que es el mismo texto que sale
+ * bajo la tarjeta de una búsqueda: dos formas de contar el mismo 401 acabarían
+ * diciendo cosas distintas. De Confluence no había ninguno —hasta H11 el panel
+ * no leía su API más que para las páginas base— y sus motivos son PROSA, no
+ * códigos (§6), así que se enseñan tal cual.
+ */
+function todayFailText(e) {
+  if (e?.product === 'jira') return jqlFailText(e, e.host)
+  if (e?.reason === 'permiso') return `No puedo leer lo último de ${e.host} sin permiso sobre ese dominio.`
+  return `No he podido leer lo último de Confluence en ${e?.host}: ${e?.detail || e?.reason || 'sin motivo'}.`
+}
+
+/**
+ * Dónde está el usuario AHORA, para puntuar contra ello (misma épica, misma
+ * familia, hermana de la página abierta, la propia página abierta fuera).
+ *
+ * Los campos de la incidencia se cruzan POR PÁGINA, como en los chips: los que
+ * se leyeron de otra incidencia dirían que ésta es «de la misma familia» sin
+ * serlo (lección de H8).
+ */
+function todayHere() {
+  const site = state.site
+  if (!site) return null
+  const titulo = cleanTabTitle(state.tabTitle, site)
+  const campos = state.issueFields && samePage(state.issueFields.url, state.tabUrl) ? state.issueFields.fields : null
+  return {
+    host: site.host,
+    issueKey: site.issueKey || '',
+    projectKey: site.projectKey || '',
+    spaceKey: site.spaceKey || '',
+    pageId: site.pageId || currentPageId(state.index, state.tabUrl) || '',
+    title: titulo,
+    family: campos ? issueFamily(campos, { summary: titulo }) : '',
+  }
+}
+
+/**
+ * Las filas de «hoy», ordenadas contra la página que hay delante AHORA.
+ *
+ * Se ordena al pedirlas y no al leerlas: cambiar de incidencia dentro del mismo
+ * Jira cambia qué es «de la misma épica» o «enlazada con», y eso no vale una
+ * petición. Ordenar unas decenas de candidatos es aritmética entera.
+ *
+ * El índice que se pasa es el de CONFLUENCE (`sourcesIndex()`: el del sitio, o
+ * el del enlazado desde un Jira), que es el único que sabe de padres y por
+ * tanto el único con el que `rankToday` puede decir «hermana de la abierta».
+ */
+function todayRows({ limit = TODAY_LIMITS.maxItems } = {}) {
+  const filas = rankToday(state.today.candidates, {
+    here: todayHere(),
+    index: sourcesIndex(),
+    preferred: state.today.preferred,
+    now: Date.now(),
+  })
+  return Number.isInteger(limit) && limit > 0 ? filas.slice(0, limit) : filas
+}
+
+/** Cuántas filas han cambiado desde que se miró la lista: el número de la insignia. */
+function todayCount() {
+  return countNew(todayRows(), state.today.seenAt)
+}
+
+/**
+ * La lista se acaba de mirar: la insignia vuelve a contar desde aquí.
+ *
+ * Se guarda en el registro del sitio (`todaySeenAt`), como `skill` o `model`:
+ * si viviera sólo en memoria, cerrar el panel volvería a contar como novedad
+ * todo lo que ya se había mirado, y la insignia dejaría de significar nada. Un
+ * fallo al guardarlo no puede tumbar la pantalla que se está abriendo: se
+ * queda en memoria hasta la próxima.
+ */
+async function markTodaySeen() {
+  state.today.seenAt = Date.now()
+  const host = state.site?.host ?? state.lastHost
+  if (host) await saveSite(host, { todaySeenAt: state.today.seenAt }).catch(() => {})
+}
+
+/** Lo guardado, normalizado: sólo un instante positivo cuenta como «ya la miraste». */
+function todaySeenAt(saved) {
+  const at = Number(saved?.todaySeenAt)
+  return Number.isFinite(at) && at > 0 ? at : 0
+}
+
+/**
+ * Abrir una fila.
+ *
+ * Dos caminos, y la diferencia no es un detalle (docs/PLAN.md §3.1):
+ *  - HOST PROPIO: la fila NO navega por su cuenta y aquí no se concatena
+ *    ninguna URL. Lo que se conoce se funde primero en el índice y el destino
+ *    pasa por `validatePlan`, que comprueba que está en el índice, que su URL
+ *    es de este origen y que el producto casa (§8.3); de ahí sale el mismo plan
+ *    de un salto que produce el planificador y lo lanza el mismo `runPlan`.
+ *  - HOST ENLAZADO: es OTRO origen, así que se abre en pestaña NUEVA con
+ *    `openUrl` —que sólo abre orígenes conocidos, y el del Confluence enlazado
+ *    lo es— y nunca con `NAVIGATE_DIRECT`, que se llevaría de sitio la pestaña
+ *    en la que el usuario está trabajando.
+ *
+ * @param {object} item una fila de `todayRows()`
+ * @param {{card?: HTMLElement|null}} opts dónde colgar el fallo, si hay dónde
+ * @returns {Promise<boolean>} si de verdad se lanzó el viaje
+ */
+async function openTodayItem(item, { card = null } = {}) {
+  const site = state.site
+  if (!item || !site) return false
+
+  const enlazado = linkedSite(state.linkedContext)
+  if (enlazado && item.host === enlazado.host) {
+    // El id se valida aquí aunque venga de nuestro propio módulo: de esto sale
+    // una URL, y una URL se monta sólo con lo que ha pasado una validadora.
+    if (item.kind !== 'confluence-page' || !/^\d{1,19}$/.test(String(item.id))) return false
+    openUrl(enlazado.origin + canonicalPagePath(enlazado, item.id))
+    return true
+  }
+  if (item.host !== site.host) return false
+
+  await learnTodayItem(item, site)
+  const r = validatePlan(
+    { navigate: true, mode: 'direct', destination: { kind: item.kind, id: item.id } },
+    { index: state.index, origin: site.origin, host: site.host, here: state.tabUrl, site }
+  )
+  if (!r.ok || !r.plan?.navigate) {
+    const motivo = r.reason || 'el plan no vale'
+    log.warn('Navegación fallida', `${item.id} · ${motivo}`)
+    const aviso = `No puedo abrir ${item.id}: ${motivo}`
+    if (card) card.appendChild(noticeNode(aviso, true))
+    else showNotice(aviso, true, { force: true })
+    announce(aviso)
+    return false
+  }
+
+  // `runPlan` cuelga lo que falle de la tarjeta que se le da. La lista de «hoy»
+  // no es una burbuja del chat, así que sin tarjeta se le da una caja suelta y
+  // lo que escriba ahí se repite en el chat, que es el sitio que siempre está
+  // (§8.14: todo fallo silencioso tiene contraparte visible).
+  const caja = card || document.createElement('div')
+  await runPlan(r.plan, 'direct', caja)
+  if (!card && caja.textContent) showNotice(caja.textContent, true, { force: true })
+  // Un salto directo no tiene «Parar» ni `PLAN_FINISHED` que vuelva a encender
+  // los botones que `runPlan` apagó, y mirar la siguiente fila es justo lo que
+  // se hace después (la misma cola que dejó `openIssueFromResults`).
+  if (card) for (const b of card.querySelectorAll('button')) b.disabled = false
+  return true
+}
+
+/**
+ * Lo que se va a abrir, en el índice.
+ *
+ * Sin esto `validatePlan` rechaza el destino, que es exactamente lo que tiene
+ * que hacer: el índice es la lista de lo que Faro sabe que existe en este
+ * sitio. Se funde con las MISMAS funciones que usan la lista de una búsqueda
+ * (`harvestFromSearch`) y la pantalla de páginas base (`mergePagesIntoIndex`),
+ * para que no haya una tercera forma de meter algo en el índice.
+ *
+ * Se escribe en disco aquí mismo y no por `markIndexDirty`: esto es un clic del
+ * usuario fuera de un turno, y `persistIndex()` sólo corre al final de uno.
+ */
+async function learnTodayItem(item, site) {
+  if (item.kind === 'jira-issue') {
+    const { index, added } = harvestFromSearch([{ key: item.id, summary: item.title }], { site, index: state.index })
+    if (!added) return
+    state.index = index
+    await saveIndex(site.host, index).catch((err) => log.warn('Índice sin guardar', String(err?.message || err)))
+    log.ok('Índice ampliado', `+${added} · total ${indexSize(index)}`)
+    return
+  }
+  if (state.index?.pages?.[item.id]) return
+  await mergePagesIntoIndex([{ id: item.id, title: item.title }])
+}
+
+/**
+ * «Analizar»: navega hasta la fila y deja la pregunta PREPARADA.
+ *
+ * No manda nada (§8.20). La intención se apunta ANTES de navegar a propósito:
+ * `refreshTab` puede correr en cuanto la pestaña cambie, y apuntarla después
+ * sería llegar tarde a la página a la que se acaba de ir. Si el viaje no sale,
+ * la intención se tira.
+ */
+async function analyzeTodayItem(item) {
+  if (!item?.host) return false
+  const diario = await getActivity(item.host)
+  state.pendingIntent = {
+    host: item.host,
+    kind: item.kind,
+    id: item.id,
+    question: analyzeQuestion(item, diario),
+    at: Date.now(),
+  }
+  const abierto = await openTodayItem(item)
+  if (!abierto) state.pendingIntent = null
+  return abierto
+}
+
+/**
+ * ¿Hemos llegado a la página que esperaba una pregunta? Entonces se fija la
+ * Skill y se escribe en el cuadro. La llama `refreshTab`, la última.
+ */
+async function consumePendingIntent(site) {
+  const intent = state.pendingIntent
+  if (!intent) return
+  // Caduca sola: dos minutos son de sobra para que cargue una página y poco
+  // para que el usuario se haya ido a otra cosa. Sin esto, una pregunta
+  // preparada aparecería media hora después en un sitio donde ya no viene a
+  // cuento, encima de lo que el usuario estuviera escribiendo.
+  if (Date.now() - intent.at > TODAY_LIMITS.intentMs) {
+    state.pendingIntent = null
+    return
+  }
+  if (!site || site.host !== intent.host) return
+  // Host Y identificador, como `esLoAbierto` de today.js: aquí no hay URLs que
+  // comparar, y una clave que es prefijo de otra no es la misma página (M3).
+  const aqui =
+    intent.kind === 'jira-issue'
+      ? validIssueKey(site.issueKey) === intent.id
+      : String(site.pageId || currentPageId(state.index, state.tabUrl) || '') === intent.id
+  if (!aqui) return
+
+  state.pendingIntent = null
+  // La Skill se fija de verdad y se guarda, como en «Pedirlo numerado»: el
+  // desplegable podía estar en otra cosa y el turno habría salido en otro modo.
+  setSkill('analisis')
+  await saveSite(site.host, { skill: 'analisis' }).catch(() => {})
+  el.input.value = intent.question
+  autoGrow()
+  el.input.focus()
+  // Que la pregunta está escrita y que la manda ÉL hay que decirlo: un cuadro
+  // que se rellena solo, sin voz, es magia (A2).
+  announce('Pregunta de Análisis preparada en el cuadro. La mandas tú cuando quieras.')
+  log.info('Qué mirar hoy', 'pregunta de Análisis preparada en el cuadro, sin mandar')
+}
+
+/**
+ * «Ya lo he visto»: esa fila deja de recomendarse hasta que cambie.
+ *
+ * Se guarda CUÁNDO estaba cambiada la cosa al descartarla, no cuándo se
+ * descartó, que es lo que hace que vuelva sola en cuanto alguien la toca
+ * (`dismissItem`). Se escribe con el mismo lee-funde-escribe del diario y
+ * tocando SÓLO `dismissed`, que no escribe ningún otro: ni el service worker
+ * (que apunta visitas) ni `touchActivity` (que apunta análisis y páginas base),
+ * así que la ventana entre la lectura y la escritura no puede perder más que
+ * una visita, igual que las demás (la cabecera de activity-store.js lo explica).
+ */
+async function dismissTodayItem(item) {
+  const host = String(item?.host || '')
+  const clave = activityKey(item?.kind, item?.id)
+  if (!host || !clave) return false
+  const actual = await getActivity(host)
+  await saveActivity(host, dismissItem(actual, clave, item.updatedAt, { host }))
+  // Y fuera de los candidatos que hay en memoria, para que la lista se repinte
+  // sin él sin tener que volver a leer nada.
+  state.today.candidates = state.today.candidates.filter(
+    (c) => !(c.host === host && activityKey(c.kind, c.id) === clave)
+  )
+  return true
+}
+
+/**
+ * «Borrar mi actividad»: el diario de este sitio se va entero, y con él su
+ * caché de «hoy».
+ *
+ * También el del Confluence ENLAZADO, cuando lo hay: sus páginas salen en esta
+ * misma lista y desde un Jira el usuario no abre nunca el panel de aquel host,
+ * así que dejarlo sería prometer un borrado a medias.
+ */
+async function clearMyActivity() {
+  const host = state.site?.host ?? state.lastHost
+  if (!host) return false
+  const enlazado = linkedSite(state.linkedContext)
+  await clearActivity(host)
+  await clearTodayCache(host)
+  if (enlazado && enlazado.host !== host) {
+    await clearActivity(enlazado.host)
+    await clearTodayCache(enlazado.host)
+  }
+  state.today = emptyToday()
+  log.ok('Qué mirar hoy', `actividad borrada en ${host}${enlazado && enlazado.host !== host ? ` y ${enlazado.host}` : ''}`)
+  announce('Actividad borrada.')
+  return true
+}
+
+/**
+ * Apunta en el diario lo que SÓLO el panel sabe. Nunca lanza.
+ *
+ * Las tres condiciones son las MISMAS que aplica el service worker antes de
+ * apuntar una visita, y por eso se preguntan aquí y no en el módulo: los dos
+ * interruptores y que el host esté configurado. Un sitio por el que se pasa sin
+ * haberlo configurado no es un sitio que se use, y el diario es de los que se
+ * usan (§8.20).
+ */
+async function noteActivity(host, evento) {
+  if (!host || !state.settings.restTools || !state.settings.todaySuggestions) return null
+  const saved = await getSite(host)
+  if (!saved?.configured) return null
+  return recordActivity(host, evento).catch((err) => {
+    log.info('Qué mirar hoy no disponible', `no he podido apuntar la actividad de ${host} · ${String(err?.message || err)}`)
+    return null
+  })
+}
+
+/**
+ * Que acabas de analizar esto, cuándo, con cuántas observaciones y de qué
+ * familia: la razón más fuerte que puede tener una fila de «hoy».
+ *
+ * La ruta no viaja: la apuntó la VISITA, que es quien sabe de qué URL vino, y
+ * el único escritor de lo visto es el service worker.
+ */
+async function noteAnalyzed({ host, issueKey, pageId, product, issue, summary, site, answer, anchors }) {
+  const kind = product === 'jira' ? 'jira-issue' : 'confluence-page'
+  const id = product === 'jira' ? issueKey : pageId
+  if (!activityKey(kind, id)) return null
+  const titulo = cleanTabTitle(summary, site)
+  return noteActivity(host, {
+    event: 'analyzed',
+    kind,
+    id,
+    title: titulo,
+    notes: observationCount(answer, anchors),
+    // La familia sólo de una incidencia, y decidida con la MISMA función que
+    // elige qué pedirle al modelo (`issue-profile.js`): el diario guarda su
+    // forma, no su lista, para no meter el panel en el service worker.
+    family: product === 'jira' && issue ? issueFamily(issue, { summary: titulo }) : '',
+  })
+}
+
+/**
+ * Cuántas observaciones trajo la respuesta.
+ *
+ * La misma escalera que `offerNotes`: la prosa numerada —adaptada si el modelo
+ * numeró «a su manera»— y, si ahí no hay números, los del bloque de anclas. Se
+ * vuelve a calcular aquí en vez de esperar a `offerNotes` porque el gancho del
+ * turno va antes que las marcas: son funciones puras sobre un texto que ya está
+ * en memoria (bajo 5 ms en `npm run bench`), y lo que se apunta es cuántas
+ * observaciones TUVO el análisis, no cuántas se pudieron subrayar — que una cita
+ * no case es cosa de la página, no de lo que el modelo dijo.
+ *
+ * Límite asumido: una respuesta que no numera en ningún sitio y que sólo
+ * `collectSegmentedNotes` acaba troceando se apunta con 0. Es el camino de
+ * último recurso y el único que no se puede saber sin gastar otro turno.
+ */
+function observationCount(answer, anchors) {
+  const adaptada = normalizeNumbering(answer, { expected: expectedCount(anchors), shortAnswer: NOTE_LIMITS.shortAnswer })
+  return observationNumbers(adaptada.prose, anchors).numeros.length
+}
+
+// ------------------------------------------ qué mirar hoy: lo que se ve (H11)
+
+/**
+ * La interfaz de «Qué mirar hoy»: la insignia de la cabecera, el bloque del
+ * chat vacío y la pantalla con la lista entera.
+ *
+ * Tres cosas que no cambian según dónde se pinte:
+ *  1. Cada fila dice POR QUÉ está ahí, en español, y ese texto lo escribió
+ *     `today.js`, no el modelo. Una recomendación que no se puede juzgar de un
+ *     vistazo es una bandeja más (§8.20).
+ *  2. Nada se abre ni se pregunta solo. «Abrir» navega por el índice y
+ *     `validatePlan`; «Analizar» además deja la pregunta ESCRITA en el cuadro y
+ *     cierra la pantalla, porque una pregunta que no se ve no se puede corregir
+ *     antes de mandarla —y la manda el usuario—.
+ *  3. Todo se construye con `createElement`/`textContent`: los títulos son
+ *     texto de Jira y de Confluence, escrito por quien creó la página (§8.12).
+ */
+
+/**
+ * El presupuesto del chat vacío, en LÍNEAS de lo que va debajo del párrafo.
+ *
+ * Ahí caben tres cosas a la vez: las filas de «hoy», las tres sugerencias que
+ * van al modelo y las pastillas de búsqueda al instante de H8. A 320 px cada
+ * una ocupa su línea y las pastillas van de dos en dos, así que el bloque
+ * entero sólo cabe mientras la suma no pase de `lines`; por encima, «hoy» se
+ * degrada a UNA línea que abre la pantalla (decisión 3 de docs/PLAN.md §3.4).
+ *
+ * De dónde salen los números: tres sugerencias (`SUGGESTION_COUNT`) + tres
+ * filas con su rótulo y su «Ver todo» son 8, y con dos pastillas y su rótulo,
+ * 10; las cuatro pastillas que puede llegar a ofrecer H8 lo pasan, y ahí se
+ * degrada. Es aritmética, no una medida: queda por confirmar a 320 px en el
+ * espejo del banco, que es lo único que mide de verdad (`faroPreview.check()`).
+ */
+const EMPTY_LIMITS = {
+  lines: 10,
+  chipsPerLine: 2,
+}
+
+/** Los tres grupos de la pantalla, en el orden en que se leen. */
+const TODAY_GROUPS = ['cambio', 'tuyo', 'proyecto']
+
+/** ¿Está encendido lo de «hoy»? Los dos interruptores, como en `loadToday`. */
+function todayEnabled() {
+  return !!(state.settings.restTools && state.settings.todaySuggestions)
+}
+
+/**
+ * ¿Caben las filas de «hoy» en el chat vacío con lo que ya hay debajo?
+ *
+ * El criterio no MIDE nada: cuenta piezas, que es lo único que se puede decidir
+ * sin tener el panel delante (y el panel puede estar oculto cuando se pinta).
+ */
+function emptyFits(rows, chips) {
+  // El rótulo y el «Ver todo» que acompañan a las filas.
+  const deHoy = rows > 0 ? rows + 2 : 0
+  // Y el rótulo de las pastillas, más las líneas que ocupen envolviendo.
+  const dePastillas = chips > 0 ? 1 + Math.ceil(chips / EMPTY_LIMITS.chipsPerLine) : 0
+  return deHoy + SUGGESTION_COUNT + dePastillas <= EMPTY_LIMITS.lines
+}
+
+/** Lo que se ve de «hoy», de una vez: la insignia, el chat vacío y la pantalla si está abierta. */
+function paintTodayUi() {
+  paintTodayBadge()
+  paintTodayBlock()
+  if (!$('screen-today').classList.contains('hidden')) paintToday().catch(console.error)
+}
+
+/**
+ * La insignia del botón de la cabecera.
+ *
+ * El número va `aria-hidden` y quien lo dice es el NOMBRE del botón, que cambia
+ * con él: un `aria-label` fijo taparía al `title` y un lector de pantalla oiría
+ * «Qué mirar hoy» con tres novedades y con ninguna (la lección de `#btn-memory`
+ * en la revisión de H5). Y el botón se enciende cuando hay algo: con la
+ * insignia sola, a 320 px, un número de 10 px es todo lo que avisa.
+ */
+function paintTodayBadge() {
+  const n = todayEnabled() ? todayCount() : 0
+  const insignia = $('today-count')
+  insignia.textContent = n ? String(n) : ''
+  insignia.classList.toggle('hidden', !n)
+  const boton = $('btn-today')
+  const nombre = n ? `Qué mirar hoy: ${n} ${n === 1 ? 'novedad' : 'novedades'}` : 'Qué mirar hoy'
+  boton.title = nombre
+  boton.setAttribute('aria-label', nombre)
+  boton.classList.toggle('on', n > 0)
+}
+
+/**
+ * El bloque del chat vacío: hasta `TODAY_LIMITS.emptyRows` filas y «Ver todo».
+ *
+ * Se repinta SÓLO esta caja, nunca el estado vacío entero: repintarlo volvería
+ * a anunciar «Listo para escuchar» al lector de pantalla cada vez que llega una
+ * lectura (A2, el mismo motivo por el que los chips se pintan aparte). Sin
+ * filas que enseñar, la caja se queda vacía y oculta y el chat vacío es byte a
+ * byte el de siempre.
+ *
+ * @param {HTMLElement|null} box la caja, si quien llama ya la tiene
+ * @param {{chips?: number|null}} opts cuántas pastillas hay debajo; si no se
+ *        dice, se cuentan las que estén pintadas
+ */
+function paintTodayBlock(box = null, { chips = null } = {}) {
+  const caja = box || el.chat.querySelector('.empty .today')
+  if (!caja?.isConnected) return
+  caja.textContent = ''
+  const todas = todayEnabled() ? todayRows() : []
+  caja.classList.toggle('hidden', !todas.length)
+  if (!todas.length) return
+
+  const filas = todas.slice(0, TODAY_LIMITS.emptyRows)
+  const pastillas = Number.isInteger(chips) ? chips : el.chat.querySelectorAll('.empty .search-chip').length
+  if (!emptyFits(filas.length, pastillas)) {
+    // No cabe: una línea, y lo demás en su pantalla. Quien abre el panel para
+    // preguntar algo no puede encontrarse media pantalla de recomendaciones.
+    caja.appendChild(todayMoreButton(`Qué mirar hoy (${todas.length})`))
+    return
+  }
+
+  const kicker = document.createElement('div')
+  kicker.className = 'today-kicker'
+  kicker.textContent = 'Qué mirar hoy'
+  caja.appendChild(kicker)
+  for (const item of filas) caja.appendChild(todayRowNode(item, { compact: true }))
+  if (todas.length > filas.length) caja.appendChild(todayMoreButton(`Ver todo (${todas.length})`))
+}
+
+/** «Ver todo (8)» / «Qué mirar hoy (8)»: lo único que hace es abrir la pantalla. */
+function todayMoreButton(texto) {
+  const b = document.createElement('button')
+  b.className = 'today-more'
+  b.type = 'button'
+  b.textContent = texto
+  b.addEventListener('click', () => showTodayScreen().catch(console.error))
+  return b
+}
+
+/**
+ * Una fila, en sus dos formas.
+ *
+ * Compacta (chat vacío): la fila ENTERA es el botón que la abre. A 320 px no
+ * caben tres acciones, y lo que se quiere desde ahí es ir.
+ * Completa (pantalla): «Abrir», «Analizar» y la × de «Ya lo he visto», cada una
+ * con el título del ítem en su nombre accesible: sin eso, un lector de pantalla
+ * lee ocho filas de «Abrir, botón» seguidas.
+ */
+function todayRowNode(item, { compact = false, desde = 0 } = {}) {
+  const nuevo = desde > 0 && item.updatedAt > desde
+  const row = document.createElement(compact ? 'button' : 'div')
+  row.className = 'today-row' + (compact ? ' compact' : '') + (nuevo ? ' new' : '')
+  if (compact) row.type = 'button'
+
+  // Un `span` y no un `div`: en la forma compacta la fila ES un `<button>`, y
+  // dentro de un botón sólo cabe contenido de texto (lo mismo que hacen las
+  // filas de una búsqueda y las páginas base sugeridas).
+  const main = document.createElement('span')
+  main.className = 'today-main'
+
+  const kind = document.createElement('span')
+  kind.className = 'today-kind'
+  kind.textContent = item.kind === 'jira-issue' ? item.id : 'Confluence'
+
+  const title = document.createElement('span')
+  title.className = 'today-title'
+  title.textContent = item.title
+  // El título entero y de qué host es: la fila lo recorta con elipsis, y desde
+  // un Jira la mitad de las filas pueden ser del Confluence enlazado.
+  title.title = `${item.title} · ${item.host}`
+
+  main.append(kind, title)
+  if (item.why) {
+    const why = document.createElement('span')
+    why.className = 'today-why'
+    why.textContent = item.why
+    why.title = item.why
+    main.appendChild(why)
+  }
+  row.appendChild(main)
+
+  if (compact) {
+    row.setAttribute('aria-label', [`Abrir «${item.title}»`, item.why].filter(Boolean).join(' · '))
+    row.addEventListener('click', () => openTodayItem(item).catch(console.error))
+    return row
+  }
+
+  const acciones = document.createElement('div')
+  acciones.className = 'today-actions'
+
+  const abrir = document.createElement('button')
+  abrir.className = 'ghost small'
+  abrir.type = 'button'
+  abrir.textContent = 'Abrir'
+  abrir.setAttribute('aria-label', `Abrir «${item.title}»`)
+  abrir.addEventListener('click', () => openTodayItem(item, { card: row }).catch(console.error))
+
+  // «Analizar» fija la Skill y escribe en el cuadro: con un turno en vuelo eso
+  // dejaría lo que viene después hablando de otro modo, así que lleva el mismo
+  // gancho que los botones del chat (H6) y `setStreaming` los devuelve.
+  const analizar = document.createElement('button')
+  analizar.className = 'ghost small ' + NEEDS_IDLE
+  analizar.type = 'button'
+  analizar.textContent = 'Analizar'
+  analizar.setAttribute('aria-label', `Analizar «${item.title}»`)
+  analizar.disabled = state.streaming
+  analizar.addEventListener('click', () => analyzeFromToday(item).catch(console.error))
+
+  const x = document.createElement('button')
+  x.className = 'today-x'
+  x.type = 'button'
+  x.title = 'Ya lo he visto'
+  x.setAttribute('aria-label', `Ya lo he visto: «${item.title}»`)
+  x.textContent = '×'
+  x.addEventListener('click', () => forgetTodayRow(item).catch(console.error))
+
+  acciones.append(abrir, analizar, x)
+  row.appendChild(acciones)
+  return row
+}
+
+/**
+ * La pantalla: se abre con la lista de AHORA y pone al día «cuándo la miré».
+ *
+ * Lo nuevo se marca contra la última vez que se miró, así que esa fecha se
+ * captura ANTES de ponerla al día: si no, abrir la pantalla borraría justo la
+ * marca que dice qué hay que mirar.
+ */
+async function showTodayScreen() {
+  const host = state.site?.host ?? state.lastHost
+  const saved = host ? await getSite(host) : null
+  // El interruptor por sitio, normalizado al leer: lo que no sea `true` no lo
+  // escribió Faro (la misma regla que aplica `loadToday`).
+  $('today-off').checked = saved?.todayOff === true
+  const desde = state.today.seenAt
+  await markTodaySeen()
+  await paintToday({ desde })
+  showScreen('screen-today')
+  paintTodayBadge()
+}
+
+/** La lista entera, por grupos, con lo que haya que decir encima. */
+async function paintToday({ desde = 0 } = {}) {
+  const lista = $('today-list')
+  lista.textContent = ''
+  const filas = todayEnabled() ? todayRows() : []
+
+  // Por qué la lista viene corta, si es que viene corta: lo que decidió la
+  // tregua de `rest-notice.js`, que es la misma de la lista de una búsqueda.
+  for (const aviso of state.today.notices) lista.appendChild(noticeNode(aviso, true))
+
+  for (const grupo of TODAY_GROUPS) {
+    const suyas = filas.filter((f) => f.group === grupo)
+    if (!suyas.length) continue
+    const h = document.createElement('h2')
+    h.className = 'today-group'
+    h.textContent = todayGroupTitle(grupo)
+    lista.appendChild(h)
+    for (const item of suyas) lista.appendChild(todayRowNode(item, { desde }))
+  }
+
+  setTodayStatus(todayStatusText(filas))
+  await paintTodayPermission()
+  await paintTodayActivity()
+}
+
+/** El rótulo de cada grupo. El ámbito sale del sitio, ya validado por `parseAtlassianUrl`. */
+function todayGroupTitle(grupo) {
+  if (grupo === 'cambio') return 'Cambió desde que lo miraste'
+  if (grupo === 'tuyo') return 'Lo tuyo'
+  const ambito = state.site?.projectKey || state.site?.spaceKey || ''
+  return ambito ? `Nuevo en ${ambito}` : 'Nuevo por aquí'
+}
+
+function setTodayStatus(texto) {
+  $('today-status').textContent = texto || ''
+}
+
+/**
+ * La línea de estado: qué hay, de cuándo es, o por qué no hay nada.
+ *
+ * Los dos interruptores y el de este sitio se dicen por su nombre: una pantalla
+ * vacía sin explicación se lee como «aquí no hay nada», que es justo lo
+ * contrario de lo que pasa (§8.14).
+ */
+function todayStatusText(filas) {
+  if (!state.settings.restTools) return 'Apagado en Ajustes: «Consultar la API de Jira y Confluence con mi sesión».'
+  if (!state.settings.todaySuggestions) return 'Apagado en Ajustes: «Qué mirar hoy».'
+  if (!(state.site?.host ?? state.lastHost)) return 'Abre una página de Jira o de Confluence y vuelve.'
+  if ($('today-off').checked) return 'Apagado en este sitio: quita la casilla de abajo para volver a mirar.'
+  if (state.today.loading) return 'Mirando qué ha cambiado…'
+  if (!filas.length) {
+    return state.today.fetchedAt
+      ? `Nada que mirar ahora mismo · leído a las ${clockTime(state.today.fetchedAt)}`
+      : 'Todavía no he mirado nada en este sitio.'
+  }
+  return `${filas.length} ${filas.length === 1 ? 'cosa' : 'cosas'} que mirar · leído a las ${clockTime(state.today.fetchedAt)}`
+}
+
+/**
+ * El permiso que falta, si falta: el del sitio de la pestaña o el del
+ * Confluence enlazado, que es a quien se le pregunta desde el panel.
+ *
+ * En `*.atlassian.net` no falta nunca (lo declara el manifest); en un sitio
+ * propio, sin él no hay content script que pregunte ni cookies que mandar.
+ */
+async function todayMissingPermission() {
+  const site = state.site
+  if (site && !(await hasHostPermission(site.origin))) return { origin: site.origin, host: site.host, tabId: state.tabId }
+  const enlazado = linkedSite(state.linkedContext)
+  if (enlazado && !(await hasHostPermission(enlazado.origin))) {
+    return { origin: enlazado.origin, host: enlazado.host, tabId: null }
+  }
+  return null
+}
+
+async function paintTodayPermission() {
+  const fila = $('today-perm')
+  const falta = todayEnabled() ? await todayMissingPermission() : null
+  fila.classList.toggle('hidden', !falta)
+  if (falta) $('today-perm-text').textContent = `Sin permiso sobre ${falta.host} no puedo mirar qué ha cambiado ahí.`
+}
+
+/** «Dar permiso» desde aquí: la tarjeta del chat queda tapada por esta pantalla. */
+async function askTodayPermission() {
+  const falta = await todayMissingPermission()
+  if (!falta) return
+  const btn = $('btn-today-permission')
+  btn.disabled = true
+  const r = await requestHostPermission(falta)
+  btn.disabled = false
+  if (r.ok) {
+    setTodayStatus(`Listo. Ya puedo mirar qué ha cambiado en ${falta.host}.`)
+    await refreshToday()
+    return
+  }
+  setTodayStatus(r.denied ? manualPermissionText(falta.origin) : 'Permiso dado, pero no he podido preguntar: ' + r.error)
+}
+
+/**
+ * Qué se guarda y dónde, con las cuentas de este sitio.
+ *
+ * Es la promesa de §8.20 escrita donde se ve: el diario es del usuario, vive en
+ * su navegador, no entra en ningún prompt y se borra de un botón. Los números
+ * son del host que hay delante; el del Confluence enlazado se borra con él.
+ */
+async function paintTodayActivity() {
+  const host = state.site?.host ?? state.lastHost
+  const diario = host ? await getActivity(host) : null
+  const { entradas, analisis, base } = activityCounts(diario)
+  $('today-activity-text').textContent =
+    `El diario son ids, claves y títulos —nunca la dirección entera ni lo que pone la página— de lo que abres, ` +
+    `analizas o usas como página base aquí: ${entradas} ${entradas === 1 ? 'entrada' : 'entradas'}, ` +
+    `${analisis} ${analisis === 1 ? 'análisis' : 'análisis'} y ${base} ${base === 1 ? 'página base' : 'páginas base'}. ` +
+    `Se guarda en este navegador, ${ACTIVITY_LIMITS.maxAgeDays} días como mucho, no sale de aquí y no entra en nada de ` +
+    `lo que se le manda al modelo. Borrarlo no borra nada en Jira ni en Confluence.`
+}
+
+/** Las cuentas del diario: números, nunca títulos ni ids (§8.20). */
+function activityCounts(activity) {
+  const items = Object.values(activity?.items || {})
+  return {
+    entradas: items.length,
+    analisis: items.filter((i) => i?.analyzedAt).length,
+    base: items.filter((i) => i?.sourceAt).length,
+  }
+}
+
+/**
+ * «Analizar» desde una fila: navega, deja la pregunta escrita y cierra.
+ *
+ * Cerrar no es cosmético: la pregunta se escribe en el cuadro del chat, que
+ * está DEBAJO de esta pantalla, y con `#app` inerte el foco ni siquiera
+ * llegaría. Quien no quiere mandarla la borra; nadie la manda por él (§8.20).
+ */
+async function analyzeFromToday(item) {
+  if (state.streaming) {
+    showNotice('Espera a que termine la respuesta.', false, { force: true })
+    return
+  }
+  const abierto = await analyzeTodayItem(item)
+  if (!abierto) {
+    setTodayStatus('No he podido abrir esa fila; lo que ha pasado está en el chat.')
+    return
+  }
+  hideScreens()
+}
+
+/** «Ya lo he visto»: fuera de la lista hasta que vuelva a cambiar. */
+async function forgetTodayRow(item) {
+  if (!(await dismissTodayItem(item))) return
+  // En el Registro, sólo de qué host: un título ahí lo lee cualquiera que mire
+  // la pantalla de estado con el panel abierto (§8.20).
+  log.info('Qué mirar hoy', `una fila descartada en ${item.host}`)
+  announce(`Quitada de la lista: ${item.title}.`)
+  await paintToday()
+  paintTodayBadge()
+}
+
+/** «Actualizar»: se salta la caché de sesión y vuelve a preguntar. */
+async function refreshToday() {
+  const btn = $('btn-today-refresh')
+  btn.disabled = true
+  setTodayStatus('Mirando qué ha cambiado…')
+  try {
+    await loadToday({ force: true })
+  } finally {
+    btn.disabled = false
+  }
+  await paintToday()
+  paintTodayBadge()
+}
+
+/** «Borrar mi actividad»: el diario de este sitio y el del enlazado, y su caché. */
+async function forgetTodayActivity() {
+  if (!(await clearMyActivity())) return
+  await paintToday()
+  paintTodayBadge()
+  paintTodayBlock()
+}
+
+/**
+ * «No sugerir nada en este sitio».
+ *
+ * Es por SITIO y no un ajuste global: un Confluence de referencia que no cambia
+ * nunca se calla sin apagar las recomendaciones del Jira donde se trabaja.
+ * Apagarlo tira lo leído; encenderlo vuelve a preguntar en el acto, porque si
+ * no habría que cambiar de pestaña para ver algo.
+ */
+async function setTodayOff(off) {
+  const host = state.site?.host ?? state.lastHost
+  if (!host) return
+  await saveSite(host, { todayOff: !!off })
+  log.info('Qué mirar hoy', `${off ? 'apagado' : 'encendido'} en ${host}`)
+  if (off) {
+    state.today = emptyToday()
+    announce('No volveré a sugerir nada en este sitio.')
+    await paintToday()
+    paintTodayUi()
+    return
+  }
+  announce('Vuelvo a mirar qué cambia en este sitio.')
+  await refreshToday()
+  paintTodayBlock()
+}
+
+/**
+ * La casilla de «Qué mirar hoy» en Ajustes cuelga de la de las lecturas REST.
+ *
+ * Desactivada conserva lo que el usuario eligió (un `input` desactivado no
+ * pierde su `checked`), así que apagar y encender el interruptor maestro no le
+ * cambia esta preferencia por detrás; lo que hace es decir por qué no se puede
+ * marcar, en vez de dejar una casilla que no haría nada.
+ */
+function paintTodaySetting() {
+  const maestro = $('set-rest-tools').checked
+  $('set-today').disabled = !maestro
+  $('set-today-hint').classList.toggle('hidden', maestro)
 }

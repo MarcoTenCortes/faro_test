@@ -92,6 +92,47 @@ test('H7: el árbol leído de la API tiene tope de peticiones, y las páginas si
   assert(!('restMaxPages' in INDEX_LIMITS), 'un segundo tope de páginas acabaría diciendo otra cosa que maxPages')
 })
 
+// ------------------------------------------------------------------ H11
+
+test('H11: «Qué mirar hoy» viene activado y está SUBORDINADO al interruptor maestro', () => {
+  eq(DEFAULT_SETTINGS.todaySuggestions, true)
+  eq(migrateSettings({}).todaySuggestions, true, 'unos ajustes de antes de H11 no dejan el panel sin él')
+  eq(migrateSettings(undefined).todaySuggestions, true)
+  eq(migrateSettings({ todaySuggestions: false }).todaySuggestions, false, 'lo que eligió el usuario manda')
+  for (const raro of ['false', 0, 1, null, {}]) {
+    eq(migrateSettings({ todaySuggestions: raro }).todaySuggestions, true, JSON.stringify(raro))
+  }
+  const raw = { todaySuggestions: false }
+  migrateSettings(raw)
+  eq(raw, { todaySuggestions: false }, 'y no se muta lo que entra')
+  // Subordinado: `restTools` sigue siendo el maestro de TODA lectura REST, así
+  // que quien lo apague no consulta nada aunque esto siga marcado. Lo
+  // comprueban quienes leen los dos (el service worker al apuntar y el panel al
+  // consultar); aquí lo que se pina es que son DOS ajustes distintos.
+  assert('restTools' in DEFAULT_SETTINGS && 'todaySuggestions' in DEFAULT_SETTINGS)
+  eq(migrateSettings({ restTools: false }).todaySuggestions, true, 'apagar el maestro no desmarca la casilla')
+})
+
+test('H11: la actividad y la caché de hoy tienen su clave POR HOST, distintas de las demás', () => {
+  eq(typeof STORAGE_KEYS.activity, 'function', 'es una clave por host, como el índice o el perfil')
+  eq(typeof STORAGE_KEYS.today, 'function')
+  eq(STORAGE_KEYS.activity('jira.simplprogramme.eu'), 'faro:actividad:jira.simplprogramme.eu')
+  eq(STORAGE_KEYS.today('jira.simplprogramme.eu'), 'faro:today:jira.simplprogramme.eu')
+  const host = 'x.eu'
+  const otras = [
+    STORAGE_KEYS.index(host),
+    STORAGE_KEYS.context(host),
+    STORAGE_KEYS.memory(host),
+    STORAGE_KEYS.session(host),
+    STORAGE_KEYS.sessionWeight(host),
+    STORAGE_KEYS.profile(host),
+    STORAGE_KEYS.sourceHistory(host),
+  ]
+  assert(!otras.includes(STORAGE_KEYS.activity(host)), 'el diario no pisa ninguna de las que ya había')
+  assert(!otras.includes(STORAGE_KEYS.today(host)), 'ni la caché')
+  assert(STORAGE_KEYS.activity(host) !== STORAGE_KEYS.today(host), 'y el diario no es la caché: uno dura 30 días y la otra 15 minutos')
+})
+
 // ------------------------------------------------------------------ H9
 
 test('H9: el perfil del proyecto tiene su clave POR HOST, distinta de las demás', () => {

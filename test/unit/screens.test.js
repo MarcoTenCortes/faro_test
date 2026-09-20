@@ -17,10 +17,14 @@ const htmlIds = new Set([...HTML.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]))
 const pantallas = new Set([...HTML.matchAll(/class="screen hidden" id="([^"]+)"/g)].map((m) => m[1]))
 
 test('ESCAPE_CLOSES: sólo las pantallas de consulta, cada una con su botón de cerrar', () => {
-  eq(Object.keys(ESCAPE_CLOSES).sort(), ['screen-log', 'screen-memory', 'screen-sources'])
+  eq(Object.keys(ESCAPE_CLOSES).sort(), ['screen-log', 'screen-memory', 'screen-sources', 'screen-today'])
   eq(ESCAPE_CLOSES['screen-memory'], 'btn-memory-close')
   eq(ESCAPE_CLOSES['screen-log'], 'btn-log-close')
   eq(ESCAPE_CLOSES['screen-sources'], 'btn-sources-close')
+  // «Qué mirar hoy» (H11) es de consulta como las otras tres: cerrarla es volver
+  // al chat y no decide nada. Lo que sí decide —apagar el sitio, borrar el
+  // diario— son controles suyos, y Escape no los pulsa.
+  eq(ESCAPE_CLOSES['screen-today'], 'btn-today-close')
 })
 
 test('ESCAPE_DISMISSES: Ajustes se cierra sin pulsar su botón, porque «Listo» guarda', () => {

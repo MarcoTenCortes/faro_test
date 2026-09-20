@@ -71,14 +71,19 @@ export const STRICT = { titles: true, msgs: true, files: true }
  * MSG, igual.
  */
 export const MSG_SIN_EMISOR_HASTA = {
-  // JQL_SEARCH y FAVOURITE_FILTERS salieron al cablearlos H8: la lista de la
-  // tarjeta de búsqueda manda el primero desde `attachJqlResults` y los chips
-  // del chat vacío el segundo desde `loadSearchChipSources` (src/panel/panel.js).
-  // SPACE_PAGES salió al cablearlo H9: lo manda `restIndexFor` para leer el
-  // árbol del espacio de la API antes de gastar un turno del modelo. Así es
-  // como encoge.
-  RECENT_ISSUES: 'H11',
-  RECENT_PAGES: 'H11',
+  // VACÍA: los cinco que sembró H7 ya están cableados, y así es como esta lista
+  // encoge hasta desaparecer. JQL_SEARCH y FAVOURITE_FILTERS salieron en H8 (la
+  // lista de la tarjeta de búsqueda manda el primero desde `attachJqlResults` y
+  // los chips del chat vacío el segundo desde `loadSearchChipSources`);
+  // SPACE_PAGES en H9 (lo manda `restIndexFor` para leer el árbol del espacio de
+  // la API antes de gastar un turno del modelo); y RECENT_ISSUES y RECENT_PAGES
+  // en H11 (los manda `readToday`, que es quien pregunta «qué ha cambiado desde
+  // que lo miraste»). Todos en src/panel/panel.js.
+  //
+  // Sigue aquí, vacía y con su mecanismo probado, porque el hito que vuelva a
+  // sembrar un receptor sin emisor tiene que poder escribir su nombre y su hito
+  // sin inventarse nada: sin la lista, el paso «docs» avisaría de un mensaje
+  // huérfano durante hitos enteros y el aviso dejaría de significar algo.
 }
 
 /** Ficheros que se leen. Rutas relativas a la raíz del repo, siempre con «/». */

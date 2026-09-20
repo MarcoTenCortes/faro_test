@@ -71,6 +71,16 @@ export const DEFAULT_SETTINGS = {
    * comportamiento pinado y no cambia (docs/PLAN.md §3.3).
    */
   restTools: true,
+  /**
+   * «Qué mirar hoy» (H11): las recomendaciones por actividad reciente.
+   *
+   * Está SUBORDINADO a `restTools`: apagado el maestro, esto no consulta nada
+   * aunque siga marcado. Y manda sobre las dos cosas que hace esta función, no
+   * sólo sobre la lista: con él apagado el service worker tampoco APUNTA la
+   * visita, porque quien no quiere que el panel toque la API de su sitio
+   * tampoco quiere un diario de lo que abre (docs/PLAN.md §3.1, §8.20).
+   */
+  todaySuggestions: true,
 }
 
 /**
@@ -92,6 +102,9 @@ export function migrateSettings(raw) {
   // elegido se respeta; cualquier otra cosa en esa casilla no la escribió Faro
   // y cuenta como no elegida.
   if (typeof s.restTools !== 'boolean') s.restTools = DEFAULT_SETTINGS.restTools
+  // Igual con el de las sugerencias por actividad (H11): unos ajustes de antes
+  // no lo traen, y lo que no es un booleano no lo escribió Faro.
+  if (typeof s.todaySuggestions !== 'boolean') s.todaySuggestions = DEFAULT_SETTINGS.todaySuggestions
   return s
 }
 
@@ -187,6 +200,16 @@ export const STORAGE_KEYS = {
   // CONTEXT.md al vuelo (`referencesFromContext`) y no hay nada que guardar.
   // Una clave que nadie escribe es una promesa falsa.
   sourceHistory: (host) => `faro:source-history:${host}`,
+  // El diario local de actividad (H11): qué abriste, qué analizaste y qué usas
+  // como página base en ese host. Es del USUARIO y no sale del navegador; se
+  // borra con «Borrar mi actividad» y con «Olvidar este sitio». Por host de la
+  // ENTIDAD: una página del Confluence enlazado analizada desde Jira se apunta
+  // en el host de Confluence, que es donde su pestaña la verá.
+  activity: (host) => `faro:actividad:${host}`,
+  // Y la caché de lo que contestaron las API para «qué mirar hoy». Va en
+  // storage.session, como la sesión: abrir el panel cinco veces en una mañana
+  // no puede costar cinco tandas de peticiones, y al cerrar Chrome se va sola.
+  today: (host) => `faro:today:${host}`,
 }
 
 /**

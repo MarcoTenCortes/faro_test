@@ -21,7 +21,7 @@
   async function boot() {
     if (ready) return ready
     ready = (async () => {
-      const [{ NavRunner }, { MSG }, { onUrlChange }, { NAV_TIMING }] = await Promise.all([
+      const [{ NavRunner }, { MSG }, { onUrlChange, pageIdFromDom }, { NAV_TIMING }] = await Promise.all([
         import(url('src/content/runner.js')),
         import(url('src/shared/messages.js')),
         import(url('src/content/dom-utils.js')),
@@ -34,8 +34,12 @@
       // del import(): el NavRunner se construye después.
       const runner = new NavRunner({ timing: { ...NAV_TIMING } })
 
+      // El `pageId` va con el aviso porque en un Confluence Data Center la URL
+      // no lo lleva (`/display/ESPACIO/Título`) y el service worker, que es
+      // quien apunta la visita, no puede mirar el DOM (H11). Es lo ÚNICO que se
+      // añade: ni el título (lo sabe Chrome) ni nada de la página.
       onUrlChange((href) => {
-        chrome.runtime.sendMessage({ type: MSG.URL_CHANGED, url: href }).catch(() => {})
+        chrome.runtime.sendMessage({ type: MSG.URL_CHANGED, url: href, pageId: pageIdFromDom() }).catch(() => {})
       })
 
       // Pulsar el número de una observación no navega: avisa al panel para que
@@ -459,10 +463,18 @@
 
   // Avisa de que esta pestaña ya puede recibir pasos. Es lo que permite
   // retomar un recorrido después de una recarga completa.
+  //
+  // Lleva el `pageId` de la meta `ajs-page-id` por lo mismo que `URL_CHANGED`:
+  // es lo único que identifica una página de un Confluence Data Center, y el
+  // service worker no puede leer el DOM. Por eso se carga también dom-utils.js
+  // aquí, que es un módulo que el content script va a pedir igualmente en
+  // cuanto el panel le mande el primer mensaje.
   const announce = () => {
-    import(url('src/shared/messages.js'))
-      .then(({ MSG }) =>
-        chrome.runtime.sendMessage({ type: MSG.CONTENT_READY, url: location.href }).catch(() => {})
+    Promise.all([import(url('src/shared/messages.js')), import(url('src/content/dom-utils.js'))])
+      .then(([{ MSG }, { pageIdFromDom }]) =>
+        chrome.runtime
+          .sendMessage({ type: MSG.CONTENT_READY, url: location.href, pageId: pageIdFromDom() })
+          .catch(() => {})
       )
       .catch(() => {})
   }

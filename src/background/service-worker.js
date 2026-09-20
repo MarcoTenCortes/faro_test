@@ -11,8 +11,11 @@
  */
 
 import { MSG, sendToTab } from '../shared/messages.js'
-import { getSettings } from '../shared/storage.js'
+import { getSettings, getSites } from '../shared/storage.js'
 import { NAV_TIMING, STORAGE_KEYS } from '../shared/config.js'
+import { parseAtlassianUrl } from '../atlassian/site.js'
+import { visitFromUrl } from '../atlassian/activity.js'
+import { recordActivity } from '../shared/activity-store.js'
 
 const PLANS_KEY = 'faro:plans'
 
@@ -63,6 +66,52 @@ chrome.action?.onClicked.addListener(async (tab) => {
 })
 
 chrome.tabs.onRemoved.addListener((tabId) => setPlan(tabId, null))
+
+/**
+ * El diario de actividad: aquí es donde se apunta lo que el usuario abre.
+ *
+ * El worker es el ÚNICO escritor de «visto» (docs/PLAN.md §3.1): funciona con
+ * el panel cerrado y sin content script —que es lo normal en un Confluence
+ * propio sin permiso de host—, y tener un solo escritor evita que la misma
+ * visita se cuente dos veces desde dos sitios con dos relojes distintos.
+ *
+ * Sólo con `changeInfo.url`: `onUpdated` dispara varias veces por carga
+ * (`status`, `favIconUrl`, `title`…) y lo que interesa es la navegación, una
+ * vez. Lo primero es `parseAtlassianUrl`, que es puro y barato: una pestaña de
+ * cualquier otra web sale de aquí sin tocar el almacén.
+ */
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (!changeInfo?.url) return
+  recordVisitFor(changeInfo.url, { title: tab?.title }).catch(() => {})
+})
+
+/**
+ * Apunta una visita si es de un sitio configurado y las sugerencias están
+ * encendidas. Nunca lanza: el diario no puede romper una navegación.
+ *
+ * `restTools` es el interruptor maestro de toda lectura nueva y
+ * `todaySuggestions` el de esta función: con cualquiera de los dos apagado no
+ * se apunta NADA, porque quien no quiere que Faro consulte la API de su sitio
+ * tampoco quiere un diario de lo que abre (CLAUDE.md §8.20).
+ *
+ * Sólo hosts con `configured: true`: pasar por un Jira ajeno no es usarlo.
+ */
+async function recordVisitFor(url, { title = '', pageId = '' } = {}) {
+  const site = parseAtlassianUrl(url)
+  if (!site?.host) return null
+
+  const settings = await getSettings()
+  if (!settings.restTools || !settings.todaySuggestions) return null
+
+  const sites = await getSites()
+  if (!sites[site.host]?.configured) return null
+
+  // La URL se vuelve clase + identificador + ruta relativa, y nada más: ni la
+  // consulta ni el fragmento entran en el diario.
+  const visit = visitFromUrl(url, { title, pageId })
+  if (!visit) return null
+  return recordActivity(site.host, { event: 'seen', ...visit })
+}
 
 /**
  * Los ajustes que cambian en el panel llegan a la página al momento.
@@ -116,12 +165,25 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           sendResponse(await contentStatus(msg.tabId, msg.origin))
           return
 
+        // Los dos avisos del content script apuntan la visita ANTES de seguir
+        // con lo suyo: traen el `pageId` de la meta `ajs-page-id`, que es lo
+        // único que identifica una página `/display/ESPACIO/Título` de un
+        // Confluence Data Center y que `tabs.onUpdated` no puede saber. Va con
+        // `.catch` propio para que el diario no pueda tumbar un recorrido.
         case MSG.CONTENT_READY:
+          await recordVisitFor(msg.url || sender.tab?.url, {
+            title: sender.tab?.title,
+            pageId: msg.pageId,
+          }).catch(() => null)
           await onContentReady(sender.tab?.id)
           sendResponse({ ok: true })
           return
 
         case MSG.URL_CHANGED:
+          await recordVisitFor(msg.url || sender.tab?.url, {
+            title: sender.tab?.title,
+            pageId: msg.pageId,
+          }).catch(() => null)
           sendResponse({ ok: true })
           return
 

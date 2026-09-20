@@ -3,6 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- El id de la página, como lo pone un Confluence Server/Data Center: en él una
+     página es `/display/ESPACIO/Título` y la URL no lleva el id por ninguna
+     parte, así que esta meta es lo ÚNICO que lo dice. La lee `pageIdFromDom`
+     (src/content/dom-utils.js) para poder apuntar la visita (H11), y
+     `renderPage` la mantiene al día al cambiar de página, que es lo que hace el
+     servidor de verdad al servir cada una. -->
+<meta name="ajs-page-id" content="400">
 <title>Banco de pruebas · Faro</title>
 <link rel="stylesheet" href="/harness/harness.css">
 </head>
@@ -131,6 +138,7 @@
     <button class="rig-btn" data-act="chips">Búsquedas al instante de ENG-7 (chips + lista)</button>
     <button class="rig-btn" data-act="rest-index">Levantar el mapa por la API (árbol + perfil)</button>
     <button class="rig-btn" data-act="links">Enlaces del contenido y páginas que se pueden sugerir</button>
+    <button class="rig-btn" data-act="today">Qué mirar hoy: lo que ha cambiado desde que lo miraste</button>
     <button class="rig-btn" data-act="unsafe">Intentar pulsar «Eliminar»</button>
     <button class="rig-btn primary" data-act="selfcheck">Autocomprobación completa</button>
     <button class="rig-btn ghost" data-act="clear">Limpiar</button>

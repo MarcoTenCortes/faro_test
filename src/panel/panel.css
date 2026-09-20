@@ -1001,7 +1001,7 @@ html.faro-still .busy-bar i { animation: none; width: 100%; }
   white-space: nowrap;
 }
 /* La misma × sirve para quitar una página base de su lista (.source-x). */
-.pick-chip-x, .source-x {
+.pick-chip-x, .source-x, .today-x {
   flex: none;
   font: inherit;
   font-size: var(--text-lg);
@@ -1284,3 +1284,99 @@ html.faro-still .busy-bar i { animation: none; width: 100%; }
    palabra más larga. La etiqueta de un botón nunca se parte: quien envuelve es
    el texto de al lado. */
 .row > button { white-space: nowrap; }
+
+/* ------------------------------------------------- Qué mirar hoy (H11) */
+
+/* Dos sitios, la misma fila: el bloque del chat vacío (compacto, sin acciones:
+   pulsar la fila la abre) y la lista de la pantalla (con «Abrir», «Analizar» y
+   la × de «Ya lo he visto»). Son fichas sueltas sobre el fondo, como las
+   páginas base sugeridas, y no filas pegadas dentro de una caja: aquí cada una
+   lleva su porqué debajo y tres líneas pegadas no se distinguen.
+
+   El motivo va en el acento de TEXTO (--gold), igual que en «Sugeridas»: es lo
+   único que permite aceptar o descartar una recomendación de un vistazo
+   (§8.20), y si no se lee, la lista es una bandeja más. */
+.today { margin-top: var(--s4); text-align: left; }
+.today-kicker {
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: var(--s2);
+}
+/* El rótulo de cada grupo dentro de la pantalla («Cambió desde que lo miraste»,
+   «Lo tuyo», «Nuevo en SIMPL»). Hereda el aspecto de `.screen h2` y sólo ajusta
+   el aire: más pegado a su lista que un apartado cualquiera. */
+.today-group { margin: var(--s4) 0 var(--s2); }
+/* La lista, separada de los botones de abajo: son acciones de la pantalla
+   entera («Actualizar», «Borrar mi actividad»), no de la última fila. */
+#today-list { margin-bottom: var(--s4); }
+
+.today-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  font-size: var(--text-sm);
+  background: var(--surface);
+  color: var(--ink-2);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+  padding: var(--s2) var(--s3);
+  margin-bottom: var(--s1);
+}
+/* Lo que ha cambiado DESDE que miraste la lista: el mismo filete de la marca
+   que lleva la tarjeta de un análisis vivo. No es un color de texto, así que no
+   compite con el motivo. */
+.today-row.new { box-shadow: inset 2px 0 0 var(--mark); }
+/* En el chat vacío la fila entera es el botón que la abre: no hay sitio para
+   tres acciones a 320 px, y lo que se quiere ahí es ir. */
+.today-row.compact { cursor: pointer; transition: background var(--dur-1) ease; }
+.today-row.compact:hover:not(:disabled) { background: var(--surface-2); }
+.today-row.compact:disabled { cursor: default; opacity: .7; }
+
+/* Quien cede es el título; la clave de la incidencia, no. Es un `span` porque
+   en el chat vacío la fila entera es un `<button>`. */
+.today-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+/* La clave de la incidencia (o de qué producto es la fila), en gris: el único
+   acento de la fila es el MOTIVO, que es lo que hay que leer. Con la clave
+   también en dorado, las dos cosas competían y ninguna destacaba. */
+.today-kind {
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--muted);
+}
+.today-title {
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.today-why {
+  font-size: var(--text-xs);
+  color: var(--gold);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Las tres acciones no se encogen ni se parten: quien envuelve es el texto de
+   la izquierda (la misma regla que `.row > button`). */
+.today-actions { display: flex; align-items: center; gap: var(--s1); flex: none; }
+.today-x:hover { background: var(--surface-2); color: var(--ink); }
+
+/* «Ver todo (8)» bajo las filas del chat vacío: es la misma fila de lista que
+   una sugerencia, y abre la pantalla en vez de preguntar nada. */
+.today-more {
+  width: 100%;
+  font: inherit; font-size: var(--text-xs); text-align: center;
+  background: transparent; color: var(--gold);
+  border: 0;
+  padding: var(--s1) var(--s2);
+  cursor: pointer;
+  transition: color var(--dur-1) ease;
+}
+.today-more:hover { color: var(--ink); }

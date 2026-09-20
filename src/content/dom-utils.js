@@ -241,6 +241,27 @@ export function isEditing() {
 const COMMENT_EDITORS = '#addcomment, #footer-comment-button, [data-testid*="comment" i], .quick-comment-container, #comments-section'
 
 /**
+ * El id de la página de Confluence que se tiene delante, leído del DOM, o ''.
+ *
+ * En un Confluence Server/Data Center una página es `/display/ESPACIO/Título`:
+ * la URL NO lleva el id por ninguna parte, así que `parseAtlassianUrl` no lo
+ * puede dar y sin esto no habría nada con lo que apuntar la visita ni con lo que
+ * reconstruir su enlace. Confluence pone ese id en una `<meta name="ajs-*">` de
+ * la cabecera (las mismas que alimentan `AJS.params`), y es lo único fiable que
+ * hay. En Cloud esa meta no existe, pero allí el id ya viaja en la URL.
+ *
+ * Sólo cifras: el contenido de una meta lo escribe la página, y de aquí sale un
+ * identificador que acaba en una clave de almacenamiento y en una URL. Se lee
+ * con `getAttribute` y no con `.content` para no depender de que el elemento sea
+ * un `HTMLMetaElement` de verdad.
+ */
+export function pageIdFromDom() {
+  const raw = document.querySelector('meta[name="ajs-page-id"]')?.getAttribute('content')
+  const id = String(raw ?? '').trim()
+  return /^\d{1,19}$/.test(id) ? id : ''
+}
+
+/**
  * Avisa cuando cambia la URL, incluidos los cambios por pushState que no
  * disparan ningún evento estándar.
  */

@@ -20,6 +20,12 @@ const LISTENERS = []
  * viéndolos.
  */
 const CAMBIOS = []
+/**
+ * Los oyentes de `chrome.tabs.onUpdated`, por lo mismo: el worker los registra
+ * al importarse y es con ellos con lo que apunta una visita en el diario de
+ * actividad (H11), con el panel cerrado y sin content script.
+ */
+const ACTUALIZADAS = []
 
 /** Construye un entorno `chrome` simulado y devuelve los mandos. */
 function makeChrome() {
@@ -39,6 +45,8 @@ function makeChrome() {
     sentWithTab: [],
     contentReply: () => ({ status: 'clicked' }),
     panelMessages: [],
+    /** Las claves de cada `storage.local.set`: para poder contar que NO se escribe. */
+    escrituras: [],
   }
 
   globalThis.chrome = {
@@ -54,7 +62,7 @@ function makeChrome() {
     sidePanel: { setPanelBehavior: async () => {}, open: async () => {} },
     tabs: {
       onRemoved: { addListener() {} },
-      onUpdated: { addListener() {} },
+      onUpdated: { addListener: (fn) => ACTUALIZADAS.push(fn) },
       onActivated: { addListener() {} },
       get: async (id) => state.tabs[id],
       // Como la de Chrome en lo que aquí importa: si se pide `active`, sólo
@@ -83,7 +91,10 @@ function makeChrome() {
       },
       local: {
         get: async (k) => (k in state.local ? { [k]: state.local[k] } : {}),
-        set: async (o) => Object.assign(state.local, o),
+        set: async (o) => {
+          state.escrituras.push(Object.keys(o))
+          Object.assign(state.local, o)
+        },
         remove: async (k) => delete state.local[k],
       },
     },
@@ -102,6 +113,16 @@ function makeChrome() {
         }
         resolve(null)
       })
+    },
+    /**
+     * Dispara `chrome.tabs.onUpdated` como al navegar. El oyente no puede ser
+     * `async` (Chrome no espera a nadie ahí), así que apunta la visita en una
+     * promesa suelta: hay que dejar correr la cola antes de mirar el almacén.
+     */
+    async fireTabUpdated(tabId, changeInfo, tab = state.tabs[tabId]) {
+      for (const fn of ACTUALIZADAS) fn(tabId, changeInfo, tab)
+      await new Promise((r) => setTimeout(r, 0))
+      await new Promise((r) => setTimeout(r, 0))
     },
   }
 }
@@ -462,4 +483,163 @@ test('H6 P6a: otra clave, u otra zona del almacén, no empujan nada', async () =
   await cambiar(null)
 
   eq(rig.state.sentToTab.filter((m) => m.type === MSG.SETTINGS).length, 0, 'sólo faro:settings en local')
+})
+
+// --------------------------------------------------------------------- H11
+//
+// El diario de actividad. El worker es el ÚNICO escritor de «visto»: apunta con
+// el panel cerrado y sin content script, que es lo normal en un Confluence
+// propio sin permiso de host. Lo que más se comprueba aquí es lo que NO se
+// apunta, porque un diario de lo que alguien abre no puede llenarse solo.
+
+const JIRA = 'https://jira.simplprogramme.eu'
+const CONF = 'https://confluence.simplprogramme.eu'
+const DIARIO_JIRA = 'faro:actividad:jira.simplprogramme.eu'
+const DIARIO_CONF = 'faro:actividad:confluence.simplprogramme.eu'
+
+/** Un worker con los dos sitios configurados y las sugerencias encendidas. */
+async function conSitios(sites = null) {
+  const rig = makeChrome()
+  await loadWorker(rig)
+  rig.state.local['faro:sites'] = sites || {
+    'jira.simplprogramme.eu': { host: 'jira.simplprogramme.eu', configured: true, product: 'jira' },
+    'confluence.simplprogramme.eu': { host: 'confluence.simplprogramme.eu', configured: true, product: 'confluence' },
+  }
+  rig.state.escrituras.length = 0
+  return rig
+}
+
+/** Las entradas del diario de un host, o {} si no hay diario. */
+const items = (rig, clave) => rig.state.local[clave]?.items || {}
+
+test('H11: al navegar a una incidencia de un sitio configurado se apunta la visita', async () => {
+  const rig = await conSitios()
+  await rig.fireTabUpdated(1, { url: `${JIRA}/browse/ENG-7` }, { id: 1, title: '[ENG-7] Consent API v2 - Jira' })
+
+  const entradas = items(rig, DIARIO_JIRA)
+  eq(Object.keys(entradas), ['jira-issue:ENG-7'])
+  eq(entradas['jira-issue:ENG-7'].kind, 'jira-issue')
+  eq(entradas['jira-issue:ENG-7'].id, 'ENG-7')
+  eq(entradas['jira-issue:ENG-7'].seenCount, 1)
+  eq(entradas['jira-issue:ENG-7'].title, 'Consent API v2', 'el título de la pestaña sin la clave ni el « - Jira»')
+  eq(rig.state.escrituras, [[DIARIO_JIRA]], 'una escritura, y sólo la del diario')
+})
+
+test('H11: SEGURIDAD: ni la consulta ni el fragmento de la URL acaban en el diario', async () => {
+  const rig = await conSitios()
+  await rig.fireTabUpdated(
+    1,
+    { url: `${JIRA}/browse/ENG-7?focusedCommentId=99&jwt=ey.SECRETO#comment-99` },
+    { id: 1, title: 'X - Jira' }
+  )
+  const guardado = JSON.stringify(rig.state.local[DIARIO_JIRA])
+  eq(items(rig, DIARIO_JIRA)['jira-issue:ENG-7'].path, '/browse/ENG-7')
+  assert(!guardado.includes('SECRETO'), 'un token pegado en la barra no se guarda treinta días')
+  assert(!guardado.includes('focusedCommentId'))
+  assert(!guardado.includes('comment-99'))
+  assert(!guardado.includes('https://'), 'ni la URL absoluta: el enlace se reconstruye')
+})
+
+test('H11: sólo se apunta en los sitios que el usuario ha configurado', async () => {
+  // Pasar por un Jira ajeno no es usarlo, y un registro a medias (host conocido
+  // pero sin `configured`) tampoco: es lo que deja `siteRecords` antes de
+  // verificar las claves.
+  const rig = await conSitios({
+    'jira.simplprogramme.eu': { host: 'jira.simplprogramme.eu', product: 'jira' },
+  })
+  await rig.fireTabUpdated(1, { url: `${JIRA}/browse/ENG-7` }, { id: 1, title: 'X - Jira' })
+  eq(rig.state.escrituras, [], 'un host sin configured no apunta nada')
+
+  const otro = await conSitios({})
+  await otro.fireTabUpdated(1, { url: 'https://jira.ajeno.example/browse/ENG-7' }, { id: 1, title: 'X - Jira' })
+  eq(otro.state.escrituras, [], 'y un host que no está en faro:sites, tampoco')
+})
+
+test('H11: con cualquiera de los dos interruptores apagado no se apunta NADA', async () => {
+  // `todaySuggestions` es el de esta función y `restTools` el maestro de toda
+  // lectura REST: quien no quiere que Faro toque la API de su sitio tampoco
+  // quiere un diario de lo que abre.
+  for (const ajustes of [{ todaySuggestions: false }, { restTools: false }, { restTools: false, todaySuggestions: false }]) {
+    const rig = await conSitios()
+    rig.state.local['faro:settings'] = ajustes
+    rig.state.escrituras.length = 0
+    await rig.fireTabUpdated(1, { url: `${JIRA}/browse/ENG-7` }, { id: 1, title: 'X - Jira' })
+    eq(rig.state.escrituras, [], JSON.stringify(ajustes))
+    eq(DIARIO_JIRA in rig.state.local, false)
+  }
+})
+
+test('H11: sin `changeInfo.url` no hay navegación que apuntar', async () => {
+  // `onUpdated` dispara varias veces por carga (status, favicon, título): sin
+  // este filtro, una sola página escribiría el diario cuatro o cinco veces.
+  const rig = await conSitios()
+  await rig.fireTabUpdated(1, { status: 'loading' }, { id: 1, url: `${JIRA}/browse/ENG-7`, title: 'X - Jira' })
+  await rig.fireTabUpdated(1, { title: 'X - Jira' }, { id: 1, url: `${JIRA}/browse/ENG-7` })
+  await rig.fireTabUpdated(1, {}, { id: 1, url: `${JIRA}/browse/ENG-7` })
+  eq(rig.state.escrituras, [])
+})
+
+test('H11: lo que no es una incidencia ni una página no se apunta', async () => {
+  const rig = await conSitios()
+  for (const url of [`${JIRA}/secure/Dashboard.jspa`, `${CONF}/spaces/ENG/overview`, 'https://mail.example.com/x']) {
+    await rig.fireTabUpdated(1, { url }, { id: 1, title: 'algo' })
+  }
+  eq(rig.state.escrituras, [])
+})
+
+test('H11: una página de un Data Center sólo se apunta con el `pageId` del content script', async () => {
+  // `/display/ESPACIO/Título` no lleva el id por ninguna parte, y el worker no
+  // puede mirar el DOM: por eso `CONTENT_READY` y `URL_CHANGED` lo traen de la
+  // meta `ajs-page-id`.
+  const rig = await conSitios()
+  await rig.fireTabUpdated(4, { url: `${CONF}/display/ENG/Guia` }, { id: 4, title: 'Guía - Confluence' })
+  eq(rig.state.escrituras, [], 'sin id no hay nada que apuntar')
+
+  await rig.send(
+    { type: MSG.CONTENT_READY, url: `${CONF}/display/ENG/Guia`, pageId: '3003' },
+    { tab: { id: 4, title: 'Guía - Confluence' } }
+  )
+  const entradas = items(rig, DIARIO_CONF)
+  eq(Object.keys(entradas), ['confluence-page:3003'])
+  eq(entradas['confluence-page:3003'].title, 'Guía')
+  eq(entradas['confluence-page:3003'].path, '/display/ENG/Guia')
+})
+
+test('H11: los dos avisos de la misma navegación cuentan UNA visita', async () => {
+  // El worker apunta al confirmarse la navegación y el content script al estar
+  // lista la página: es la misma visita, y `recordVisit` la funde por su clave.
+  const rig = await conSitios()
+  await rig.fireTabUpdated(1, { url: `${JIRA}/browse/ENG-7` }, { id: 1, title: 'Página anterior - Jira' })
+  await rig.send(
+    { type: MSG.CONTENT_READY, url: `${JIRA}/browse/ENG-7` },
+    { tab: { id: 1, title: '[ENG-7] Consent API v2 - Jira' } }
+  )
+  await rig.send({ type: MSG.URL_CHANGED, url: `${JIRA}/browse/ENG-7` }, { tab: { id: 1, title: '[ENG-7] Consent API v2 - Jira' } })
+
+  const entradas = items(rig, DIARIO_JIRA)
+  eq(entradas['jira-issue:ENG-7'].seenCount, 1)
+  eq(
+    entradas['jira-issue:ENG-7'].title,
+    'Consent API v2',
+    'y el título se queda con el bueno: al confirmarse la navegación la pestaña todavía llevaba el de antes'
+  )
+})
+
+test('H11: el diario no puede tumbar un recorrido', async () => {
+  // `CONTENT_READY` es lo que retoma un paso tras una recarga, y apuntar la
+  // visita va ANTES: si el almacén falla ahí, el recorrido tiene que seguir.
+  const rig = await conSitios()
+  const bueno = globalThis.chrome.storage.local.get
+  globalThis.chrome.storage.local.get = async () => {
+    throw new Error('almacén lleno')
+  }
+  try {
+    const res = await rig.send(
+      { type: MSG.CONTENT_READY, url: `${JIRA}/browse/ENG-7` },
+      { tab: { id: 1, title: 'X - Jira' } }
+    )
+    eq(res, { ok: true }, 'la pestaña sigue avisando de que está lista')
+  } finally {
+    globalThis.chrome.storage.local.get = bueno
+  }
 })

@@ -30,19 +30,20 @@
 
   `window.faroPreview.check()` mide lo que hay que mirar en cada captura
   (desbordamiento, alto de la cabecera, alto de la fila del redactor, cabeceras
-  de pantalla a la vista, sugerencias del estado vacío, y de H8 las filas de
+  de pantalla a la vista, sugerencias del estado vacío, de H8 las filas de
   chips, si alguno se recorta y si el estado vacío entero cabe sin desplazar el
-  chat) y deja el resultado en la barra lateral. Los mandos también son API:
-  setTheme, setWidth, setStatus, setChat, setScreen, setPick, setSources,
-  setFifth.
+  chat, y de H11 cuánto de «Qué mirar hoy» hay delante) y deja el resultado en
+  la barra lateral. Los mandos también son API: setTheme, setWidth, setStatus,
+  setChat, setScreen, setPick, setSources, setFifth, setToday.
 
   Cómo se acepta el rediseño (paso 8 del anexo D, CLAUDE.md §2): con el Browser
   pane VISIBLE a 1280×900, capturas a 320 y 420 px × claro y oscuro de cada
   conversación —las cinco del grupo «Conversación»— y `faroPreview.check()` en
-  verde en cada una y en cada pantalla. `setFifth(true)` mete un quinto
-  `icon-btn` del tamaño que tendrá «Qué mirar hoy» (H11) para ver la cabecera
-  estrecha con los cinco: es un hueco, no ese botón, y el espejo no se adelanta
-  a su id.
+  verde en cada una y en cada pantalla. Desde H11 el quinto botón de la cabecera
+  es el REAL (`#btn-today`, que viene en panel.html) y `setFifth(on)` enciende y
+  apaga su insignia; `setToday('bloque'|'linea')` fuerza las dos formas del
+  bloque del chat vacío para poder mirarlas por separado, y con «auto» se pinta
+  la que pintaría el panel.
 -->
 
 <link rel="stylesheet" href="/src/panel/panel.css">
@@ -141,6 +142,7 @@
     <button class="rig" data-screen="screen-settings">Ajustes</button>
     <button class="rig" data-screen="screen-memory">Memoria</button>
     <button class="rig" data-screen="screen-sources">Páginas base del análisis</button>
+    <button class="rig" data-screen="screen-today">Qué mirar hoy</button>
     <button class="rig" data-screen="screen-log">Registro</button>
     <button class="rig" data-screen="busy">Indexando…</button>
   </div>
@@ -172,8 +174,16 @@
   </div>
 
   <div class="grp">
+    <div class="grp-title">Qué mirar hoy</div>
+    <button class="rig on" data-today="auto" title="Lo que pintaría el panel: el bloque entero si cabe con las sugerencias y los chips, y si no, una línea">Como lo decide el panel</button>
+    <button class="rig" data-today="bloque" title="Las tres filas y «Ver todo», quepan o no: es donde se ve si el estado vacío se desplaza">Siempre el bloque</button>
+    <button class="rig" data-today="linea" title="Degradado a una línea, que es lo que hace el panel cuando no cabe">Siempre una línea</button>
+    <button class="rig" data-today="off" title="Los dos interruptores apagados: el chat vacío vuelve a ser el de antes de H11">Apagado en Ajustes</button>
+  </div>
+
+  <div class="grp">
     <div class="grp-title">Cabecera</div>
-    <button class="rig" data-fifth="1" title="Un bulto del tamaño de «Qué mirar hoy», que crea H11">Quinto botón (hueco de H11)</button>
+    <button class="rig on" data-fifth="1" title="La insignia de «Qué mirar hoy» con sus novedades; el botón es el real de panel.html">Insignia de «Qué mirar hoy»</button>
   </div>
 
   <div class="grp">
@@ -219,12 +229,15 @@ async function arrancar() {
     { pickLabel, buildTextPick },
     { navOptions },
     { sourcesLabel, sourcesNote },
-    { suggestionsFor },
+    { SUGGESTION_COUNT, suggestionsFor },
     { searchChips },
     { jqlLink, jqlPlan },
     { suggestSources, reasonText },
     { normalizeHistory },
     { referencesFromContext },
+    { buildCandidates, countNew, rankToday, TODAY_LIMITS },
+    { ACTIVITY_LIMITS, emptyActivity, preferredFamilies, recordVisit, touchActivity },
+    { clockTime },
   ] = await Promise.all([
     import('/src/panel/markdown.js'),
     import('/src/panel/skills.js'),
@@ -237,6 +250,9 @@ async function arrancar() {
     import('/src/panel/source-suggest.js'),
     import('/src/panel/source-history.js'),
     import('/src/panel/references.js'),
+    import('/src/panel/today.js'),
+    import('/src/atlassian/activity.js'),
+    import('/src/shared/format.js'),
   ])
 
   const $ = (id) => doc.getElementById(id)
@@ -398,7 +414,137 @@ async function arrancar() {
     ],
   }
 
-  const estado = { chat: 'confluence', pantalla: '', status: 'ok', pick: 'off', sources: 'off', ancho: 360, tema: 'dark', quinto: false }
+  // H11 · lo que alimenta «Qué mirar hoy». Las dos mitades: lo que contestan
+  // las API de los dos sitios (con las claves EXACTAS que dejan
+  // `parseSearchIssues` y `parseRecentV1`) y el diario local, que se construye
+  // con el módulo de verdad. Qué fila sale, en qué grupo cae y con qué motivo lo
+  // deciden `buildCandidates` y `rankToday`, no este fichero: una lista escrita
+  // a mano seguiría diciendo lo de antes en cuanto cambiara la tabla de puntos.
+  //
+  // Las fechas cuelgan de un instante fijo para que la captura de hoy y la de
+  // dentro de un año digan lo mismo.
+  const AHORA = Date.now()
+  const HORA = 60 * 60 * 1000
+  const incidenciaDeHoy = (o) => ({
+    assignee: null,
+    components: [],
+    epicKey: '',
+    labels: [],
+    lastViewedAt: 0,
+    parentKey: '',
+    priority: 'Media',
+    reporter: null,
+    status: 'En curso',
+    statusCategory: 'indeterminate',
+    type: 'Task',
+    ...o,
+  })
+  const paginaDeHoy = (o) => ({ spaceKey: 'ENG', updatedBy: '', url: '', version: 1, ...o })
+  const LECTURAS_HOY = [
+    {
+      product: 'jira',
+      host: SITIOS.jira.host,
+      kind: 'history',
+      items: [
+        incidenciaDeHoy({
+          key: 'SIMPL-1198',
+          summary: 'Retirar el endpoint de consentimiento v1 y su documentación',
+          type: 'Story',
+          status: 'En revisión',
+          updatedAt: AHORA - 2 * HORA,
+          lastViewedAt: AHORA - 3 * DIA,
+        }),
+        // Una cerrada al lado de una viva: penaliza de verdad y se ve en su sitio.
+        incidenciaDeHoy({
+          key: 'SIMPL-1150',
+          summary: 'Migrar el almacén de tokens de servicio',
+          status: 'Cerrada',
+          statusCategory: 'done',
+          updatedAt: AHORA - 30 * HORA,
+          lastViewedAt: AHORA - 5 * DIA,
+        }),
+      ],
+    },
+    {
+      product: 'jira',
+      host: SITIOS.jira.host,
+      kind: 'mine',
+      items: [
+        incidenciaDeHoy({
+          key: 'SIMPL-1301',
+          summary: 'Cuotas por cliente en la API de federación',
+          type: 'API Definition',
+          status: 'En revisión',
+          updatedAt: AHORA - 20 * HORA,
+        }),
+      ],
+    },
+    {
+      product: 'jira',
+      host: SITIOS.jira.host,
+      kind: 'project',
+      items: [
+        incidenciaDeHoy({
+          key: 'SIMPL-1402',
+          summary: 'Alertas duplicadas del validador de esquemas',
+          type: 'Bug',
+          status: 'Abierta',
+          statusCategory: 'new',
+          updatedAt: AHORA - 5 * HORA,
+        }),
+      ],
+    },
+    {
+      product: 'confluence',
+      host: SITIOS.confluence.host,
+      kind: 'viewed',
+      items: [
+        paginaDeHoy({ id: '4501', title: 'Guía de API del programa', updatedAt: AHORA - 5 * HORA, updatedBy: 'Marta Ruiz' }),
+        paginaDeHoy({ id: '2001', title: 'ADR-014 Rotación de tokens de servicio', updatedAt: AHORA - 26 * HORA, updatedBy: 'Ana Pérez' }),
+        paginaDeHoy({ id: '4502', title: 'Criterios de aceptación de una API', updatedAt: AHORA - 2 * DIA, updatedBy: 'Ana Pérez' }),
+      ],
+    },
+    {
+      product: 'confluence',
+      host: SITIOS.confluence.host,
+      kind: 'mine',
+      items: [paginaDeHoy({ id: '3001', title: 'Runbook de guardia', updatedAt: AHORA - 8 * HORA, updatedBy: 'Luis Gómez' })],
+    },
+  ]
+
+  /**
+   * El diario de cada host: la mitad que no tiene el servidor. De aquí salen
+   * «la analizaste ayer con 6 observaciones», «página base de tus análisis» y
+   * «la sueles mirar (4 veces)», que es lo que ninguna bandeja de Jira puede
+   * decir. Un diario por host, como en el panel: el de Jira y el de su
+   * Confluence enlazado son dos.
+   */
+  const DIARIOS_HOY = (() => {
+    const jira = SITIOS.jira.host
+    const conf = SITIOS.confluence.host
+    let dj = emptyActivity(jira)
+    dj = recordVisit(dj, { kind: 'jira-issue', id: 'SIMPL-1198', title: 'Retirar el endpoint v1', at: AHORA - 3 * DIA }, { host: jira, now: AHORA })
+    dj = touchActivity(
+      dj,
+      { event: 'analyzed', kind: 'jira-issue', id: 'SIMPL-1198', notes: 6, family: 'api', at: AHORA - DIA },
+      { host: jira, now: AHORA }
+    )
+    let dc = emptyActivity(conf)
+    for (const dias of [6, 4, 3, 2]) {
+      dc = recordVisit(dc, { kind: 'confluence-page', id: '2001', title: 'ADR-014', at: AHORA - dias * DIA }, { host: conf, now: AHORA })
+    }
+    dc = touchActivity(dc, { event: 'source', kind: 'confluence-page', id: '4501', at: AHORA - 4 * DIA }, { host: conf, now: AHORA })
+    return { [jira]: dj, [conf]: dc }
+  })()
+
+  /**
+   * Cuándo se miró la lista por última vez: es contra esto contra lo que la
+   * insignia cuenta lo NUEVO y contra lo que las filas se marcan con el filete
+   * de la marca. Doce horas atrás deja la mitad de las filas como novedad.
+   */
+  const HOY_VISTO = AHORA - 12 * HORA
+
+  const estado = { chat: 'confluence', pantalla: '', status: 'ok', pick: 'off', sources: 'off', ancho: 360, tema: 'dark', quinto: true, today: 'auto' }
   // Tres de las cinco conversaciones son de Jira («jira», «jira-busqueda» y el
   // vacío «empty-jira»): el producto se mira por el nombre, que es lo que decide
   // la cabecera, las etiquetas de las páginas base y si hay chips.
@@ -433,26 +579,186 @@ async function arrancar() {
   }
 
   /**
-   * El hueco del quinto botón de la cabecera: «Qué mirar hoy» lo crea H11, así
-   * que aquí sólo se puede poner un bulto del mismo tamaño para comprobar que
-   * a 320 px la fila sigue siendo una y el chip cede antes que las acciones.
-   * No lleva el id real (#btn-today) a propósito: el botón no existe todavía.
+   * El quinto botón de la cabecera, que hasta H11 era un hueco que este fichero
+   * fabricaba para medir la fila con cinco: ahora es `#btn-today`, viene en
+   * panel.html y lo único que hay que pintarle es su insignia.
+   *
+   * El número va `aria-hidden` y quien lo dice es el NOMBRE del botón, que
+   * cambia con él (la lección de `#btn-memory` en la revisión de H5): un
+   * `aria-label` fijo tapa al `title` y un lector de pantalla oiría lo mismo con
+   * tres novedades y con ninguna. Es lo que hace `paintTodayBadge`.
    */
   function pintarQuinto() {
-    const zona = doc.querySelector('.top-actions')
-    const puesto = zona.querySelector('[data-hueco]')
-    if (!estado.quinto) {
-      puesto?.remove()
+    const n = estado.quinto && estado.today !== 'off' ? countNew(filasDeHoy(), HOY_VISTO) : 0
+    const insignia = $('today-count')
+    insignia.textContent = n ? String(n) : ''
+    insignia.classList.toggle('hidden', !n)
+    const boton = $('btn-today')
+    const nombre = n ? `Qué mirar hoy: ${n} ${n === 1 ? 'novedad' : 'novedades'}` : 'Qué mirar hoy'
+    boton.title = nombre
+    boton.setAttribute('aria-label', nombre)
+    boton.classList.toggle('on', n > 0)
+  }
+
+  // --------------------------------------------------------- qué mirar hoy
+
+  /**
+   * Las filas de la conversación que se está mirando, puntuadas y explicadas
+   * por `rankToday`.
+   *
+   * Desde una pestaña de Confluence NO se consulta el Jira enlazado (v1: el
+   * PASO 0 comprobó la sesión en la otra dirección), así que esa conversación
+   * enseña sólo sus páginas; desde el Jira salen las dos, que es lo que decide
+   * `todayTargets` en el panel.
+   */
+  function filasDeHoy() {
+    if (estado.today === 'off') return []
+    const s = sitio()
+    const suyas = s.product === 'confluence' ? LECTURAS_HOY.filter((r) => r.product === 'confluence') : LECTURAS_HOY
+    const aqui = {
+      host: s.host,
+      issueKey: s.issueKey || '',
+      projectKey: s.projectKey || '',
+      spaceKey: s.product === 'confluence' ? s.clave : '',
+      pageId: '',
+      title: s.titulo,
+      family: s.product === 'jira' ? 'api' : '',
+    }
+    const preferidas = [...new Set(Object.values(DIARIOS_HOY).flatMap((d) => preferredFamilies(d, { now: AHORA })))]
+    const candidatos = buildCandidates({ reads: suyas, activity: DIARIOS_HOY, here: aqui, now: AHORA })
+    return rankToday(candidatos, { here: aqui, index: null, preferred: preferidas, now: AHORA })
+  }
+
+  /**
+   * ¿Cabe el bloque entero en el estado vacío, o se degrada a una línea?
+   *
+   * Es la cuenta de `emptyFits` con los números de `EMPTY_LIMITS` (panel.js):
+   * las filas con su rótulo y su «Ver todo», las tres sugerencias y las
+   * pastillas, que envuelven de dos en dos. No se puede importar de panel.js
+   * —arranca solo y necesita `chrome.*`—, así que se copia, y
+   * panel-wiring.test.js pina que los dos sigan diciendo lo mismo. Con el mando
+   * en «bloque» o «línea» se fuerza una de las dos para poder mirarlas.
+   */
+  const PRESUPUESTO_VACIO = { lineas: 10, pastillasPorLinea: 2 }
+  function cabeHoy(filas, pastillas) {
+    if (estado.today === 'bloque') return true
+    if (estado.today === 'linea') return false
+    const deHoy = filas > 0 ? filas + 2 : 0
+    const dePastillas = pastillas > 0 ? 1 + Math.ceil(pastillas / PRESUPUESTO_VACIO.pastillasPorLinea) : 0
+    return deHoy + SUGGESTION_COUNT + dePastillas <= PRESUPUESTO_VACIO.lineas
+  }
+
+  /** «Ver todo (8)» / «Qué mirar hoy (8)»: en el panel abre la pantalla. */
+  function masDeHoy(texto) {
+    const b = mk('button', 'today-more', texto)
+    b.type = 'button'
+    return b
+  }
+
+  /**
+   * Una fila, en sus dos formas, como las pinta `todayRowNode`: compacta (el
+   * chat vacío, donde la fila ENTERA es el botón que abre) y completa (la
+   * pantalla, con «Abrir», «Analizar» y la × de «Ya lo he visto»).
+   *
+   * El nombre accesible de cada acción lleva el título dentro: sin eso, un
+   * lector de pantalla lee ocho «Abrir, botón» seguidos.
+   */
+  function filaDeHoy(item, { compact = false, desde = 0 } = {}) {
+    const nuevo = desde > 0 && item.updatedAt > desde
+    const row = mk(compact ? 'button' : 'div', 'today-row' + (compact ? ' compact' : '') + (nuevo ? ' new' : ''))
+    if (compact) row.type = 'button'
+
+    const main = mk('span', 'today-main')
+    main.appendChild(mk('span', 'today-kind', item.kind === 'jira-issue' ? item.id : 'Confluence'))
+    const titulo = mk('span', 'today-title', item.title)
+    titulo.title = `${item.title} · ${item.host}`
+    main.appendChild(titulo)
+    if (item.why) {
+      const why = mk('span', 'today-why', item.why)
+      why.title = item.why
+      main.appendChild(why)
+    }
+    row.appendChild(main)
+
+    if (compact) {
+      row.setAttribute('aria-label', [`Abrir «${item.title}»`, item.why].filter(Boolean).join(' · '))
+      return row
+    }
+
+    const acciones = mk('div', 'today-actions')
+    const abrir = mk('button', 'ghost small', 'Abrir')
+    abrir.type = 'button'
+    abrir.setAttribute('aria-label', `Abrir «${item.title}»`)
+    const analizar = mk('button', 'ghost small needs-idle', 'Analizar')
+    analizar.type = 'button'
+    analizar.setAttribute('aria-label', `Analizar «${item.title}»`)
+    const x = mk('button', 'today-x', '×')
+    x.type = 'button'
+    x.title = 'Ya lo he visto'
+    x.setAttribute('aria-label', `Ya lo he visto: «${item.title}»`)
+    acciones.append(abrir, analizar, x)
+    row.appendChild(acciones)
+    return row
+  }
+
+  /** El bloque del chat vacío: hasta tres filas y «Ver todo», o una línea. */
+  function pintarBloqueHoy(caja, pastillas) {
+    caja.textContent = ''
+    const todas = filasDeHoy()
+    caja.classList.toggle('hidden', !todas.length)
+    if (!todas.length) return
+    const filas = todas.slice(0, TODAY_LIMITS.emptyRows)
+    if (!cabeHoy(filas.length, pastillas)) {
+      caja.appendChild(masDeHoy(`Qué mirar hoy (${todas.length})`))
       return
     }
-    if (puesto) return
-    const b = mk('button', 'icon-btn')
-    b.type = 'button'
-    b.dataset.hueco = '1'
-    b.title = 'Hueco del quinto botón: «Qué mirar hoy» (lo crea H11)'
-    b.setAttribute('aria-label', 'Hueco de «Qué mirar hoy»')
-    b.appendChild(svgIcon('M8 2.7a5.3 5.3 0 1 1 0 10.6 5.3 5.3 0 0 1 0-10.6zM8 5.3v3l2 1.2'))
-    zona.appendChild(b)
+    caja.appendChild(mk('div', 'today-kicker', 'Qué mirar hoy'))
+    for (const item of filas) caja.appendChild(filaDeHoy(item, { compact: true }))
+    if (todas.length > filas.length) caja.appendChild(masDeHoy(`Ver todo (${todas.length})`))
+  }
+
+  /** Los tres grupos de la pantalla, en el orden en que se leen. */
+  const GRUPOS_HOY = [
+    ['cambio', () => 'Cambió desde que lo miraste'],
+    ['tuyo', () => 'Lo tuyo'],
+    ['proyecto', () => `Nuevo en ${sitio().product === 'jira' ? sitio().projectKey : sitio().clave}`],
+  ]
+
+  /** La pantalla entera: la lista por grupos, el estado y qué se guarda. */
+  function pintarPantallaHoy() {
+    const lista = $('today-list')
+    lista.textContent = ''
+    const filas = filasDeHoy()
+    for (const [grupo, titulo] of GRUPOS_HOY) {
+      const suyas = filas.filter((f) => f.group === grupo)
+      if (!suyas.length) continue
+      lista.appendChild(mk('h2', 'today-group', titulo()))
+      for (const item of suyas) lista.appendChild(filaDeHoy(item, { desde: HOY_VISTO }))
+    }
+    $('today-status').textContent = filas.length
+      ? `${filas.length} ${filas.length === 1 ? 'cosa' : 'cosas'} que mirar · leído a las ${clockTime(AHORA)}`
+      : 'Apagado en Ajustes: «Qué mirar hoy».'
+    // El interruptor por SITIO no es el de Ajustes: aquí se queda sin marcar, y
+    // apagado lo dice la línea de estado. La casilla de Ajustes sí sigue al
+    // mando, para que las dos pantallas cuenten lo mismo en la misma captura.
+    $('today-off').checked = false
+    $('set-today').checked = estado.today !== 'off'
+    // La fila del permiso se queda fuera de la captura: en un sitio de
+    // `*.atlassian.net` no falta nunca, y cuando falta es la tarjeta de siempre.
+    $('today-perm').classList.add('hidden')
+    // Qué se guarda y dónde, con las cuentas de ESTE sitio. El texto se copia
+    // porque `paintTodayActivity` lo compone en línea; el test exige que el
+    // panel diga lo mismo.
+    const items = Object.values(DIARIOS_HOY[sitio().host]?.items || {})
+    const entradas = items.length
+    const analisis = items.filter((i) => i.analyzedAt).length
+    const base = items.filter((i) => i.sourceAt).length
+    $('today-activity-text').textContent =
+      `El diario son ids, claves y títulos —nunca la dirección entera ni lo que pone la página— de lo que abres, ` +
+      `analizas o usas como página base aquí: ${entradas} ${entradas === 1 ? 'entrada' : 'entradas'}, ` +
+      `${analisis} ${analisis === 1 ? 'análisis' : 'análisis'} y ${base} ${base === 1 ? 'página base' : 'páginas base'}. ` +
+      `Se guarda en este navegador, ${ACTIVITY_LIMITS.maxAgeDays} días como mucho, no sale de aquí y no entra en nada de ` +
+      `lo que se le manda al modelo. Borrarlo no borra nada en Jira ni en Confluence.`
   }
 
   // ------------------------------------------------------------- redactor
@@ -1057,7 +1363,8 @@ async function arrancar() {
           : 'Pregúntame sobre el espacio ENG. Si la respuesta está en algún sitio, te llevo.'
       )
     )
-    wrap.appendChild(mk('div', 'today hidden'))
+    const hoy = mk('div', 'today hidden')
+    wrap.appendChild(hoy)
     const sugerencias = mk('div', 'suggestions')
     for (const texto of suggestionsFor(s, $('skill').value, paginasBase())) {
       const b = mk('button', 'suggestion', texto)
@@ -1068,6 +1375,10 @@ async function arrancar() {
     const chips = mk('div', 'search-chips hidden')
     wrap.appendChild(chips)
     pintarChips(chips)
+    // «Hoy» se pinta DESPUÉS de las pastillas y con su cuenta: las tres cosas se
+    // reparten el mismo presupuesto, y con las cuatro que puede ofrecer H8 el
+    // bloque se degrada a una línea (decisión 3 de docs/PLAN.md §3.4).
+    pintarBloqueHoy(hoy, chips.querySelectorAll('.search-chip').length)
     chat.appendChild(wrap)
   }
 
@@ -1184,6 +1495,12 @@ async function arrancar() {
   // Y la casilla que lo decide, aquí y no con el resto de Ajustes: las dos
   // pantallas tienen que contar lo mismo en la misma captura.
   $('set-rest-tools').checked = true
+  // Y la de H11, que cuelga de ella: con la de arriba marcada se puede marcar y
+  // su explicación no hace falta (apagada la de arriba, `paintTodaySetting` la
+  // desactiva y enseña el «Necesita la casilla de arriba»). Marcarla o no lo
+  // decide el mando de «Qué mirar hoy», en `pintarPantallaHoy`.
+  $('set-today').disabled = false
+  $('set-today-hint').classList.add('hidden')
   $('settings-site-info').textContent = 'acme.atlassian.net · 212 entradas indexadas · con contexto'
   $('delay-value').textContent = '900'
   $('set-delay').value = 900
@@ -1355,12 +1672,32 @@ async function arrancar() {
     b.addEventListener('click', () => {
       estado.chat = b.dataset.chat
       marcar('chat', estado.chat)
-      pintarCabecera()
-      pintarPaginasBase()
-      pintarChat()
+      pintarConversacion()
       programarCheck()
     })
   )
+
+  lado.querySelectorAll('[data-today]').forEach((b) =>
+    b.addEventListener('click', () => {
+      estado.today = b.dataset.today
+      marcar('today', estado.today)
+      pintarConversacion()
+      programarCheck()
+    })
+  )
+
+  /**
+   * Todo lo que cambia con la conversación: la cabecera (con la insignia de
+   * «hoy», que cuenta lo del sitio que se mira), las páginas base, el chat y la
+   * pantalla de «Qué mirar hoy», cuya lista es la de ESE sitio.
+   */
+  function pintarConversacion() {
+    pintarCabecera()
+    pintarQuinto()
+    pintarPaginasBase()
+    pintarChat()
+    pintarPantallaHoy()
+  }
 
   lado.querySelectorAll('[data-screen]').forEach((b) =>
     b.addEventListener('click', () => {
@@ -1486,6 +1823,9 @@ async function arrancar() {
   // su título y su motivo se recortan con elipsis, pero su meta («ENG · id 4501
   // · desde confluence.simplprogramme.eu») ENVUELVE, y basta con que alguien le
   // ponga un `white-space: nowrap` para que la fila empuje a lo ancho.
+  // Y de H11, la fila de «hoy»: su título y su motivo se recortan con elipsis,
+  // pero sus tres acciones no se encogen (`.today-actions { flex: none }`), así
+  // que es justo la pieza que puede empujar a lo ancho a 320 px.
   const CAJAS = [
     '.top',
     '.brand',
@@ -1497,6 +1837,7 @@ async function arrancar() {
     '.result-row',
     '.search-chip-row',
     '.suggest-row.suggested',
+    '.today-row',
   ]
 
   function check() {
@@ -1545,6 +1886,14 @@ async function arrancar() {
     const caja = doc.querySelector('.chat')
     const emptyFits = !vacio || !caja || caja.scrollHeight <= caja.clientHeight + 1
 
+    // Y cuánto de «hoy» hay en el estado vacío: cuántas filas y si se ha
+    // quedado en la línea de «Qué mirar hoy (N)». No son veredictos —el panel
+    // pinta una cosa o la otra a propósito—, sino lo que explica el
+    // `emptyFits` de al lado: si las tres filas están puestas y el estado vacío
+    // no cabe, es que había que degradarlo (decisión 3 de docs/PLAN.md §3.4).
+    const todayRows = doc.querySelectorAll('.empty .today .today-row').length
+    const todayLine = !!doc.querySelector('.empty .today .today-more') && todayRows === 0
+
     // ¿Hay panel? Las tres piezas que sostienen las medidas de arriba, y que
     // midan algo: un 0 px no es «cabe de sobra», es que no está pintado.
     const falta = ['#app', '.top', '.composer-meta'].filter((s) => !doc.querySelector(s))
@@ -1564,7 +1913,20 @@ async function arrancar() {
       emptyStateRows <= 3 &&
       chipsClipped === 0 &&
       emptyFits
-    return { ok, motivo, overflowX, topHeight, composerMetaHeight, screenHeadsVisible, emptyStateRows, chipRows, chipsClipped, emptyFits }
+    return {
+      ok,
+      motivo,
+      overflowX,
+      topHeight,
+      composerMetaHeight,
+      screenHeadsVisible,
+      emptyStateRows,
+      chipRows,
+      chipsClipped,
+      emptyFits,
+      todayRows,
+      todayLine,
+    }
   }
 
   /** El resultado, a la vista en la barra lateral: se mira sin abrir la consola. */
@@ -1583,6 +1945,9 @@ async function arrancar() {
       // estado vacío no quepa, y eso se mide aparte).
       ['chips', r.chipRows ? `${r.chipRows} fila(s)` : 'ninguno', null],
       ['chips legibles', r.chipsClipped ? `${r.chipsClipped} recortado(s)` : 'sí', r.chipsClipped === 0],
+      // Como los chips: un número, no un veredicto. Dice cuánto de «hoy» hay
+      // delante, que es lo que explica la fila de abajo.
+      ['qué mirar hoy', r.todayLine ? 'una línea' : r.todayRows ? `${r.todayRows} fila(s)` : 'nada', null],
       ['estado vacío', r.emptyFits ? 'cabe' : 'se desplaza', r.emptyFits],
     ]
     for (const [k, v, bien] of filas) {
@@ -1617,6 +1982,7 @@ async function arrancar() {
   pintarSeleccion()
   pintarEnvio()
   pintarChat()
+  pintarPantallaHoy()
   mostrarPantalla('')
   pintarMedidas()
 
@@ -1648,9 +2014,14 @@ async function arrancar() {
     setChat(k) {
       estado.chat = k
       marcar('chat', k)
-      pintarCabecera()
-      pintarPaginasBase()
-      pintarChat()
+      pintarConversacion()
+      return pintarMedidas()
+    },
+    /** 'auto' | 'bloque' | 'linea' | 'off': cuánto de «Qué mirar hoy» se enseña. */
+    setToday(modo) {
+      estado.today = modo
+      marcar('today', modo)
+      pintarConversacion()
       return pintarMedidas()
     },
     setScreen(id) {
@@ -1671,6 +2042,11 @@ async function arrancar() {
       pintarChat()
       return pintarMedidas()
     },
+    /**
+     * La insignia del quinto botón. Hasta H11 este mando METÍA un bulto del
+     * tamaño que tendría «Qué mirar hoy»; ahora el botón es el real de
+     * panel.html y lo que se enciende y se apaga es su insignia.
+     */
     setFifth(on) {
       estado.quinto = !!on
       marcar('fifth', on ? '1' : '')

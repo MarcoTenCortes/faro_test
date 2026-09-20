@@ -158,3 +158,23 @@ test('el árbol de un espacio no acepta topes por mensaje: los pone el módulo',
     assert(!caso.includes(tope), `${tope} no viaja en el mensaje`)
   }
 })
+
+// --------------------------------------------------------------------- H11
+// El diario de «Qué mirar hoy» lo apunta el service worker, que NO puede leer el
+// DOM: en un Confluence Data Center una página `/display/ESPACIO/Título` sólo se
+// identifica por su `<meta name="ajs-page-id">`, así que el id tiene que viajar
+// en los dos avisos del content script. El SW prueba que apunta el `pageId` que
+// RECIBE; que el content script lo MANDE no lo vigilaba nadie (lo dejó anotado
+// quien construyó el diario): estas tres líneas se podían borrar en verde.
+
+test('H11: los dos avisos del content script llevan el pageId leído de la página', () => {
+  assert(JS.includes('{ onUrlChange, pageIdFromDom }'), 'se carga con lo demás al arrancar')
+  assert(
+    JS.includes('chrome.runtime.sendMessage({ type: MSG.URL_CHANGED, url: href, pageId: pageIdFromDom() })'),
+    'cada cambio de URL dice qué página es'
+  )
+  const aviso = entre('const announce = () => {', "if (document.readyState === 'complete'")
+  assert(aviso.includes('type: MSG.CONTENT_READY, url: location.href, pageId: pageIdFromDom()'), 'y el aviso de que la pestaña está lista, también')
+  // Sólo el id: ni el título ni nada del contenido viajan en estos avisos.
+  assert(!/document\.title|textContent|innerText/.test(aviso), 'del DOM sólo sale el id de la página')
+})

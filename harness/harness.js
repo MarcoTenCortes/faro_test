@@ -12,7 +12,7 @@
 import { NavRunner, STEP_RESULT } from '../src/content/runner.js'
 import { isSafeToClick } from '../src/content/locators.js'
 import { treeContainer, rowFor, toggleFor, treeScroller } from '../src/content/tree-dom.js'
-import { scrollWithinScrollers } from '../src/content/dom-utils.js'
+import { pageIdFromDom, scrollWithinScrollers } from '../src/content/dom-utils.js'
 import { imagesWithin } from '../src/content/anchor.js'
 import { Picker } from '../src/content/picker.js'
 import { pageDigest, digestScope, resolveBlockQuote } from '../src/content/digest.js'
@@ -376,6 +376,24 @@ function renderPage(key, { push = true } = {}) {
   })
   if (push && location.pathname !== page.path) history.pushState({ key }, '', page.path)
   document.title = page.title + (page.raw ? ' - Jira' : ' · Confluence')
+  ponerIdDeLaPagina(page)
+}
+
+/**
+ * La meta `ajs-page-id` al día, como la sirve un Confluence Data Center.
+ *
+ * El id sale de la RUTA de la página y no de la clave del banco: así
+ * `page:largo` dice 900 —el id de su ruta— y una página de Jira o la portada de
+ * un espacio se quedan sin id, que es lo que pasa de verdad. Con el contenido
+ * vacío, `pageIdFromDom` devuelve '' (sólo acepta cifras), que es lo mismo que
+ * si la meta no estuviera: se conserva el elemento para no andar metiéndolo y
+ * sacándolo de la cabecera en cada render.
+ */
+function ponerIdDeLaPagina(page) {
+  const meta = document.querySelector('meta[name="ajs-page-id"]')
+  if (!meta) return
+  const id = page.raw ? '' : /\/pages\/(\d+)\//.exec(page.path)?.[1] || ''
+  meta.setAttribute('content', id)
 }
 
 function keyForPath(path) {
@@ -772,6 +790,56 @@ async function driveSteps(steps, anchor) {
   }
 }
 
+/**
+ * El diario de actividad de mentira con el que se prueba «qué mirar hoy» (H11).
+ *
+ * Es la mitad que el servidor no tiene: cuándo miraste cada cosa, qué
+ * analizaste y con cuántas observaciones, y qué página usas de base. Se
+ * construye con el MÓDULO de verdad (`src/atlassian/activity.js`) y con el
+ * reloj que se le pase, para que dos corridas den lo mismo; las cuatro entradas
+ * están elegidas para que cada señal de `SIGNALS` dispare al menos una vez:
+ *
+ *  - la página 2003, vista cuatro veces (la sueles mirar) y cambiada después;
+ *  - ENG-12, mirada hace 30 h y movida hace 24: cambió desde que la miraste;
+ *  - ENG-7, analizada hace dos días con seis observaciones y movida después;
+ *  - la página 200, que usas como página base y que alguien ha tocado.
+ *
+ * @param {object} actividad el módulo `activity.js`, que se importa a demanda
+ * @param {number} ahora el reloj: todas las fechas cuelgan de él
+ */
+function diarioDeMentira(actividad, ahora) {
+  const HORA = 3600000
+  const DIA = 24 * HORA
+  const host = location.hostname
+  let diario = actividad.emptyActivity(host)
+  // Cuatro visitas separadas: dentro de `dedupeMs` contarían como una sola.
+  for (const dias of [5, 4, 3, 2]) {
+    diario = actividad.recordVisit(
+      diario,
+      {
+        kind: 'confluence-page',
+        id: '2003',
+        title: 'ACV Static - Identity Provider Service',
+        path: '/wiki/spaces/ENG/pages/2003/ACV',
+        at: ahora - dias * DIA,
+      },
+      { host, now: ahora }
+    )
+  }
+  diario = actividad.recordVisit(
+    diario,
+    { kind: 'jira-issue', id: 'ENG-12', title: 'Cachear el catálogo de servicios', path: '/browse/ENG-12', at: ahora - 30 * HORA },
+    { host, now: ahora }
+  )
+  diario = actividad.touchActivity(
+    diario,
+    { event: 'analyzed', kind: 'jira-issue', id: 'ENG-7', notes: 6, family: 'api', at: ahora - 2 * DIA },
+    { host, now: ahora }
+  )
+  diario = actividad.touchActivity(diario, { event: 'source', kind: 'confluence-page', id: '200', at: ahora - 3 * DIA }, { host, now: ahora })
+  return diario
+}
+
 const actions = {
   async quote() {
     renderPage('page:200')
@@ -1141,6 +1209,69 @@ const actions = {
     for (const c of quedan) say(`  ${c.id} · ${c.title} · desde ${c.where}`)
     const fuera = enlaces.length - quedan.length
     say(`${fuera} descartados: otro producto, otro host o sin id que se pueda resolver con el índice`)
+  },
+
+  /**
+   * «Qué mirar hoy» de punta a punta (H11), sin panel y sin modelo: lo que
+   * contestan las API del sitio, cruzado con un diario de mentira, puntuado y
+   * explicado.
+   *
+   * Es la acción que enseña de dónde sale cada fila: la mitad del servidor
+   * (cuándo cambió) no dice nada por sí sola, y la mitad local (cuándo lo
+   * miraste tú, qué analizaste) no la tiene nadie más. Se ve porque la misma
+   * lista se ordena dos veces, con diario y sin él.
+   */
+  async today() {
+    const jiraRest = await import('/src/shared/jira-rest.js')
+    const confRest = await import('/src/shared/confluence-rest.js')
+    const actividad = await import('/src/atlassian/activity.js')
+    const hoy = await import('/src/panel/today.js')
+    const pide = (u, o) => fetch(u, o)
+    const sitioJira = { origin: location.origin, jiraPrefix: '', cloud: false }
+    const sitioConf = { origin: location.origin, wikiPrefix: '/wiki', cloud: false }
+
+    // La mitad local empieza aquí: lo que se apuntaría de la página que hay
+    // delante. En un Data Center el id no está en la URL, sólo en el DOM.
+    const visita = actividad.visitFromUrl(location.href, { title: document.title, pageId: pageIdFromDom() })
+    say(
+      visita
+        ? `de esta página se apuntaría: ${visita.kind} ${visita.id} · ruta «${visita.path}» · «${visita.title}»`
+        : 'de esta página no se apunta nada: no es una incidencia ni una página con id',
+      visita ? 'ok' : ''
+    )
+
+    const lecturas = []
+    for (const [kind, jql] of Object.entries({
+      history: jiraRest.historyJql(),
+      mine: jiraRest.mineJql(hoy.TODAY_LIMITS.daysMine),
+      project: jiraRest.projectJql('ENG', hoy.TODAY_LIMITS.daysProject),
+      related: jiraRest.relatedJql('ENG-7'),
+    })) {
+      const r = await jiraRest.searchIssues(pide, sitioJira, jql, { limit: 20 })
+      say(`  jira/${kind} → ${r.ok ? r.issues.length + ' incidencias en ' + r.ms + ' ms' : 'sin lista: ' + r.reason}`, r.ok ? 'ok' : 'bad')
+      if (r.ok) lecturas.push({ product: 'jira', host: location.hostname, kind, items: r.issues })
+    }
+    const vistas = await confRest.searchContent(pide, sitioConf, confRest.viewedCql(10))
+    say(`  confluence/viewed → ${vistas.ok ? vistas.pages.length + ' páginas en ' + vistas.ms + ' ms' : 'sin lista: ' + vistas.reason}`, vistas.ok ? 'ok' : 'bad')
+    if (vistas.ok) lecturas.push({ product: 'confluence', host: location.hostname, kind: 'viewed', items: vistas.pages })
+
+    const ahora = Date.now()
+    const diario = diarioDeMentira(actividad, ahora)
+    const preferidas = actividad.preferredFamilies(diario, { now: ahora })
+    const candidatos = hoy.buildCandidates({ reads: lecturas, activity: { [location.hostname]: diario }, here: null, now: ahora })
+    const filas = hoy.rankToday(candidatos, { here: null, index: null, preferred: preferidas, now: ahora })
+    say(`${candidatos.length} candidatos → ${filas.length} filas · familias que más analizas: ${preferidas.join(', ') || '(ninguna)'}`, 'ok')
+    for (const f of filas) say(`  [${f.group}] ${f.kind === 'jira-issue' ? f.id : 'página ' + f.id} · ${f.score} · ${f.title}`)
+    for (const f of filas) say(`      ${f.id}: ${f.why}`)
+
+    // Y lo mismo sin el diario: es la comparación que dice qué aporta la mitad
+    // que sólo tiene Faro.
+    const sinDiario = hoy.rankToday(hoy.buildCandidates({ reads: lecturas, activity: {}, here: null, now: ahora }), { now: ahora })
+    const conCambios = (lista) => lista.filter((f) => f.group === 'cambio').length
+    say(
+      `sin el diario la lista es otra: ${conCambios(filas)} filas «cambió desde que lo miraste» con él, ${conCambios(sinDiario)} sin él`,
+      conCambios(filas) > conCambios(sinDiario) ? 'ok' : 'bad'
+    )
   },
 
   unsafe() {
@@ -3007,6 +3138,211 @@ const actions = {
       `${sinLa100.map((s) => s.id).join(' ')} sin la 100 · rutas del enlazado «${delEnlazado55.map((s) => s.path).join('')}»`
     )
 
+    // ------------------------------------------------------------------
+    // 56-59: «Qué mirar hoy» (H11). Son las dos mitades de una recomendación
+    // juntas: la del SERVIDOR (qué cambió y cuándo, por las plantillas fijas
+    // contra la API del sitio) y la LOCAL (cuándo lo miraste tú, qué
+    // analizaste, qué usas de base), que no tiene nadie más. Aquí no se navega
+    // ni se pinta nada del panel —el panel no corre en el banco—: lo que se
+    // comprueba es el transporte y la lógica, que es justo lo que no se puede
+    // probar en Node (la API de mentira) ni en Node solo (la meta del DOM).
+    //
+    // El reloj se para DESPUÉS de la última lectura y se usa el mismo para el
+    // diario y para las dos ordenaciones: la fixture da las fechas en horas
+    // hacia atrás desde que contesta el servidor, así que parar el reloj antes
+    // convertiría un «cambió hace 2 h» en «hace 1 h» por unos milisegundos.
+    // ------------------------------------------------------------------
+
+    // 56. En un Confluence Data Center una página es `/display/ESPACIO/Título`:
+    //     la URL no lleva el id por ninguna parte y lo único que lo dice es la
+    //     meta `ajs-page-id`. Sin leerla no habría visita que apuntar, y de la
+    //     URL no se guarda ni la consulta ni el fragmento (§8.20).
+    const act56 = await import('/src/atlassian/activity.js')
+    renderPage('page:200')
+    await wait(320)
+    const id56 = pageIdFromDom()
+    const titulo56 = document.title
+    renderPage('page:201')
+    await wait(320)
+    const otra56 = pageIdFromDom()
+    renderPage('issue:ENG-7')
+    await wait(320)
+    const enJira56 = pageIdFromDom()
+    const visita56 = act56.visitFromUrl(location.origin + '/display/ENG/ADR-014?focusedCommentId=9#hilo', { title: titulo56, pageId: id56 })
+    const sinMeta56 = act56.visitFromUrl(location.origin + '/display/ENG/ADR-014', { title: titulo56, pageId: '' })
+    ok(
+      'el id de una pagina de Data Center sale del DOM, y de la URL no se guarda ni la consulta ni el fragmento',
+      id56 === '200' &&
+        otra56 === '201' &&
+        enJira56 === '' &&
+        !!visita56 &&
+        visita56.kind === 'confluence-page' &&
+        visita56.id === '200' &&
+        visita56.path === '/display/ENG/ADR-014' &&
+        visita56.title === titulo56 &&
+        sinMeta56 === null,
+      `meta ${id56} → ${otra56} → «${enJira56 || 'sin id'}» · ruta guardada «${visita56?.path}» · sin meta ${sinMeta56 === null ? 'no hay visita' : 'ERROR'}`
+    )
+
+    // Y los dos escritores no se pisan: el service worker apunta lo VISTO y el
+    // panel lo que sólo él sabe. Dos avisos de la misma navegación (uno del
+    // worker, otro del content script) son una visita; dos minutos después, dos.
+    const host56 = location.hostname
+    const ahora56 = Date.now()
+    const clave56 = act56.activityKey('confluence-page', '200')
+    let diario56 = act56.recordVisit(act56.emptyActivity(host56), { ...visita56, at: ahora56 }, { host: host56, now: ahora56 })
+    diario56 = act56.recordVisit(diario56, { ...visita56, at: ahora56 + 30000 }, { host: host56, now: ahora56 + 30000 })
+    const unaVisita56 = diario56.items[clave56]
+    diario56 = act56.recordVisit(diario56, { ...visita56, at: ahora56 + 120000 }, { host: host56, now: ahora56 + 120000 })
+    diario56 = act56.touchActivity(
+      diario56,
+      { event: 'analyzed', kind: 'confluence-page', id: '200', notes: 4, at: ahora56 + 120000 },
+      { host: host56, now: ahora56 + 120000 }
+    )
+    const tras56 = diario56.items[clave56]
+    ok(
+      'dos avisos de la misma navegacion cuentan una visita, y analizar no toca lo visto ni al reves',
+      unaVisita56.seenCount === 1 &&
+        unaVisita56.analyzedAt === 0 &&
+        tras56.seenCount === 2 &&
+        tras56.seenAt === ahora56 + 120000 &&
+        tras56.analyzedAt === ahora56 + 120000 &&
+        tras56.notes === 4 &&
+        Object.keys(diario56.items).length === 1,
+      `visitas ${unaVisita56.seenCount} → ${tras56.seenCount} · analizada con ${tras56.notes} observaciones`
+    )
+
+    // 57. La lista entera: las cuatro plantillas de Jira y las tres de
+    //     Confluence contra la API del sitio, cruzadas con el diario. Lo que se
+    //     comprueba es que sale la MISMA lista dos veces, con los mismos
+    //     motivos: las lecturas llegan en el orden en que conteste la red y el
+    //     desempate tiene que ser total, o la lista bailaría entre arranques.
+    const hoy57 = await import('/src/panel/today.js')
+    const lecturas57 = []
+    const fallos57 = []
+    const leer57 = async (kind, jql, opciones = {}) => {
+      const r = await jiraRest.searchIssues(pideApi, sitioJira, jql, { limit: 20, ...opciones })
+      if (r.ok) lecturas57.push({ product: 'jira', host: location.hostname, kind, items: r.issues })
+      else fallos57.push({ product: 'jira', host: location.hostname, kind, reason: r.reason, status: r.status, messages: r.messages })
+      return r
+    }
+    await leer57('history', jiraRest.historyJql())
+    await leer57('mine', jiraRest.mineJql(hoy57.TODAY_LIMITS.daysMine))
+    await leer57('project', jiraRest.projectJql('ENG', hoy57.TODAY_LIMITS.daysProject))
+    await leer57('related', jiraRest.relatedJql('ENG-7'))
+    // Los ids que se preguntan salen del diario, que es lo que hace el panel:
+    // «de las páginas que tú tocas, ¿alguna ha cambiado?».
+    const delDiario57 = hoy57.recentPagesFromActivity(diarioDeMentira(act56, Date.now())).map((p) => p.id)
+    const paginas57 = []
+    for (const [kind, cql] of [
+      ['viewed', confRest.viewedCql(10)],
+      ['mine', confRest.mineCql(hoy57.TODAY_LIMITS.daysMine)],
+      ['ids', confRest.idsCql(delDiario57)],
+    ]) {
+      const r = await confRest.searchContent(pideApi, sitioConf, cql)
+      if (r.ok) paginas57.push({ product: 'confluence', host: location.hostname, kind, items: r.pages })
+    }
+    const todas57 = [...lecturas57, ...paginas57]
+    // El reloj se para aquí: después de la última petición y antes de puntuar.
+    const ahora57 = Date.now()
+    const diario57 = diarioDeMentira(act56, ahora57)
+    const preferidas57 = act56.preferredFamilies(diario57, { now: ahora57 })
+    const cands57 = hoy57.buildCandidates({ reads: todas57, activity: { [location.hostname]: diario57 }, here: null, now: ahora57 })
+    const ordenar57 = (candidatos, aqui = null) =>
+      hoy57.rankToday(candidatos, { here: aqui, index: null, preferred: preferidas57, now: ahora57 })
+    const filas57 = ordenar57(cands57)
+    const otraVez57 = ordenar57(cands57)
+    const corto57 = (f) => (f.kind === 'jira-issue' ? f.id : 'p' + f.id)
+    ok(
+      'las siete plantillas dan una lista ordenada que es la misma dos veces, hasta en el desempate',
+      todas57.length === 7 &&
+        delDiario57.join(',') === '200,2003' &&
+        cands57.length > 15 &&
+        filas57.length === hoy57.TODAY_LIMITS.maxItems &&
+        filas57.map(corto57).join(' ') === 'ENG-12 ENG-7 p2003 p200 ENG-3 ENG-5 p1086 ENG-18' &&
+        JSON.stringify(otraVez57) === JSON.stringify(filas57),
+      `${cands57.length} candidatos → ${filas57.map((f) => corto57(f) + ':' + f.score).join(' ')}`
+    )
+    // Y cada fila dice POR QUÉ está ahí, con las dos mitades dentro: el servidor
+    // pone «cambió», el diario pone «la analizaste» y «página base de tus
+    // análisis», y sin él la lista es otra.
+    const motivo57 = (id) => filas57.find((f) => corto57(f) === id)?.why || '(no está)'
+    const sinDiario57 = hoy57.rankToday(hoy57.buildCandidates({ reads: todas57, activity: {}, here: null, now: ahora57 }), { now: ahora57 })
+    const conCambio = (lista) => lista.filter((f) => f.group === 'cambio').length
+    ok(
+      'cada fila dice por que esta ahi, y sin el diario ni el orden ni los grupos son los mismos',
+      motivo57('ENG-12') === 'cambió ayer · es tuya o la sigues · Task' &&
+        motivo57('ENG-7') === 'cambió hace 3 h · la analizaste hace 2 días con 6 observaciones · es tuya o la sigues' &&
+        motivo57('p2003') === 'cambió hace 2 h · modificada por Ana Pérez · la sueles mirar (4 veces)' &&
+        motivo57('p200') === 'página base de tus análisis · cambió ayer · modificada por Marta Ruiz' &&
+        conCambio(filas57) === 5 &&
+        conCambio(sinDiario57) === 2 &&
+        sinDiario57.map(corto57).join(' ') !== filas57.map(corto57).join(' '),
+      `${conCambio(filas57)} filas con cambios con diario, ${conCambio(sinDiario57)} sin él · sin diario: ${sinDiario57.map(corto57).join(' ')}`
+    )
+
+    // 58. Lo que ya tienes delante no se recomienda, y lo que descartaste no
+    //     vuelve hasta que alguien lo toque: es lo que separa esta lista de una
+    //     bandeja de actualizados.
+    const aqui58 = { host: location.hostname, issueKey: 'ENG-7', projectKey: 'ENG' }
+    const conENG7 = ordenar57(hoy57.buildCandidates({ reads: todas57, activity: { [location.hostname]: diario57 }, here: aqui58, now: ahora57 }), aqui58)
+    ok(
+      'la incidencia que tienes abierta no se recomienda, aunque sea la que mas puntos tendria',
+      filas57.some((f) => f.id === 'ENG-7') && !conENG7.some((f) => f.id === 'ENG-7') && conENG7.length === hoy57.TODAY_LIMITS.maxItems,
+      `con ella ${filas57.map(corto57).join(' ')} · abierta ${conENG7.map(corto57).join(' ')}`
+    )
+    const eng12 = cands57.find((c) => c.id === 'ENG-12')
+    const descartado58 = act56.dismissItem(diario57, 'jira-issue:ENG-12', eng12.updatedAt, { host: location.hostname, now: ahora57 })
+    // El descarte guarda CÓMO estaba la cosa, no cuándo se descartó: con la
+    // fecha de una hora antes, «desde entonces alguien la ha tocado».
+    const antiguo58 = act56.dismissItem(diario57, 'jira-issue:ENG-12', eng12.updatedAt - 3600000, { host: location.hostname, now: ahora57 })
+    const conDescarte = (diario) => ordenar57(hoy57.buildCandidates({ reads: todas57, activity: { [location.hostname]: diario }, here: null, now: ahora57 }))
+    const sin12 = conDescarte(descartado58)
+    const vuelve12 = conDescarte(antiguo58)
+    ok(
+      'lo descartado desaparece, y vuelve solo en cuanto cambia: el descarte recuerda como estaba',
+      !sin12.some((f) => f.id === 'ENG-12') &&
+        sin12.length === hoy57.TODAY_LIMITS.maxItems &&
+        vuelve12.map(corto57).join(' ') === filas57.map(corto57).join(' ') &&
+        Object.keys(descartado58.dismissed).join(',') === 'jira-issue:ENG-12',
+      `sin él ${sin12.map(corto57).join(' ')} · si cambia vuelve el primero: ${vuelve12[0] ? corto57(vuelve12[0]) : '(nada)'}`
+    )
+
+    // 59. Y si la API dice que no, la sección se degrada: la lista sale de lo
+    //     que haya contestado y el motivo es del SERVIDOR, no una lista vacía
+    //     que parecería «hoy no hay nada que mirar» (§8.14).
+    const antes59 = pedidasRest.length
+    const caidas59 = []
+    for (const [kind, jql] of [
+      ['history', jiraRest.historyJql()],
+      ['mine', jiraRest.mineJql(hoy57.TODAY_LIMITS.daysMine)],
+      ['project', jiraRest.projectJql('ENG', hoy57.TODAY_LIMITS.daysProject)],
+      ['related', jiraRest.relatedJql('ENG-7')],
+    ]) {
+      const r = await jiraRest.searchIssues(pideApi, sitioJira, jql, { limit: 20, prefix: '/sinsesion' })
+      caidas59.push({ product: 'jira', host: location.hostname, kind, reason: r.reason, status: r.status, ok: r.ok })
+    }
+    ok(
+      'sin sesion valida las cuatro lecturas de Jira fallan por la sesion, y ninguna sale del origen',
+      caidas59.length === 4 &&
+        caidas59.every((e) => !e.ok && e.reason === 'sesion' && e.status === 401) &&
+        pedidasRest.length === antes59 + 4 &&
+        pedidasRest.slice(antes59).every((u) => u.startsWith(location.origin)),
+      caidas59.map((e) => `${e.kind}:${e.reason}`).join(' ')
+    )
+    const soloPaginas59 = ordenar57(hoy57.buildCandidates({ reads: paginas57, activity: { [location.hostname]: diario57 }, here: null, now: ahora57 }))
+    const resumen59 = hoy57.todaySummary({ items: soloPaginas59, errors: caidas59 })
+    ok(
+      'la lista sale de lo que haya contestado, y el Registro dice por que viene corta sin un solo titulo',
+      soloPaginas59.length > 0 &&
+        soloPaginas59.every((f) => f.product === 'confluence') &&
+        resumen59.startsWith(`${soloPaginas59.length} filas · Confluence ${soloPaginas59.length}`) &&
+        resumen59.includes('Jira sin lista: sesion') &&
+        !soloPaginas59.some((f) => f.title && resumen59.includes(f.title)) &&
+        !soloPaginas59.some((f) => resumen59.includes(f.id)),
+      resumen59
+    )
+
     renderPage('page:200')
     await wait(320)
 
@@ -3051,6 +3387,9 @@ window.faroHarness = {
   // De H10, lo que se lee de la pantalla para sugerir páginas base: es DOM
   // puro, así que se expone entero y no a demanda como los módulos del panel.
   pageLinks,
+  // Y de H11, el id de la página que se tiene delante: en un Data Center sólo
+  // está en el DOM, así que va aquí por lo mismo que `pageLinks`.
+  pageIdFromDom,
   formatDigest,
   observacionesPorBloques,
   observacionesDeIncidencia,
@@ -3082,5 +3421,12 @@ window.faroHarness = {
   sourceSuggest: () => import('/src/panel/source-suggest.js'),
   references: () => import('/src/panel/references.js'),
   sourceHistory: () => import('/src/panel/source-history.js'),
+  // Y de H11, las dos mitades de «qué mirar hoy»: la que puntúa y explica
+  // (src/panel/) y el diario local (src/atlassian/), más el diario de ejemplo
+  // con el que se prueban los tramos 56-59 desde fuera. Funciones, como los
+  // demás: el diario depende del reloj que se le pase.
+  today: () => import('/src/panel/today.js'),
+  activity: () => import('/src/atlassian/activity.js'),
+  diarioDeEjemplo: async (ahora = Date.now()) => diarioDeMentira(await import('/src/atlassian/activity.js'), ahora),
 }
 say('banco listo')

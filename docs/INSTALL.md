@@ -229,15 +229,16 @@ Arriba hay tres cosas, y ninguna ocupa más de una línea:
   árbol**, ese hueco enseña qué está pasando («pensando…», «paso 2/5») y al
   acabar vuelve el título. Un fallo de conexión no se queda ahí: lo cuentan el
   faro en rojo y la pantalla que te dice cómo arrancar opencode.
-- **Los cuatro botones**: nueva sesión, memoria (encendido si la memoria entre
-  sesiones está activa), registro y ajustes. Nunca se encogen ni se parten en
+- **Los cinco botones**: nueva sesión, **qué mirar hoy** (con su insignia
+  cuando hay novedades), memoria (encendido si la memoria entre sesiones está
+  activa), registro y ajustes. Nunca se encogen ni se parten en
   dos filas, ni con el panel en su anchura mínima. El de memoria dice en qué
   estado está también por escrito —«Memoria entre sesiones: activa» o
   «: desactivada», en el tooltip y en el nombre que lee un lector de pantalla—,
   porque el color encendido no se oye.
 
-Cada pantalla (Ajustes, Memoria, Registro, Páginas base, el paso manual de las
-claves) se cierra con **la flecha de su cabecera**, que se queda arriba mientras
+Cada pantalla (Ajustes, Memoria, Registro, Páginas base, Qué mirar hoy, el paso
+manual de las claves) se cierra con **la flecha de su cabecera**, que se queda arriba mientras
 lees: antes había que bajar hasta el final a buscar un «Listo». La de Ajustes
 dice «Guardar y volver», porque al cerrarla se guardan la contraseña y la
 dirección del servidor y el panel rearranca.
@@ -463,8 +464,15 @@ Junto al selector de modelo, abajo, hay otras dos cosas:
   la lectura del camino por el árbol ni la búsqueda de páginas base, que
   funcionan desde antes. Se aplica al momento, sin rearrancar el panel.
 
-- **Teclado y lector de pantalla** — `Esc` cierra Ajustes, Memoria, Registro y
-  Páginas base (en Páginas base, primero vacía las sugerencias) y cancela el
+- **Ajustes → Sugerirme qué mirar hoy** — enciende o apaga la lista de «Qué
+  mirar hoy» y, con ella, el diario local que la alimenta: apagada, no sale ni
+  una consulta y no se apunta nada. Viene encendida, y **depende de la de
+  arriba**: con *Consultar tu sitio* apagado ésta se queda desactivada y lo
+  dice. Para apagarla sólo en un sitio, la casilla **«No sugerir nada en este
+  sitio»** vive en su propia pantalla. Se aplica al momento.
+
+- **Teclado y lector de pantalla** — `Esc` cierra Ajustes, Memoria, Registro,
+  Páginas base (donde primero vacía las sugerencias) y Qué mirar hoy y cancela el
   velo «Trabajando…»; con una pantalla abierta el resto del panel queda inerte
   y el foco va a su título, y al cerrarla vuelve a donde estaba. Mientras llega
   una respuesta el chat lleva `aria-busy`; lo que se anuncia al lector de
@@ -472,7 +480,78 @@ Junto al selector de modelo, abajo, hay otras dos cosas:
   avisos, no cada trozo de texto. El chat sólo se desplaza solo al fondo si ya
   estabas pegado a él: si subiste a leer, se queda donde estás.
 
-## 7. Guiada o rápida
+## 7. Qué mirar hoy
+
+El **quinto botón de la cabecera** (el de la lista, entre «Nueva sesión» y
+«Memoria») abre **Qué mirar hoy**: hasta ocho filas con la incidencia o la
+página que te importa ahora mismo, agrupadas en tres bloques —*Cambió desde que
+lo miraste*, *Lo tuyo* y *Nuevo en \<tu proyecto o espacio\>*—. Si hay algo nuevo
+desde la última vez que abriste la lista, el botón se enciende y lo dice también
+por escrito, en el tooltip y en el nombre que lee un lector de pantalla («Qué
+mirar hoy: 3 novedades»). En el **chat vacío** salen las tres primeras, y si esa
+zona se queda sin sitio —porque hay pastillas de búsqueda además de las
+sugerencias— se encoge sola a una línea, «Qué mirar hoy (8)», que abre la
+pantalla.
+
+**Nada de esto pasa por el modelo, y no cuesta un token.** La lista sale de
+preguntarle a tu propio Jira y a tu propio Confluence, con la sesión que ya
+tienes abierta en el navegador, siete cosas que sus API contestan exactas: lo
+que has visto últimamente, lo que es tuyo o sigues, lo que se ha movido en el
+proyecto, lo que enlaza la incidencia abierta, y en Confluence lo que viste, lo
+que escribiste y las páginas concretas que ya conoce tu diario. Eso se cruza con
+el **diario local** (abajo) y se ordena. **Cada fila dice por qué está ahí**, en
+español: «cambió ayer · es tuya o la sigues · Task», «la analizaste hace 2 días
+con 6 observaciones», «la sueles mirar (4 veces)», «página base de tus
+análisis». Lo leído vale un cuarto de hora; **Actualizar** lo vuelve a pedir.
+
+Cada fila tiene tres cosas que hacer:
+
+- **Abrir** — te lleva ahí. Si es del sitio de la pestaña, por el mismo camino
+  validado que cualquier otro destino de Faro (entra en el índice y se comprueba
+  antes de abrir nada); si es una página del Confluence enlazado a tu Jira, se
+  abre en una pestaña nueva.
+- **Analizar** — te lleva, pone la Skill en *Análisis* y **deja la pregunta
+  escrita en el cuadro, sin mandarla**. Enviarla es tuyo, siempre. Si tardas más
+  de dos minutos o acabas en otra página, la pregunta se descarta sola en vez de
+  aparecer donde no viene a cuento.
+- **Ya lo he visto** — quita la fila. No es «para siempre»: **vuelve sola en
+  cuanto esa página o esa incidencia cambie**, porque lo que se recuerda es cómo
+  estaba cuando la descartaste.
+
+Abajo del todo de la pantalla: **«No sugerir nada en este sitio»** (una casilla,
+por sitio), **Actualizar**, **Borrar mi actividad** y una línea que dice qué se
+guarda y dónde, con los números.
+
+### Qué guarda tu diario, y dónde
+
+Para poder decirte qué ha cambiado *desde que lo miraste*, Faro apunta en el
+almacenamiento de tu navegador —**local, por sitio, nunca en ningún servidor**—
+la clave de la incidencia o el id de la página, su **título**, su **ruta
+relativa** dentro del sitio, cuándo la viste y cuántas veces, cuándo la
+analizaste y con cuántas observaciones, si la usaste como página base y de qué
+**tipo** era la incidencia. **No** guarda la URL completa, ni nada de lo que
+venga detrás de un «?» o de un «#», ni el texto de ninguna página, ni una
+palabra de lo que escribes. Trescientas entradas por sitio y **treinta días**;
+lo más viejo se cae solo. Sólo se apunta de los sitios que has configurado, y
+sólo con las dos casillas encendidas.
+
+**Nada de eso llega nunca al modelo**: no entra en ningún prompt. Se borra con
+**Borrar mi actividad**, y **Ajustes → Olvidar este sitio** se lo lleva junto con
+el resto.
+
+### Cuándo no sale nada
+
+- **Ajustes → *Sugerirme qué mirar hoy* apagado**, o **Ajustes → *Consultar tu
+  sitio* apagado**: con el segundo apagado se apaga también el primero (y la
+  casilla lo dice), y entonces no sale ni una consulta ni se apunta nada.
+- **Jira Cloud**: Atlassian retiró esa API, así que allí no hay lista de Jira.
+- **Desde una pestaña de Confluence** todavía no se consulta el Jira enlazado.
+- **Sin permiso sobre el dominio** del Confluence enlazado: la pantalla ofrece
+  un botón para dártelo. No se pide solo.
+- **Sesión caducada o consulta rechazada**: sale un aviso con el motivo y la
+  lista se queda con lo que sí se pudo leer. El resto del panel sigue igual.
+
+## 8. Guiada o rápida
 
 **Ajustes → Cómo te lleva Faro** decide qué hace la tarjeta «Puedo llevarte»:
 
@@ -489,7 +568,7 @@ destino sale de ahí, sin gastar un turno en preguntárselo. Si un modelo se
 salta esa línea pero nombra una sola página del índice, vale igual. La tarjeta
 aparece nada más terminar la respuesta.
 
-## 8. Herramientas de desarrollo
+## 9. Herramientas de desarrollo
 
 ### Cómo ver el último turno real
 
@@ -583,11 +662,23 @@ distinta. Se regenera sólo cuando el cambio es intencionado, revisando el
 
 `npm run harness` levanta en <http://127.0.0.1:5175> una Confluence y un Jira de
 mentira con las piezas reales encima. El botón **Autocomprobación completa**
-recorre hoy **55 tramos numerados (103 comprobaciones)**; hay que correrla con el panel del navegador a
+recorre hoy **59 tramos numerados (111 comprobaciones)**; hay que correrla con el panel del navegador a
 la vista y a 1280×900, porque con la ventana oculta Chrome estrangula los
 temporizadores y no ejecuta los fotogramas.
 
-Los tres últimos (53-55) son las **páginas base que Faro propone**: los enlaces que
+Los cuatro últimos (56-59) son **«Qué mirar hoy»**, y tampoco navegan: que la
+página de mentira lleve su id en una etiqueta `meta` y que de una URL se saque
+la ruta **sin la parte de detrás del «?» ni del «#»**; que dos avisos de la
+misma navegación cuenten una sola visita y que apuntar un análisis no toque lo
+que se apuntó al verla; las siete consultas contra la Jira y la Confluence de
+mentira, de las que salen veintidós candidatos y una lista de ocho que es
+**exactamente la misma dos veces seguidas**, con sus motivos escritos; que lo
+que tienes abierto no aparezca en la lista y que lo descartado vuelva en cuanto
+cambia; y que con la sesión caducada las cuatro consultas de Jira fallen, no se
+salga del sitio y la lista salga de lo que sí contestó Confluence. Tienen botón
+propio, **«Qué mirar hoy: lo que ha cambiado desde que lo miraste»**.
+
+Los tramos 53-55 son las **páginas base que Faro propone**: los enlaces que
 una incidencia tiene en su contenido con la parte de la que viene cada uno —y
 tres trampas que NO tienen que salir: uno en la barra de acciones, uno en un
 botón dentro de la descripción y uno en una pestaña de campos plegada—, lo mismo
@@ -901,6 +992,23 @@ en Confluence no hay nada de esto.
   pregunta lo pone: «búsqueda directa, sin modelo». Si el chip no se pudo
   ejecutar, el detalle dice por qué.
 
+**Qué mirar hoy**
+
+- «Qué mirar hoy» — la lista se leyó: cuántas filas salieron, cuántas de Jira y
+  cuántas de Confluence, cuántas traen un cambio desde que las miraste, de
+  cuántos candidatos, de qué sitios, y lo que tardó (o «de la caché», si valía
+  la lectura de hace menos de un cuarto de hora). Con el mismo título salen
+  también las otras cosas que se hacen ahí: descartar una fila, apagar o
+  encender el sitio, borrar tu actividad, y «pregunta de Análisis preparada en
+  el cuadro, sin mandar». Son números y motivos: nunca un título ni un id.
+- «Qué mirar hoy no disponible» — no se pudo leer, o no había a quién
+  preguntar. Los casos: no hay ningún sitio que consultar (Jira Cloud, donde esa
+  API está retirada; o una pestaña de Confluence, desde la que todavía no se
+  consulta el Jira enlazado); un sitio se quedó fuera y el detalle dice por qué;
+  la respuesta llegó con el panel ya en otro sitio; ninguna consulta devolvió
+  nada; o no se pudo apuntar la actividad. La sección se queda vacía o a medias
+  y el resto del panel sigue igual.
+
 **Señalar en la página**
 
 - «Señalado en la página» — lo que subrayaste o la imagen que pulsaste llegó
@@ -1108,6 +1216,28 @@ una incidencia abierta, no hay épica ni sprint de los que partir; si no tienes
 filtros marcados como favoritos en tu Jira, no hay pastilla de filtro (el registro
 dice «Filtros favoritos» con cuántos leyó); y las «Última: …» aparecen en cuanto
 ejecutes la primera. Como mucho cuatro, para que el chat vacío siga cabiendo.
+
+**«Qué mirar hoy» sale vacío, o el botón nunca se enciende**
+Primero, las dos casillas: **Ajustes → Consultar tu sitio** y **Ajustes →
+Sugerirme qué mirar hoy** tienen que estar encendidas (la segunda se apaga sola
+con la primera), y la pantalla tiene la suya propia, **«No sugerir nada en este
+sitio»**. Después, dónde estás: en **Jira Cloud** no hay lista de Jira —esa API
+está retirada— y desde una pestaña de **Confluence** todavía no se consulta el
+Jira enlazado; las dos cosas las dice la propia pantalla, y quedan en el
+registro como «Qué mirar hoy no disponible» con el motivo. Si la sesión de tu
+sitio caducó, la API contesta 401: abre ese Jira o ese Confluence en una
+pestaña, entra y vuelve. Y si acabas de instalar, **es normal que los primeros
+días haya poco**: la mitad de las señales salen de tu propio diario —qué has
+visto, qué has analizado—, que se llena mientras trabajas. La lista se guarda un
+cuarto de hora; **Actualizar** la vuelve a pedir.
+
+**Quiero borrar lo que Faro sabe de lo que miro**
+**Qué mirar hoy → Borrar mi actividad** borra el diario de ese sitio (y el del
+Confluence enlazado, si lo hay). **Ajustes → Olvidar este sitio** se lo lleva
+junto con el índice, el contexto y la memoria. Lo que se guarda está escrito en
+una línea al pie de esa misma pantalla, con los números: claves, ids, títulos y
+rutas relativas, nunca la URL completa ni el texto de ninguna página, y nunca
+llega al modelo.
 
 **«El modelo no aceptó la petición» o el turno se queda pensando**
 Es el modelo, no Faro. Cambia de modelo en el desplegable: el propio mensaje

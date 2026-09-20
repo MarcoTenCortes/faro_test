@@ -479,15 +479,31 @@ Trece decisiones que sostienen el diseño:
    sitio*, y si falla —sesión caducada, sin permiso, consulta rechazada— la
    tarjeta se queda entera con un aviso que dice el motivo. En **Jira Cloud** no
    se consulta la API en ningún caso (Atlassian la retiró: allí todo sigue por el
-   MCP), y en Confluence no hay búsquedas al instante. Lo que falta por llegar:
-   el contexto del sitio leído de la API y las recomendaciones de qué mirar hoy.
+   MCP), y en Confluence no hay búsquedas al instante.
+
+16. **Faro te dice qué ha cambiado desde que lo miraste.** El quinto botón de la
+   cabecera abre **Qué mirar hoy**: hasta ocho filas con la incidencia o la
+   página que te importa, **cada una con su porqué en español** («cambió ayer ·
+   es tuya o la sigues», «la analizaste hace 2 días con 6 observaciones», «la
+   sueles mirar (4 veces)», «página base de tus análisis»). Con algo nuevo, el
+   botón se enciende y su nombre lo dice («Qué mirar hoy: 3 novedades»), y en el
+   chat vacío salen las tres primeras. **Ninguna recomendación pasa por el
+   modelo**: la lista sale de preguntarle a tu propio Jira y a tu propio
+   Confluence lo que ya miraste, lo tuyo y lo que se movió, y de cruzarlo con un
+   **diario local** de lo que abriste y analizaste. Cada fila tiene tres cosas
+   que hacer: **Abrir** (por el mismo camino validado que cualquier destino),
+   **Analizar** —que te lleva, pone la Skill Análisis y **deja la pregunta
+   escrita en el cuadro sin mandarla**: la mandas tú— y **Ya lo he visto**, que
+   la quita y la devuelve sola en cuanto esa página vuelva a cambiar. Se apaga
+   entero en Ajustes, o sólo en un sitio desde su propia pantalla, y tu
+   actividad se borra cuando quieras.
 
 ---
 
 ## Comprobaciones
 
 ```bash
-npm run check              # sintaxis + orden + manifest + 1171 pruebas unitarias + docs
+npm run check              # sintaxis + orden + manifest + 1258 pruebas unitarias + docs
 npm run check:docs         # sólo el paso docs: número de pruebas, títulos del registro, mensajes y ficheros del mapa
 npm run test:integration   # contra un opencode real que arranca la propia prueba
 npm run harness            # banco de pruebas visual en http://127.0.0.1:5175
@@ -781,6 +797,22 @@ de que el modelo se porte bien:
   de resultados entra en el índice del sitio y pasa por la misma comprobación
   que cualquier destino antes de que nadie pueda abrirla.
 
+**Tu actividad es tuya, local, y no entra en ningún prompt.** Para decirte qué
+ha cambiado desde que lo miraste, Faro lleva un **diario en tu navegador**
+(`chrome.storage.local`, por sitio). Qué guarda: la clave de la incidencia o el
+id de la página, su **título**, su **ruta relativa** dentro del sitio, cuándo la
+viste y cuántas veces, cuándo la analizaste y con cuántas observaciones, si la
+usaste como página base, y de qué **tipo** era la incidencia. Qué NO guarda: la
+URL completa, nada de lo que venga detrás de un «?» o de un «#», el texto de
+ninguna página, ni una sola palabra de lo que escribes. Trescientas entradas por
+sitio, **treinta días**, y sólo de los sitios que has configurado. **Nada de eso
+llega nunca al modelo**: no entra en ningún prompt, y lo comprobamos por los dos
+lados (hay una prueba que compara los 36 prompts byte a byte y otra que exige
+que el diario no se le pase a quien los escribe). Está a la vista —la pantalla
+dice en una línea qué se guarda y dónde, con los números— y se borra con
+**«Borrar mi actividad»**, o con **«Olvidar este sitio»** junto con todo lo
+demás.
+
 **Y el modelo no puede tocar tu máquina.** El agente por defecto de opencode
 trae herramientas de shell y de ficheros, y las usa: comprobado, ejecutaba
 `echo hola` y leía `package.json` dentro de un turno normal de chat. Faro abre
@@ -913,6 +945,16 @@ modelo que funciona se recuerda para ese sitio.
   ese caso se manda su `alt`, su pie de figura y el texto de alrededor, y se
   dice en el chat que la imagen no iba.
 
+- **«Qué mirar hoy» no adivina, y no te manda nada.** Lo que sale ahí viene de
+  lo que tu propio sitio contesta (lo que has visto, lo tuyo, lo que se ha
+  movido) cruzado con tu diario local; nada lo decide un modelo, así que si una
+  fila no te sirve el porqué está escrito y puedes descartarla. Faro **nunca
+  manda una pregunta por su cuenta**: «Analizar» te lleva a la página, pone la
+  Skill y deja la pregunta escrita en el cuadro; enviarla es tuyo. En **Jira
+  Cloud** no hay lista de Jira (Atlassian retiró esa API), y por ahora, desde una
+  pestaña de Confluence, no se consulta el Jira enlazado: las dos cosas se dicen
+  en la pantalla en vez de quedarse en blanco.
+
 - **El alcance «sólo estas» se le pide al modelo, no se le impone.** Las
   páginas base las lee el modelo por el MCP, y limitar sus herramientas en un
   turno no se puede: opencode convierte esa limitación en permisos permanentes
@@ -941,6 +983,7 @@ src/
     setup.js                claves por producto → bloque MCP; hosts enlazados (puro salvo las llamadas a opencode)
     sources.js              páginas base del análisis: forma, alcance, autocompletado desde el índice, URL pegada, vigilancia del alcance (puro)
     suggestions.js          las tres sugerencias del chat vacío, por producto y por Skill (puro)
+    today.js                qué mirar hoy: a quién se pregunta, qué puntúa cada señal y el porqué de cada fila (puro)
     source-history.js       qué páginas base usaste para analizar qué: el historial local que permite volver a proponerlas (puro + su almacén)
     references.js           las páginas que el contexto del sitio nombra como guía, plantilla o decisión, con su papel (puro)
     source-suggest.js       qué páginas base proponer y por qué, sin preguntarle al modelo (puro)
@@ -965,6 +1008,7 @@ src/
     runner.js               ejecutor de un paso
   opencode/                 cliente HTTP + SSE, reconstrucción de turnos
   atlassian/                detección de sitio, índice de contenido
+    activity.js             el diario local de lo que has visto y analizado: sólo ids, títulos y rutas relativas (puro)
   nav/                      esquema NavigationPlan y su validación
   shared/
     rest-get.js             la única puerta por la que Faro lee una API REST: sólo GET, sólo al mismo sitio, con tope de tiempo y sin lanzar nunca (puro)
@@ -972,6 +1016,7 @@ src/
     confluence-rest.js      el árbol y la búsqueda de páginas por la API REST del sitio, con tu sesión; lo último que viste y el árbol entero de un espacio, paginado (puro)
     digest.js               cómo se enseñan los bloques y cómo se reconoce uno después (puro)
     config.js               ajustes por defecto y su migración; NAV_TIMING, el único sitio con los tiempos de la navegación; y los topes de la eficiencia: cuántos mensajes se piden al restaurar y cuándo se avisa de una conversación pesada
+    activity-store.js       dónde vive ese diario y cómo se escribe sin que el service worker y el panel se pisen
     storage.js              lo guardado del navegador; todo lo de un sitio en UNA lectura (getSiteBundle) y lo que arrastra la sesión abierta
     permissions.js          los permisos de cada sesión de opencode: todo denegado salvo el MCP, y una copia de cómo los evalúa opencode para probarlo (puro)
     timing.js               el cronómetro por fases que el registro enseña: sólo etiquetas y números, nunca cuerpos ni claves (puro)

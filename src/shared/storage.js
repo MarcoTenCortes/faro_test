@@ -42,14 +42,16 @@ export async function forgetSite(host) {
   delete sites[host]
   await chrome.storage.local.set({ [STORAGE_KEYS.sites]: sites })
   // Lo que se aprendió de ese sitio se va con él: el índice, el perfil de su
-  // proyecto y el historial de páginas base. «Olvidar este sitio» no puede
-  // dejar detrás una lista de tipos y estados que el turno siguiente volvería a
-  // meter en el prompt, ni un rastro de qué incidencias se analizaron ahí que
-  // seguiría sugiriendo páginas al volver.
+  // proyecto, el historial de páginas base y el diario de actividad. «Olvidar
+  // este sitio» no puede dejar detrás una lista de tipos y estados que el turno
+  // siguiente volvería a meter en el prompt, ni un rastro de qué incidencias se
+  // analizaron ahí que seguiría sugiriendo páginas al volver, ni un diario de lo
+  // que el usuario abrió en un sitio que ha pedido olvidar.
   await chrome.storage.local.remove([
     STORAGE_KEYS.index(host),
     STORAGE_KEYS.profile(host),
     STORAGE_KEYS.sourceHistory(host),
+    STORAGE_KEYS.activity(host),
   ])
 }
 
@@ -88,21 +90,22 @@ async function takeIndex(host, index) {
  * Las claves POR HOST que el paquete del sitio trae ADEMÁS de las de siempre
  * (el mapa de sitios, el índice, el contexto y la memoria).
  *
- * Hoy el perfil del proyecto (H9) y el historial de páginas base (H10). Lo que
- * viene (docs/PLAN.md §3.5) —la actividad (H11)— entra aquí con el NOMBRE de su
- * clave en `STORAGE_KEYS` y su valor sale en `bundle.extras` SIN TOCAR: la
- * forma de cada una la decide su hito con sus propias claves blancas, no este
- * módulo (el perfil, por `normalizeProfile`, que es lo que hace `getProfile`;
- * el historial, por `normalizeHistory`, que vive en `src/panel/source-history.js`
- * y aquí no se puede importar, igual que `normalizeMemory`). Añadir el nombre
- * aquí es todo lo que hace falta para que su lectura viaje en la misma petición
- * al almacén.
+ * Hoy el perfil del proyecto (H9), el historial de páginas base (H10) y el
+ * diario de actividad (H11). Quien añada una pone aquí el NOMBRE de su clave en
+ * `STORAGE_KEYS` y su valor sale en `bundle.extras` SIN TOCAR: la forma de cada
+ * una la decide su hito con sus propias claves blancas, no este módulo (el
+ * perfil, por `normalizeProfile`, que es lo que hace `getProfile`; el historial,
+ * por `normalizeHistory`, que vive en `src/panel/source-history.js` y aquí no se
+ * puede importar, igual que `normalizeMemory`; el diario, por
+ * `pruneActivity`/`normalizeActivity`, que es lo que hace `getActivity`).
+ * Añadir el nombre aquí es todo lo que hace falta para que su lectura viaje en
+ * la misma petición al almacén.
  *
  * Las PÁGINAS DE REFERENCIA del contexto no tienen clave y por eso no están
  * aquí: docs/PLAN.md §3.2 descartó la lista estructurada del indexador, y el
  * parser de prosa las saca del CONTEXT.md, que ya viaja en este mismo paquete.
  */
-export const BUNDLE_EXTRA_KEYS = ['profile', 'sourceHistory']
+export const BUNDLE_EXTRA_KEYS = ['profile', 'sourceHistory', 'activity']
 
 /**
  * Las claves de almacenamiento que lee `getSiteBundle` para un host. Pura.

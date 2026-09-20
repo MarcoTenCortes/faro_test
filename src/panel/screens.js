@@ -19,6 +19,7 @@ export const ESCAPE_CLOSES = Object.freeze({
   'screen-memory': 'btn-memory-close',
   'screen-log': 'btn-log-close',
   'screen-sources': 'btn-sources-close',
+  'screen-today': 'btn-today-close',
 })
 
 /**

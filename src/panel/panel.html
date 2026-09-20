@@ -37,10 +37,22 @@
       <span class="loc-title" id="location-title">Buscando…</span>
     </span>
   </button>
-  <!-- Cabe un quinto botón: «Qué mirar hoy» (#btn-today), que crea H11. -->
+  <!-- El quinto botón que H5 dejó previsto es «Qué mirar hoy» (H11): las acciones
+       no se encogen (`.top-actions { flex: none }`), así que quien cede a 320 px
+       es el chip de ubicación y nunca esta fila. -->
   <div class="top-actions">
     <button class="icon-btn" id="btn-new-session" type="button" title="Empezar una sesión nueva" aria-label="Nueva sesión">
       <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+    </button>
+    <!-- El número de la insignia es `aria-hidden`: lo que lee un lector de
+         pantalla es el NOMBRE del botón, que dice lo mismo («Qué mirar hoy: 3
+         novedades»), igual que el de Memoria desde la revisión de H5. -->
+    <button class="icon-btn" id="btn-today" type="button" title="Qué mirar hoy" aria-label="Qué mirar hoy">
+      <svg viewBox="0 0 16 16" aria-hidden="true">
+        <circle cx="8" cy="8" r="1.9" fill="currentColor"/>
+        <path d="M4.3 4.3a5.2 5.2 0 0 0 0 7.4M11.7 11.7a5.2 5.2 0 0 0 0-7.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+      </svg>
+      <span class="badge hidden" id="today-count" aria-hidden="true"></span>
     </button>
     <button class="icon-btn" id="btn-memory" type="button" title="Memoria entre sesiones: desactivada" aria-label="Memoria entre sesiones: desactivada">
       <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 3.5h8v9l-4-2.5-4 2.5z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
@@ -302,6 +314,13 @@
          de la cadena de padres ni la búsqueda de páginas base, que llevan
          funcionando desde antes (DEFAULT_SETTINGS.restTools en config.js). -->
     <label class="check"><input type="checkbox" id="set-rest-tools"> Consultar la API de Jira y Confluence con mi sesión — lista de resultados en la tarjeta, búsquedas al instante y un índice exacto al levantar el mapa, sin gastar tokens. Sólo lecturas, al mismo sitio.</label>
+    <!-- Subordinada a la de arriba: «Qué mirar hoy» se apoya en esas mismas
+         lecturas, así que con el interruptor maestro apagado esta casilla se
+         desactiva y se explica por qué, en vez de quedarse marcada sin hacer
+         nada. Apagarla para el diario TAMBIÉN: quien no quiere que el panel
+         toque la API de su sitio tampoco quiere un diario de lo que abre. -->
+    <label class="check"><input type="checkbox" id="set-today"> Qué mirar hoy — al abrir el panel mira qué ha cambiado desde que lo miraste y apunta en este navegador lo que abres y analizas aquí. Ninguna sugerencia pasa por el modelo ni gasta tokens.</label>
+    <p class="fine hidden" id="set-today-hint">Necesita la casilla de arriba: sin consultar la API no hay con qué comparar lo que ya habías visto.</p>
 
     <h2>Servidor</h2>
     <div class="field">
@@ -409,6 +428,43 @@
       <button class="ghost" id="btn-sources-clear" type="button">Quitar las páginas</button>
       <span class="grow"></span>
     </div>
+  </div>
+</section>
+
+<!-- «Qué mirar hoy» (H11): lo que ha cambiado desde que lo miraste, lo tuyo y lo
+     nuevo del proyecto, ordenado por la extensión y con el porqué de cada fila
+     escrito en español. Ninguna fila llama al modelo: todo sale de la API del
+     propio sitio (leída con la sesión del navegador) y del diario local. -->
+<section class="screen hidden" id="screen-today" aria-labelledby="today-title">
+  <div class="screen-inner">
+    <div class="screen-head">
+      <button class="icon-btn back" id="btn-today-close" type="button" title="Volver al chat" aria-label="Volver al chat">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M9.5 3.5L5 8l4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <h1 id="today-title">Qué mirar hoy</h1>
+    </div>
+    <p>Lo que ha cambiado desde que lo miraste, lo que es tuyo y lo nuevo en tu proyecto.
+      Sale de la API de este sitio, leída con tu sesión, y del diario que Faro guarda en este
+      navegador. No pasa por el modelo, no gasta tokens y nada se abre ni se pregunta solo.</p>
+    <p class="fine" id="today-status"></p>
+
+    <div class="row hidden" id="today-perm" style="margin-top:6px">
+      <button class="ghost small" id="btn-today-permission" type="button">Dar permiso</button>
+      <span class="fine" id="today-perm-text"></span>
+    </div>
+
+    <div id="today-list"></div>
+
+    <label class="check"><input type="checkbox" id="today-off"> No sugerir nada en este sitio</label>
+
+    <div class="row wrap">
+      <button class="ghost" id="btn-today-refresh" type="button">Actualizar</button>
+      <button class="ghost danger" id="btn-today-forget" type="button">Borrar mi actividad</button>
+      <span class="grow"></span>
+    </div>
+    <!-- Qué se guarda y dónde, en una línea: la promesa de §8.20 escrita donde
+         se ve, no sólo en la documentación. -->
+    <p class="fine" id="today-activity-text"></p>
   </div>
 </section>
 
