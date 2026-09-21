@@ -963,7 +963,7 @@ su revisión, que es como se cerró de verdad).
 | **H10** Páginas base sugeridas | La pantalla de páginas base PROPONE hasta cinco, cada una con su motivo a la vista, cruzando lo que la página enlaza, lo que el CONTEXT.md nombra, el historial local de análisis y el título del índice. Sin gastar un token. | `plan/h10-paginas-base-sugeridas` · f39b108 + 6dbfcc5 | 1171 |
 | **H11** Qué mirar hoy | El diario local de actividad (con el service worker como único escritor de «visto»), la puntuación pura de `today.js`, el quinto botón con su insignia, el bloque del chat vacío y la pantalla `screen-today`. Ninguna recomendación llama al modelo. | `plan/h11-que-mirar-hoy` · 74075fa + 792315a | 1266 |
 | **H12** Prompts opcionales | «Preguntar sobre estos»: un botón bajo la lista de una búsqueda deja la pregunta escrita y, al enviarla, esas filas viajan con ella en vez de que el modelo vuelva a buscarlas. **«YA LEÍDAS» se descartó con una medida** (12.4). | `plan/h12-prompts-opcionales` · abfc0fc + 4477eda | 1279 |
-| **H13** Cierre | La vista «Qué guarda Faro de mí» en Ajustes y el olvido de un sitio en UNA función derivada de `STORAGE_KEYS` + `STORAGE_AREAS` (§4.11), esta consolidación de §12, y README, INSTALL y PLAN definitivos. | `plan/h13-cierre` · d0ef30d + el commit de su revisión, que es el que le sigue | 1283 |
+| **H13** Cierre | La vista «Qué guarda Faro de mí» en Ajustes y el olvido de un sitio en UNA función derivada de `STORAGE_KEYS` + `STORAGE_AREAS` (§4.11), esta consolidación de §12, y README, INSTALL y PLAN definitivos. | `plan/h13-cierre` · d0ef30d + ff90e94 | 1283 |
 
 **Dónde vive todo esto.** Las catorce ramas están **apiladas** —cada
 `plan/hN` cuelga de la anterior— sobre `40f56d7`, que es lo que la PR #5
