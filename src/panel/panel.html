@@ -338,11 +338,26 @@
       <button class="ghost" id="btn-reindex" type="button">Reconstruir el contexto</button>
       <button class="ghost" id="btn-edit-keys" type="button">Cambiar las claves</button>
       <button class="ghost" id="btn-tree-debug" type="button">Diagnóstico del árbol</button>
-      <button class="ghost danger" id="btn-forget" type="button">Olvidar este sitio</button>
     </div>
     <p class="fine">El diagnóstico lee la barra lateral de esta pestaña y apunta en el Registro qué
       estructura ha encontrado. Es lo que hay que mirar cuando la navegación paso a paso no
       despliega el árbol de tu Confluence.</p>
+
+    <!-- H13: una sola vista de lo que Faro guarda de ti en ESTE sitio, con su
+         medida y sin enseñar contenido, y el botón que se lo lleva todo justo
+         debajo. Hasta aquí había que deducirlo de tres pantallas distintas. -->
+    <h2 id="privacy-title">Qué guarda Faro de mí</h2>
+    <ul class="privacy" id="privacy-list" aria-labelledby="privacy-title"></ul>
+    <p class="fine hidden" id="privacy-others"></p>
+    <p class="fine">Todo esto vive en este navegador y no sale de él. Las claves de Jira y de
+      Confluence no están aquí: ésas sólo están en la configuración de opencode, en tu máquina.</p>
+    <p class="fine">Lo que NO se guarda aquí: el texto de las páginas que Faro lee y tus preguntas y
+      respuestas, que viven en la sesión de opencode. Se cierran con «Sesión nueva».</p>
+    <div class="row wrap">
+      <button class="ghost danger" id="btn-forget" type="button">Olvidar este sitio</button>
+    </div>
+    <p class="fine">Borra de golpe todo lo de la lista y deja este sitio como si Faro no lo hubiera
+      visto nunca. No se puede deshacer, y la próxima vez volverá a preguntarte por el contexto.</p>
 
     <p class="fine" id="settings-status"></p>
   </div>

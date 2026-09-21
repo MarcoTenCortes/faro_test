@@ -965,6 +965,35 @@ html.faro-still .busy-bar i { animation: none; width: 100%; }
 .state-row .v.ok { color: var(--ok); }
 .state-row .v.bad { color: var(--danger); }
 
+/* «Qué guarda Faro de mí», en Ajustes (H13). La misma fila clave/valor que el
+   Registro de arriba, pero sobre el fondo de la pantalla y con su tipografía, no
+   monoespaciada: esto se LEE, no se copia para pegarlo en un informe.
+   Es una LISTA de verdad (`ul`/`li`) porque es lo que es: así un lector de
+   pantalla dice cuántas cosas hay guardadas, y ninguna fila es un botón, así que
+   envolverlas no le quita el papel a nada (en H10 las sugeridas SÍ son botones y
+   por eso son un `role="group"` y no una lista).
+   Sin colores nuevos: `--muted` y `--ink-2` sobre `--ground` ya están declarados
+   en test/contrast-pairs.js, y el filete es el `--hairline` decorativo de
+   siempre. Y sin `white-space: nowrap` en ninguna de las dos piezas: a 320 px lo
+   que tiene que pasar si una medida crece es que se parta en dos líneas, no que
+   la fila se salga a lo ancho. */
+.privacy { list-style: none; margin: 0 0 var(--s3); padding: 0; }
+.privacy li {
+  display: flex;
+  gap: var(--s2);
+  align-items: baseline;
+  padding: var(--s1) 0;
+  border-bottom: 1px solid var(--hairline);
+  font-size: var(--text-xs);
+}
+.privacy li:last-child { border-bottom: 0; }
+.privacy .k { color: var(--muted); }
+.privacy .v { color: var(--ink-2); overflow-wrap: anywhere; }
+/* La línea de los OTROS sitios con datos lleva hosts, que son una sola palabra:
+   uno largo se saldría a lo ancho del panel a 320 px, y eso sí lo cazaría el
+   `scrollWidth` del documento en `faroPreview.check()`. */
+#privacy-others { overflow-wrap: anywhere; }
+
 /* --------------------------------------------- Skill y selección de página */
 
 /* La fila del redactor es UNA línea, siempre. Quien cede es el nombre del

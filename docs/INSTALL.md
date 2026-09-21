@@ -490,6 +490,10 @@ Junto al selector de modelo, abajo, hay otras dos cosas:
   sitio»** vive en su propia pantalla, y apaga las consultas y las
   recomendaciones de ese sitio (no el diario, que lo apaga ésta). Se aplica al momento.
 
+- **Ajustes → Qué guarda Faro de mí** — la lista de todo lo que Faro tiene
+  apuntado de este sitio, una línea por cosa y con su medida, y debajo el botón
+  que se lo lleva todo. Está entero en el apartado 8 de esta guía.
+
 - **Teclado y lector de pantalla** — `Esc` cierra Ajustes, Memoria, Registro,
   Páginas base (donde primero vacía las sugerencias) y Qué mirar hoy y cancela el
   velo «Trabajando…»; con una pantalla abierta el resto del panel queda inerte
@@ -564,9 +568,9 @@ sitio y **treinta días** —los «ya lo he visto» también, y cuando cae el ú
 diario de ese sitio se borra solo—; lo más viejo se cae solo. Sólo se apunta de los sitios que has configurado, y
 sólo con las dos casillas encendidas.
 
-**Nada de eso llega nunca al modelo**: no entra en ningún prompt. Se borra con
-**Borrar mi actividad**, y **Ajustes → Olvidar este sitio** se lo lleva junto con
-el resto.
+**Nada de eso llega nunca al modelo**: no entra en ningún prompt. Se ve entero,
+con sus números, en **Ajustes → Qué guarda Faro de mí**; se borra con **Borrar mi
+actividad**, y **Ajustes → Olvidar este sitio** se lo lleva junto con el resto.
 
 ### Cuándo no sale nada
 
@@ -580,7 +584,89 @@ el resto.
 - **Sesión caducada o consulta rechazada**: sale un aviso con el motivo y la
   lista se queda con lo que sí se pudo leer. El resto del panel sigue igual.
 
-## 8. Guiada o rápida
+## 8. Qué guarda Faro de mí
+
+**Ajustes → Qué guarda Faro de mí** es la lista entera, para este sitio, de lo
+que Faro tiene apuntado en tu navegador. Una línea por cosa, con su cuenta o su
+medida y **sin nada de su contenido** —ni un título de página, ni una clave de
+incidencia, ni una línea del contexto—:
+
+- **índice de navegación** — «412 páginas · 37 incidencias»: el mapa que
+  permite llevarte, con rutas del propio sitio.
+- **contexto del sitio** — «8 214 caracteres»: el resumen que el indexador
+  escribió (o el que subiste tú).
+- **memoria entre sesiones** — «3 resúmenes», o «(desactivada)» si la casilla de
+  la pantalla de Memoria está apagada.
+- **perfil del proyecto** — «SIMPL · muestra de 30 · contado hace 2 días»: los
+  nombres que Faro contó de tu Jira (tipos, estados, componentes, etiquetas). Se
+  dice de qué proyecto es porque se guarda uno por sitio.
+- **historial de páginas base** — «6 análisis»: con qué páginas analizaste qué,
+  que es lo que permite proponerlas otra vez.
+- **diario de actividad** — «48 entradas · 2 descartes», o «(apagado)» si la
+  función está apagada.
+- **últimas búsquedas** — «5 consultas»: las JQL que de verdad se ejecutaron
+  aquí, para ofrecerlas como pastilla.
+- **páginas base elegidas** — «2 páginas»: las que tienes puestas ahora mismo
+  para el análisis.
+- **espacio usado** — «1,4 MB de 10 MB»: lo que Faro ocupa en el navegador. Esta
+  cuenta es de **todos** los sitios, no sólo de este.
+
+Debajo, si tienes más sitios configurados, una línea los nombra. No hay botones
+para ellos a propósito: cada sitio se borra desde sí mismo, que es donde ves qué
+vas a perder.
+
+**Lo que NO está ahí**: las claves de Jira y de Confluence —ésas sólo están en
+la configuración de opencode, en tu máquina—, el texto de las páginas que Faro
+lee y tus preguntas y respuestas, que viven en la sesión de opencode y se
+cierran con «Sesión nueva».
+
+Y al final, **Olvidar este sitio**: borra de golpe todo lo de la lista y deja
+ese sitio como si Faro no lo hubiera visto nunca. No se puede deshacer, y la
+próxima vez volverá a preguntarte por el contexto. Para borrar sólo el diario,
+**Qué mirar hoy → Borrar mi actividad**; para sólo el historial de páginas base,
+**Olvidar el historial**, en la pantalla de páginas base.
+
+La lista se lee del almacenamiento de verdad, no de lo que el panel tenga en
+memoria, así que sirve para comprobarlo: después de olvidar un sitio, vuelve a
+abrirla y todo lo suyo dice «(nada)» (el espacio usado sigue con su número,
+porque ése cuenta el navegador entero).
+
+### Qué se conserva al reabrir el panel
+
+**Mientras no cierres Chrome**, al volver a ese Jira o a ese Confluence:
+
+- **la conversación** se repinta con lo que hay en opencode: los últimos 60
+  mensajes, y si había más, **«Ver toda la conversación»** arriba trae el resto;
+- **las observaciones del último análisis** vuelven como tarjeta: viva si sus
+  marcas siguen en la página, y si no, atenuada con **«Volver a marcar»** (que
+  comprueba antes que sigues en la misma página; Faro nunca re-marca solo).
+
+**Aunque cierres el navegador** se conserva todo lo de la lista de arriba: el
+índice, el contexto, la memoria entre sesiones, el perfil del proyecto, el
+historial de páginas base, el diario de actividad, las páginas base elegidas con
+su alcance, las últimas búsquedas, y el modelo y la Skill de ese sitio.
+
+**No se conserva**, y es a propósito:
+
+- **la sesión de chat, al cerrar Chrome**: el id de la conversación vive en el
+  almacén de sesión del navegador, así que se olvida y la próxima vez Faro abre
+  una nueva. La conversación sigue existiendo dentro de opencode; lo que se
+  pierde es saber cuál era;
+- **una búsqueda directa** (una pastilla del chat vacío): no habló nadie con
+  opencode, así que no está en la conversación que se restaura;
+- **la lista de resultados dentro de la tarjeta de una búsqueda**: la tarjeta
+  vuelve, la lista no —se lee de tu sitio en el momento, y una de hace dos días
+  no diría la verdad—, y con ella lo que hubieras precargado con «Preguntar
+  sobre estos»;
+- **los números de las observaciones cuando los puso la pasada de rescate** (la
+  que trocea la respuesta si el modelo no numeró): lo que opencode guarda es la
+  respuesta original, sin esos `[n]`;
+- **lo que hubieras señalado con el rotulador**: acompaña a la siguiente
+  pregunta y ahí se acaba;
+- **la lista de «qué mirar hoy»**, que vale un cuarto de hora y muere al cerrar
+  el navegador (el diario que la alimenta, no: ése dura treinta días).
+
+## 9. Guiada o rápida
 
 **Ajustes → Cómo te lleva Faro** decide qué hace la tarjeta «Puedo llevarte»:
 
@@ -597,7 +683,7 @@ destino sale de ahí, sin gastar un turno en preguntárselo. Si un modelo se
 salta esa línea pero nombra una sola página del índice, vale igual. La tarjeta
 aparece nada más terminar la respuesta.
 
-## 9. Herramientas de desarrollo
+## 10. Herramientas de desarrollo
 
 ### Cómo ver el último turno real
 
@@ -1271,13 +1357,20 @@ días haya poco**: la mitad de las señales salen de tu propio diario —qué ha
 visto, qué has analizado—, que se llena mientras trabajas. La lista se guarda un
 cuarto de hora; **Actualizar** la vuelve a pedir.
 
-**Quiero borrar lo que Faro sabe de lo que miro**
-**Qué mirar hoy → Borrar mi actividad** borra el diario de ese sitio (y el del
-Confluence enlazado, si lo hay). **Ajustes → Olvidar este sitio** se lo lleva
-junto con el índice, el contexto y la memoria. Lo que se guarda está escrito en
-una línea al pie de esa misma pantalla, con los números —entradas, análisis,
-páginas base y «ya lo he visto»—: claves, ids, títulos y rutas relativas, nunca la
-URL completa ni el texto de ninguna página, y nunca llega al modelo.
+**Quiero ver y borrar lo que Faro guarda de mí**
+**Ajustes → Qué guarda Faro de mí** lo enseña TODO lo de este sitio en una lista,
+una línea por cosa y con su medida —el índice, el contexto, la memoria, el perfil
+del proyecto, el historial de páginas base, el diario de actividad, las últimas
+búsquedas y las páginas base elegidas—, sin enseñar nada de su contenido, más el
+espacio que ocupa en el navegador y qué otros sitios tienen datos. Debajo está
+**Olvidar este sitio**, que se lo lleva todo de golpe y deja ese sitio como si
+Faro no lo hubiera visto nunca. Y para el diario a solas, **Qué mirar hoy →
+Borrar mi actividad** borra el de ese sitio (y el del Confluence enlazado, si lo
+hay), y esa misma pantalla dice en una línea qué apunta y con qué números
+—entradas, análisis, páginas base y «ya lo he visto»—: claves, ids, títulos y
+rutas relativas, nunca la URL completa ni el texto de ninguna página, y nunca
+llega al modelo. La lista entera, fila por fila, y qué se conserva al reabrir el
+panel están en el apartado **«Qué guarda Faro de mí»** de esta guía.
 
 **«El modelo no aceptó la petición» o el turno se queda pensando**
 Es el modelo, no Faro. Cambia de modelo en el desplegable: el propio mensaje

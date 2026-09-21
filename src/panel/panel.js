@@ -40,7 +40,7 @@ import {
 import { navOptions } from '../nav/options.js'
 import { validatePlan } from '../nav/validate.js'
 import {
-  getSettings, saveSettings, getSite, saveSite, forgetSite, getSiteBundle,
+  getSettings, saveSettings, getSite, getSites, saveSite, forgetEverythingFor, getSiteBundle,
   getIndex, saveIndex, getProfile, saveProfile, getSessionId, setSessionId, clearSessionId,
   getSessionWeight, setSessionWeight, clearSessionWeight,
 } from '../shared/storage.js'
@@ -109,7 +109,7 @@ import {
 } from '../shared/confluence-rest.js'
 // «Qué mirar hoy» (H11): el diario local de actividad y la puntuación pura que
 // lo ordena. Ni uno ni otra tocan la red; quien pide y quien pinta es el panel.
-import { ACTIVITY_LIMITS, activityKey, preferredFamilies } from '../atlassian/activity.js'
+import { ACTIVITY_LIMITS, activityKey, preferredFamilies, pruneActivity } from '../atlassian/activity.js'
 import {
   clearActivity,
   clearTodayCache,
@@ -5814,6 +5814,167 @@ async function showSettingsScreen() {
     ? `${state.site.host} · ${state.index ? indexSize(state.index) + ' entradas indexadas' : 'sin índice'} · ${state.contextMd ? 'con contexto' : 'sin contexto'}`
     : 'sin sitio'
   showScreen('screen-settings')
+  // La pantalla se abre YA y la lista se rellena detrás: son dos lecturas del
+  // almacén y abrir Ajustes no tiene por qué esperarlas.
+  await paintPrivacy()
+}
+
+/** Cuántos de los OTROS sitios con datos se nombran antes de contar el resto. */
+const OTHER_HOSTS_SHOWN = 4
+
+/**
+ * «Qué guarda Faro de mí»: una fila por cosa guardada de ESTE sitio, con su
+ * medida y sin una línea de su contenido (H13).
+ *
+ * Por qué existe: lo que Faro guarda estaba repartido entre tres pantallas —el
+ * Registro decía el índice y el contexto, la de Memoria los resúmenes, la de
+ * páginas base las elegidas— y de dos cosas (el perfil del proyecto y el
+ * historial de análisis) no hablaba ninguna. La promesa de §8.20 es que lo que
+ * Faro apunta del usuario «se ve y se borra»; esto es el «se ve», y el botón de
+ * abajo el «se borra».
+ *
+ * Se lee del ALMACÉN, no de `state`: la pregunta es «qué GUARDA Faro», y el panel
+ * puede tener en memoria un índice que todavía no ha escrito (`state.indexDirty`,
+ * P3) o haberse quedado con lo de antes de un borrado. Leerlo de disco es además
+ * lo que hace que la pantalla se compruebe a sí misma: tras «Olvidar este sitio»
+ * todo lo de ese sitio dice «(nada)» (el espacio usado sigue con su número: cuenta
+ * el almacén entero). Son dos lecturas: el paquete del sitio —que
+ * trae de una vez el índice, el contexto, la memoria, el perfil, el historial y
+ * el diario— y el mapa de sitios, para la línea de los OTROS hosts con datos
+ * (`getSiteBundle` lee ese mapa y se queda sólo con este host, porque sus claves
+ * son exactas: §6).
+ *
+ * Cuentas y medidas, nunca contenido: ni un título de página, ni una clave de
+ * incidencia, ni una línea del contexto. Es la misma regla que el Registro
+ * (§8.20): esta pantalla se mira con el panel abierto delante de otra gente. La
+ * única excepción es la CLAVE DEL PROYECTO del perfil, a propósito: se guarda uno
+ * por host y un Jira tiene muchos proyectos, así que sin ella no se sabe de cuál
+ * es lo guardado (revisión adversaria de H9) y además ya está en la cabecera. Y
+ * nada de esto entra en ningún prompt.
+ *
+ * El sitio es el de la PESTAÑA (`state.site`), como en `settings-site-info` y en
+ * el Registro, y no el último que el panel recuerde: el botón de abajo también lo
+ * es, así que enseñar la lista de un host que ese botón no puede borrar sería
+ * ofrecer un borrado que no va a pasar.
+ */
+async function paintPrivacy() {
+  const box = $('privacy-list')
+  const otros = $('privacy-others')
+  box.textContent = ''
+  otros.classList.add('hidden')
+  const add = (k, v) => {
+    const row = document.createElement('li')
+    const kk = document.createElement('span')
+    kk.className = 'k'
+    kk.textContent = k
+    const vv = document.createElement('span')
+    vv.className = 'v'
+    vv.textContent = v
+    row.append(kk, vv)
+    box.appendChild(row)
+  }
+
+  const host = state.site?.host || ''
+  if (!host) {
+    add('este sitio', 'no estás en Jira ni en Confluence')
+    return
+  }
+
+  let bundle = null
+  let sitios = {}
+  try {
+    ;[bundle, sitios] = await Promise.all([getSiteBundle(host), getSites()])
+  } catch (err) {
+    // La contraparte visible de §8.14 va en la propia lista: si no se pudo leer,
+    // lo peor sería una lista vacía que parecería «no guardo nada de ti».
+    add('lo guardado', 'no se pudo leer: ' + err.message)
+    return
+  }
+  // §8.22: el host se captura al pedir y se comprueba al volver. Entre las dos
+  // cosas la pestaña puede haberse ido a otro sitio, y entonces estas cuentas
+  // serían de un host que ya no es el de la cabecera.
+  if (state.site?.host !== host) return
+
+  const paginas = Object.keys(bundle.index?.pages || {}).length
+  const incidencias = Object.keys(bundle.index?.issues || {}).length
+  add('índice de navegación', bundle.index ? `${paginas} páginas · ${incidencias} incidencias` : '(nada)')
+  add('contexto del sitio', bundle.contextMd ? `${bundle.contextMd.length} caracteres` : '(nada)')
+
+  const resumenes = memory.normalizeMemory(bundle.memoryRaw).entries.length
+  add(
+    'memoria entre sesiones',
+    !state.settings.crossSessionMemory ? '(desactivada)' : resumenes ? `${resumenes} resúmenes` : '(nada)'
+  )
+
+  // El perfil se guarda por HOST y un Jira tiene muchos proyectos, así que se
+  // dice de CUÁL es: el de otro proyecto no es el que entra en el prompt de aquí
+  // (revisión adversaria de H9), y verlo con su clave es lo que lo explica.
+  const perfil = normalizeProfile(bundle.extras?.profile)
+  add(
+    'perfil del proyecto',
+    perfil ? `${perfil.projectKey} · muestra de ${perfil.sampled} · ${hace(perfil.at)}` : '(nada)'
+  )
+
+  const analisis = normalizeHistory(bundle.extras?.sourceHistory, { host }).entries.length
+  add('historial de páginas base', analisis ? `${analisis} análisis` : '(nada)')
+
+  const cuentas = activityCounts(pruneActivity(bundle.extras?.activity, { host }))
+  add(
+    'diario de actividad',
+    !todayEnabled()
+      ? '(apagado)'
+      : cuentas.entradas || cuentas.descartes
+        ? `${cuentas.entradas} entradas · ${cuentas.descartes} descartes`
+        : '(nada)'
+  )
+
+  // Estas dos viven dentro del registro del sitio, no en una clave propia, así
+  // que salen del paquete igual que las de arriba.
+  const consultas = normalizeRecentJql(bundle.site?.recentJql).length
+  add('últimas búsquedas', consultas ? `${consultas} consultas` : '(nada)')
+  const elegidas = normalizeSources(bundle.site?.analysisSources, { host }).pages.length
+  add('páginas base elegidas', elegidas ? `${elegidas} páginas` : '(nada)')
+
+  try {
+    const bytes = await chrome.storage.local.getBytesInUse(null)
+    const cuota = chrome.storage.local.QUOTA_BYTES || 10 * 1024 * 1024
+    add('espacio usado', `${formatBytes(bytes)} de ${Math.round(cuota / (1024 * 1024))} MB · todos los sitios`)
+  } catch (err) {
+    add('espacio usado', 'no se pudo medir: ' + err.message)
+  }
+
+  // Y los OTROS hosts de los que Faro tiene algo guardado. Sin botones a
+  // propósito: borrar otro sitio se hace desde ese sitio, que es donde se ve qué
+  // se va a perder. Los hosts son los que el propio usuario configuró aquí. Se
+  // nombran unos pocos y se cuenta el resto: a 320 px una lista de veinte hosts
+  // es una pantalla entera de texto que nadie lee.
+  const demas = Object.keys(sitios)
+    .filter((h) => h && h !== host)
+    .sort()
+  if (demas.length) {
+    const nombra = demas.slice(0, OTHER_HOSTS_SHOWN)
+    const resto = demas.length - nombra.length
+    otros.textContent =
+      `Otros sitios con datos guardados: ${nombra.join(', ')}${resto ? ` y ${resto} más` : ''}. ` +
+      'Para borrar uno, ábrelo y usa su «Olvidar este sitio».'
+    otros.classList.remove('hidden')
+  }
+}
+
+/**
+ * Cuánto hace que se contó algo, en palabras y por TIEMPO TRANSCURRIDO, como el
+ * porqué de «qué mirar hoy»: un nombre de día depende de la zona horaria.
+ *
+ * Sin un instante utilizable no se inventa ninguno («sin fecha»), por lo mismo
+ * que `memoryToPrompt` no imprime una fecha que no tiene: `normalizeProfile` deja
+ * `at` en 0 cuando lo guardado no valía, y eso saldría como «hace 20 700 días».
+ */
+function hace(at) {
+  if (!Number.isFinite(at) || at <= 0) return 'sin fecha'
+  const dias = Math.floor((Date.now() - at) / (24 * 60 * 60 * 1000))
+  if (dias <= 0) return 'contado hoy'
+  if (dias === 1) return 'contado ayer'
+  return `contado hace ${dias} días`
 }
 
 // ------------------------------------------------------------------ acción
@@ -6227,56 +6388,47 @@ function wireEvents() {
   $('btn-tree-debug').addEventListener('click', () => treeDebug().catch(console.error))
   $('btn-forget').addEventListener('click', async () => {
     if (!state.site) return
-    // El diario de actividad, ANTES que nada y por su propia puerta: `forgetSite`
-    // borra su clave con las demás, pero borrarla a secas no impide que una
-    // escritura del service worker que ya había leído la devuelva unos
-    // milisegundos después. `clearActivity` deja la marca de borrado que ese
-    // escritor relee antes de guardar (revisión adversaria de H11), y es también
-    // lo que serializa el borrado con lo que el panel tuviera en la cola.
-    await clearActivity(state.site.host)
-    await forgetSite(state.site.host)
-    await memory.clearMemory(state.site.host)
-    await memory.saveContextMd(state.site.host, '')
-    await clearSessionId(state.site.host)
-    // Y con la sesión, lo que arrastraba: dejar el contador puesto sumaría la
-    // conversación de antes a la de después y el aviso de pesada saldría con un
-    // número que no es de nadie (revisión adversaria de H6).
-    await clearSessionWeight(state.site.host)
+    const host = state.site.host
+    // TODO lo guardado de este host, en una sola llamada: el registro del sitio,
+    // el índice, el contexto, la memoria, el perfil, el historial de páginas
+    // base, el diario de actividad, la sesión, lo que pesaba y la caché de «hoy»
+    // (H13). Las claves las deriva `forgetEverythingFor` de `STORAGE_KEYS` y
+    // `STORAGE_AREAS`, así que una clave nueva por host se va con ella sin tocar
+    // este manejador; hasta H13 eran siete llamadas escritas aquí a mano y dos
+    // —el contexto y la memoria— se habrían quedado detrás con cualquier otro
+    // llamante. Ahí dentro va también la marca de borrado del diario, sin la cual
+    // una escritura del service worker que ya había leído lo devolvía unos
+    // milisegundos después (revisión adversaria de H11).
+    await forgetEverythingFor(host)
+    // Y lo que el panel tenga en memoria de este sitio: lo de arriba borra el
+    // almacén, pero un `state` que siga cargado lo vuelve a escribir en el turno
+    // siguiente —o lo mete en su prompt— como si no se hubiera olvidado nada.
     state.sessionToolChars = 0
     state.heavyWarned = false
     state.index = null
-    // Y lo que estuviera apuntado para guardar: olvidar el sitio no puede dejar
+    // Lo que estuviera apuntado para guardar: olvidar el sitio no puede dejar
     // un índice pendiente que el turno siguiente vuelva a escribir (P3).
     state.indexDirty = null
     state.ancestryFetched = new Map()
     state.contextMd = ''
+    state.memory = { entries: [] }
     state.sessionID = null
     state.sources = emptySources()
-    // Y las búsquedas que se recordaban de aquí: `forgetSite` ya borró el
-    // registro del sitio, así que dejarlas en memoria las volvería a guardar en
-    // cuanto se ejecutara la siguiente. Con el perfil contado, lo mismo:
-    // `forgetSite` borra su clave y dejarlo en memoria lo metería en el prompt
-    // del turno siguiente como si no se hubiera olvidado nada.
     state.recentJql = []
     state.favouriteFilters = null
     state.profile = null
-    // Y lo precargado: `bootForSite` repinta el chat y se lleva la tarjeta con
-    // la lista, así que dejarlo armado lo metería en la primera pregunta tras
+    // Lo precargado: `bootForSite` repinta el chat y se lleva la tarjeta con la
+    // lista, así que dejarlo armado lo metería en la primera pregunta tras
     // olvidar, con unos resultados que ya no se ven (revisión adversaria de H12;
     // el mismo motivo que en `newSession`).
     state.pendingPreload = null
-    // Y el historial de análisis con páginas base, que `forgetSite` acaba de
-    // borrar del almacén: dejarlo en memoria seguiría sugiriendo en este sitio
-    // lo que el usuario ha pedido olvidar, y el turno siguiente lo reescribiría.
     state.sourceHistory = emptyHistory()
     state.references = { propio: null, enlazado: null, index: null, items: null }
-    // Y el diario de actividad de este sitio, que `forgetSite` acaba de borrar
-    // del almacén (su clave va en la misma `remove`), con la caché de «qué
-    // mirar hoy» que se leyó con él: olvidar un sitio no puede dejar detrás un
-    // rastro de lo que abriste allí ni una lista que lo siga recomendando.
-    await clearTodayCache(state.site.host)
     state.today = emptyToday()
     paintSourcesUi()
+    // Se dice en voz alta: es la acción más destructiva del panel y su efecto
+    // —que la pantalla se repinte con todo a cero— no se oye por sí solo (A2).
+    announce(`Olvidado todo lo guardado de ${host}.`)
     hideScreens()
     await bootForSite()
   })

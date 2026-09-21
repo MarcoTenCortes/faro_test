@@ -220,6 +220,40 @@ export const STORAGE_KEYS = {
 }
 
 /**
+ * En qué área del almacén vive cada clave de arriba: `storage.local` o
+ * `storage.session` (H13).
+ *
+ * Hasta aquí el área estaba sólo en los comentarios, y con eso «Olvidar este
+ * sitio» tenía que saberse de memoria cuáles se borran de `local` y cuáles de
+ * `session`: dos listas escritas a mano en otro fichero. Así se quedaron sin
+ * borrar el contexto y la memoria del sitio —`forgetSite` no las tocaba, las
+ * borraba el manejador del botón, y cualquier otro llamante las habría dejado
+ * atrás—. Declarada aquí, `forgetEverythingFor` (storage.js) DERIVA las dos
+ * listas de esta tabla, así que una clave nueva por host se borra sola en cuanto
+ * dice dónde vive, y `storage.test.js` exige que toda clave de `STORAGE_KEYS`
+ * la diga: una que se añada mañana y se olvide aquí hace fallar la prueba.
+ *
+ * `faro:plans` del service worker no está: no es de `STORAGE_KEYS` y no es por
+ * host, es por PESTAÑA (el recorrido en vuelo de esa pestaña, que muere con el
+ * navegador), así que no hay forma de pedir «el de este host» ni sentido en
+ * hacerlo.
+ */
+export const STORAGE_AREAS = {
+  settings: 'local',
+  sites: 'local',
+  index: 'local',
+  session: 'session',
+  sessionWeight: 'session',
+  context: 'local',
+  memory: 'local',
+  profile: 'local',
+  sourceHistory: 'local',
+  activity: 'local',
+  activityCleared: 'session',
+  today: 'session',
+}
+
+/**
  * Permisos con los que Faro abre TODAS sus sesiones de opencode: una regla
  * que deniega todo y sólo el MCP de Atlassian permitido. Viven en
  * permissions.js (puro, con la simulación de cómo los evalúa opencode 1.2.25

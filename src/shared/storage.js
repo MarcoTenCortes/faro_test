@@ -1,8 +1,12 @@
 /** Acceso a chrome.storage con valores por defecto y sin sorpresas. */
 
-import { DEFAULT_SETTINGS, STORAGE_KEYS, migrateSettings } from './config.js'
+import { DEFAULT_SETTINGS, STORAGE_AREAS, STORAGE_KEYS, migrateSettings } from './config.js'
 import { INDEX_VERSION } from '../atlassian/index-store.js'
 import { normalizeProfile } from './jira-rest.js'
+// El diario tiene su propia puerta de borrado (deja una marca y va por su cola),
+// y «Olvidar este sitio» pasa por ella: mira `forgetEverythingFor`. shared →
+// shared, sin ciclo (activity-store.js sólo importa config.js y activity.js).
+import { clearActivity } from './activity-store.js'
 
 export async function getSettings() {
   const got = await chrome.storage.local.get(STORAGE_KEYS.settings)
@@ -37,22 +41,82 @@ export async function saveSite(host, patch) {
   return next
 }
 
-export async function forgetSite(host) {
+/**
+ * Las claves POR HOST que «Olvidar este sitio» CONSERVA, con su motivo (H13).
+ *
+ * Es la ÚNICA puerta por la que una clave por host puede sobrevivir a un olvido:
+ * `storage.test.js` recorre `STORAGE_KEYS` entera y exige que el olvido se lleve
+ * todas las que son función de un host salvo las de aquí. El motivo no es
+ * decorativo —la prueba exige que esté escrito—: sin él nadie puede saber dentro
+ * de un año si conservarla sigue teniendo sentido.
+ */
+export const FORGET_KEEPS = {
+  activityCleared:
+    'No es un dato del sitio: es la MARCA de que su diario se acaba de borrar. ' +
+    'La deja este mismo olvido (`clearActivity`) y la releen los dos escritores ' +
+    'del diario justo antes de guardar, para que una visita que el service worker ' +
+    'ya había leído no devuelva el diario entero unos milisegundos después ' +
+    '(revisión adversaria de H11). Borrarla aquí sería deshacer el borrado.',
+}
+
+/** El área declarada de una clave, o '' si no dice dónde vive. */
+function areaDe(name) {
+  const area = Object.hasOwn(STORAGE_AREAS, name) ? STORAGE_AREAS[name] : ''
+  return area === 'local' || area === 'session' ? area : ''
+}
+
+/**
+ * Las claves POR HOST de un área que un olvido se lleva: las de `STORAGE_KEYS`
+ * que son función de un host, viven ahí y no están conservadas.
+ *
+ * Derivadas, nunca escritas a mano: eso es lo que hace que una clave nueva no se
+ * pueda quedar sin borrar. `Object.hasOwn` y no `in`, porque una clave que se
+ * llamara «constructor» o «toString» sobreviviría por el prototipo (la lección
+ * de `suggestionsFor` en H5).
+ */
+function hostKeys(host, area) {
+  const out = []
+  for (const [name, make] of Object.entries(STORAGE_KEYS)) {
+    if (typeof make !== 'function') continue
+    if (Object.hasOwn(FORGET_KEEPS, name)) continue
+    if (areaDe(name) === area) out.push(make(host))
+  }
+  return out
+}
+
+/**
+ * «Olvidar este sitio»: dejar ese host como si Faro no lo hubiera visto nunca.
+ *
+ * UNA sola puerta, y ésta (H13). Hasta aquí el borrado estaba repartido entre
+ * `forgetSite` —que se llevaba cuatro claves de `local`— y el manejador del
+ * botón del panel, que añadía a mano la memoria, el contexto, la sesión, lo que
+ * pesaba, la caché de «hoy» y la marca de borrado del diario: siete llamadas en
+ * el orden correcto que había que acordarse de escribir, y dos de ellas —el
+ * CONTEXT.md y los resúmenes— no estaban en `forgetSite`, así que cualquier otro
+ * llamante habría dejado detrás la prosa de un sitio que el usuario pidió
+ * olvidar. Ahora el botón llama a esto y nada más.
+ *
+ * Las claves no se escriben aquí: se derivan de `STORAGE_KEYS` y de
+ * `STORAGE_AREAS`, así que una clave nueva por host se borra sola en cuanto dice
+ * en qué área vive. Lo único que sobrevive es lo que esté en `FORGET_KEEPS` con
+ * su motivo. `remove` con una clave que no está es un no-op, así que no hace
+ * falta saber cuáles tenía este host.
+ *
+ * El diario va PRIMERO y por su propia puerta: quitar su clave a secas no impide
+ * que una escritura del service worker que ya había leído lo devuelva unos
+ * milisegundos después. `clearActivity` deja la marca que ese escritor relee
+ * antes de guardar y va dentro de la cola del diario, así que además serializa
+ * el borrado con lo que el panel tuviera pendiente de apuntar.
+ */
+export async function forgetEverythingFor(host) {
+  await clearActivity(host)
   const sites = await getSites()
   delete sites[host]
   await chrome.storage.local.set({ [STORAGE_KEYS.sites]: sites })
-  // Lo que se aprendió de ese sitio se va con él: el índice, el perfil de su
-  // proyecto, el historial de páginas base y el diario de actividad. «Olvidar
-  // este sitio» no puede dejar detrás una lista de tipos y estados que el turno
-  // siguiente volvería a meter en el prompt, ni un rastro de qué incidencias se
-  // analizaron ahí que seguiría sugiriendo páginas al volver, ni un diario de lo
-  // que el usuario abrió en un sitio que ha pedido olvidar.
-  await chrome.storage.local.remove([
-    STORAGE_KEYS.index(host),
-    STORAGE_KEYS.profile(host),
-    STORAGE_KEYS.sourceHistory(host),
-    STORAGE_KEYS.activity(host),
-  ])
+  for (const area of ['local', 'session']) {
+    const claves = hostKeys(host, area)
+    if (claves.length) await chrome.storage[area].remove(claves)
+  }
 }
 
 /** El índice de contenido, cacheado en local para que navegar sea inmediato. */

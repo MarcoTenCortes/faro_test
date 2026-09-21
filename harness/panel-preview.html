@@ -1550,6 +1550,29 @@ async function arrancar() {
   $('set-today').disabled = false
   $('set-today-hint').classList.add('hidden')
   $('settings-site-info').textContent = 'acme.atlassian.net · 212 entradas indexadas · con contexto'
+  // «Qué guarda Faro de mí» (H13): la lista que `paintPrivacy` compone leyendo el
+  // almacén. Aquí va a mano —no hay `chrome.storage` en el iframe— con una fila
+  // de cada clase: dos vacías, una desactivada y el total, que es la más larga y
+  // la que dice si a 320 px la fila se parte en dos líneas.
+  const privacidad = $('privacy-list')
+  for (const [k, v] of [
+    ['índice de navegación', '212 páginas · 34 incidencias'],
+    ['contexto del sitio', '4812 caracteres'],
+    ['memoria entre sesiones', '3 resúmenes'],
+    ['perfil del proyecto', 'ENG · muestra de 28 · contado hace 2 días'],
+    ['historial de páginas base', '5 análisis'],
+    ['diario de actividad', '12 entradas · 2 descartes'],
+    ['últimas búsquedas', '(nada)'],
+    ['páginas base elegidas', '2 páginas'],
+    ['espacio usado', '8,4 MB de 10 MB · todos los sitios'],
+  ]) {
+    const fila = doc.createElement('li')
+    fila.append(mk('span', 'k', k), mk('span', 'v', v))
+    privacidad.appendChild(fila)
+  }
+  $('privacy-others').textContent =
+    'Otros sitios con datos guardados: jira.simplprogramme.eu. Para borrar uno, ábrelo y usa su «Olvidar este sitio».'
+  $('privacy-others').classList.remove('hidden')
   $('delay-value').textContent = '900'
   $('set-delay').value = 900
   $('set-nav-guided').checked = true
@@ -1892,6 +1915,10 @@ async function arrancar() {
     '.search-chip-row',
     '.suggest-row.suggested',
     '.today-row',
+    // H13: la fila más larga de «Qué guarda Faro de mí». Su clave y su valor
+    // pueden partirse en dos líneas a propósito (panel.css no les pone
+    // `nowrap`), así que lo que esto caza es que no se salga a lo ancho.
+    '.privacy li',
   ]
 
   function check() {

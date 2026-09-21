@@ -14,7 +14,7 @@
  * se clona, como hace chrome.storage de verdad.
  */
 import { test, eq, assert } from '../harness.js'
-import { STORAGE_KEYS } from '../../src/shared/config.js'
+import { STORAGE_AREAS, STORAGE_KEYS } from '../../src/shared/config.js'
 import { INDEX_VERSION } from '../../src/atlassian/index-store.js'
 import { PROFILE_VERSION } from '../../src/shared/jira-rest.js'
 import {
@@ -23,7 +23,8 @@ import {
   getSiteBundle,
   getProfile,
   saveProfile,
-  forgetSite,
+  forgetEverythingFor,
+  FORGET_KEEPS,
   bundleKeys,
   BUNDLE_EXTRA_KEYS,
   getSessionWeight,
@@ -34,42 +35,55 @@ import {
 const HOST = 'confluence.simplprogramme.eu'
 const OTRO = 'jira.simplprogramme.eu'
 
+/** Los nombres de `STORAGE_KEYS` que son una clave POR HOST. */
+const PORHOST = Object.keys(STORAGE_KEYS).filter((n) => typeof STORAGE_KEYS[n] === 'function')
+
 /**
- * Ejecuta `fn` con un `chrome.storage.local` simulado y lo retira al salir.
- * Devuelve el almacén y el diario de llamadas: `gets` lleva el argumento de
- * cada lectura (cadena o lista) y `removed` lo que se haya borrado.
+ * Ejecuta `fn` con un `chrome.storage` simulado y lo retira al salir. Devuelve el
+ * almacén de `local` y el diario de llamadas: `gets` lleva el argumento de cada
+ * lectura (cadena o lista) y `removed` lo que se haya borrado.
+ *
+ * Desde H13 instala TAMBIÉN `storage.session`, que es donde viven la sesión, su
+ * peso, la caché de «hoy» y la marca de borrado del diario: sin ella el olvido
+ * de un sitio no se podía probar entero desde aquí, y por eso la mitad de él
+ * estaba escrita a mano en el manejador del botón del panel. `fn` recibe
+ * `(diario, local, session)`.
  */
 async function conChrome(inicial, fn) {
   const previo = globalThis.chrome
   const local = { ...inicial }
+  const session = {}
   const clon = (v) => JSON.parse(JSON.stringify(v))
-  const diario = { gets: [], removed: [], sets: [] }
+  const diario = { gets: [], removed: [], sets: [], sessionGets: [], sessionRemoved: [], sessionSets: [] }
+  const area = (almacen, reg) => ({
+    get: async (k) => {
+      diario[reg.gets].push(k)
+      const claves = Array.isArray(k) ? k : [k]
+      const out = {}
+      for (const clave of claves) if (clave in almacen) out[clave] = clon(almacen[clave])
+      return out
+    },
+    set: async (o) => {
+      diario[reg.sets].push(Object.keys(o))
+      for (const [k, v] of Object.entries(o)) almacen[k] = clon(v)
+    },
+    remove: async (k) => {
+      diario[reg.removed].push(k)
+      // `remove` acepta una clave o una lista, y `forgetEverythingFor` borra
+      // todas las de un área de golpe.
+      for (const clave of Array.isArray(k) ? k : [k]) delete almacen[clave]
+    },
+  })
   globalThis.chrome = {
     storage: {
-      local: {
-        get: async (k) => {
-          diario.gets.push(k)
-          const claves = Array.isArray(k) ? k : [k]
-          const out = {}
-          for (const clave of claves) if (clave in local) out[clave] = clon(local[clave])
-          return out
-        },
-        set: async (o) => {
-          diario.sets.push(Object.keys(o))
-          for (const [k, v] of Object.entries(o)) local[k] = clon(v)
-        },
-        remove: async (k) => {
-          diario.removed.push(k)
-          // `chrome.storage.local.remove` acepta una clave o una lista, y
-          // `forgetSite` borra varias de golpe: el índice, el perfil, el
-          // historial de páginas base y el diario de actividad.
-          for (const clave of Array.isArray(k) ? k : [k]) delete local[clave]
-        },
-      },
+      local: area(local, { gets: 'gets', sets: 'sets', removed: 'removed' }),
+      // El diario de `session` va aparte: mezclarlo con el de `local` haría que
+      // «la lectura del paquete es UNA» dejara de poder contarse.
+      session: area(session, { gets: 'sessionGets', sets: 'sessionSets', removed: 'sessionRemoved' }),
     },
   }
   try {
-    await fn(diario, local)
+    await fn(diario, local, session)
   } finally {
     if (previo === undefined) delete globalThis.chrome
     else globalThis.chrome = previo
@@ -267,39 +281,89 @@ test('H9: guardar el perfil lo normaliza antes, y guardar nada quita la clave', 
   })
 })
 
-test('H9/H10/H11: «Olvidar este sitio» se lleva el perfil, el historial de páginas base y el diario', async () => {
-  // Si no, el turno siguiente en ese host volvería a meter en el prompt los
-  // tipos y estados de un sitio que el usuario acaba de tirar, la pantalla de
-  // páginas base seguiría sugiriendo por lo que analizó ahí, y quedaría un
-  // diario de lo que abrió en un sitio que ha pedido olvidar.
-  const HISTORIAL = `faro:source-history:${HOST}`
-  const DIARIO = `faro:actividad:${HOST}`
-  await conChrome(
-    {
-      'faro:sites': { [HOST]: SITIO, [OTRO]: { host: OTRO } },
-      [`faro:index:${HOST}`]: INDICE,
-      [CLAVE_PERFIL]: PERFIL,
-      [`faro:profile:${OTRO}`]: PERFIL,
-      [HISTORIAL]: { version: 1, host: HOST, entries: [] },
-      [`faro:source-history:${OTRO}`]: { version: 1, host: OTRO, entries: [] },
-      [DIARIO]: { version: 1, host: HOST, items: {}, dismissed: {} },
-      [`faro:actividad:${OTRO}`]: { version: 1, host: OTRO, items: {}, dismissed: {} },
-    },
-    async (diario, local) => {
-      await forgetSite(HOST)
-      eq(HOST in local['faro:sites'], false)
-      eq(`faro:index:${HOST}` in local, false)
-      eq(CLAVE_PERFIL in local, false)
-      eq(HISTORIAL in local, false)
-      eq(DIARIO in local, false)
-      eq(`faro:profile:${OTRO}` in local, true, 'el de otro host no se toca')
-      eq(`faro:source-history:${OTRO}` in local, true)
-      eq(`faro:actividad:${OTRO}` in local, true)
-      for (const clave of [CLAVE_PERFIL, HISTORIAL, DIARIO]) {
-        assert(diario.removed.flat().includes(clave), `${clave} se borra junto al índice: ` + JSON.stringify(diario.removed))
-      }
+// ---- «Olvidar este sitio»: una sola puerta y ninguna clave suelta (H13) ------
+
+/**
+ * El pin del hito: toda clave POR HOST tiene que decir en qué área vive, y el
+ * olvido tiene que llevárselas TODAS salvo las que estén en `FORGET_KEEPS` con su
+ * motivo escrito.
+ *
+ * Es lo que impide que la deuda vuelva. Hasta H13 la lista de lo que se borra
+ * estaba escrita a mano en dos sitios —cuatro claves en `forgetSite` y seis
+ * llamadas más en el manejador del botón del panel— y el contexto y la memoria
+ * del sitio no estaban en la primera: cualquier llamante que no fuera ese botón
+ * dejaba detrás el CONTEXT.md y los resúmenes de un sitio que el usuario pidió
+ * olvidar. Ahora las claves se DERIVAN, y una que se añada mañana hace fallar
+ * esta prueba hasta que diga dónde vive.
+ */
+test('H13: toda clave por host dice en qué área vive, y el olvido no puede dejarse ninguna', () => {
+  for (const nombre of Object.keys(STORAGE_KEYS)) {
+    const area = Object.hasOwn(STORAGE_AREAS, nombre) ? STORAGE_AREAS[nombre] : ''
+    assert(
+      area === 'local' || area === 'session',
+      `STORAGE_KEYS.${nombre} no dice en qué área de chrome.storage vive: ponlo en STORAGE_AREAS`
+    )
+  }
+  assert(PORHOST.length >= 10, 'esperaba al menos diez claves por host, hay ' + PORHOST.length)
+  // Y las conservadas son claves de verdad, por host, y con su motivo escrito: un
+  // nombre suelto ahí dentro sería una clave que sobrevive a un olvido y nadie
+  // sabría por qué.
+  for (const [nombre, motivo] of Object.entries(FORGET_KEEPS)) {
+    assert(PORHOST.includes(nombre), `FORGET_KEEPS nombra ${nombre}, que no es una clave por host`)
+    assert(typeof motivo === 'string' && motivo.length > 40, `FORGET_KEEPS.${nombre} no dice POR QUÉ se conserva`)
+  }
+})
+
+test('H13: «Olvidar este sitio» deja ese host como si Faro no lo hubiera visto nunca', async () => {
+  // Todas las claves por host de los dos áreas, llenas, más las del OTRO host
+  // para comprobar que no se las lleva de paso.
+  const inicial = { 'faro:sites': { [HOST]: SITIO, [OTRO]: { host: OTRO } } }
+  const enSesion = []
+  for (const nombre of PORHOST) {
+    const valor = { marca: nombre }
+    if (STORAGE_AREAS[nombre] === 'local') {
+      inicial[STORAGE_KEYS[nombre](HOST)] = valor
+      inicial[STORAGE_KEYS[nombre](OTRO)] = valor
+    } else enSesion.push(nombre)
+  }
+  // El índice, con su versión: si no, `takeIndex` lo tiraría al leerlo y el
+  // «se borró» de abajo saldría verde por el camino equivocado.
+  inicial[`faro:index:${HOST}`] = INDICE
+
+  await conChrome(inicial, async (diario, local, session) => {
+    for (const nombre of enSesion) {
+      session[STORAGE_KEYS[nombre](HOST)] = { marca: nombre }
+      session[STORAGE_KEYS[nombre](OTRO)] = { marca: nombre }
     }
-  )
+    const antes = Date.now()
+    await forgetEverythingFor(HOST)
+
+    eq(HOST in local['faro:sites'], false, 'el registro del sitio se va')
+    eq(OTRO in local['faro:sites'], true, 'y el del otro host se queda')
+    for (const nombre of PORHOST) {
+      if (Object.hasOwn(FORGET_KEEPS, nombre)) continue
+      const donde = STORAGE_AREAS[nombre] === 'local' ? local : session
+      eq(STORAGE_KEYS[nombre](HOST) in donde, false, `${nombre} sigue guardado tras olvidar el sitio`)
+      assert(STORAGE_KEYS[nombre](OTRO) in donde, `${nombre} del otro host no se toca`)
+    }
+
+    // Y la marca de borrado del diario se QUEDA, porque la deja este mismo
+    // olvido: es lo único que impide que una escritura del service worker que ya
+    // había leído devuelva el diario entero unos milisegundos después.
+    const marca = session[STORAGE_KEYS.activityCleared(HOST)]
+    assert(Number.isFinite(marca) && marca >= antes, 'el olvido deja la marca de borrado del diario: ' + marca)
+    eq(STORAGE_KEYS.activity(HOST) in local, false, 'y el diario, borrado')
+  })
+})
+
+test('H13: el olvido es de ESE host, y de un sitio del que no hay nada guardado no falla', async () => {
+  await conChrome({}, async (diario, local, session) => {
+    await forgetEverythingFor(HOST)
+    eq(local['faro:sites'], {}, 'sin nada guardado queda el mapa vacío, no una excepción')
+    // La marca del diario se pone igual: el borrado es el mismo, haya o no
+    // diario, y una escritura en vuelo tiene que verla de todas formas.
+    assert(STORAGE_KEYS.activityCleared(HOST) in session)
+  })
 })
 
 test('H11: el diario de actividad viaja en el paquete del arranque, crudo', async () => {

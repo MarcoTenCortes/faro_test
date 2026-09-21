@@ -120,6 +120,16 @@ la respuesta**.
   índice. **Ninguna sugerencia le pregunta al modelo, y Faro no añade ninguna
   por su cuenta**: hay que pulsarla, y debajo lo dice. Lo que has elegido antes
   se apunta en tu navegador y sólo ahí; se borra con «Olvidar el historial».
+- **Qué mirar hoy**: el quinto botón de la cabecera enseña hasta ocho cosas que
+  te importan ahora mismo —lo que ha cambiado desde que lo miraste, lo tuyo, lo
+  nuevo de tu proyecto o espacio—, **cada una con su porqué en español**. Sale de
+  preguntarle a tu propio Jira y a tu propio Confluence, cruzado con un diario
+  local de lo que has abierto y analizado: **ninguna recomendación pasa por el
+  modelo**, y Faro no manda ninguna pregunta por su cuenta.
+- **Lo que Faro guarda de ti, a la vista y borrable**: en **Ajustes → Qué guarda
+  Faro de mí**, una línea por cada cosa —con su cuenta o su medida, nunca su
+  contenido— y un botón que se lo lleva todo de ese sitio. Las claves de
+  Atlassian no están ahí: viven en tu opencode.
 
 ---
 
@@ -508,12 +518,67 @@ Trece decisiones que sostienen el diseño:
    las pide el Jira que lo tiene enlazado—, y tu actividad se borra cuando
    quieras.
 
+17. **Lo que Faro guarda de ti se ve en una lista, y se borra con un botón.**
+   En **Ajustes → Qué guarda Faro de mí** hay una línea por cada cosa que Faro
+   guarda de este sitio —el índice de navegación, el contexto, la memoria entre
+   sesiones, el perfil del proyecto, el historial de páginas base, el diario de
+   actividad, las últimas búsquedas y las páginas base elegidas—, cada una con
+   su cuenta o su medida y **sin una línea de su contenido**; debajo, el espacio
+   que ocupa todo en el navegador y qué otros sitios tienen datos guardados.
+   Y ahí mismo, **Olvidar este sitio**, que se lo lleva todo de golpe y lo deja
+   como si Faro no lo hubiera visto nunca. La lista se lee del almacén de
+   verdad, no de lo que el panel recuerde, así que la propia pantalla es la
+   comprobación: después de olvidar un sitio, todo lo suyo sale como «(nada)»
+   (el espacio usado sigue contando, porque cuenta el navegador entero).
+
+---
+
+## Qué se conserva al reabrir el panel
+
+**Se conserva**, por sitio, mientras no cierres Chrome:
+
+- **La conversación.** Al volver a ese Jira o a ese Confluence, el chat se
+  repinta con lo que hay en opencode: los **últimos 60 mensajes**, y si había
+  más, una fila arriba con **«Ver toda la conversación»** que trae el resto.
+- **Las observaciones del último análisis.** Si sus marcas siguen puestas en la
+  página, vuelve la tarjeta viva; si no, una atenuada con **«Volver a marcar»**,
+  que comprueba que sigues en la misma página antes de volver a subrayar. Faro
+  nunca re-marca solo.
+
+**Se conserva aunque cierres el navegador**, porque vive en el almacén del
+sitio (es justo lo que enseña «Qué guarda Faro de mí»): el **índice**, el
+**contexto** del sitio, la **memoria entre sesiones** si la tienes activada, el
+**perfil del proyecto**, el **historial de páginas base**, el **diario de
+actividad** (30 días), las **páginas base elegidas** con su alcance, las
+**últimas búsquedas**, y el **modelo** y la **Skill** de ese sitio.
+
+**No se conserva** (y es a propósito):
+
+- **La sesión de chat, al cerrar Chrome.** El id de la conversación vive en el
+  almacén de sesión del navegador: al cerrarlo se olvida, y la próxima vez Faro
+  abre una nueva. La conversación sigue existiendo dentro de opencode; lo que
+  se pierde es saber cuál era.
+- **Una búsqueda directa** (las pastillas del chat vacío): no habló nadie con
+  opencode, así que no está en la conversación que se restaura.
+- **La lista de resultados dentro de la tarjeta de una búsqueda.** La tarjeta
+  vuelve, la lista no: se lee de tu sitio en el momento, y una lista de hace
+  dos días no dice la verdad. Lo mismo con lo que hubieras precargado con
+  «Preguntar sobre estos».
+- **Los números de las observaciones cuando los puso la pasada de rescate** (la
+  que trocea la respuesta cuando el modelo no numeró): lo que opencode guarda es
+  la respuesta original, sin esos `[n]`.
+- **Lo que hubieras señalado con el rotulador**: acompaña a la siguiente
+  pregunta y ahí se acaba.
+- **La lista de «qué mirar hoy»**, que se guarda un cuarto de hora y muere al
+  cerrar el navegador. El **diario** que la alimenta no: ése es local y dura
+  treinta días, y se borra cuando quieras.
+
 ---
 
 ## Comprobaciones
 
 ```bash
-npm run check              # sintaxis + orden + manifest + 1279 pruebas unitarias + docs
+npm run check              # sintaxis + orden + manifest + 1282 pruebas unitarias + docs
 npm run check:docs         # sólo el paso docs: número de pruebas, títulos del registro, mensajes y ficheros del mapa
 npm run test:integration   # contra un opencode real que arranca la propia prueba
 npm run harness            # banco de pruebas visual en http://127.0.0.1:5175
@@ -529,7 +594,7 @@ Con el banco levantado hay dos páginas:
   anillo, el cartel y el recorrido asistido funcionando de verdad.
 - <http://127.0.0.1:5175/harness/panel-preview.html> — el panel real con cinco
   conversaciones de ejemplo (una de Confluence, una de Jira, la de una búsqueda
-  de Jira con su lista dentro, y los dos chats vacíos), para recorrer sus nueve
+  de Jira con su lista dentro, y los dos chats vacíos), para recorrer sus diez
   pantallas sin tener que instalar nada. Sus mandos cambian el tema
   (claro/oscuro), la anchura (320, 360 y 420), el estado del faro y la pantalla
   abierta, y `faroPreview.check()` mide en cada combinación lo que hay que mirar:
@@ -553,7 +618,7 @@ Con el banco levantado hay dos páginas:
   permisos de sesión contra una copia de cómo los evalúa opencode (todo
   denegado salvo el MCP), que todo lo que el content script carga está entre
   los recursos que el manifest expone, y los prompts completos
-  de 33 escenarios comparados byte a byte con sus instantáneas (dos de ellos
+  de 37 escenarios comparados byte a byte con sus instantáneas (dos de ellos
   con contexto, memoria y Confluence enlazado más largos que el presupuesto,
   para que los recortes se vean). El panel, el overlay y el ejecutor de pasos
   —que sólo viven en el navegador— se comprueban por regex sobre su propio
@@ -675,6 +740,18 @@ Con el banco levantado hay dos páginas:
   Lo último es de seguridad: ninguna de esas lecturas sale del sitio, y una
   consulta que no salga de una plantilla no llega a pedirse.
 
+  Y lo que cada área fue añadiendo encima: que el **árbol que da la API** de un
+  espacio dice el mismo padre para cada página que el que se lee de la barra
+  lateral —los dos leídos al vuelo, nada escrito a mano—; que el **perfil de un
+  proyecto** sale idéntico contándolo dos veces y sin una sola persona dentro;
+  que de una incidencia se leen los **enlaces de su contenido** y no los de su
+  barra de acciones, los de un menú ni los del árbol lateral, y que con ellos,
+  el contexto y el historial salen cinco **páginas base sugeridas** con su
+  motivo, las mismas en dos pasadas; y que **«qué mirar hoy»** ordena la misma
+  lista byte a byte dos veces, devuelve una fila descartada en cuanto vuelve a
+  cambiar, y con la sesión caducada se queda sin las cuatro lecturas de Jira
+  sin que se escape un solo título ni un id.
+
 - **`npm run turn`** enseña lo que el modelo contestó DE VERDAD en el último
   turno de la última sesión del panel: la pregunta, cuánto sistema llevaba (con
   sus primeras y últimas líneas), cada consulta a Atlassian con su JQL o su id y
@@ -710,7 +787,7 @@ Con el banco levantado hay dos páginas:
   el que sí corre en `npm run check`.
 
 - **`npm run snapshots`** reescribe `test/fixtures/prompts/*.txt` con los
-  prompts que el código produce hoy para 33 escenarios fijos (Confluence y Jira
+  prompts que el código produce hoy para 37 escenarios fijos (Confluence y Jira
   Data Center × cada Skill × con y sin página en bloques, páginas base,
   contexto, memoria y Confluence enlazado, más los turnos internos).
   `npm run check` los compara byte a byte y, si difieren, enseña la primera
@@ -724,7 +801,7 @@ Con el banco levantado hay dos páginas:
 ## Seguridad
 
 El contenido de Jira y Confluence lo escribe cualquiera de tu organización.
-Faro lo trata como información, nunca como instrucciones. Cinco barreras
+Faro lo trata como información, nunca como instrucciones. Siete barreras
 —más los permisos de la sesión, al final de este apartado—, y ninguna depende
 de que el modelo se porte bien:
 
@@ -760,9 +837,10 @@ de que el modelo se porte bien:
   de una página, y nunca
   sale del navegador: no viaja a opencode, no entra en ningún prompt y no lo
   ve ningún modelo. Son como mucho 60 análisis y caduca a los 90 días. Lo ves
-  en la propia pantalla de páginas base —cada sugerencia dice de dónde sale— y
-  lo borras con «Olvidar el historial» o con «Olvidar este sitio», que se lo
-  lleva entero junto al índice y al contexto.
+  en la propia pantalla de páginas base —cada sugerencia dice de dónde sale—,
+  cuántos hay en **Ajustes → Qué guarda Faro de mí**, y lo borras con «Olvidar
+  el historial» o con «Olvidar este sitio», que se lo lleva entero junto a todo
+  lo demás que Faro guarde de ese sitio.
 - **Los enlaces de la página se leen, no se consultan.** Para proponer una
   página base, Faro mira los enlaces que la página o la incidencia tiene en su
   contenido (no en la barra de acciones ni en un menú) y, en una incidencia de
@@ -823,8 +901,9 @@ llega nunca al modelo**: no entra en ningún prompt, y lo comprobamos por los do
 lados (hay una prueba que compara los 37 prompts byte a byte y otra que exige
 que el diario no se le pase a quien los escribe). Está a la vista —la pantalla
 dice en una línea qué se guarda y dónde, con los números, los «ya lo he visto»
-incluidos— y se borra con **«Borrar mi actividad»**, o con **«Olvidar este
-sitio»** junto con todo lo demás. Y se borra de verdad: el panel y el proceso de
+incluidos, y **Ajustes → Qué guarda Faro de mí** lo enseña junto a todo lo demás
+que Faro guarda de ese sitio— y se borra con **«Borrar mi actividad»**, o con
+**«Olvidar este sitio»** junto con todo lo demás. Y se borra de verdad: el panel y el proceso de
 fondo escriben ese diario cada uno por su lado, así que al borrarlo se deja una
 señal que el otro mira antes de guardar, para que lo que tuviera a medias no te
 devuelva lo que acabas de tirar.
@@ -1032,9 +1111,9 @@ src/
     jira-rest.js            lo que la API del propio Jira da exacto: consultas de plantilla, filas con claves blancas, el perfil contado de un proyecto y las búsquedas sugeridas; en Jira Cloud no pide nada (puro)
     confluence-rest.js      el árbol y la búsqueda de páginas por la API REST del sitio, con tu sesión; lo último que viste y el árbol entero de un espacio, paginado (puro)
     digest.js               cómo se enseñan los bloques y cómo se reconoce uno después (puro)
-    config.js               ajustes por defecto y su migración; NAV_TIMING, el único sitio con los tiempos de la navegación; y los topes de la eficiencia: cuántos mensajes se piden al restaurar y cuándo se avisa de una conversación pesada
+    config.js               ajustes por defecto y su migración; NAV_TIMING, el único sitio con los tiempos de la navegación; los topes de la eficiencia (cuántos mensajes se piden al restaurar, cuándo se avisa de una conversación pesada); y la lista de lo que Faro guarda, con el área del navegador en la que vive cada cosa
     activity-store.js       dónde vive ese diario y cómo se escribe sin que el service worker y el panel se pisen
-    storage.js              lo guardado del navegador; todo lo de un sitio en UNA lectura (getSiteBundle) y lo que arrastra la sesión abierta
+    storage.js              lo guardado del navegador; todo lo de un sitio en UNA lectura (getSiteBundle), lo que arrastra la sesión abierta, y «olvidar este sitio» en una sola función que deriva de esa lista lo que borra
     permissions.js          los permisos de cada sesión de opencode: todo denegado salvo el MCP, y una copia de cómo los evalúa opencode para probarlo (puro)
     timing.js               el cronómetro por fases que el registro enseña: sólo etiquetas y números, nunca cuerpos ni claves (puro)
 harness/                    Confluence y Jira de mentira para pruebas visuales; issues.json es la fixture de la Jira falsa

@@ -1642,12 +1642,17 @@ test('H6 P6b: el panel sabe lo que arrastra la conversación y lo dice una vez',
   assert(/clearSessionWeight\(state\.site\.host\)/.test(nueva), 'se borra también del almacén')
   assert(/state\.sessionToolChars = 0/.test(nueva) && /state\.heavyWarned = false/.test(nueva))
 
-  // Y olvidar el sitio lo borra igual: su sesión se cierra ahí mismo
-  // (`clearSessionId`) y dejar el peso contaría la conversación de antes contra
-  // la de después (revisión adversaria de H6).
+  // Y olvidar el sitio lo borra igual: su sesión se cierra ahí mismo y dejar el
+  // peso contaría la conversación de antes contra la de después (revisión
+  // adversaria de H6). Desde H13 la clave se la lleva `forgetEverythingFor` con
+  // las demás de `session` —lo pina storage.test.js recorriendo STORAGE_KEYS—, y
+  // aquí lo que queda por comprobar es el contador EN MEMORIA, que ése no lo
+  // puede vaciar el almacén.
   const olvidar = sinComentarios(JS.slice(JS.indexOf("$('btn-forget')"), JS.indexOf('// --- memoria')))
-  assert(/clearSessionWeight\(state\.site\.host\)/.test(olvidar), 'olvidar el sitio borra también lo que pesaba su sesión')
+  assert(/forgetEverythingFor\(host\)/.test(olvidar), 'olvidar el sitio pasa por la única puerta de borrado')
   assert(/state\.sessionToolChars = 0/.test(olvidar) && /state\.heavyWarned = false/.test(olvidar))
+  const areas = readFileSync(join(ROOT, 'src/shared/config.js'), 'utf8')
+  assert(/sessionWeight: 'session'/.test(areas), 'y su clave dice que vive en storage.session, que es de dónde se borra')
 
   // Y al cambiar de sitio, como los tiempos: el peso es de la sesión de ESE host.
   const refresco = JS.slice(JS.indexOf('async function refreshTab'), JS.indexOf('async function bootForSite'))
@@ -2602,7 +2607,7 @@ test('H9: el perfil entra en el prompt y en los chips, y se va con el sitio', ()
   const hastaOlvidar = eventos.indexOf("$('mem-enabled')", desdeOlvidar)
   assert(desdeOlvidar > 0 && hastaOlvidar > desdeOlvidar, 'el manejador de «Olvidar este sitio» se puede recortar')
   const olvidar = eventos.slice(desdeOlvidar, hastaOlvidar)
-  assert(/forgetSite\(state\.site\.host\)/.test(olvidar) && /state\.profile = null/.test(olvidar), 'olvidar el sitio se lleva también lo contado de su proyecto')
+  assert(/forgetEverythingFor\(host\)/.test(olvidar) && /state\.profile = null/.test(olvidar), 'olvidar el sitio se lleva también lo contado de su proyecto')
 })
 
 test('H9 revisión: el perfil sólo vale para el proyecto que hay delante, y la pantalla de contexto no promete la API donde no se usa', () => {
@@ -2892,8 +2897,11 @@ test('H10: el historial se apunta al terminar un análisis, y sólo bajo el host
   )
   const olvidarSitio = sinComentarios(JS.slice(JS.indexOf("$('btn-forget').addEventListener"), JS.indexOf("$('mem-enabled').addEventListener")))
   assert(/state\.sourceHistory = emptyHistory\(\)/.test(olvidarSitio), 'olvidar el sitio se lleva su historial de la memoria del panel')
-  const almacen = readFileSync(join(ROOT, 'src/shared/storage.js'), 'utf8')
-  assert(/STORAGE_KEYS\.sourceHistory\(host\)/.test(almacen), 'y forgetSite, su clave del almacén')
+  // Y su clave del almacén se la lleva `forgetEverythingFor`, que las deriva de
+  // STORAGE_KEYS: lo pina storage.test.js recorriéndolas todas (H13). Aquí basta
+  // con que la clave siga declarando dónde vive, que es de lo que sale la lista.
+  const areasH10 = readFileSync(join(ROOT, 'src/shared/config.js'), 'utf8')
+  assert(/sourceHistory: 'local'/.test(areasH10), 'y su clave dice que vive en storage.local')
 
   // Cerrar la pantalla sube el testigo: los enlaces que lleguen después no
   // tienen dónde pintarse.
@@ -3214,20 +3222,26 @@ test('H11: el panel apunta en el diario sólo lo que sólo él sabe, y se borra 
   assert(/clearActivity\(enlazado\.host\)/.test(borrar), 'y el del enlazado, que desde Jira nadie más va a borrar')
   assert(/state\.today = emptyToday\(\)/.test(borrar))
 
-  // Y «Olvidar este sitio» también: `forgetSite` borra la clave del almacén, y
-  // ANTES pasa por `clearActivity`, que es quien deja la marca de borrado que el
-  // service worker relee antes de guardar. Sin ella, una visita que el worker ya
-  // hubiera leído devolvía el diario entero unos milisegundos después (revisión
-  // adversaria de H11).
+  // Y «Olvidar este sitio» también, pero desde H13 por UNA sola puerta: el diario
+  // (con su marca de borrado), la caché de «hoy» y todo lo demás de este host se
+  // van dentro de `forgetEverythingFor`, que es quien llama a `clearActivity`
+  // —ANTES de quitar ninguna clave, porque es esa marca la que el service worker
+  // relee antes de guardar: sin ella una visita que ya hubiera leído devolvía el
+  // diario entero unos milisegundos después (revisión adversaria de H11)—. Que se
+  // lleve TODAS las claves por host lo pina storage.test.js; aquí, que el panel
+  // no se quede con el diario en memoria.
   const olvidarSitio = sinComentarios(JS.slice(JS.indexOf("$('btn-forget').addEventListener"), JS.indexOf("$('mem-enabled').addEventListener")))
-  assert(/clearTodayCache\(state\.site\.host\)/.test(olvidarSitio) && /state\.today = emptyToday\(\)/.test(olvidarSitio))
+  assert(/forgetEverythingFor\(host\)/.test(olvidarSitio) && /state\.today = emptyToday\(\)/.test(olvidarSitio))
   assert(
-    olvidarSitio.indexOf('await clearActivity(state.site.host)') >= 0 &&
-      olvidarSitio.indexOf('await clearActivity(state.site.host)') < olvidarSitio.indexOf('await forgetSite(state.site.host)'),
-    'el diario se borra por su puerta y antes de olvidar el sitio'
+    !/clearActivity\(|clearTodayCache\(|memory\.clearMemory\(|clearSessionId\(/.test(olvidarSitio),
+    'y ninguna clave se borra a mano aquí: eran siete llamadas que había que acordarse de escribir (H13)'
   )
   const almacen = readFileSync(join(ROOT, 'src/shared/storage.js'), 'utf8')
-  assert(/STORAGE_KEYS\.activity\(host\)/.test(almacen), 'y forgetSite, su clave del almacén')
+  const puerta = sinComentarios(almacen.slice(almacen.indexOf('export async function forgetEverythingFor')))
+  assert(
+    puerta.indexOf('await clearActivity(host)') >= 0 && puerta.indexOf('await clearActivity(host)') < puerta.indexOf('.remove('),
+    'el diario se borra por su puerta y antes que ninguna otra clave'
+  )
 })
 
 // -------------------------------------- «Qué mirar hoy»: la interfaz (H11, paso 9)
@@ -3563,4 +3577,107 @@ test('H11: el espejo enseña «Qué mirar hoy» en sus tres sitios, y mide si el
   const cajas = espejo.slice(espejo.indexOf('const CAJAS ='), espejo.indexOf('function check() {'))
   assert(cajas.includes("'.today-row'"), 'y la fila entra en la medida de desbordamiento, como las piezas de H8')
   assert(/setToday\(modo\)/.test(espejo), 'y setToday es API, como los demás mandos')
+})
+
+// ----------------------------------- «Qué guarda Faro de mí», en Ajustes (H13)
+
+test('H13: Ajustes dice qué guarda Faro de este sitio, con su medida y sin enseñar contenido', () => {
+  // La promesa de §8.20 es que lo que Faro apunta del usuario «se ve y se
+  // borra». El «se borra» existía desde H10; el «se ve» estaba repartido entre
+  // tres pantallas y de dos cosas —el perfil contado y el historial de análisis—
+  // no hablaba ninguna.
+  for (const id of ['privacy-title', 'privacy-list', 'privacy-others']) {
+    assert(htmlIds.has(id), 'falta en la pantalla de Ajustes: ' + id)
+  }
+  const ajustes = HTML.slice(HTML.indexOf('id="screen-settings"'), HTML.indexOf('id="screen-memory"'))
+  // La lista es una LISTA (un `ul`) con su encabezado: así un lector de pantalla
+  // dice cuántas cosas hay guardadas. Ninguna fila es un botón, así que
+  // envolverlas no le quita el papel a nada (en H10 las sugeridas SÍ son botones
+  // y por eso son un `role="group"`).
+  assert(/<ul class="privacy" id="privacy-list" aria-labelledby="privacy-title">/.test(ajustes), 'la lista es un ul con su encabezado')
+  // Y el botón que se lo lleva todo vive AHÍ, debajo de la lista de lo que borra.
+  assert(ajustes.indexOf('id="privacy-list"') < ajustes.indexOf('id="btn-forget"'), '«Olvidar este sitio» va debajo de la lista')
+  // Dónde vive todo y qué NO se guarda, escrito donde se ve (§8.13 y §8.20).
+  for (const trozo of [
+    'vive en este navegador',
+    'sólo están en la configuración de opencode',
+    'Lo que NO se guarda aquí',
+    'la sesión de opencode',
+  ]) {
+    assert(ajustes.includes(trozo), 'la pantalla no dice «' + trozo + '»')
+  }
+
+  // El CSS de las filas, con su regla (la trampa de `.older-turns` en H6: un
+  // nombre renombrado a «.privacy-loquesea» contiene «.privacy» y dejaría el pin
+  // en verde con la lista sin estilo).
+  for (const regla of ['.privacy {', '.privacy li {', '.privacy .k {', '.privacy .v {']) {
+    assert(CSS_LIMPIO.includes(regla), 'clase sin estilo: ' + regla)
+  }
+  assert(!/\.privacy[^{]*\{[^}]*white-space: nowrap/.test(CSS_LIMPIO), 'nada de nowrap: a 320 px lo que tiene que pasar es que se parta en dos líneas')
+
+  // Lo que se enseña se lee del ALMACÉN y no de `state`: la pregunta es «qué
+  // GUARDA Faro», y el panel puede tener en memoria un índice que todavía no ha
+  // escrito (`state.indexDirty`, P3) o lo de antes de un borrado. Y es lo que
+  // hace que la pantalla se compruebe a sí misma: tras olvidar, todo «(nada)».
+  const lista = sinComentarios(JS.slice(JS.indexOf('async function paintPrivacy'), JS.indexOf('function hace(at)')))
+  assert(lista.length > 400, 'el trozo de paintPrivacy se puede recortar')
+  assert(/await Promise\.all\(\[getSiteBundle\(host\), getSites\(\)\]\)/.test(lista), 'las dos lecturas van a la vez')
+  for (const dato of [
+    'bundle.index',
+    'bundle.contextMd',
+    'bundle.memoryRaw',
+    'bundle.extras?.profile',
+    'bundle.extras?.sourceHistory',
+    'bundle.extras?.activity',
+    'bundle.site?.recentJql',
+    'bundle.site?.analysisSources',
+  ]) {
+    assert(lista.includes(dato), `la fila no sale del almacén: falta ${dato}`)
+  }
+  assert(!/state\.index\b|state\.contextMd|state\.memory\b|state\.profile|state\.sourceHistory|state\.today\b|state\.sources\b/.test(lista), 'ninguna fila se pinta de lo que el panel tenga en memoria')
+  // Y cada cosa guardada pasa por su normalizadora, como en el arranque: lo que
+  // hay en disco se puede haber editado a mano.
+  for (const norma of ['memory.normalizeMemory(', 'normalizeProfile(', 'normalizeHistory(', 'pruneActivity(', 'normalizeRecentJql(', 'normalizeSources(']) {
+    assert(lista.includes(norma), 'lo guardado se cuenta sin reconstruir: falta ' + norma)
+  }
+  // §8.22: el host se captura al pedir y se comprueba al volver. Es el de la
+  // PESTAÑA, como en el Registro y como el botón de olvidar: enseñar la lista de
+  // un host que ese botón no puede borrar sería ofrecer un borrado que no pasa.
+  assert(/const host = state\.site\?\.host \|\| ''/.test(lista), 'el host se captura antes de leer')
+  assert(/if \(state\.site\?\.host !== host\) return/.test(lista), 'y se comprueba al volver')
+  // §8.14: si no se pudo leer, se dice en la propia lista. Una lista vacía
+  // parecería «no guardo nada de ti», que es justo lo contrario.
+  assert(/no se pudo leer: /.test(lista) && /no se pudo medir: /.test(lista), 'los dos fallos tienen su fila')
+  // SEGURIDAD §8.20: cuentas y medidas, nunca contenido. Ni un título de página,
+  // ni una clave de incidencia, ni una línea del contexto: esta pantalla se mira
+  // con el panel abierto delante de otra gente, igual que el Registro. La única
+  // excepción es la CLAVE DEL PROYECTO del perfil, y es a propósito: el perfil se
+  // guarda por host y un Jira tiene muchos proyectos, así que sin ella no se sabe
+  // de cuál es lo guardado (revisión adversaria de H9), y ya está en la cabecera.
+  assert(!/\.title\b/.test(lista) && !/\.entries\[/.test(lista), 'de aquí no sale ningún título ni ninguna entrada de la memoria')
+  assert(
+    !/(bundle\.\w+|contextMd|memoryRaw|extras)[\w?.]*\.slice\(/.test(lista),
+    'ni un trozo de lo guardado: un «primeros 40 caracteres del contexto» es justo lo que esta pantalla no puede enseñar'
+  )
+  assert(/\.length/.test(lista) && /formatBytes\(bytes\)/.test(lista), 'lo que sale son longitudes y medidas')
+  // Y la lista se pinta con createElement, como todo el panel.
+  assert(/document\.createElement\('li'\)/.test(lista) && !/innerHTML/.test(lista))
+
+  // Se rellena al abrir la pantalla, y después de abrirla: son dos lecturas y
+  // Ajustes no tiene por qué esperarlas para aparecer.
+  const pantalla = sinComentarios(JS.slice(JS.indexOf('async function showSettingsScreen'), JS.indexOf('async function paintPrivacy')))
+  assert(pantalla.indexOf("showScreen('screen-settings')") < pantalla.indexOf('await paintPrivacy()'), 'la pantalla se abre y luego se rellena')
+
+  // El borrado se dice en voz alta: es la acción más destructiva del panel y que
+  // la pantalla se repinte con todo a cero no se oye por sí solo (A2).
+  const olvidar = sinComentarios(JS.slice(JS.indexOf("$('btn-forget').addEventListener"), JS.indexOf("$('mem-enabled').addEventListener")))
+  assert(/announce\(/.test(olvidar), 'olvidar un sitio se anuncia')
+
+  // El espejo enseña la sección con una fila de cada clase, y la fila entra en la
+  // medida de desbordamiento a lo ancho, como las piezas de H8 y H11.
+  const espejo = readFileSync(join(ROOT, 'harness/panel-preview.html'), 'utf8')
+  assert(/\$\('privacy-list'\)/.test(espejo) && /\$\('privacy-others'\)/.test(espejo), 'el espejo rellena la lista y la línea de los otros sitios')
+  assert(espejo.includes("'espacio usado'") && JS.includes("'espacio usado'"), 'con la misma última fila que el panel: los dos textos se han separado')
+  const cajas = espejo.slice(espejo.indexOf('const CAJAS ='), espejo.indexOf('function check() {'))
+  assert(cajas.includes("'.privacy li'"), 'y la fila entra en la medida de desbordamiento')
 })
