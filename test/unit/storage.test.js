@@ -13,7 +13,10 @@
  * eso el `chrome` se instala en cada prueba y se retira al salir. Lo guardado
  * se clona, como hace chrome.storage de verdad.
  */
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { test, eq, assert } from '../harness.js'
+import { listJsFiles } from '../syntax.js'
 import { STORAGE_AREAS, STORAGE_KEYS } from '../../src/shared/config.js'
 import { INDEX_VERSION } from '../../src/atlassian/index-store.js'
 import { PROFILE_VERSION } from '../../src/shared/jira-rest.js'
@@ -296,6 +299,33 @@ test('H9: guardar el perfil lo normaliza antes, y guardar nada quita la clave', 
  * olvidar. Ahora las claves se DERIVAN, y una que se añada mañana hace fallar
  * esta prueba hasta que diga dónde vive.
  */
+test('H13 revisión: el área declarada de cada clave por host es la que USA el código', () => {
+  // EL CAMBIO: la prueba del olvido siembra el almacén con la MISMA tabla que
+  // comprueba, así que un área mal puesta le era invisible: con `memory: 'session'`
+  // el olvido borraba de session, los resúmenes seguían en local para siempre, y
+  // las 1282 en verde (revisión adversaria de H13). Aquí la tabla se cruza con
+  // el código: cada línea de src/ que escribe, lee o borra `STORAGE_KEYS.<x>(`
+  // dice en qué área lo hace, y tiene que ser la declarada.
+  const usos = new Map()
+  for (const fichero of listJsFiles(fileURLToPath(new URL('../../src/', import.meta.url)))) {
+    const lineas = readFileSync(fichero, 'utf8').split('\n')
+    lineas.forEach((linea, i) => {
+      const area = linea.match(/chrome\.storage\.(local|session)\.(?:get|set|remove)\(/)
+      if (!area) return
+      for (const m of linea.matchAll(/STORAGE_KEYS\.(\w+)\(/g)) {
+        if (!usos.has(m[1])) usos.set(m[1], [])
+        usos.get(m[1]).push({ area: area[1], donde: fichero.split(/[\\/]/).slice(-2).join('/') + ':' + (i + 1) })
+      }
+    })
+  }
+  for (const [nombre, clave] of Object.entries(STORAGE_KEYS)) {
+    if (typeof clave !== 'function') continue
+    const vistos = usos.get(nombre) || []
+    assert(vistos.length > 0, nombre + ': ninguna línea de src/ la usa junto a su área (si se escribe de otra forma, este pin hay que enseñárselo)')
+    for (const u of vistos) eq(u.area, STORAGE_AREAS[nombre], `${nombre} se usa en storage.${u.area} (${u.donde}) y está declarada en ${STORAGE_AREAS[nombre]}`)
+  }
+})
+
 test('H13: toda clave por host dice en qué área vive, y el olvido no puede dejarse ninguna', () => {
   for (const nombre of Object.keys(STORAGE_KEYS)) {
     const area = Object.hasOwn(STORAGE_AREAS, nombre) ? STORAGE_AREAS[nombre] : ''

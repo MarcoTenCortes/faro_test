@@ -252,7 +252,7 @@ De ahí que haya dos caminos hasta el mismo sitio: la extensión ve **la página
 que tienes delante**, y opencode consulta **la API**. Ninguno de los dos
 escribe nada.
 
-Trece decisiones que sostienen el diseño:
+Diecisiete decisiones que sostienen el diseño:
 
 1. **El panel es el único que habla con opencode.** El content script vive
    dentro de una página que no controlamos: no conoce la contraseña del
@@ -578,7 +578,7 @@ actividad** (30 días), las **páginas base elegidas** con su alcance, las
 ## Comprobaciones
 
 ```bash
-npm run check              # sintaxis + orden + manifest + 1282 pruebas unitarias + docs
+npm run check              # sintaxis + orden + manifest + 1283 pruebas unitarias + docs
 npm run check:docs         # sólo el paso docs: número de pruebas, títulos del registro, mensajes y ficheros del mapa
 npm run test:integration   # contra un opencode real que arranca la propia prueba
 npm run harness            # banco de pruebas visual en http://127.0.0.1:5175

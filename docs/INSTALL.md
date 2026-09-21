@@ -595,15 +595,18 @@ incidencia, ni una línea del contexto—:
   permite llevarte, con rutas del propio sitio.
 - **contexto del sitio** — «8 214 caracteres»: el resumen que el indexador
   escribió (o el que subiste tú).
-- **memoria entre sesiones** — «3 resúmenes», o «(desactivada)» si la casilla de
-  la pantalla de Memoria está apagada.
+- **memoria entre sesiones** — «3 resúmenes». Si la casilla de la pantalla de
+  Memoria está apagada pero hay resúmenes de antes, lo dice así: «3 resúmenes ·
+  desactivada» —apagarla no los borra: deja de usarlos y de añadir—. Se borran
+  uno a uno en esa pantalla, o todos con «Olvidar este sitio».
 - **perfil del proyecto** — «SIMPL · muestra de 30 · contado hace 2 días»: los
   nombres que Faro contó de tu Jira (tipos, estados, componentes, etiquetas). Se
   dice de qué proyecto es porque se guarda uno por sitio.
 - **historial de páginas base** — «6 análisis»: con qué páginas analizaste qué,
   que es lo que permite proponerlas otra vez.
-- **diario de actividad** — «48 entradas · 2 descartes», o «(apagado)» si la
-  función está apagada.
+- **diario de actividad** — «48 entradas · 2 descartes», y «· apagado» detrás si
+  la función está apagada: apagarla deja de apuntar, pero lo apuntado sigue ahí
+  hasta que lo borres o caduque a los 30 días.
 - **últimas búsquedas** — «5 consultas»: las JQL que de verdad se ejecutaron
   aquí, para ofrecerlas como pastilla.
 - **páginas base elegidas** — «2 páginas»: las que tienes puestas ahora mismo

@@ -5901,9 +5901,13 @@ async function paintPrivacy() {
   add('contexto del sitio', bundle.contextMd ? `${bundle.contextMd.length} caracteres` : '(nada)')
 
   const resumenes = memory.normalizeMemory(bundle.memoryRaw).entries.length
+  // Apagar la memoria no borra lo que ya hay: la pregunta de esta pantalla es
+  // «qué GUARDA Faro», y contestar «(desactivada)» con doce resúmenes en disco era
+  // contestar a otra cosa (revisión adversaria de H13). Primero lo que hay; que
+  // está apagada se dice detrás, y sin nada guardado es «(nada)», esté como esté.
   add(
     'memoria entre sesiones',
-    !state.settings.crossSessionMemory ? '(desactivada)' : resumenes ? `${resumenes} resúmenes` : '(nada)'
+    resumenes ? `${resumenes} resúmenes${state.settings.crossSessionMemory ? '' : ' · desactivada'}` : '(nada)'
   )
 
   // El perfil se guarda por HOST y un Jira tiene muchos proyectos, así que se
@@ -5921,11 +5925,9 @@ async function paintPrivacy() {
   const cuentas = activityCounts(pruneActivity(bundle.extras?.activity, { host }))
   add(
     'diario de actividad',
-    !todayEnabled()
-      ? '(apagado)'
-      : cuentas.entradas || cuentas.descartes
-        ? `${cuentas.entradas} entradas · ${cuentas.descartes} descartes`
-        : '(nada)'
+    cuentas.entradas || cuentas.descartes
+      ? `${cuentas.entradas} entradas · ${cuentas.descartes} descartes${todayEnabled() ? '' : ' · apagado'}`
+      : '(nada)'
   )
 
   // Estas dos viven dentro del registro del sitio, no en una clave propia, así
@@ -6399,7 +6401,18 @@ function wireEvents() {
     // llamante. Ahí dentro va también la marca de borrado del diario, sin la cual
     // una escritura del service worker que ya había leído lo devolvía unos
     // milisegundos después (revisión adversaria de H11).
+    // El Confluence enlazado, ANTES de vaciar nada: desde un Jira, las páginas
+    // base y los análisis de páginas se apuntan en el diario de AQUEL host, y el
+    // usuario no abre nunca su panel para borrarlo. «Borrar mi actividad» ya se
+    // lo llevaba; que el botón más ancho dejara lo que el estrecho borra era
+    // prometer un olvido a medias (revisión adversaria de H13). Sólo su diario y
+    // su caché de «hoy»: lo demás de aquel sitio es de aquel sitio.
+    const enlazado = linkedSite(state.linkedContext)
     await forgetEverythingFor(host)
+    if (enlazado && enlazado.host !== host) {
+      await clearActivity(enlazado.host)
+      await clearTodayCache(enlazado.host)
+    }
     // Y lo que el panel tenga en memoria de este sitio: lo de arriba borra el
     // almacén, pero un `state` que siga cargado lo vuelve a escribir en el turno
     // siguiente —o lo mete en su prompt— como si no se hubiera olvidado nada.

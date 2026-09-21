@@ -3233,8 +3233,8 @@ test('H11: el panel apunta en el diario sólo lo que sólo él sabe, y se borra 
   const olvidarSitio = sinComentarios(JS.slice(JS.indexOf("$('btn-forget').addEventListener"), JS.indexOf("$('mem-enabled').addEventListener")))
   assert(/forgetEverythingFor\(host\)/.test(olvidarSitio) && /state\.today = emptyToday\(\)/.test(olvidarSitio))
   assert(
-    !/clearActivity\(|clearTodayCache\(|memory\.clearMemory\(|clearSessionId\(/.test(olvidarSitio),
-    'y ninguna clave se borra a mano aquí: eran siete llamadas que había que acordarse de escribir (H13)'
+    !/clearActivity\((?!enlazado\.host\))|clearTodayCache\((?!enlazado\.host\))|memory\.clearMemory\(|clearSessionId\(/.test(olvidarSitio),
+    'y ninguna clave de ESTE host se borra a mano aquí: eran siete llamadas que había que acordarse de escribir (H13); lo único a mano es el diario del enlazado (revisión de H13)'
   )
   const almacen = readFileSync(join(ROOT, 'src/shared/storage.js'), 'utf8')
   const puerta = sinComentarios(almacen.slice(almacen.indexOf('export async function forgetEverythingFor')))
@@ -3660,6 +3660,105 @@ test('H13: Ajustes dice qué guarda Faro de este sitio, con su medida y sin ense
     'ni un trozo de lo guardado: un «primeros 40 caracteres del contexto» es justo lo que esta pantalla no puede enseñar'
   )
   assert(/\.length/.test(lista) && /formatBytes\(bytes\)/.test(lista), 'lo que sale son longitudes y medidas')
+  // EL CAMBIO (revisión adversaria de H13): lo de arriba es una lista NEGRA, y
+  // cuatro fugas de verdad la pasaban en verde —la JQL guardada
+  // (`…[0].jql`), los nombres de estado del proyecto (`perfil.statuses.map(…)`),
+  // una clave de incidencia (`Object.keys(….items)[0]`) y el espacio de una
+  // página base—. La promesa es de lista BLANCA: lo que cada fila enseña sólo
+  // puede salir de estas piezas, que son cuentas, medidas y la clave del proyecto.
+  const PERMITIDO = new Set([
+    'bundle.index',
+    'bundle.contextMd',
+    'bundle.contextMd.length',
+    'paginas',
+    'incidencias',
+    'resumenes',
+    'state.settings.crossSessionMemory',
+    'perfil',
+    'perfil.projectKey',
+    'perfil.sampled',
+    'perfil.at',
+    'hace',
+    'analisis',
+    'cuentas.entradas',
+    'cuentas.descartes',
+    'todayEnabled',
+    'consultas',
+    'elegidas',
+    'formatBytes',
+    'bytes',
+    'Math.round',
+    'cuota',
+    'err.message',
+  ])
+  // Cada `add(` de la función (menos su propia definición), con su segundo
+  // argumento recortado por paréntesis balanceados.
+  const valores = []
+  for (let i = lista.indexOf('add('); i >= 0; i = lista.indexOf('add(', i + 1)) {
+    if (/const $/.test(lista.slice(0, i)) || lista.slice(i - 6, i) === 'const ') continue
+    let nivel = 0
+    let j = i + 3
+    let coma = -1
+    let enCadena = ''
+    for (; j < lista.length; j++) {
+      const c = lista[j]
+      if (enCadena) {
+        if (c === '\\') j++
+        else if (c === enCadena) enCadena = ''
+        continue
+      }
+      if (c === "'") enCadena = "'"
+      else if (c === '(' || c === '{') nivel++
+      else if (c === ')' || c === '}') {
+        nivel--
+        if (nivel === 0) break
+      } else if (c === ',' && nivel === 1 && coma < 0) coma = j
+    }
+    if (coma > 0) valores.push(lista.slice(coma + 1, j))
+  }
+  assert(valores.length >= 11, 'se recortan las filas de la lista: ' + valores.length)
+  for (const valor of valores) {
+    // Fuera las cadenas y el texto fijo de las plantillas: queda sólo lo que se
+    // CALCULA. Con una pila, porque dentro de un `${…}` puede haber otra cadena u
+    // otra plantilla (`${cond ? '' : ' · apagado'}`).
+    let calculado = ''
+    const pila = ['codigo']
+    for (let k = 0; k < valor.length; k++) {
+      const c = valor[k]
+      const modo = pila[pila.length - 1]
+      if (modo === 'cadena') {
+        if (c === '\\') k++
+        else if (c === "'") pila.pop()
+      } else if (modo === 'plantilla') {
+        if (c === '\\') k++
+        else if (c === '`') pila.pop()
+        else if (c === '$' && valor[k + 1] === '{') {
+          pila.push('codigo')
+          k++
+          calculado += ' '
+        }
+      } else if (c === "'") pila.push('cadena')
+      else if (c === '`') pila.push('plantilla')
+      else if (c === '}' && pila.length > 1) {
+        pila.pop()
+        calculado += ' '
+      } else calculado += c
+    }
+    assert(!calculado.includes('['), 'ninguna fila indexa lo guardado: ' + valor.trim().slice(0, 80))
+    const piezas = calculado.match(/[A-Za-z_$][\w$]*(?:\??\.[A-Za-z_$][\w$]*)*/g) || []
+    for (const pieza of piezas) {
+      assert(PERMITIDO.has(pieza), `la fila enseña algo que no es una cuenta ni una medida: ${pieza} — en «${valor.trim().slice(0, 70)}»`)
+    }
+  }
+  // Y las seis cuentas son de verdad CUENTAS: cada una nace de un `.length`.
+  for (const cuenta of ['paginas', 'incidencias', 'resumenes', 'analisis', 'consultas', 'elegidas']) {
+    assert(new RegExp('const ' + cuenta + ' = [^\\n]*\\.length\\n').test(lista), cuenta + ' es una longitud')
+  }
+  // Apagado no es vacío: la fila dice lo que HAY guardado y, detrás, que está
+  // apagado. «(desactivada)» con doce resúmenes en disco era contestar a otra
+  // pregunta, y hacía falsa la autocomprobación de «tras olvidar, todo (nada)».
+  assert(!/\? '\(desactivada\)'/.test(lista) && !/\? '\(apagado\)'/.test(lista), 'ninguna fila contesta «apagado» en vez de lo que hay')
+  assert(/' · desactivada'/.test(lista) && /' · apagado'/.test(lista), 'que está apagado se dice DETRÁS de la cuenta')
   // Y la lista se pinta con createElement, como todo el panel.
   assert(/document\.createElement\('li'\)/.test(lista) && !/innerHTML/.test(lista))
 
@@ -3672,6 +3771,18 @@ test('H13: Ajustes dice qué guarda Faro de este sitio, con su medida y sin ense
   // la pantalla se repinte con todo a cero no se oye por sí solo (A2).
   const olvidar = sinComentarios(JS.slice(JS.indexOf("$('btn-forget').addEventListener"), JS.indexOf("$('mem-enabled').addEventListener")))
   assert(/announce\(/.test(olvidar), 'olvidar un sitio se anuncia')
+  // Desde un Jira, las páginas base y los análisis de páginas se apuntan en el
+  // diario del Confluence ENLAZADO, que el usuario no abre nunca para borrarlo:
+  // «Borrar mi actividad» ya se lo llevaba, y el botón más ancho no puede dejar lo
+  // que borra el estrecho (revisión adversaria de H13). Se captura ANTES de
+  // olvidar, y sólo su diario y su caché de «hoy».
+  assert(olvidar.indexOf('const enlazado = linkedSite(state.linkedContext)') > 0)
+  assert(olvidar.indexOf('const enlazado = linkedSite(state.linkedContext)') < olvidar.indexOf('await forgetEverythingFor(host)'), 'el enlazado se captura antes de olvidar')
+  assert(
+    /if \(enlazado && enlazado\.host !== host\) \{\s*await clearActivity\(enlazado\.host\)\s*await clearTodayCache\(enlazado\.host\)\s*\}/.test(olvidar),
+    'y se va su diario con su caché de «hoy»'
+  )
+  assert(!/forgetEverythingFor\(enlazado/.test(olvidar), 'pero NO se olvida aquel sitio entero: lo demás es suyo')
 
   // El espejo enseña la sección con una fila de cada clase, y la fila entra en la
   // medida de desbordamiento a lo ancho, como las piezas de H8 y H11.
