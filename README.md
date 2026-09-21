@@ -513,7 +513,7 @@ Trece decisiones que sostienen el diseño:
 ## Comprobaciones
 
 ```bash
-npm run check              # sintaxis + orden + manifest + 1278 pruebas unitarias + docs
+npm run check              # sintaxis + orden + manifest + 1279 pruebas unitarias + docs
 npm run check:docs         # sólo el paso docs: número de pruebas, títulos del registro, mensajes y ficheros del mapa
 npm run test:integration   # contra un opencode real que arranca la propia prueba
 npm run harness            # banco de pruebas visual en http://127.0.0.1:5175
@@ -820,7 +820,7 @@ si vuelve a cambiar. Trescientas entradas por sitio, **treinta días** —tambi�
 «ya lo he visto»: cuando cae el último, el diario de ese sitio se borra solo—, y
 sólo de los sitios que has configurado. **Nada de eso
 llega nunca al modelo**: no entra en ningún prompt, y lo comprobamos por los dos
-lados (hay una prueba que compara los 36 prompts byte a byte y otra que exige
+lados (hay una prueba que compara los 37 prompts byte a byte y otra que exige
 que el diario no se le pase a quien los escribe). Está a la vista —la pantalla
 dice en una línea qué se guarda y dónde, con los números, los «ya lo he visto»
 incluidos— y se borra con **«Borrar mi actividad»**, o con **«Olvidar este

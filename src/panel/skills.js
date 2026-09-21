@@ -105,7 +105,21 @@ function busquedaJira({ projectKey = '', cloud = false, profile = null, preloade
     cloud
       ? 'Tu trabajo es localizar QUÉ incidencias hablan de lo que pregunta el usuario, no explicarlas enteras. Las incidencias se buscan con JQL; si lo que busca es una página de Confluence de este mismo sitio, búscala con las herramientas de Confluence.'
       : 'Tu trabajo es localizar QUÉ incidencias hablan de lo que pregunta el usuario, no explicarlas enteras. En Jira no hay árbol de páginas: se busca con JQL.',
-    '- Busca de verdad con la herramienta de búsqueda de Jira del MCP (jira_search) y una consulta JQL antes de contestar. Construye el JQL con lo que dice el usuario: texto (text ~ "…" o summary ~ "…"), estado, tipo, asignado, etiquetas, fechas' +
+    // Con una lista precargada, la orden de buscar «antes de contestar» no puede
+    // seguir ahí en imperativo: el modelo leía dos órdenes opuestas, y la primera
+    // —la de buscar— era la más fuerte y la que iba antes, justo lo contrario de
+    // lo que el hito viene a conseguir (revisión adversaria de H12). Con precarga,
+    // lo PRIMERO que lee es que ya tiene los resultados, y buscar pasa a ser el
+    // recurso. Sin precarga, letra a letra lo de siempre.
+    ...(preloaded
+      ? [
+          '- Ya tienes más abajo los resultados de una búsqueda que la extensión hizo con tu sesión: contesta sobre ellos y NO vuelvas a llamar a jira_search salvo que no basten para lo que pregunta el usuario.',
+        ]
+      : []),
+    (preloaded
+      ? '- Sólo si no bastan, busca con la herramienta de búsqueda de Jira del MCP (jira_search) y una consulta JQL.'
+      : '- Busca de verdad con la herramienta de búsqueda de Jira del MCP (jira_search) y una consulta JQL antes de contestar.') +
+      ' Construye el JQL con lo que dice el usuario: texto (text ~ "…" o summary ~ "…"), estado, tipo, asignado, etiquetas, fechas' +
       (proyecto
         ? `; y acótalo al proyecto en el que está, ${proyecto} (project = ${proyecto}), salvo que pida otra cosa.`
         : '; y acótalo al proyecto en el que está, si lo sabes, salvo que pida otra cosa.') +
@@ -120,15 +134,13 @@ function busquedaJira({ projectKey = '', cloud = false, profile = null, preloade
           '- Y sobre todo en los DATOS DEL PROYECTO de más abajo: esos los leyó la extensión de la API de este Jira, no un modelo, así que los nombres de tipo, estado, componente y etiqueta que hay ahí son los EXACTOS. Cópialos tal cual en el JQL (entre comillas si llevan espacios) y no te inventes ni traduzcas ninguno: un nombre que no existe no da error, da cero resultados.',
         ]
       : []),
-    // Lo que el usuario pidió precargar con un clic: los resultados que ya está
-    // viendo. Sin esta viñeta el modelo volvía a llamar a `jira_search` para
-    // buscar lo que tiene delante, y esa salida se arrastra en la sesión (§7).
-    ...(preloaded
-      ? [
-          '- Ya tienes más abajo los resultados de una búsqueda que la extensión hizo con tu sesión: apóyate en ellos y busca de nuevo con jira_search sólo si no bastan.',
-        ]
-      : []),
-    '- Di en una línea qué JQL has usado, para que pueda repetirlo o afinarlo. La extensión ofrece abajo abrir esa búsqueda en Jira, con la lista entera.',
+    // La tarjeta «Abrir la búsqueda en Jira» sale de la llamada REAL a
+    // `jira_search` (`jqlDestination`), no de la prosa: si el modelo hace lo que
+    // se le pide con una lista precargada —no volver a buscar—, no hay tarjeta, y
+    // prometérsela al usuario sería mentirle (revisión adversaria de H12).
+    preloaded
+      ? '- Si has vuelto a buscar, di en una línea qué JQL has usado, para que pueda repetirlo o afinarlo: la extensión ofrece entonces abrir esa búsqueda en Jira. Si no has buscado, no prometas ninguna tarjeta: la consulta de esos resultados ya la tiene el usuario delante.'
+      : '- Di en una línea qué JQL has usado, para que pueda repetirlo o afinarlo. La extensión ofrece abajo abrir esa búsqueda en Jira, con la lista entera.',
     cloud
       ? '- Contesta en pocas líneas: qué has encontrado, nombrando cada incidencia por su clave (ABC-123) y su resumen, con su estado y su asignado si vienen; y cada página de Confluence por su título exacto con su id numérico entre paréntesis.'
       : '- Contesta en pocas líneas: qué has encontrado, nombrando cada incidencia por su clave (ABC-123) y su resumen, con su estado y su asignado si vienen.',

@@ -422,7 +422,7 @@ test('EL CAMBIO: en Jira la tarjeta abre la búsqueda que hizo el modelo, y el i
   // consulta JQL que produjo la lista, leída de la llamada real a jira_search
   // (las partes del turno), y no necesita índice.
   const envio = JS.slice(JS.indexOf('async function send('), JS.indexOf('function paintTurn('))
-  assert(/offerNavigation\(answer, bubble, skill, turn\.parts\)/.test(envio), 'las partes del turno llegan a la navegación')
+  assert(/offerNavigation\(answer, bubble, skill, turn\.parts, \{ preloaded: !!preloadDelTurno \}\)/.test(envio), 'las partes del turno llegan a la navegación')
   const nav = JS.slice(JS.indexOf('async function offerNavigation'), JS.indexOf('async function learnAncestry'))
   assert(/jqlDestination\(parts, \{ origin: state\.site\.origin \}\)/.test(nav), 'la URL se construye contra el origen de la pestaña')
   assert(/navCard\(jqlPlan\(busqueda\)\)/.test(nav))
@@ -2043,10 +2043,19 @@ test('H12: «Preguntar sobre estos» arma la precarga y deja la pregunta escrita
   // turno siguiente en vez de que el modelo vuelva a pedírsela a Jira (§8.19).
   // Quien pregunta sigue siendo el usuario (§8.20): esto escribe en el cuadro.
   const lista = sinComentarios(JS.slice(JS.indexOf('async function attachJqlResults'), JS.indexOf('const PRELOAD_QUESTION')))
+  // El pin viejo usaba una travesía libre entre el `if` y el `appendChild`, que
+  // cruzaba la llave de cierre: sacar el botón del `if` dejaba todo en verde
+  // (revisión adversaria de H12). Ahora se recorta el CUERPO del `if` —hasta la
+  // primera llave de cierre a su sangría— y el botón tiene que estar DENTRO, y
+  // una sola vez en toda la función.
+  const desdeIf = lista.slice(lista.indexOf('if (issues.length) {'))
+  const cuerpoIf = desdeIf.slice(0, desdeIf.indexOf('\n  }'))
+  assert(cuerpoIf.length > 50 && cuerpoIf.includes('jqlResultsList(issues'), 'el cuerpo del if existe y es el de la lista')
   assert(
-    /if \(issues\.length\) \{[\s\S]*card\.querySelector\('\.nav-actions'\)\?\.appendChild\(preloadButton\(issues, \{ site, jql, total \}\)\)/.test(lista),
+    cuerpoIf.includes("card.querySelector('.nav-actions')?.appendChild(preloadButton(issues, { site, jql, total }))"),
     'el botón sólo con filas, y dentro de las acciones de la tarjeta'
   )
+  eq(lista.split('preloadButton(').length - 1, 1, 'y en ningún otro sitio de la función')
 
   const boton = sinComentarios(JS.slice(JS.indexOf('function preloadButton('), JS.indexOf('function jqlResultsList')))
   assert(boton.length > 200, 'el trozo de preloadButton existe')
@@ -2081,8 +2090,24 @@ test('H12: lo precargado se consume en el turno siguiente, se dice bajo la pregu
   // Y se dice: mandar contexto sin que se vea sería mandarlo a espaldas de quien
   // pregunta, como la página en bloques y las páginas base.
   const nota = envio.slice(envio.indexOf('addUserMessage('), envio.indexOf('state.lastQuestion = text'))
-  assert(/preloadNote\(preloadAlPedir\)/.test(nota), 'la nota va bajo la pregunta')
-  assert(/import \{ baseSystem, selectionBlock, stripSelectionBlock, pageUrlFromSystem, preloadNote, preloadFromSystem, PAGE_OPEN \}/.test(JS))
+  assert(/preloadNote\(preloadDelTurno\)/.test(nota), 'la nota va bajo la pregunta, y habla de lo que DE VERDAD viaja')
+  assert(/import \{\s*baseSystem,\s*selectionBlock,\s*stripSelectionBlock,\s*pageUrlFromSystem,\s*preloadNote,\s*preloadFromSystem,\s*preloadedApplies,\s*PAGE_OPEN,\s*\} from '\.\/prompts\.js'/.test(JS))
+  // EL CAMBIO (revisión adversaria de H12): con alcance EXCLUSIVO el bloque no
+  // va en el prompt, así que la nota no puede decir que fue; la regla es UNA
+  // (`preloadedApplies`, la que usa `baseSystem`), y el descarte se dice (§8.14).
+  assert(
+    /const preloadDelTurno = preloadAlPedir && preloadedApplies\(\{ site: state\.site, skill, sources \}\) \? preloadAlPedir : null/.test(envio),
+    'lo que viaja se decide con la misma regla que el prompt'
+  )
+  assert(/preloaded: preloadDelTurno,/.test(envio) && !/preloaded: preloadAlPedir,/.test(envio), 'y eso es lo que recibe baseSystem')
+  const descarte = nota.slice(nota.indexOf('if (preloadAlPedir && !preloadDelTurno) {'))
+  assert(descarte.length > 20 && /'Búsqueda precargada'/.test(descarte) && /showNotice\(/.test(descarte), 'un descarte se registra y se dice')
+  // Y sin búsqueda nueva no se planifica: la pregunta era sobre la lista.
+  const navH12 = sinComentarios(JS.slice(JS.indexOf('async function offerNavigation'), JS.indexOf('async function learnAncestry')))
+  assert(/async function offerNavigation\(answer, bubble, skillId = state\.skill, parts = \[\], \{ preloaded = false \} = \{\}\)/.test(navH12))
+  const salida = navH12.indexOf('if (preloaded) {')
+  assert(salida > navH12.indexOf('jqlDestination(parts') && salida < navH12.indexOf('planNavigation('), 'tras mirar si hubo búsqueda y ANTES de planificar')
+  assert(/'Sin navegación', 'la pregunta era sobre una lista ya leída'/.test(navH12))
   assert(!/preloadedSearchBlock|SEARCH_OPEN/.test(sinComentarios(JS)), 'el bloque lo monta prompts.js, no el panel')
 
   // Al restaurar, la nota se reconstruye del sistema guardado con la MISMA
@@ -2099,6 +2124,11 @@ test('H12: lo precargado se consume en el turno siguiente, se dice bajo la pregu
   assert(/state\.pendingPreload = null/.test(otra), 'al cambiar de página se olvida')
   const nueva = sinComentarios(JS.slice(JS.indexOf('async function newSession'), JS.indexOf('function emptyToday')))
   assert(/state\.pendingPreload = null/.test(nueva), 'y con una sesión nueva')
+  // «Olvidar este sitio» repinta el chat igual que una sesión nueva: si no lo
+  // suelta, viaja en la primera pregunta tras olvidar (revisión adversaria de H12).
+  const olvidarH12 = sinComentarios(JS.slice(JS.indexOf("$('btn-forget').addEventListener"), JS.indexOf("$('mem-enabled').addEventListener")))
+  assert(olvidarH12.length > 200 && /state\.pendingPreload = null/.test(olvidarH12), 'y al olvidar el sitio')
+  assert(olvidarH12.indexOf('state.pendingPreload = null') < olvidarH12.indexOf('await bootForSite()'), 'antes de repintar')
 })
 
 test('H8: la casilla de las lecturas REST se lee y se guarda en Ajustes, y no rearranca el panel', () => {
@@ -2553,10 +2583,10 @@ test('H9: el perfil entra en el prompt y en los chips, y se va con el sitio', ()
   const peticion = envio.slice(envio.indexOf('const peticion = {'), envio.indexOf('let silencioso'))
   assert(peticion.length > 200, 'el trozo de la petición existe')
   assert(
-    /linkedContext: state\.linkedContext,\s*profile: currentProfile\(\),\s*preloaded: preloadAlPedir,\s*sources,/.test(peticion),
+    /linkedContext: state\.linkedContext,\s*profile: currentProfile\(\),\s*preloaded: preloadDelTurno,\s*sources,/.test(peticion),
     'el perfil viaja en el system del turno, entre el contexto enlazado y lo precargado (H12), que va antes de las páginas base'
   )
-  assert(/import \{ baseSystem/.test(JS) && !/profileBlock/.test(sinComentarios(JS)), 'el bloque lo monta prompts.js, no el panel')
+  assert(/import \{\s*baseSystem/.test(JS) && !/profileBlock/.test(sinComentarios(JS)), 'el bloque lo monta prompts.js, no el panel')
 
   // Es del SITIO: al cambiar de host se vacía, y «Olvidar este sitio» —que
   // borra su clave— no puede dejarlo en memoria para el turno siguiente.

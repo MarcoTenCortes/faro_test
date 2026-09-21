@@ -146,8 +146,20 @@ test('H12: con una lista precargada, Búsqueda se apoya en ella antes de volver 
   // en la sesión y se reenvía en cada turno (§7).
   const s = skillSystem('busqueda', { product: 'jira', projectKey: 'SIMPL', preloaded: true })
   assert(/Ya tienes más abajo los resultados de una búsqueda que la extensión hizo con tu sesión/.test(s), 'se le dice que ya los tiene')
-  assert(/apóyate en ellos y busca de nuevo con jira_search sólo si no bastan/.test(s), 'y qué hacer con ellos')
-  assert(s.indexOf('Ya tienes más abajo') < s.indexOf('Di en una línea qué JQL has usado'), 'antes de pedirle que diga qué consulta usó')
+  assert(/contesta sobre ellos y NO vuelvas a llamar a jira_search salvo que no basten/.test(s), 'y qué hacer con ellos')
+  // EL CAMBIO (revisión adversaria de H12): la viñeta nueva convivía con «Busca
+  // de verdad … antes de contestar», en imperativo y DELANTE. Dos órdenes
+  // opuestas, y ganaba la de buscar. Con precarga esa orden no está, lo primero
+  // que lee el modo es que ya tiene los resultados, y buscar es el recurso.
+  assert(!/Busca de verdad/.test(s) && !/antes de contestar/.test(s), 'con precarga no se le ordena buscar antes de contestar')
+  const vinetas = s.split('\n').filter((l) => l.startsWith('- '))
+  assert(vinetas[0].startsWith('- Ya tienes más abajo'), 'y es la PRIMERA viñeta del modo: ' + vinetas[0].slice(0, 40))
+  assert(/^- Sólo si no bastan, busca con la herramienta de búsqueda de Jira del MCP \(jira_search\)/.test(vinetas[1]), 'buscar pasa a ser el recurso')
+  assert(/project = SIMPL/.test(vinetas[1]), 'y si busca, el JQL se construye como siempre')
+  // La tarjeta «Abrir la búsqueda en Jira» sale de la llamada real a la
+  // herramienta: sin búsqueda no hay tarjeta, y no se le promete al usuario.
+  assert(/Si has vuelto a buscar, di en una línea qué JQL has usado/.test(s) && /no prometas ninguna tarjeta/.test(s))
+  assert(!/La extensión ofrece abajo abrir esa búsqueda en Jira, con la lista entera/.test(s), 'la promesa incondicional de la tarjeta no va con precarga')
 
   // Sin nada precargado, letra a letra el de siempre. Quién decide que hay
   // bloque es `baseSystem`, que es quien lo pone: una viñeta que mande apoyarse
@@ -155,6 +167,8 @@ test('H12: con una lista precargada, Búsqueda se apoya en ella antes de volver 
   const sin = skillSystem('busqueda', { product: 'jira', projectKey: 'SIMPL' })
   eq(skillSystem('busqueda', { product: 'jira', projectKey: 'SIMPL', preloaded: false }), sin)
   assert(!/Ya tienes más abajo/.test(sin))
+  assert(/- Busca de verdad con la herramienta de búsqueda de Jira del MCP \(jira_search\) y una consulta JQL antes de contestar\./.test(sin), 'sin precarga, la orden de siempre')
+  assert(/La extensión ofrece abajo abrir esa búsqueda en Jira, con la lista entera/.test(sin), 'y la promesa de la tarjeta, que entonces es verdad')
   // Y la viñeta del perfil y la de la lista no se estorban: son dos fuentes
   // distintas y las dos pueden ir en el mismo turno.
   const perfil = { version: 1, projectKey: 'SIMPL', types: [{ name: 'Story', count: 3 }], statuses: [] }

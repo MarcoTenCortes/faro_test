@@ -147,7 +147,16 @@ import {
   surplusNumbers,
   NOTE_LIMITS,
 } from './notes.js'
-import { baseSystem, selectionBlock, stripSelectionBlock, pageUrlFromSystem, preloadNote, preloadFromSystem, PAGE_OPEN } from './prompts.js'
+import {
+  baseSystem,
+  selectionBlock,
+  stripSelectionBlock,
+  pageUrlFromSystem,
+  preloadNote,
+  preloadFromSystem,
+  preloadedApplies,
+  PAGE_OPEN,
+} from './prompts.js'
 import { stuckToBottom } from './chat-scroll.js'
 import { ESCAPE_CLOSES, ESCAPE_DISMISSES } from './screens.js'
 import { allowedLinkOrigin } from './links.js'
@@ -1964,6 +1973,10 @@ async function send() {
   // abierta entonces. En un Data Center la URL no lleva id: se busca en el
   // índice, y si no, queda el título de la pestaña.
   const sources = skill === 'analisis' && hasSources(state.sources) ? normalizeSources(state.sources, { host: state.site.host }) : null
+  // Lo precargado que DE VERDAD viaja: con alcance exclusivo el prompt no lo
+  // lleva (`preloadedApplies`, la misma regla que usa `baseSystem`), y entonces
+  // tampoco se dice bajo la pregunta que viajó; se dice que NO, más abajo.
+  const preloadDelTurno = preloadAlPedir && preloadedApplies({ site: state.site, skill, sources }) ? preloadAlPedir : null
   const pageIdAlPedir = state.site.pageId || currentPageId(state.index, state.tabUrl) || ''
   // En Jira lo abierto es una incidencia: es lo que el alcance permite leer.
   const issueKeyAlPedir = state.site.issueKey || ''
@@ -2037,11 +2050,17 @@ async function send() {
         sources ? sourcesNote(sources, { product: productoAlPedir }) : '',
         // Lo precargado se dice igual que lo señalado y las páginas base: mandar
         // contexto sin que se vea sería mandarlo a espaldas de quien pregunta.
-        preloadNote(preloadAlPedir),
+        preloadNote(preloadDelTurno),
       ]
         .filter(Boolean)
         .join(' · ')
     )
+    // Un descarte en silencio sería el fallo de §8.14: el usuario pulsó
+    // «Preguntar sobre estos» y la lista no va. Se dice, y por qué.
+    if (preloadAlPedir && !preloadDelTurno) {
+      log.info('Búsqueda precargada', 'no viaja: el alcance del análisis es exclusivo')
+      showNotice('Los resultados de la búsqueda no viajan con esta pregunta: el alcance del análisis es exclusivo.')
+    }
     state.lastQuestion = text
     state.turns.push({ role: 'user', text })
     scrollChat()
@@ -2112,7 +2131,7 @@ async function send() {
         // en Jira, y lo decide `baseSystem`, que es quien pone el bloque.
         profile: currentProfile(),
         // Y los resultados que el usuario pidió precargar con un clic (H12).
-        preloaded: preloadAlPedir,
+        preloaded: preloadDelTurno,
         sources,
       }),
     }
@@ -2358,7 +2377,7 @@ async function send() {
 
     // Y, si procede, ofrecer llevar al usuario allí (necesita el índice de
     // arriba: el destino sólo vale si está en él).
-    await offerNavigation(answer, bubble, skill, turn.parts)
+    await offerNavigation(answer, bubble, skill, turn.parts, { preloaded: !!preloadDelTurno })
 
     // Y una sola escritura del índice por turno, con todo lo que haya crecido
     // (las herramientas, el árbol, el camino que leyó el planificador). Si el
@@ -2945,7 +2964,7 @@ function warnAboutSources(parts, bubble, { sources, pageId = '', issueKey = '', 
  *        `jira_search`, el destino es esa búsqueda (la lista de tickets vive
  *        en el buscador), y no hace falta índice.
  */
-async function offerNavigation(answer, bubble, skillId = state.skill, parts = []) {
+async function offerNavigation(answer, bubble, skillId = state.skill, parts = [], { preloaded = false } = {}) {
   const skill = skillById(skillId)
 
   // Resumir o analizar lo que ya tienes delante no es ir a ningún sitio, y una
@@ -2981,6 +3000,15 @@ async function offerNavigation(answer, bubble, skillId = state.skill, parts = []
         state.recentJql = rememberJql(state.recentJql, busqueda.jql, { count: lista.total })
         await saveSite(sitio.host, { recentJql: state.recentJql })
       }
+      return
+    }
+    // La pregunta era sobre una lista que el usuario ya tenía delante y el
+    // modelo —como se le pide— no ha vuelto a buscar: no hay búsqueda que abrir,
+    // y tampoco destino que planificar. Sin esta salida, Búsqueda (que planifica
+    // siempre) gastaba el turno del planificador para no llevar a ningún sitio
+    // (revisión adversaria de H12).
+    if (preloaded) {
+      log.info('Sin navegación', 'la pregunta era sobre una lista ya leída')
       return
     }
   }
@@ -6232,6 +6260,11 @@ function wireEvents() {
     state.recentJql = []
     state.favouriteFilters = null
     state.profile = null
+    // Y lo precargado: `bootForSite` repinta el chat y se lleva la tarjeta con
+    // la lista, así que dejarlo armado lo metería en la primera pregunta tras
+    // olvidar, con unos resultados que ya no se ven (revisión adversaria de H12;
+    // el mismo motivo que en `newSession`).
+    state.pendingPreload = null
     // Y el historial de análisis con páginas base, que `forgetSite` acaba de
     // borrar del almacén: dejarlo en memoria seguiría sugiriendo en este sitio
     // lo que el usuario ha pedido olvidar, y el turno siguiente lo reescribiría.

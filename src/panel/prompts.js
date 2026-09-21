@@ -114,7 +114,12 @@ export function baseSystem({
   // Y acotarlo a Búsqueda sería un fallo silencioso: la tarjeta con la lista
   // también sale de un chip del chat vacío, donde la Skill es la que el sitio
   // tuviera guardada, así que el clic no habría servido para nada.
-  const busquedaBlock = enJira ? preloadedSearchBlock(preloaded) : ''
+  // Con ALCANCE EXCLUSIVO tampoco: el modo dice «trabaja SÓLO con la incidencia
+  // abierta y las páginas base» y veinte incidencias de otra búsqueda puestas
+  // treinta líneas más abajo son lo contrario (revisión adversaria de H12; la
+  // misma contradicción que la de H8 arregló en `productoBlock`). Quien manda el
+  // turno pregunta lo mismo con `preloadedApplies` para no DECIR que viajó.
+  const busquedaBlock = preloadedApplies({ site, skill, sources }) ? preloadedSearchBlock(preloaded) : ''
   // La clave del espacio ya llega con forma de clave (`validSpaceKey`, en
   // site.js); se cita entre «» porque es un dato del sitio, no una palabra de
   // Faro (auditoría del 2026-09-13, docs/PLAN.md §2, S2).
@@ -577,6 +582,20 @@ function preloadedLines(preloaded) {
   return { lines, jql, total: Math.max(Number.isInteger(total) && total > 0 ? total : 0, lines.length) }
 }
 
+/**
+ * ¿Pueden viajar unos resultados precargados en un turno así? Pura.
+ *
+ * Sólo en Jira —son incidencias— y nunca en un Análisis con alcance EXCLUSIVO,
+ * donde el modo prohíbe mirar nada que no sea lo abierto y las páginas base. Es
+ * UNA regla para los dos que la necesitan: `baseSystem`, que pone o no el
+ * bloque, y el panel, que dice bajo la pregunta lo que viaja. Escrita dos veces,
+ * la nota acabaría prometiendo un bloque que no fue.
+ */
+export function preloadedApplies({ site, skill, sources } = {}) {
+  const exclusivo = (skill || DEFAULT_SKILL) === 'analisis' && sources?.mode === 'exclusive'
+  return site?.product === 'jira' && !exclusivo
+}
+
 /** Los resultados precargados, envueltos para el prompt. '' si no hay nada que enseñar. Pura. */
 export function preloadedSearchBlock(preloaded) {
   const datos = preloadedLines(preloaded)
@@ -587,6 +606,10 @@ export function preloadedSearchBlock(preloaded) {
     ...datos.lines,
     SEARCH_CLOSE,
     contentRule('resultados de una búsqueda en Jira, leídos por la extensión con la sesión del usuario', { plural: true }),
+    // Y qué hacer con ellos, FUERA de los delimitadores —es Faro quien habla— y
+    // en el propio bloque: la viñeta que lo enmarca sólo existe en Búsqueda, y el
+    // bloque viaja en cualquier modo (revisión adversaria de H12).
+    'El usuario ha pedido traer esos resultados a esta pregunta: contesta sobre ellos y no vuelvas a buscarlos salvo que no basten.',
   ].join('\n')
 }
 

@@ -441,7 +441,12 @@ Junto al selector de modelo, abajo, hay otras dos cosas:
   **nunca de quién es**. Si te vas a otra página o a otro sitio entre el clic y
   el envío, se descarta y la nota no aparece: vuelve a pulsar el botón, que la
   tarjeta sigue ahí con los mismos resultados. Y no sobrevive a cerrar el panel:
-  son los resultados de ese momento.
+  son los resultados de ese momento. Tampoco viajan en un **Análisis con alcance
+  exclusivo** —ahí el modelo sólo puede mirar la incidencia abierta y las páginas
+  base, y una lista de otras incidencias sería lo contrario—: en ese caso sale
+  un aviso en el chat que lo dice. Y como la pregunta es sobre una lista que ya
+  tienes, si el modelo no vuelve a buscar no aparece ninguna tarjeta de
+  «Abrir la búsqueda en Jira» debajo de la respuesta: la de antes sigue arriba.
 
 - **Búsquedas al instante** — en un **Jira propio (Data Center)**, con el chat
   vacío, bajo las tres sugerencias hay hasta cuatro pastillas: «Misma épica
@@ -1021,7 +1026,11 @@ en Confluence no hay nada de esto.
   pregunta —cuántos resultados y la consulta recortada— más la consulta entera.
   No hay título de fallo: si cambias de página o de sitio entre el clic y el
   envío, lo precargado se descarta y la nota bajo la pregunta no aparece, que es
-  lo que se ve.
+  lo que se ve. Con el detalle «no viaja: el alcance del análisis es exclusivo»,
+  es que mandaste la pregunta en Análisis con el alcance exclusivo puesto: la
+  lista no fue (y un aviso en el chat te lo dijo). Y el «Sin navegación» con
+  «la pregunta era sobre una lista ya leída» que sale detrás de un turno así no
+  es un fallo: no había búsqueda nueva que abrir ni sitio al que llevarte.
 
 **Qué mirar hoy**
 
