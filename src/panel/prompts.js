@@ -6,8 +6,15 @@
  * porque es fácil borrarlas sin querer al reescribir una frase.
  */
 
-import { cleanTabTitle, sinInvisibles } from '../atlassian/site.js'
+import { cleanTabTitle, sinInvisibles, validIssueKey } from '../atlassian/site.js'
 import { INDEX_LIMITS } from '../shared/config.js'
+// La consulta que se nombra en la cabecera de los resultados precargados pasa
+// por la MISMA limpieza que la que se ejecuta (H12): una línea, sin controles y
+// con tope. Se importa de donde vive y no se copia, porque una segunda limpieza
+// de lo mismo es una limpieza que divergirá; y los topes de cada campo de una
+// incidencia ya tienen dueño ahí mismo (§9: lo que ya está acotado no se acota
+// otra vez con otro número).
+import { cleanJql, JIRA_REST_LIMITS } from '../shared/jira-rest.js'
 import { DEFAULT_SKILL, offersNavigation, skillSystem, MISSING_FROM_BLOCKS } from './skills.js'
 import { NOTHING_TO_SAY } from './notes.js'
 
@@ -44,6 +51,14 @@ export const CONTEXT_BUDGET = {
    * fase 1 los quiere para hablar del sitio real, no para recorrerlos.
    */
   tree: 6000,
+  /**
+   * Los resultados de la búsqueda que el usuario pidió precargar (H12): una
+   * línea por incidencia. Va acotado por CARACTERES y por FILAS, y el corte se
+   * hace por líneas enteras: media línea de resultados diría «ENG-7 · In Rev»
+   * y el modelo hablaría de un estado que no existe.
+   */
+  preloaded: 3000,
+  preloadedRows: 20,
 }
 
 /**
@@ -62,8 +77,22 @@ export const CONTEXT_BUDGET = {
  *        (sólo desde Jira): con él, el modelo sabe qué páginas mirar.
  *        `profile` es lo que la extensión contó de una muestra del proyecto
  *        (`normalizeProfile`, H9); sólo en Jira y sólo en Búsqueda.
+ *        `preloaded` son los resultados de una búsqueda que el usuario pidió
+ *        precargar con «Preguntar sobre estos» (H12): `{jql, total, issues}`,
+ *        y sólo en el turno que sigue al clic.
  */
-export function baseSystem({ site, contextMd, memoryMd, page, skill, digest = null, sources = null, linkedContext = null, profile = null }) {
+export function baseSystem({
+  site,
+  contextMd,
+  memoryMd,
+  page,
+  skill,
+  digest = null,
+  sources = null,
+  linkedContext = null,
+  profile = null,
+  preloaded = null,
+}) {
   const conPagina = !!digest?.text
   // Con alcance exclusivo, la cabecera no puede invitar a leer «otras
   // páginas» y el modo prohibirlo tres párrafos más abajo: las dos frases que
@@ -78,6 +107,14 @@ export function baseSystem({ site, contextMd, memoryMd, page, skill, digest = nu
   // líneas de datos sin nadie que diga qué son. Si no hay nada que contar, el
   // bloque sale vacío y entonces tampoco se le promete al modo que existe.
   const perfilBlock = enJira && (skill || DEFAULT_SKILL) === 'busqueda' ? profileBlock(profile) : ''
+  // Los resultados que el usuario pidió precargar (H12). Sólo en Jira —son
+  // incidencias— y en cualquier modo, a diferencia del perfil: el bloque se
+  // explica a sí mismo («RESULTADOS DE UNA BÚSQUEDA QUE HIZO LA EXTENSIÓN…»),
+  // mientras que seis líneas de conteos sin viñeta que las nombre no dicen nada.
+  // Y acotarlo a Búsqueda sería un fallo silencioso: la tarjeta con la lista
+  // también sale de un chip del chat vacío, donde la Skill es la que el sitio
+  // tuviera guardada, así que el clic no habría servido para nada.
+  const busquedaBlock = enJira ? preloadedSearchBlock(preloaded) : ''
   // La clave del espacio ya llega con forma de clave (`validSpaceKey`, en
   // site.js); se cita entre «» porque es un dato del sitio, no una palabra de
   // Faro (auditoría del 2026-09-13, docs/PLAN.md §2, S2).
@@ -188,8 +225,15 @@ export function baseSystem({ site, contextMd, memoryMd, page, skill, digest = nu
     // guardado: un perfil sin nada contado no tiene bloque, y una viñeta que
     // mande mirar unos datos que no están abajo es una viñeta que miente.
     profile: perfilBlock ? profile : null,
+    // Igual con los resultados precargados: la viñeta sólo si el bloque va.
+    preloaded: !!busquedaBlock,
   })
   if (modo) out.push('', modo)
+
+  // Los resultados de la búsqueda que el usuario pidió precargar: detrás del
+  // modo —que es quien dice qué hacer con ellos— y delante de la página y del
+  // contexto, porque son la respuesta a la pregunta que se está haciendo ahora.
+  if (busquedaBlock) out.push('', busquedaBlock)
 
   // La página abierta, en bloques numerados: después del modo, que dice qué
   // hacer con ella, y antes del contexto, que es lo que primero se recorta.
@@ -435,6 +479,160 @@ export function profileBlock(profile) {
     PROFILE_CLOSE,
     contentRule('nombres y resúmenes de tickets de Jira, contados por la extensión', { plural: true }),
   ].join('\n')
+}
+
+/**
+ * Los resultados de una búsqueda que el usuario pidió precargar (H12).
+ *
+ * POR QUÉ EXISTE: en Búsqueda, el modelo escribe la JQL, la extensión la ejecuta
+ * con la sesión del navegador y la tarjeta enseña la lista (H8). Si entonces el
+ * usuario quiere preguntar SOBRE esa lista, hoy el modelo tiene que volver a
+ * buscarla: otra llamada a `jira_search`, otros segundos, y su salida arrastrada
+ * en la sesión turno tras turno (§7). «Preguntar sobre estos» mete esos mismos
+ * resultados —los que el usuario ya está viendo— en el `system` del turno
+ * siguiente, que en opencode va POR MENSAJE y no se acumula.
+ *
+ * Y por eso va DELIMITADO y con la regla detrás: son claves, estados, tipos y
+ * resúmenes de tickets, o sea contenido de Jira que escribe cualquiera de la
+ * organización (§8.12). SIN personas: ni asignado ni informador entran en ningún
+ * prompt (§6), aunque la fila que llega de la API los traiga.
+ *
+ * `SEARCH_OPEN` es un PREFIJO, como `PROFILE_OPEN` y `LINKED_OPEN`: la consulta
+ * y las cuentas van dentro de la línea de apertura y cambian con la búsqueda.
+ */
+export const SEARCH_OPEN = '--- RESULTADOS DE UNA BÚSQUEDA QUE HIZO LA EXTENSIÓN'
+export const SEARCH_CLOSE = '--- FIN DE LOS RESULTADOS DE LA BÚSQUEDA ---'
+
+/**
+ * Cuánto de la consulta se lee en la NOTA de debajo de la pregunta. En la
+ * cabecera del bloque va entera hasta el tope de `dato` (200), porque ahí la lee
+ * el modelo; en la nota la lee una persona en un panel de 320 px, y una JQL de
+ * doscientos caracteres bajo la pregunta son cuatro líneas de ruido.
+ */
+const JQL_EN_LA_NOTA = 60
+
+/**
+ * La línea de apertura, para volver a leerla de un sistema guardado.
+ *
+ * `(.*)` es voraz y el resto va anclado al fin de línea, así que gana el ÚLTIMO
+ * «; N en total, se enseñan M) ---» de la línea: una consulta que llevara ese
+ * texto dentro no puede fingir otras cuentas (la misma idea que el
+ * `lastIndexOf` de `stripSelectionBlock`).
+ *
+ * Repite a mano el texto de `SEARCH_OPEN` porque una regex no se puede escribir
+ * con una constante sin escaparla; lo que impide que se separen es la prueba de
+ * ida y vuelta, que monta el bloque con `baseSystem` y lo vuelve a leer de ahí.
+ */
+const PRELOAD_HEADER = /^--- RESULTADOS DE UNA BÚSQUEDA QUE HIZO LA EXTENSIÓN \(JQL: (.*); (\d+) en total, se enseñan (\d+)\) ---$/
+
+/**
+ * Las líneas de resultados que caben, con su consulta y su total. Pura.
+ *
+ * Una línea por incidencia, «CLAVE · estado · tipo · resumen», con cada dato
+ * pasado por `dato()`: colapsado a una línea, sin invisibles y con tope. Así un
+ * resumen que traiga saltos, un NEL, un U+2028 o el literal del cierre dentro no
+ * abre línea ni cierra el bloque.
+ *
+ * La clave pasa por `validIssueKey` porque es lo único del bloque que el modelo
+ * puede citar para que la extensión lleve al usuario allí (§8.3): una fila sin
+ * clave utilizable no aporta nada y se cae.
+ *
+ * El corte es por LÍNEAS ENTERAS, como en `treeTitles`: primero el tope de filas
+ * y después el de caracteres, y la cabecera dice cuántas van de verdad.
+ * @returns {{lines: string[], jql: string, total: number}|null}
+ */
+function preloadedLines(preloaded) {
+  if (!preloaded || typeof preloaded !== 'object') return null
+  // Sin consulta no hay bloque: unos resultados sin decir qué los produjo son
+  // resultados cuya procedencia no se puede contar, ni al modelo ni al usuario.
+  const jql = dato(cleanJql(preloaded.jql))
+  if (!jql) return null
+
+  const lines = []
+  let chars = 0
+  // La lista viene de `parseSearchIssues`, que ya la acota a
+  // `JIRA_REST_LIMITS.maxResults`: el recorrido está acotado aunque ninguna fila
+  // llegue a dar línea.
+  for (const issue of Array.isArray(preloaded.issues) ? preloaded.issues : []) {
+    if (lines.length >= CONTEXT_BUDGET.preloadedRows) break
+    const clave = validIssueKey(dato(issue?.key, 40))
+    if (!clave) continue
+    // Sin `assignee` ni `reporter`: de quién es una incidencia no entra en
+    // ningún prompt, y la fila de la API los trae.
+    const linea = [
+      clave,
+      dato(issue?.status, JIRA_REST_LIMITS.fieldChars),
+      dato(issue?.type, JIRA_REST_LIMITS.fieldChars),
+      dato(issue?.summary, JIRA_REST_LIMITS.summaryChars),
+    ]
+      .filter(Boolean)
+      .join(' · ')
+    chars += linea.length + 1
+    if (chars > CONTEXT_BUDGET.preloaded) break
+    lines.push(linea)
+  }
+  if (!lines.length) return null
+
+  const total = Number(preloaded.total)
+  return { lines, jql, total: Math.max(Number.isInteger(total) && total > 0 ? total : 0, lines.length) }
+}
+
+/** Los resultados precargados, envueltos para el prompt. '' si no hay nada que enseñar. Pura. */
+export function preloadedSearchBlock(preloaded) {
+  const datos = preloadedLines(preloaded)
+  if (!datos) return ''
+  return [
+    `${SEARCH_OPEN} (JQL: ${datos.jql}; ${datos.total} en total, se enseñan ${datos.lines.length}) ---`,
+    'Cada línea es una incidencia: «CLAVE · estado · tipo · resumen».',
+    ...datos.lines,
+    SEARCH_CLOSE,
+    contentRule('resultados de una búsqueda en Jira, leídos por la extensión con la sesión del usuario', { plural: true }),
+  ].join('\n')
+}
+
+/**
+ * Lo que se dice DEBAJO de la pregunta cuando el turno lleva resultados
+ * precargados. '' si no lleva ninguno. Pura.
+ *
+ * Acepta las DOS formas, como `sourcesNote`: lo que el panel tiene en la mano al
+ * mandar (`{jql, total, issues}`) y lo que `preloadFromSystem` saca de un
+ * sistema guardado (`{jql, count}`). Una sola función porque los dos textos
+ * tienen que decir lo mismo: escritos por separado, divergen.
+ */
+export function preloadNote(preloaded) {
+  if (!preloaded || typeof preloaded !== 'object') return ''
+  // Con filas en la mano se cuentan las que DE VERDAD caben, no las que llegaron:
+  // si el tope recorta, la nota y el bloque tienen que decir el mismo número.
+  const datos = Array.isArray(preloaded.issues) ? preloadedLines(preloaded) : null
+  const n = datos ? datos.lines.length : Number(preloaded.count) || 0
+  if (n <= 0) return ''
+  const jql = dato(cleanJql(preloaded.jql), JQL_EN_LA_NOTA)
+  return (n === 1 ? 'con 1 resultado' : `con los ${n} resultados`) + ' de una búsqueda previa' + (jql ? ` (${jql})` : '')
+}
+
+/**
+ * La búsqueda que llevaba precargada un mensaje guardado: su consulta y cuántos
+ * resultados fueron. Sirve para reconstruir la nota de debajo de la pregunta al
+ * recuperar una conversación de opencode. Pura.
+ *
+ * Se mira LÍNEA A LÍNEA y sólo hasta el primer bloque de contenido: el de la
+ * búsqueda va delante de la página, del contexto, del perfil, del enlazado y de
+ * la memoria, así que un CONTEXT.md con una cabecera falsa dentro no puede
+ * fabricar una nota (es lo que hace `sourcesFromSystem` con su corte, y sin el
+ * `m` de una regex multilínea, para el que un U+2028 dentro de un título también
+ * abre línea).
+ * @returns {{jql:string, count:number}|null}
+ */
+export function preloadFromSystem(system) {
+  const otros = [PAGE_OPEN, '--- CONTEXTO DE ESTE SITIO', PROFILE_OPEN, LINKED_OPEN, '--- DE SESIONES ANTERIORES ---']
+  for (const linea of String(system || '').replace(/\r\n/g, '\n').split('\n')) {
+    if (otros.some((marca) => linea.startsWith(marca))) return null
+    const m = linea.startsWith(SEARCH_OPEN) ? linea.match(PRELOAD_HEADER) : null
+    // «se enseñan M»: lo que el modelo tuvo de verdad delante, que es de lo que
+    // habla la nota. El total de Jira va en la cabecera para el modelo.
+    if (m) return { jql: m[1], count: Number(m[3]) }
+  }
+  return null
 }
 
 /**

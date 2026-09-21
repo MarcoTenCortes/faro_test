@@ -2026,8 +2026,8 @@ test('H8: una fila de la lista no navega por su cuenta — pasa por el índice y
   assert(/index: state\.index, origin: site\.origin, host: site\.host, here: state\.tabUrl, site/.test(abrir), 'contra el índice y el origen del sitio')
   assert(/await runPlan\(r\.plan, 'direct', card\)/.test(abrir), 'y lo lanza el mismo runPlan: NAVIGATE_DIRECT')
   assert(
-    /for \(const b of card\.querySelectorAll\('\.result-row'\)\) b\.disabled = false/.test(abrir),
-    'y las filas vuelven: un salto directo no tiene PLAN_FINISHED que las encienda, y la lista se quedaba muerta tras abrir una'
+    /for \(const b of card\.querySelectorAll\('\.result-row, \.' \+ NEEDS_IDLE\)\) \{\s*b\.disabled = b\.classList\.contains\(NEEDS_IDLE\) \? state\.streaming : false/.test(abrir),
+    'y las filas vuelven —un salto directo no tiene PLAN_FINISHED que las encienda, y la lista se quedaba muerta tras abrir una—, y con ellas «Preguntar sobre estos» de H12, que no es un viaje; lo que lleva NEEDS_IDLE sólo si no se está respondiendo (H6)'
   )
   assert(/noticeNode\(/.test(abrir), 'y si el plan no vale, se dice (§8.14)')
   assert(/import \{ validatePlan \} from '\.\.\/nav\/validate\.js'/.test(JS))
@@ -2036,6 +2036,69 @@ test('H8: una fila de la lista no navega por su cuenta — pasa por el índice y
   const JS_LIMPIO = sinComentarios(JS)
   assert(!JS_LIMPIO.includes('/rest/api/'), 'ninguna ruta REST en el panel: las monta el módulo del producto')
   assert(!/'\/browse\/' \+/.test(JS_LIMPIO), 'ninguna URL de incidencia concatenada a mano')
+})
+
+test('H12: «Preguntar sobre estos» arma la precarga y deja la pregunta escrita, sin mandar nada', () => {
+  // La lista que el usuario ya ve en la tarjeta puede viajar en el `system` del
+  // turno siguiente en vez de que el modelo vuelva a pedírsela a Jira (§8.19).
+  // Quien pregunta sigue siendo el usuario (§8.20): esto escribe en el cuadro.
+  const lista = sinComentarios(JS.slice(JS.indexOf('async function attachJqlResults'), JS.indexOf('const PRELOAD_QUESTION')))
+  assert(
+    /if \(issues\.length\) \{[\s\S]*card\.querySelector\('\.nav-actions'\)\?\.appendChild\(preloadButton\(issues, \{ site, jql, total \}\)\)/.test(lista),
+    'el botón sólo con filas, y dentro de las acciones de la tarjeta'
+  )
+
+  const boton = sinComentarios(JS.slice(JS.indexOf('function preloadButton('), JS.indexOf('function jqlResultsList')))
+  assert(boton.length > 200, 'el trozo de preloadButton existe')
+  assert(/'Preguntar sobre estos'/.test(boton) && /b\.className = 'ghost small ' \+ NEEDS_IDLE/.test(boton))
+  assert(/b\.disabled = state\.streaming/.test(boton) && /if \(state\.streaming\) \{/.test(boton), 'nace desactivado con un turno en vuelo, y el clic del cambio tampoco pasa (H6)')
+  assert(/state\.pendingPreload = \{ jql, total, issues, host: site\.host \}/.test(boton), 'con el host con el que se leyó (§8.22)')
+  assert(/el\.input\.value = PRELOAD_QUESTION/.test(boton) && /el\.input\.focus\(\)/.test(boton), 'la pregunta queda escrita y con el foco')
+  assert(/'Búsqueda precargada'/.test(boton), 'y en el Registro')
+  assert(/announce\(/.test(boton), 'y se anuncia: es una promesa de lo que va a viajar (A2)')
+  // SEGURIDAD (§8.20): Faro no manda la pregunta por su cuenta, y lo que deja
+  // escrito no lleva claves, ni la consulta, ni el host: eso acabaría en un
+  // prompt en cuanto el usuario pulse enviar.
+  assert(!/\bsend\(\)/.test(boton), 'no manda nada')
+  const pregunta = JS.slice(JS.indexOf('const PRELOAD_QUESTION'), JS.indexOf('\n', JS.indexOf('const PRELOAD_QUESTION')))
+  for (const prohibido of ['jql', 'host', 'key', 'site', '${']) {
+    assert(!pregunta.includes(prohibido), 'la pregunta no lleva ' + prohibido)
+  }
+  // Y la tarjeta lleva ya dos acciones: a 320 px no caben en una línea.
+  assert(/\.nav-actions \{[^}]*flex-wrap: wrap/.test(CSS_LIMPIO), 'las acciones de una tarjeta envuelven')
+})
+
+test('H12: lo precargado se consume en el turno siguiente, se dice bajo la pregunta y no viaja a otro sitio', () => {
+  const envio = sinComentarios(JS.slice(JS.indexOf('async function send('), JS.indexOf('function paintTurn(')))
+  // Se captura y se consume al mandar, como lo señalado con el ratón: acompaña a
+  // ESTA pregunta y sólo a ésta.
+  assert(/const preload = state\.pendingPreload\s*state\.pendingPreload = null/.test(envio), 'se consume al mandar')
+  assert(
+    /const preloadAlPedir = preload\?\.host === state\.site\.host \? preload : null/.test(envio),
+    'y lo de otro host no viaja: serían incidencias de otro Jira en el system de éste (§8.22)'
+  )
+  assert(envio.indexOf('state.pendingPreload = null') < envio.indexOf('runTurn('), 'antes de mandar el turno')
+  // Y se dice: mandar contexto sin que se vea sería mandarlo a espaldas de quien
+  // pregunta, como la página en bloques y las páginas base.
+  const nota = envio.slice(envio.indexOf('addUserMessage('), envio.indexOf('state.lastQuestion = text'))
+  assert(/preloadNote\(preloadAlPedir\)/.test(nota), 'la nota va bajo la pregunta')
+  assert(/import \{ baseSystem, selectionBlock, stripSelectionBlock, pageUrlFromSystem, preloadNote, preloadFromSystem, PAGE_OPEN \}/.test(JS))
+  assert(!/preloadedSearchBlock|SEARCH_OPEN/.test(sinComentarios(JS)), 'el bloque lo monta prompts.js, no el panel')
+
+  // Al restaurar, la nota se reconstruye del sistema guardado con la MISMA
+  // función: dos textos escritos por separado divergen.
+  const restaurar = sinComentarios(JS.slice(JS.indexOf('async function restoreConversation'), JS.indexOf('function showWelcome')))
+  assert(restaurar.length > 200, 'el trozo de restoreConversation existe')
+  assert(/const precargadoDelTurno = preloadFromSystem\(m\.info\.system\)/.test(restaurar))
+  assert(/preloadNote\(precargadoDelTurno\)/.test(restaurar), 'y se pinta con la misma función que al mandar')
+
+  // Es de un momento: al cambiar de página —y por tanto de host— se olvida, y
+  // una sesión nueva vacía el chat, así que la tarjeta con la lista se va con él.
+  const pestana = sinComentarios(JS.slice(JS.indexOf('async function refreshTab'), JS.indexOf('async function bootForSite')))
+  const otra = pestana.slice(pestana.indexOf('if (otraPagina) {'), pestana.indexOf('state.tabId = tab.id'))
+  assert(/state\.pendingPreload = null/.test(otra), 'al cambiar de página se olvida')
+  const nueva = sinComentarios(JS.slice(JS.indexOf('async function newSession'), JS.indexOf('function emptyToday')))
+  assert(/state\.pendingPreload = null/.test(nueva), 'y con una sesión nueva')
 })
 
 test('H8: la casilla de las lecturas REST se lee y se guarda en Ajustes, y no rearranca el panel', () => {
@@ -2321,6 +2384,38 @@ test('H8: el espejo enseña la lista de la tarjeta, la búsqueda directa, los ch
   assert(cajas.includes("'.result-row'") && cajas.includes("'.search-chip-row'"), 'las piezas de H8 entran en la medida de desbordamiento')
 })
 
+test('H12: el espejo enseña «Preguntar sobre estos» y la nota de lo que viaja precargado', () => {
+  const espejo = readFileSync(join(ROOT, 'harness/panel-preview.html'), 'utf8')
+  const busqueda = espejo.slice(espejo.indexOf('function conversacionBusqueda()'), espejo.indexOf('/** La burbuja que está llegando'))
+  assert(busqueda.length > 500, 'el trozo de conversacionBusqueda existe')
+
+  // El botón de H12 cuelga de las MISMAS acciones de la tarjeta que «Abrir la
+  // búsqueda en Jira», igual que en el panel, y sólo donde hay filas.
+  const poner = espejo.slice(espejo.indexOf('function ponerPreguntar(card)'), espejo.indexOf('/** Los chips de «búsquedas al instante»'))
+  assert(poner.length > 100, 'el trozo de ponerPreguntar existe')
+  assert(/'Preguntar sobre estos'/.test(poner) && JS.includes("'Preguntar sobre estos'"), 'con el mismo texto que el panel')
+  assert(/'ghost small needs-idle'/.test(poner), 'y con la clase gancho de H6, que es como nace en el panel')
+  assert(/card\.querySelector\('\.nav-actions'\)\.appendChild/.test(poner), 'dentro de las acciones de la tarjeta')
+  assert(/ponerLista\(conLista, RESULTADOS\)\s*ponerPreguntar\(conLista\)/.test(busqueda), 'la tarjeta con lista lo lleva')
+  assert(/ponerLista\(directa, RESULTADOS\)\s*ponerPreguntar\(directa\)/.test(busqueda), 'y la búsqueda directa, que es la misma tarjeta')
+  assert(!/ponerPreguntar\(sinLista\)/.test(busqueda), 'la que se quedó sin lista no: sin filas no hay nada que precargar')
+
+  // La nota bajo la pregunta la escribe el código real. Copiada a mano aquí
+  // diría otro número en cuanto el tope de filas recortara.
+  assert(/import\('\/src\/panel\/prompts\.js'\)/.test(espejo) && /\{ preloadNote \}/.test(espejo), 'la nota sale de prompts.js')
+  assert(
+    /preloadNote\(\{ jql: BUSQUEDA_JQL, total: 37, issues: RESULTADOS \}\)/.test(busqueda),
+    'con los mismos resultados y la misma consulta que la tarjeta de arriba enseña'
+  )
+  assert(!/de una búsqueda previa/.test(espejo), 'el texto de la nota no se copia: lo pone preloadNote')
+
+  // Y la fila de acciones entra en la medida de desbordamiento: con dos botones
+  // a 320 px es justo la pieza que puede empujar a lo ancho.
+  const cajasH12 = espejo.slice(espejo.indexOf('const CAJAS ='), espejo.indexOf('function check() {'))
+  assert(cajasH12.includes("'.nav-actions'"), 'las acciones de una tarjeta se miden a lo ancho')
+  assert(/\.nav-actions \{[^}]*flex-wrap: wrap/.test(CSS_LIMPIO), 'y envuelven, que es lo que hace que quepan')
+})
+
 test('H9: el mapa se levanta con lo que la API da exacto, y si no puede sigue por el modelo', () => {
   // Levantar el contexto de un espacio eran TRES turnos del modelo; el árbol lo
   // dice la lista paginada de Confluence en milisegundos (§8.19). La regla de
@@ -2458,8 +2553,8 @@ test('H9: el perfil entra en el prompt y en los chips, y se va con el sitio', ()
   const peticion = envio.slice(envio.indexOf('const peticion = {'), envio.indexOf('let silencioso'))
   assert(peticion.length > 200, 'el trozo de la petición existe')
   assert(
-    /linkedContext: state\.linkedContext,\s*profile: currentProfile\(\),\s*sources,/.test(peticion),
-    'el perfil viaja en el system del turno, entre el contexto enlazado y las páginas base'
+    /linkedContext: state\.linkedContext,\s*profile: currentProfile\(\),\s*preloaded: preloadAlPedir,\s*sources,/.test(peticion),
+    'el perfil viaja en el system del turno, entre el contexto enlazado y lo precargado (H12), que va antes de las páginas base'
   )
   assert(/import \{ baseSystem/.test(JS) && !/profileBlock/.test(sinComentarios(JS)), 'el bloque lo monta prompts.js, no el panel')
 

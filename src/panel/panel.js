@@ -147,7 +147,7 @@ import {
   surplusNumbers,
   NOTE_LIMITS,
 } from './notes.js'
-import { baseSystem, selectionBlock, stripSelectionBlock, pageUrlFromSystem, PAGE_OPEN } from './prompts.js'
+import { baseSystem, selectionBlock, stripSelectionBlock, pageUrlFromSystem, preloadNote, preloadFromSystem, PAGE_OPEN } from './prompts.js'
 import { stuckToBottom } from './chat-scroll.js'
 import { ESCAPE_CLOSES, ESCAPE_DISMISSES } from './screens.js'
 import { allowedLinkOrigin } from './links.js'
@@ -352,6 +352,13 @@ const state = {
   // haya nada que volver a leer: `todayRows()` las ordena al pedirlas.
   // Es del SITIO del panel: `refreshTab` lo vacía al cambiar de host.
   today: emptyToday(),
+  // Los resultados que el usuario pidió precargar con «Preguntar sobre estos»
+  // (H12): `{jql, total, issues, host}` o null. Acompañan a la SIGUIENTE
+  // pregunta y sólo a ésa —`send()` los consume, como lo señalado con el ratón—,
+  // y llevan el host con el que se leyeron porque entre el clic y el envío el
+  // panel puede haberse ido a otro sitio (§8.22). Nunca se guardan: son los
+  // resultados de AHORA, y una lista de ayer no es una precarga, es un engaño.
+  pendingPreload: null,
   // La intención de «Analizar» que dejó una fila de «hoy»: se navega y, cuando
   // la pestaña llega a esa página, se fija la Skill Análisis y se deja la
   // pregunta ESCRITA en el cuadro, sin mandarla (§8.20: Faro nunca manda una
@@ -458,6 +465,15 @@ async function refreshTab() {
     state.sourcesSuggest.links = []
     state.sourcesSuggest.remote = null
     state.sourcesSuggest.url = ''
+    // Y lo precargado, que es de un momento: el usuario pidió preguntar sobre
+    // una lista y se ha ido a otra página, así que la pregunta que tenía en la
+    // cabeza ya no es la misma. La tarjeta sigue en el chat con su botón: volver
+    // a pulsarlo lo vuelve a armar con los mismos resultados, sin releer nada.
+    // Aquí basta la página, y no hace falta repetirlo en el bloque de cambio de
+    // sitio: dos hosts distintos nunca son la misma página (`samePage` compara
+    // el origen), y además `send()` descarta lo precargado de otro host con el
+    // que capturó al pedir, que es la guarda que de verdad manda (§8.22).
+    state.pendingPreload = null
   }
   state.tabId = tab.id
 
@@ -1434,6 +1450,9 @@ async function restoreConversation(testigo = state.bootToken, { all = false } = 
           // Las páginas base viajaron en el sistema de ese mensaje: la nota
           // de abajo se reconstruye de ahí, con el mismo texto que al mandar.
           baseDelTurno = sourcesFromSystem(m.info.system)
+          // Y los resultados precargados también viajaron ahí (H12): la nota de
+          // abajo se reconstruye de la misma cabecera que se escribió al mandar.
+          const precargadoDelTurno = preloadFromSystem(m.info.system)
           // Y si el turno fue un Análisis: la cabecera del modo va en su sistema.
           analisisDelTurno = String(m.info.system || '').includes('MODO ANÁLISIS.')
           if (!text.trim()) continue
@@ -1452,6 +1471,7 @@ async function restoreConversation(testigo = state.bootToken, { all = false } = 
               limpio === text ? '' : 'con una selección de la página',
               conPagina ? `con el texto de la ${productoDelTurno === 'jira' ? 'incidencia' : 'página'}` : '',
               baseDelTurno ? sourcesNote(baseDelTurno, { product: productoDelTurno }) : '',
+              preloadNote(precargadoDelTurno),
             ]
               .filter(Boolean)
               .join(' · ')
@@ -1922,6 +1942,14 @@ async function send() {
   const pick = state.pendingPick
   clearPick()
 
+  // Y lo mismo con los resultados que el usuario pidió precargar (H12): son la
+  // respuesta a ESTA pregunta y sólo a ésta, así que se consumen aquí. Si entre
+  // el clic y el envío el panel se fue a otro sitio, no viajan: serían
+  // incidencias de otro Jira metidas en el `system` de éste (§8.22).
+  const preload = state.pendingPreload
+  state.pendingPreload = null
+  const preloadAlPedir = preload?.host === state.site.host ? preload : null
+
   el.input.value = ''
   autoGrow()
 
@@ -2007,6 +2035,9 @@ async function send() {
           ? `con el texto de la ${productoAlPedir === 'jira' ? 'incidencia' : 'página'} (${digest.count} bloques${digest.truncated ? ', recortado' : ''})`
           : '',
         sources ? sourcesNote(sources, { product: productoAlPedir }) : '',
+        // Lo precargado se dice igual que lo señalado y las páginas base: mandar
+        // contexto sin que se vea sería mandarlo a espaldas de quien pregunta.
+        preloadNote(preloadAlPedir),
       ]
         .filter(Boolean)
         .join(' · ')
@@ -2080,6 +2111,8 @@ async function send() {
         // Y lo que la extensión contó del proyecto (H9): sólo lo usa Búsqueda
         // en Jira, y lo decide `baseSystem`, que es quien pone el bloque.
         profile: currentProfile(),
+        // Y los resultados que el usuario pidió precargar con un clic (H12).
+        preloaded: preloadAlPedir,
         sources,
       }),
     }
@@ -3169,10 +3202,66 @@ async function attachJqlResults(card, busqueda, { site = state.site, sessionID =
     `${issues.length} de ${total}${r.via === 'updated' ? ' · sin ordenar por lo último visto' : ''}` +
       `${r.prefix ? ' · vía ' + r.prefix : ''}${Number.isFinite(r.ms) ? ` · ${r.ms} ms` : ''} · ${jql}`
   )
-  if (issues.length) card.insertBefore(jqlResultsList(issues, { site, card }), card.querySelector('.nav-actions'))
+  if (issues.length) {
+    card.insertBefore(jqlResultsList(issues, { site, card }), card.querySelector('.nav-actions'))
+    // Y el botón que deja preguntar SOBRE esta lista sin que el modelo vuelva a
+    // buscarla (H12): sólo con filas, porque sin ellas no habría nada que
+    // precargar, y dentro de las acciones de la tarjeta, al lado de «Abrir la
+    // búsqueda en Jira», que es la otra cosa que se puede hacer con ella.
+    card.querySelector('.nav-actions')?.appendChild(preloadButton(issues, { site, jql, total }))
+  }
   // Con el total ya comprobado: quien lo apunte como «última búsqueda» no tiene
   // que volver a preguntarse si el servidor mandó un número.
   return { ...r, total }
+}
+
+/**
+ * La pregunta que se deja ESCRITA en el cuadro al precargar una lista.
+ *
+ * Sin claves, sin la consulta y sin el host: la escribe el usuario al pulsar
+ * enviar, y lo que se le ofrezca escrito acaba en un prompt (es la misma regla
+ * que `analyzeQuestion` de «qué mirar hoy», §8.20).
+ */
+const PRELOAD_QUESTION = '¿Qué tienen en común estas incidencias?'
+
+/**
+ * «Preguntar sobre estos»: el botón que precarga la lista en el turno siguiente.
+ *
+ * NO manda nada (§8.20): apunta los resultados, escribe la pregunta en el cuadro
+ * y deja el foco ahí. Quien pregunta es el usuario, y puede reescribirla o
+ * borrarla; lo único que ha cambiado es que el turno siguiente llevará la lista
+ * en su `system` y el modelo no tendrá que volver a pedírsela a Jira.
+ *
+ * El host viaja con lo apuntado: si el panel se va a otro sitio entre el clic y
+ * el envío, `send()` lo descarta (§8.22). Y lleva `NEEDS_IDLE` como los demás
+ * botones que cuelgan del chat: la tarjeta se pinta con `state.streaming`
+ * todavía en true, y un botón que parece vivo y no hace nada es peor que uno
+ * desactivado (revisión adversaria de H6).
+ */
+function preloadButton(issues, { site, jql, total }) {
+  const b = document.createElement('button')
+  b.className = 'ghost small ' + NEEDS_IDLE
+  b.type = 'button'
+  b.textContent = 'Preguntar sobre estos'
+  b.title = 'Mete estos resultados en la siguiente pregunta, para no volver a buscarlos'
+  b.disabled = state.streaming
+  b.addEventListener('click', () => {
+    if (state.streaming) {
+      showNotice('Espera a que termine la respuesta.', false, { force: true })
+      return
+    }
+    state.pendingPreload = { jql, total, issues, host: site.host }
+    const nota = preloadNote(state.pendingPreload)
+    log.ok('Búsqueda precargada', `${nota} · ${jql}`)
+    el.input.value = PRELOAD_QUESTION
+    autoGrow()
+    el.input.focus()
+    // Lo que va a viajar con la pregunta se dice en voz alta: es la misma
+    // promesa que la nota de debajo, que todavía no existe porque nadie ha
+    // mandado nada (A2).
+    announce(`${PRELOAD_QUESTION} — ${nota}. Puedes cambiarla antes de enviar.`)
+  })
+  return b
 }
 
 /**
@@ -3244,9 +3333,15 @@ async function openIssueFromResults(key, { site, card }) {
   // `runPlan` apaga los botones de la tarjeta mientras lanza el viaje, y un
   // salto directo no tiene «Parar» ni `PLAN_FINISHED` que los vuelva a encender:
   // la lista se quedaba muerta después de abrir UNA incidencia, y mirar la
-  // siguiente de la lista es justo lo que se hace después. Las acciones de la
-  // tarjeta («Abrir la búsqueda en Jira») siguen la regla de siempre.
-  for (const b of card.querySelectorAll('.result-row')) b.disabled = false
+  // siguiente de la lista es justo lo que se hace después. Desde H12 vuelve
+  // también «Preguntar sobre estos», que cuelga de esta misma tarjeta y no es un
+  // viaje: abrir una fila y luego querer preguntar por la lista es la secuencia
+  // normal, y el clic de la fila la había dejado muerta. Lo que lleva
+  // `NEEDS_IDLE` sólo vuelve si no se está respondiendo (H6). Las acciones de
+  // viaje de la tarjeta («Abrir la búsqueda en Jira») siguen la regla de siempre.
+  for (const b of card.querySelectorAll('.result-row, .' + NEEDS_IDLE)) {
+    b.disabled = b.classList.contains(NEEDS_IDLE) ? state.streaming : false
+  }
 }
 
 /**
@@ -6661,6 +6756,10 @@ async function newSession() {
   await clearSessionWeight(state.site.host)
   state.sessionToolChars = 0
   state.heavyWarned = false
+  // Y lo precargado: el chat se vacía, así que la tarjeta con la lista y su
+  // botón se van con él. Dejarlo puesto metería en la primera pregunta de la
+  // sesión nueva unos resultados que ya no se ven por ninguna parte.
+  state.pendingPreload = null
   forgetNotes()
   log.ok('Sesión nueva', state.settings.crossSessionMemory ? 'la anterior quedó resumida' : '')
   state.sessionID = null

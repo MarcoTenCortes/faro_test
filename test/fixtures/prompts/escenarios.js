@@ -380,6 +380,30 @@ const PERFIL_JIRA = normalizeProfile({
   ],
 })
 
+/**
+ * Los resultados que el usuario pidió precargar con «Preguntar sobre estos»
+ * (H12): lo que el panel apunta en `state.pendingPreload` con la MISMA consulta
+ * que el modelo ejecutó por el MCP y las filas que devolvió la API del sitio
+ * (las claves de `parseSearchIssues`, con el asignado y el informador que la API
+ * trae y que NO entran en el prompt).
+ */
+const PRECARGA_JIRA = {
+  jql: 'project = SIMPL AND labels = API_Definition AND status = "In Review" ORDER BY updated DESC',
+  total: 37,
+  issues: [
+    {
+      key: 'SIMPL-12',
+      summary: '[API Definition] - Consent API v2',
+      status: 'In Review',
+      type: 'Story',
+      assignee: { name: 'ana', displayName: 'Ana Pérez' },
+      reporter: { name: 'luis', displayName: 'Luis Gómez' },
+    },
+    { key: 'SIMPL-31', summary: '[API Definition] - Federation API v1', status: 'In Review', type: 'Story' },
+    { key: 'SIMPL-44', summary: '[API Definition] - Consent API v2: faltan los códigos de error', status: 'In Review', type: 'Bug' },
+  ],
+}
+
 /** Lo señalado con el ratón, como lo deja `buildTextPick`. */
 const PICK = {
   kind: 'text',
@@ -430,7 +454,7 @@ const INDICE_CONFLUENCE = {
  * normalizan contra el host de la pestaña), y las claves van en el mismo
  * orden que allí.
  */
-function sistema({ site, page, skill, contextMd = '', memoryMd = '', digest = null, linkedContext = null, sources = null, profile = null }) {
+function sistema({ site, page, skill, contextMd = '', memoryMd = '', digest = null, linkedContext = null, sources = null, profile = null, preloaded = null }) {
   const analisis = skill === 'analisis'
   return baseSystem({
     site,
@@ -442,6 +466,7 @@ function sistema({ site, page, skill, contextMd = '', memoryMd = '', digest = nu
     linkedContext,
     sources: analisis && hasSources(sources) ? normalizeSources(sources, { host: site.host }) : null,
     profile,
+    preloaded,
   })
 }
 
@@ -592,6 +617,21 @@ export const ESCENARIOS = [
         memoryMd: MEMORIA_MD,
         linkedContext: ENLAZADO,
         profile: PERFIL_JIRA,
+      }),
+  },
+  {
+    id: 'jira-busqueda-precargada',
+    que: 'Búsqueda (JQL) en Jira DC con los RESULTADOS que el usuario pidió precargar con «Preguntar sobre estos» (H12): el bloque entre el modo y el contexto, la viñeta que manda apoyarse en ellos, y ninguna persona aunque las filas de la API las traigan',
+    build: () =>
+      sistema({
+        site: SITE_JIRA,
+        page: PAGE_JIRA,
+        skill: 'busqueda',
+        contextMd: CONTEXTO_JIRA,
+        memoryMd: MEMORIA_MD,
+        linkedContext: ENLAZADO,
+        profile: PERFIL_JIRA,
+        preloaded: PRECARGA_JIRA,
       }),
   },
   {

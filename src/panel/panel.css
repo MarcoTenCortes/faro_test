@@ -490,7 +490,13 @@ hr { border: 0; border-top: 1px solid var(--hairline); margin: 1em 0; }
 }
 .nav-steps span { background: var(--surface-2); border: 1px solid var(--hairline); border-radius: var(--r-sm); padding: 1px var(--s1); }
 .nav-steps b { color: var(--gold); font-weight: 700; }
-.nav-actions { display: flex; gap: var(--s2); }
+/* Las acciones ENVUELVEN desde H12: la tarjeta de una búsqueda de Jira lleva ya
+   dos botones («Abrir la búsqueda en Jira» y «Preguntar sobre estos») y a 320 px
+   al panel le quedan unos 272, donde esos dos no caben en una línea. Sin
+   envolver, `flex` los aprieta y el texto se recorta o desborda; es el arreglo
+   que H5 dejó anotado para cuando una tarjeta tuviera dos acciones largas. El
+   `gap` vale también para la separación entre líneas. */
+.nav-actions { display: flex; flex-wrap: wrap; gap: var(--s2); }
 
 /* La lista de una búsqueda de Jira, DENTRO de la tarjeta que lleva a ella: la
    tarjeta decía «los 37 resultados» y para ver cuáles había que irse a Jira.

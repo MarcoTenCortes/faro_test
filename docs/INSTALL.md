@@ -430,6 +430,19 @@ Junto al selector de modelo, abajo, hay otras dos cosas:
   primero que se mira cuando la respuesta no cuadra. Siempre empieza plegada, y
   al reabrir el panel no se recrea: la conversación restaurada no las tiene.
 
+- **Preguntar sobre estos** — bajo la lista de una búsqueda, al lado de «Abrir
+  la búsqueda en Jira», hay un botón más. Pulsarlo **no manda nada**: te deja
+  escrita en el cuadro la pregunta «¿Qué tienen en común estas incidencias?»
+  —cámbiala o bórrala, enviar lo haces tú— y apunta esas filas para que viajen
+  con la siguiente pregunta. Así el modelo no tiene que volver a buscar lo que
+  ya tienes delante. Cuando envías, bajo tu pregunta se dice lo que fue: «con
+  los 10 resultados de una búsqueda previa (project = ENG AND …)». De cada
+  incidencia van la clave, el estado, el tipo y el resumen, como mucho veinte, y
+  **nunca de quién es**. Si te vas a otra página o a otro sitio entre el clic y
+  el envío, se descarta y la nota no aparece: vuelve a pulsar el botón, que la
+  tarjeta sigue ahí con los mismos resultados. Y no sobrevive a cerrar el panel:
+  son los resultados de ese momento.
+
 - **Búsquedas al instante** — en un **Jira propio (Data Center)**, con el chat
   vacío, bajo las tres sugerencias hay hasta cuatro pastillas: «Misma épica
   ENG-1», «Mismo sprint «S37 Infra»», «Mis abiertas de ENG», «Filtro: API en
@@ -1002,6 +1015,13 @@ en Confluence no hay nada de esto.
   el modelo** (de qué fuente salía el chip, su etiqueta y la consulta). Bajo la
   pregunta lo pone: «búsqueda directa, sin modelo». Si el chip no se pudo
   ejecutar, el detalle dice por qué.
+- «Búsqueda precargada» — pulsaste *Preguntar sobre estos* bajo la lista de una
+  búsqueda: esas filas viajarán con la siguiente pregunta, para que el modelo no
+  tenga que volver a pedirlas a Jira. El detalle es lo mismo que verás bajo la
+  pregunta —cuántos resultados y la consulta recortada— más la consulta entera.
+  No hay título de fallo: si cambias de página o de sitio entre el clic y el
+  envío, lo precargado se descarta y la nota bajo la pregunta no aparece, que es
+  lo que se ve.
 
 **Qué mirar hoy**
 

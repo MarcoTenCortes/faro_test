@@ -91,12 +91,14 @@ function busquedaConfluence() {
  * que busca es una página, se nombra como en Confluence y el cierre lleva su
  * id, que ahí sí hace falta.
  *
- * @param {{projectKey?: string, cloud?: boolean, profile?: object|null}} ctx el
+ * @param {{projectKey?: string, cloud?: boolean, profile?: object|null, preloaded?: boolean}} ctx el
  *        proyecto en el que está el usuario, si la URL lo dice: es el acotado
- *        por defecto de la consulta; si el sitio es Cloud; y si más abajo van
- *        los DATOS DEL PROYECTO que leyó la extensión (H9), para decírselo.
+ *        por defecto de la consulta; si el sitio es Cloud; si más abajo van
+ *        los DATOS DEL PROYECTO que leyó la extensión (H9), para decírselo; y si
+ *        más abajo van los RESULTADOS de una búsqueda que el usuario pidió
+ *        precargar (H12), para que se apoye en ellos antes de volver a buscar.
  */
-function busquedaJira({ projectKey = '', cloud = false, profile = null } = {}) {
+function busquedaJira({ projectKey = '', cloud = false, profile = null, preloaded = false } = {}) {
   const proyecto = /^[A-Z][A-Z0-9_]*$/.test(String(projectKey || '')) ? String(projectKey) : ''
   return [
     'MODO BÚSQUEDA, en Jira.',
@@ -116,6 +118,14 @@ function busquedaJira({ projectKey = '', cloud = false, profile = null } = {}) {
     ...(profile
       ? [
           '- Y sobre todo en los DATOS DEL PROYECTO de más abajo: esos los leyó la extensión de la API de este Jira, no un modelo, así que los nombres de tipo, estado, componente y etiqueta que hay ahí son los EXACTOS. Cópialos tal cual en el JQL (entre comillas si llevan espacios) y no te inventes ni traduzcas ninguno: un nombre que no existe no da error, da cero resultados.',
+        ]
+      : []),
+    // Lo que el usuario pidió precargar con un clic: los resultados que ya está
+    // viendo. Sin esta viñeta el modelo volvía a llamar a `jira_search` para
+    // buscar lo que tiene delante, y esa salida se arrastra en la sesión (§7).
+    ...(preloaded
+      ? [
+          '- Ya tienes más abajo los resultados de una búsqueda que la extensión hizo con tu sesión: apóyate en ellos y busca de nuevo con jira_search sólo si no bastan.',
         ]
       : []),
     '- Di en una línea qué JQL has usado, para que pueda repetirlo o afinarlo. La extensión ofrece abajo abrir esa búsqueda en Jira, con la lista entera.',
@@ -152,7 +162,7 @@ export const SKILLS = [
     alwaysPlan: true,
     system(ctx = {}) {
       return ctx.product === 'jira'
-        ? busquedaJira({ projectKey: ctx.projectKey, cloud: !!ctx.cloud, profile: ctx.profile || null })
+        ? busquedaJira({ projectKey: ctx.projectKey, cloud: !!ctx.cloud, profile: ctx.profile || null, preloaded: !!ctx.preloaded })
         : busquedaConfluence()
     },
   },
@@ -284,7 +294,7 @@ export function skillById(id) {
 /**
  * El bloque de sistema de una Skill. Cadena vacía si no aporta nada.
  * @param {string} id
- * @param {{digest?: boolean, sources?: object|null, product?: string, projectKey?: string, cloud?: boolean, linked?: boolean, issue?: object|null, issueTitle?: string, profile?: object|null}} [ctx]
+ * @param {{digest?: boolean, sources?: object|null, product?: string, projectKey?: string, cloud?: boolean, linked?: boolean, issue?: object|null, issueTitle?: string, profile?: object|null, preloaded?: boolean}} [ctx]
  *        si la página va en el prompt en bloques ¶; las páginas base del
  *        análisis con su alcance (sólo las mira el modo Análisis); el
  *        producto en el que está el usuario ('jira' | 'confluence'), con su
@@ -293,7 +303,9 @@ export function skillById(id) {
  *        incidencia abierta (`normalizeIssueFields`) con su título, que
  *        deciden cómo se analiza (Análisis en Jira); y si el prompt lleva los
  *        DATOS DEL PROYECTO contados de la API (`profile`, sólo Búsqueda en
- *        Jira: lo decide `baseSystem`, que es quien pone el bloque)
+ *        Jira: lo decide `baseSystem`, que es quien pone el bloque); y si lleva
+ *        los RESULTADOS de una búsqueda precargada (`preloaded`, H12, lo decide
+ *        también `baseSystem` por lo mismo)
  */
 export function skillSystem(id, ctx = {}) {
   return skillById(id).system(ctx) || ''

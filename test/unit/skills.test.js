@@ -139,6 +139,35 @@ test('H9: con los datos del proyecto delante, Búsqueda copia los nombres exacto
   }
 })
 
+test('H12: con una lista precargada, Búsqueda se apoya en ella antes de volver a buscar', () => {
+  // El usuario pulsó «Preguntar sobre estos» sobre la lista que ya veía: los
+  // resultados van más abajo en el `system`. Sin esta viñeta el modelo volvía a
+  // llamar a jira_search para buscar lo que tiene delante, y esa salida se queda
+  // en la sesión y se reenvía en cada turno (§7).
+  const s = skillSystem('busqueda', { product: 'jira', projectKey: 'SIMPL', preloaded: true })
+  assert(/Ya tienes más abajo los resultados de una búsqueda que la extensión hizo con tu sesión/.test(s), 'se le dice que ya los tiene')
+  assert(/apóyate en ellos y busca de nuevo con jira_search sólo si no bastan/.test(s), 'y qué hacer con ellos')
+  assert(s.indexOf('Ya tienes más abajo') < s.indexOf('Di en una línea qué JQL has usado'), 'antes de pedirle que diga qué consulta usó')
+
+  // Sin nada precargado, letra a letra el de siempre. Quién decide que hay
+  // bloque es `baseSystem`, que es quien lo pone: una viñeta que mande apoyarse
+  // en unos resultados que no están abajo es una viñeta que miente.
+  const sin = skillSystem('busqueda', { product: 'jira', projectKey: 'SIMPL' })
+  eq(skillSystem('busqueda', { product: 'jira', projectKey: 'SIMPL', preloaded: false }), sin)
+  assert(!/Ya tienes más abajo/.test(sin))
+  // Y la viñeta del perfil y la de la lista no se estorban: son dos fuentes
+  // distintas y las dos pueden ir en el mismo turno.
+  const perfil = { version: 1, projectKey: 'SIMPL', types: [{ name: 'Story', count: 3 }], statuses: [] }
+  const dos = skillSystem('busqueda', { product: 'jira', projectKey: 'SIMPL', profile: perfil, preloaded: true })
+  assert(/DATOS DEL PROYECTO de más abajo/.test(dos) && /Ya tienes más abajo/.test(dos))
+  // En Confluence no hay incidencias que precargar, llegue lo que llegue.
+  eq(skillSystem('busqueda', { product: 'confluence', preloaded: true }), skillSystem('busqueda'))
+  // Y los demás modos no la nombran: la viñeta es de Búsqueda.
+  for (const id of ['general', 'resumen', 'analisis']) {
+    eq(skillSystem(id, { product: 'jira', digest: true, preloaded: true }), skillSystem(id, { product: 'jira', digest: true }), id)
+  }
+})
+
 test('en Confluence —o sin producto— Búsqueda dice lo de siempre, letra a letra', () => {
   eq(skillSystem('busqueda', { product: 'confluence' }), skillSystem('busqueda'))
   eq(skillSystem('busqueda', { product: 'confluence', projectKey: 'ENG' }), skillSystem('busqueda'))

@@ -221,8 +221,10 @@ async function arrancar() {
   // Skills, las opciones de la tarjeta de navegación, la etiqueta de lo
   // señalado, las etiquetas de las páginas base, las sugerencias del vacío y,
   // de H8, los chips de búsqueda al instante y el plan de una búsqueda (su
-  // título y su URL los escribe `jqlPlan`/`jqlLink`, no este fichero). Lo demás
-  // son textos de ejemplo.
+  // título y su URL los escribe `jqlPlan`/`jqlLink`, no este fichero); y de
+  // H12, la nota de lo que viaja precargado, que la escribe `preloadNote` con
+  // los mismos resultados que la tarjeta enseña, para que el espejo y el panel
+  // no puedan decir números distintos. Lo demás son textos de ejemplo.
   const [
     { renderMarkdown },
     { SKILLS },
@@ -237,6 +239,7 @@ async function arrancar() {
     { referencesFromContext },
     { buildCandidates, countNew, rankToday, TODAY_LIMITS },
     { ACTIVITY_LIMITS, emptyActivity, preferredFamilies, recordVisit, touchActivity },
+    { preloadNote },
     { clockTime },
   ] = await Promise.all([
     import('/src/panel/markdown.js'),
@@ -252,6 +255,7 @@ async function arrancar() {
     import('/src/panel/references.js'),
     import('/src/panel/today.js'),
     import('/src/atlassian/activity.js'),
+    import('/src/panel/prompts.js'),
     import('/src/shared/format.js'),
   ])
 
@@ -1100,6 +1104,25 @@ async function arrancar() {
   }
 
   /**
+   * Y el botón de H12, que también cuelga de las acciones de la tarjeta: deja
+   * los resultados que ya se ven preparados para la SIGUIENTE pregunta, para
+   * que el modelo no tenga que volver a pedírselos a Jira.
+   *
+   * Sólo donde hay filas —sin ellas no habría nada que precargar, y por eso la
+   * tarjeta que se quedó sin lista no lo lleva— y con la clase gancho
+   * `needs-idle`, porque en el panel nace desactivado mientras se responde (H6).
+   * Es la SEGUNDA acción de la tarjeta, y a 320 px las dos ya no caben en una
+   * línea: por eso `.nav-actions` envuelve desde H12 y por eso entra en las
+   * cajas que se miden a lo ancho.
+   */
+  function ponerPreguntar(card) {
+    const b = mk('button', 'ghost small needs-idle', 'Preguntar sobre estos')
+    b.type = 'button'
+    b.title = 'Mete estos resultados en la siguiente pregunta, para no volver a buscarlos'
+    card.querySelector('.nav-actions').appendChild(b)
+  }
+
+  /**
    * Los chips de «búsquedas al instante» del chat vacío (H8), con las mismas
    * piezas que `paintSearchChips`: el epígrafe fino, la fila que envuelve y un
    * botón por chip con la consulta entera en su `title`.
@@ -1413,8 +1436,28 @@ async function arrancar() {
     const conLista = tarjetaBusqueda(jqlPlan({ ...jqlLink(BUSQUEDA_JQL, { origin }), count: 37 }))
     ponerEstado(conLista, `${RESULTADOS.length} de 37, leídos ahora mismo de Jira`)
     ponerLista(conLista, RESULTADOS)
+    ponerPreguntar(conLista)
     b1.appendChild(conLista)
     chat.appendChild(b1)
+
+    // Y el turno de H12: la pregunta que «Preguntar sobre estos» deja ESCRITA en
+    // el cuadro (mandarla, o cambiarla, es del usuario) con la nota que dice qué
+    // viajó en su sistema. La nota la escribe `preloadNote` con los MISMOS
+    // resultados de la tarjeta, así que el número y la consulta recortada son
+    // los del código real. Ese turno no lleva consultas plegadas a propósito: de
+    // eso trata el hito, el modelo no ha vuelto a llamar a `jira_search`.
+    chat.appendChild(
+      burbujaUsuario('¿Qué tienen en común estas incidencias?', preloadNote({ jql: BUSQUEDA_JQL, total: 37, issues: RESULTADOS }))
+    )
+    const bPrecargada = mk('div', 'msg assistant')
+    bPrecargada.appendChild(
+      prosa([
+        'Las dos tocan el contrato de la **API de consentimiento**: una define la federación entre proveedores y la otra retira su versión anterior.',
+        '',
+        'Conviene cerrarlas en el mismo sprint: retirar el endpoint v1 sin la definición publicada deja a los consumidores sin contrato al que migrar.',
+      ])
+    )
+    chat.appendChild(bPrecargada)
 
     chat.appendChild(burbujaUsuario('¿Y lo que he tocado yo esta semana?'))
     const b2 = mk('div', 'msg assistant')
@@ -1446,6 +1489,7 @@ async function arrancar() {
     directa.classList.add('direct')
     ponerEstado(directa, '2 de 9, leídos ahora mismo de Jira')
     ponerLista(directa, RESULTADOS)
+    ponerPreguntar(directa)
     b3.appendChild(directa)
     chat.appendChild(b3)
   }
@@ -1830,10 +1874,16 @@ async function arrancar() {
   // Y de H11, la fila de «hoy»: su título y su motivo se recortan con elipsis,
   // pero sus tres acciones no se encogen (`.today-actions { flex: none }`), así
   // que es justo la pieza que puede empujar a lo ancho a 320 px.
+  // Y de H12, las acciones de una tarjeta: la de una búsqueda de Jira lleva ya
+  // DOS botones («Abrir la búsqueda en Jira» y «Preguntar sobre estos») que
+  // juntos miden más de lo que el panel tiene de ancho a 320 px, así que
+  // `.nav-actions` envuelve; si alguien le quita el `flex-wrap`, el
+  // desbordamiento se ve aquí.
   const CAJAS = [
     '.top',
     '.brand',
     '.top-actions',
+    '.nav-actions',
     '.composer',
     '.composer-meta',
     '.composer-row',

@@ -467,6 +467,14 @@ Trece decisiones que sostienen el diseño:
      resúmenes— salen de contar una muestra, no de que el modelo los recuerde:
      con ellos delante escribe el JQL con los nombres exactos, que es donde una
      búsqueda falla en silencio. Sin personas, y se borra con el sitio.
+   - **Puedes preguntar sobre esa lista sin que nadie vuelva a buscarla.** Bajo
+     los resultados hay un botón, *Preguntar sobre estos*: te deja escrita en el
+     cuadro la pregunta «¿Qué tienen en común estas incidencias?» —que puedes
+     cambiar o borrar, porque enviar lo haces tú— y, cuando envías, esas mismas
+     filas viajan con la pregunta en vez de que el modelo tenga que volver a
+     pedirlas a Jira. Debajo de tu pregunta se dice lo que fue: «con los 10
+     resultados de una búsqueda previa». Van la clave, el estado, el tipo y el
+     resumen; nunca de quién es una incidencia.
    - **El chat vacío ofrece hasta cuatro búsquedas al instante.** «Misma épica
      ENG-1», «Mis abiertas de ENG», «Filtro: API en revisión»… Las tres
      sugerencias de al lado son preguntas para el modelo; estas no pasan por él.
@@ -505,7 +513,7 @@ Trece decisiones que sostienen el diseño:
 ## Comprobaciones
 
 ```bash
-npm run check              # sintaxis + orden + manifest + 1266 pruebas unitarias + docs
+npm run check              # sintaxis + orden + manifest + 1278 pruebas unitarias + docs
 npm run check:docs         # sólo el paso docs: número de pruebas, títulos del registro, mensajes y ficheros del mapa
 npm run test:integration   # contra un opencode real que arranca la propia prueba
 npm run harness            # banco de pruebas visual en http://127.0.0.1:5175
