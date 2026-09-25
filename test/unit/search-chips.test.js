@@ -115,6 +115,47 @@ test('SEGURIDAD: una consulta con una función que no es de Jira se ofrece, pero
   eq(usesUnknownFunction(null), false)
 })
 
+// --- los nombres traducidos y el id (H14) ----------------------------------
+
+test('H14: con el perfil delante, el chip del tipo y el del estado preguntan por id, y siguen siendo ejecutables', () => {
+  // Es el caso REAL del usuario: su Jira está en español, el DOM dice «Tarea» y
+  // JQL contesta 400 a `issuetype = "Tarea"`. El perfil trae el id de cada tipo
+  // y de cada estado, así que el chip que sale de la pantalla pregunta por él.
+  const perfil = {
+    version: 2,
+    projectKey: 'ENG',
+    types: [{ name: 'Tarea', count: 12, id: '10002' }],
+    statuses: [
+      { name: 'En progreso', count: 9, category: 'indeterminate', id: '3' },
+      { name: 'Cerrada', count: 8, category: 'done', id: '6' },
+      { name: 'Abierta', count: 4, category: 'new', id: '1' },
+    ],
+  }
+  // Sólo con el tipo delante: con la épica y el sprint también, el reparto por
+  // grupos coge uno de la pantalla y el del tipo no llegaría a la fila.
+  const chips = searchChips({ ...JIRA, issueKey: '' }, { issueFields: { type: 'Tarea' }, profile: perfil })
+  const porClase = Object.fromEntries(chips.map((c) => [c.kind, c]))
+  eq(porClase.tipo.jql, 'project = ENG AND issuetype = 10002 AND resolution = Unresolved')
+  eq(porClase.tipo.label, 'Del mismo tipo («Tarea»), sin resolver', 'la etiqueta enseña el nombre: es lo que el usuario ve en su Jira')
+  // Y el chip del estado, igual. Los de cierre no se ofrecen (lo terminado no es
+  // lo que se viene a buscar), así que el primero es el más usado de los otros.
+  const estados = chips.filter((c) => c.kind === 'estado')
+  eq(estados.map((c) => c.jql), ['project = ENG AND status = 3', 'project = ENG AND status = 1'], 'ninguno por nombre, y ninguno de cierre')
+  eq(estados[0].label, 'ENG en «En progreso»')
+  // Un número en la consulta no es una llamada a función: el chip se ejecuta.
+  for (const c of chips) eq(c.run, true, c.jql)
+  eq(usesUnknownFunction('project = ENG AND issuetype = 10002 AND resolution = Unresolved'), false)
+  eq(usesUnknownFunction('project = ENG AND status = 3'), false)
+
+  // Sin perfil —o con un perfil que no conoce ese nombre— se pregunta por el
+  // nombre entrecomillado, que es lo de antes de H14 y lo que vale en un Jira sin
+  // traducir. Mejor una consulta que puede no encontrar nada que ninguna.
+  const sinPerfil = searchChips({ ...JIRA, issueKey: '' }, { issueFields: { type: 'Tarea' } }).find((c) => c.kind === 'tipo')
+  eq(sinPerfil.jql, 'project = ENG AND issuetype = "Tarea" AND resolution = Unresolved')
+  const otroTipo = searchChips({ ...JIRA, issueKey: '' }, { issueFields: { type: 'Tarea' }, profile: { ...perfil, types: [{ name: 'Historia', id: '10001' }] } })
+  eq(otroTipo.find((c) => c.kind === 'tipo').jql, 'project = ENG AND issuetype = "Tarea" AND resolution = Unresolved')
+})
+
 // --- nada de esto puede lanzar ---------------------------------------------
 
 test('SEGURIDAD: con basura en el estado no lanza y no ofrece nada raro', () => {

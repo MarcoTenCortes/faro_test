@@ -495,8 +495,29 @@ en la red y en el DOM, no aquí).
 > en su rama y con su revisión adversaria aplicada antes del siguiente (1 283
 > pruebas al cerrar H13, con su revisión). El estado hito por hito —qué trajo, rama, commits y
 > pruebas— está en **CLAUDE.md §12.1**, y la bitácora completa, con los desvíos
-> y los límites de cada uno, en **§12.5**. Nada se ha pusheado: las catorce
+> y los límites de cada uno, en **§12.5**. Nada se ha pusheado: las quince
 > ramas están apiladas en el clon de Marco y no hay ninguna PR abierta.
+>
+> **Y encima hay un hito que no es de este plan: H14.** El plan lo ejecutó todo
+> contra pruebas, el banco y el espejo; H14 es lo que pasó al ejecutar los módulos
+> de `src/` **dentro del Jira y el Confluence reales de Marco** (sólo GET, sólo
+> lectura, el 2026-09-21). Salieron nueve cosas: ocho eran fallos que ninguna
+> prueba podía ver porque dependen de cómo es un producto real —el estado que no
+> está donde se buscaba, «Ninguno» tomado por un valor, el tope de enlaces que se
+> comen las rutas internas de Jira, **los nombres que Jira traduce y que JQL
+> rechaza** (el más grave: el perfil de H9 le estaba dictando al modelo un nombre
+> que da un 400), el título genérico «Page» de un enlace remoto, una URL pegada
+> como título, el árbol del espacio leído por las páginas más VIEJAS y el árbol
+> lateral de un Confluence Data Center que no se reconocía—; y la novena es **P5**,
+> el MCP fuera del camino crítico del arranque, que H6 dejó condicionado a medir
+> `GET /mcp` en frío (14 463 ms, medido allí). Los nueve están arreglados en la
+> rama `plan/h14-verificacion-real` (1 315 pruebas), y el detalle —cómo se
+> verificó, qué se vio bien, los nueve hallazgos con su arreglo, los desvíos y lo
+> que sigue sin verse— está en **CLAUDE.md §12.5, bloque «H14 hecho»**, con la
+> decisión nueva en **§8.23** y el estado en **§12.1** y **§12.2**. De paso quedan
+> resueltas las dos primeras decisiones pendientes de §12.3: `minimum_chrome_version`
+> sube a **130** y P5 está hecho. Este plan **no se reabre**: lo de H14 no cambia
+> ninguna de sus decisiones, las precisa con lo que el producto real hace.
 >
 > **Lo que quedó deliberadamente sin hacer**, con su motivo:
 >
@@ -517,8 +538,10 @@ en la red y en el DOM, no aquí).
 >   ninguna recomendación llama al modelo, que es la decisión §8.20. Cada fila
 >   trae su porqué escrito por la extensión.
 >
-> **Lo que depende de Marco** está junto en **CLAUDE.md §12.3**:
-> `minimum_chrome_version` 116 o 130, P5 cuando exista el número, si
+> **Lo que depende de Marco** está junto en **CLAUDE.md §12.3**. Las dos primeras
+> —`minimum_chrome_version` 116 o 130, y P5 cuando existiera el número— quedaron
+> RESUELTAS en H14 (130, y P5 hecho con `GET /mcp` medido en 14 463 ms); siguen
+> abiertas si
 > `npm run test:integration` puede gastar turnos de su Copilot, `jiraPrefix` sin
 > guardar (no hay instancia con ruta de contexto contra la que probarlo), un
 > perfil por host y no por proyecto, y qué hacer con la pila de ramas. Y lo que

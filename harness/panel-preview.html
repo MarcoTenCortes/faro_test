@@ -1054,6 +1054,30 @@ async function arrancar() {
   }
 
   /**
+   * El aviso de que el MCP no está conectado (H14, P5), tal como lo cuelga
+   * `attachMcpNotice` del chat cuando la comprobación llega tarde y no se le
+   * puede abrir la pantalla de claves al usuario (está escribiendo, esperando
+   * una respuesta o en otra pantalla). Es lo único que P5 añade a la vista, y su
+   * fila de acciones es la que hay que mirar a 320 px.
+   */
+  function avisoMcpSinConectar() {
+    const wrap = doc.createElement('div')
+    wrap.appendChild(
+      aviso(
+        'He comprobado el MCP de Atlassian de este sitio y no está conectado (failed): ' +
+          'el modelo no podrá leer Jira ni Confluence. Puedes revisarlo cuando termines.',
+        true
+      )
+    )
+    const acciones = mk('div', 'nav-actions')
+    const btn = mk('button', 'ghost small', 'Cambiar las claves')
+    btn.type = 'button'
+    acciones.appendChild(btn)
+    wrap.appendChild(acciones)
+    return wrap
+  }
+
+  /**
    * La tarjeta de una búsqueda de Jira (H8), como la pinta `navCard`: el kicker
    * que trae el plan («Puedo llevarte», o «Búsqueda directa» si no la pidió
    * ningún turno), el título y la explicación —que en una búsqueda es la propia
@@ -1366,6 +1390,7 @@ async function arrancar() {
     chat.appendChild(b1)
 
     chat.appendChild(tarjetaPermiso(SITIOS.jira.host))
+    chat.appendChild(avisoMcpSinConectar())
   }
 
   /**

@@ -565,6 +565,9 @@ import {
   spacePagesPath,
   parseSpacePages,
   fetchSpacePages,
+  spaceCql,
+  spaceSearchPath,
+  parseSpaceSearch,
 } from '../../src/shared/confluence-rest.js'
 import { INDEX_LIMITS } from '../../src/shared/config.js'
 
@@ -802,41 +805,263 @@ test('H7: parseSpacePages da cada página con su padre (el último antepasado) y
   eq(parseSpacePages(null, ''), null)
 })
 
-test('H7: fetchSpacePages pagina hasta el final y cuenta las peticiones', async () => {
+// --------------------------------------- H14: las más recientes, con su cadena
+
+test('H14: el árbol de un espacio se lee por una consulta de plantilla, las más recientes primero', () => {
+  eq(spaceCql('SIMPL'), 'type = page AND space = "SIMPL" ORDER BY lastmodified DESC')
+  eq(spaceCql('  ~ana\n'), 'type = page AND space = "~ana" ORDER BY lastmodified DESC', 'los bordes se recortan, como en el prompt')
+  eq(isTemplateCql(spaceCql('SIMPL')), true, 'y pasa la misma barrera que las demás plantillas')
+  // EL CAMBIO (H14, F8): la lista de `/rest/api/content` devuelve las páginas más
+  // VIEJAS primero, así que en el espacio real del usuario (2 697 páginas) el tope
+  // se gastaba en las de hace años y la página que tenía abierta ni estaba.
+  assert(/ ORDER BY lastmodified DESC$/.test(spaceCql('SIMPL')), spaceCql('SIMPL'))
+})
+
+test('SEGURIDAD: en la consulta del espacio sólo entra una clave de espacio, y no puede cerrar el literal', () => {
+  for (const mala of [
+    '../x',
+    'ENG x',
+    'ENG"',
+    'ENG\\',
+    'ENG*',
+    'ENG\nhola',
+    '~',
+    '_',
+    '',
+    null,
+    undefined,
+    'a/b',
+    'x'.repeat(256),
+    'SIMPL" OR space = "OTRO',
+    'SIMPL) AND (type = blogpost',
+  ]) {
+    eq(spaceCql(mala), null, JSON.stringify(mala))
+  }
+  // Y con TODOS los caracteres que `validSpaceKey` sí admite, el literal sigue
+  // cerrado y la consulta sigue siendo la plantilla: no hay comillas, ni barras,
+  // ni espacios, ni paréntesis con los que salirse.
+  const todos = '~abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.@:-'
+  const cql = spaceCql(todos)
+  eq(cql, `type = page AND space = "${todos}" ORDER BY lastmodified DESC`)
+  eq(cql.split('"').length - 1, 2, 'dos comillas y sólo dos')
+  eq(isTemplateCql(cql), true)
+  // A la inversa: lo que se PAREZCA a la plantilla pero no lo haya escrito ella
+  // no pasa la barrera, así que `searchContent` no lo ejecutaría.
+  for (const mala of [
+    'type = page AND space = "SIMPL" ORDER BY lastmodified ASC',
+    'type = page AND space = "SIMPL"',
+    'type = page AND space = "" ORDER BY lastmodified DESC',
+    'type = page AND space = "SIM PL" ORDER BY lastmodified DESC',
+    'type = page AND space = "SIMPL" OR type = blogpost ORDER BY lastmodified DESC',
+    'type = page AND space = SIMPL ORDER BY lastmodified DESC',
+  ]) {
+    eq(isTemplateCql(mala), false, mala)
+  }
+  // Y la propiedad que importa: el CQL que acaba en la ruta lo reconoce siempre
+  // `isTemplateCql`. `spaceSearchPath` no lo vuelve a comprobar —sería
+  // preguntarle a la plantilla por sí misma—, así que lo que se pina es esto.
+  for (const buena of ['SIMPL', '~ana', todos]) {
+    const enLaRuta = new URL('https://x' + spaceSearchPath(buena, '')).searchParams.get('cql')
+    eq(isTemplateCql(enLaRuta), true, buena)
+    eq(enLaRuta, spaceCql(buena))
+  }
+})
+
+test('H14: spaceSearchPath cuelga del prefijo, pide los antepasados y acota el tamaño de página', () => {
+  eq(
+    spaceSearchPath('SIMPL', '', { start: 0, limit: 100 }),
+    '/rest/api/content/search?cql=' + encodeURIComponent(spaceCql('SIMPL')) + '&expand=ancestors&start=0&limit=100'
+  )
+  eq(spaceSearchPath('~ana', '/wiki', { start: 100, limit: 5 }).startsWith('/wiki/rest/api/content/search?cql='), true)
+  const params = (ruta) => new URL('https://x' + ruta).searchParams
+  eq(params(spaceSearchPath('SIMPL')).get('limit'), String(CONFLUENCE_REST_LIMITS.pageSize))
+  eq(params(spaceSearchPath('SIMPL', '', { limit: 9999 })).get('limit'), String(CONFLUENCE_REST_LIMITS.pageSize))
+  eq(params(spaceSearchPath('SIMPL', '', { limit: '8&expand=body' })).get('limit'), String(CONFLUENCE_REST_LIMITS.pageSize))
+  eq(params(spaceSearchPath('SIMPL', '', { start: -1 })).get('start'), '0')
+  eq(params(spaceSearchPath('SIMPL', '', { start: 200 })).get('cql'), spaceCql('SIMPL'), 'la consulta viaja codificada y vuelve entera')
+  for (const mala of ['../x', 'ENG x', '~', '', null, undefined]) eq(spaceSearchPath(mala, ''), null, JSON.stringify(mala))
+})
+
+/** Una página con su enlace, como la devuelve la búsqueda con `expand=ancestors`. */
+const enlace = (slug) => ({ _links: { webui: '/display/SIMPL/' + slug } })
+const RAIZ = { id: '1', title: 'SIMPL Home', ...enlace('Home') }
+const RAMA = { id: '1080', title: '1080 - Architecture', ...enlace('1080') }
+/**
+ * Dos páginas de resultados de la búsqueda del espacio. El blogpost está a
+ * propósito: el parser no se fía de que la consulta dijera `type = page`.
+ */
+const BUSCA_1 = {
+  start: 0,
+  limit: 2,
+  size: 2,
+  totalSize: 3,
+  results: [
+    { id: '3001', type: 'page', title: 'TechArch', ...enlace('TechArch'), ancestors: [RAIZ, RAMA] },
+    { id: '2003', type: 'page', title: 'ACV Static', ...enlace('ACV'), ancestors: [RAIZ, RAMA] },
+  ],
+  _links: { next: '/rest/api/content/search?cql=x&start=2' },
+}
+const BUSCA_2 = {
+  start: 2,
+  limit: 2,
+  size: 2,
+  totalSize: 3,
+  results: [
+    { id: '200', type: 'page', title: 'ADR-014', ...enlace('ADR'), ancestors: [{ id: '100', title: 'Arquitectura', ...enlace('Arq') }] },
+    { id: '77', type: 'blogpost', title: 'No es página' },
+  ],
+}
+/** Lo que trae la lista con `limit=1`: la página más vieja y, de propina, la portada. */
+const PORTADA = {
+  size: 1,
+  limit: 1,
+  results: [
+    {
+      id: '9',
+      type: 'page',
+      title: 'La más vieja del espacio',
+      space: { key: 'SIMPL', homepage: { id: '1' } },
+      ancestors: [],
+      ...enlace('Vieja'),
+    },
+  ],
+  _links: { next: '/rest/api/content?spaceKey=SIMPL&start=1&limit=1' },
+}
+
+test('H14: parseSpaceSearch da cada resultado con su cadena entera, de la raíz a él', () => {
+  const r = parseSpaceSearch(BUSCA_1, { wikiPrefix: '', spaceKey: 'SIMPL' })
+  eq(r.groups[0], [
+    { id: '1', title: 'SIMPL Home', parentId: null, url: '/display/SIMPL/Home', spaceKey: 'SIMPL' },
+    { id: '1080', title: '1080 - Architecture', parentId: '1', url: '/display/SIMPL/1080', spaceKey: 'SIMPL' },
+    { id: '3001', title: 'TechArch', parentId: '1080', url: '/display/SIMPL/TechArch', spaceKey: 'SIMPL' },
+  ])
+  eq(r.groups[1].map((p) => p.id), ['1', '1080', '2003'], 'cada resultado trae su cadena, aunque se repitan')
+  eq(r.groups.length, 2)
+  eq(r.size, 2)
+  eq(r.total, 3, 'cuántas hay en el espacio, no cuántas vinieron')
+  eq(r.next, true)
+
+  const r2 = parseSpaceSearch(BUSCA_2, { wikiPrefix: '/wiki', spaceKey: 'SIMPL' })
+  eq(r2.groups.length, 1, 'un blogpost no es una página')
+  eq(r2.groups[0].map((p) => p.url), ['/wiki/display/SIMPL/Arq', '/wiki/display/SIMPL/ADR'])
+  eq(r2.next, false)
+
+  // Un antepasado sin ruta no rompe la cadena: el índice sabe fabricarla por id.
+  const sinRuta = parseSpaceSearch(
+    { results: [{ id: '5', type: 'page', title: 'Hija', ancestors: [{ id: '4' }, { id: '5' }] }] },
+    { spaceKey: 'SIMPL' }
+  )
+  eq(sinRuta.groups[0], [
+    { id: '4', title: '', parentId: null, url: '', spaceKey: 'SIMPL' },
+    { id: '5', title: 'Hija', parentId: '4', url: '', spaceKey: 'SIMPL' },
+  ])
+  eq(sinRuta.total, 0, 'sin `totalSize` no se inventa un total')
+
+  // SEGURIDAD: la clave que se estampa en cada página es la VALIDADA. Una con
+  // forma rara no se copia: de aquí sale un dato que viaja a un mensaje y al
+  // índice, y el índice la volvería a tirar, pero la barrera es de quien produce.
+  const clavePicante = parseSpaceSearch(
+    { results: [{ id: '5', type: 'page', title: 'Hija', ancestors: [{ id: '4' }] }] },
+    { spaceKey: 'a/b' }
+  )
+  eq(clavePicante.groups[0].map((p) => p.spaceKey), [null, null])
+
+  // Lo que no tiene la forma esperada no se inventa.
+  eq(parseSpaceSearch({ results: [{ id: 'x' }, null] }, {}).groups, [])
+  eq(parseSpaceSearch({ size: 0 }, {}), null)
+  eq(parseSpaceSearch(null, {}), null)
+})
+
+test('H14: fetchSpacePages lee las más recientes con su cadena y dice cuántas de cuántas', async () => {
   let n = 0
   const { fn, calls } = fakeFetch({
-    '/rest/api/content?spaceKey=SIMPL': () => (++n === 1 ? ESPACIO_1 : ESPACIO_2),
+    '/rest/api/content/search': () => (++n === 1 ? BUSCA_1 : BUSCA_2),
+    '/rest/api/content?spaceKey=SIMPL': PORTADA,
   })
   const r = await fetchSpacePages(fn, DC, 'SIMPL', { limit: 2 })
   eq(r.ok, true)
-  eq(r.pages.map((p) => p.id), ['1', '1080', '3001'])
+  eq(r.via, 'busqueda')
+  eq(r.pages.map((p) => p.id), ['1', '1080', '3001', '2003', '100', '200'])
+  eq(r.own, 3, 'las páginas del espacio que entraron; los antepasados vienen de propina')
+  eq(r.total, 3)
+  eq(r.truncated, false, 'entraron las tres que hay')
   eq(r.homeId, '1')
-  eq(r.requests, 2)
-  eq(r.truncated, false)
+  eq(r.requests, 3, 'la portada y las dos páginas de resultados')
   assert(Number.isFinite(r.ms) && r.ms >= 0)
-  eq(calls.length, 2)
+  eq(calls.length, 3)
+  // La portada cuesta UNA petición a la lista de siempre, con `limit=1`, y la
+  // página que trae —la más vieja— NO se guarda: aquí se leen las recientes.
+  eq(new URL(calls[0].url).searchParams.get('limit'), '1')
+  assert(!r.pages.some((p) => p.id === '9'), 'la página de la petición de la portada no entra en el árbol')
   // La segunda página se pide con el `start` que lleva la cuenta el bucle, NO
   // siguiendo la ruta que mandó el servidor en `_links.next` (§8.3).
-  eq(new URL(calls[0].url).searchParams.get('start'), '0')
-  eq(new URL(calls[1].url).searchParams.get('start'), '2')
+  eq(new URL(calls[1].url).searchParams.get('start'), '0')
+  eq(new URL(calls[2].url).searchParams.get('start'), '2')
+  eq(new URL(calls[1].url).searchParams.get('cql'), spaceCql('SIMPL'))
   for (const c of calls) eq(new URL(c.url).origin, DC.origin)
 })
 
+test('H14: una página entra con su cadena entera o no entra, y el tope cuenta las dos cosas', async () => {
+  const rutas = { '/rest/api/content/search': BUSCA_1, '/rest/api/content?spaceKey=SIMPL': PORTADA }
+  // El primer grupo son tres páginas (la raíz, su rama y el resultado); el
+  // segundo sólo añade una, porque su cadena ya está.
+  const { fn } = fakeFetch(rutas)
+  const justo = await fetchSpacePages(fn, DC, 'SIMPL', { limit: 2, maxPages: 4 })
+  eq(justo.pages.map((p) => p.id), ['1', '1080', '3001', '2003'])
+  eq(justo.own, 2)
+  eq(justo.truncated, true, 'el servidor dice que hay tres y entraron dos')
+
+  const { fn: fn2 } = fakeFetch(rutas)
+  const corto = await fetchSpacePages(fn2, DC, 'SIMPL', { limit: 2, maxPages: 2 })
+  eq(corto.pages, [], 'media cadena es una página a la que no se sabría llegar')
+  eq(corto.own, 0)
+  eq(corto.truncated, true)
+})
+
+test('H14: si la instancia no sabe hacer esa búsqueda, se lee la lista de siempre y se dice por dónde', async () => {
+  let n = 0
+  const { fn, calls } = fakeFetch({
+    '/rest/api/content/search': 400,
+    '/rest/api/content?spaceKey=SIMPL': () => (++n === 1 ? PORTADA : n === 2 ? ESPACIO_1 : ESPACIO_2),
+  })
+  const r = await fetchSpacePages(fn, DC, 'SIMPL', { limit: 2 })
+  eq(r.ok, true)
+  eq(r.via, 'lista', 'el camino de antes: una rebanada arbitraria, pero cierta')
+  eq(r.pages.map((p) => p.id), ['1', '1080', '3001'])
+  eq(r.own, 3)
+  eq(r.total, 0, 'la lista no dice cuántas hay en el espacio')
+  eq(r.truncated, false)
+  eq(r.homeId, '1')
+  eq(r.requests, 4, 'la portada, la búsqueda que falló y las dos de la lista')
+  eq(calls.length, 4)
+
+  // Una sesión que no vale no se degrada: tampoco valdría en la lista.
+  const { fn: sesion, calls: c2 } = fakeFetch({ '/rest/api/content/search': 401, '/rest/api/content?spaceKey=SIMPL': PORTADA })
+  const sin = await fetchSpacePages(sesion, DC, 'SIMPL', { limit: 2 })
+  eq(sin.ok, false)
+  eq(sin.status, 401)
+  eq(c2.length, 2, 'no se reintenta por el otro camino')
+})
+
 test('H7: el árbol para en el tope de páginas o en el de peticiones, y lo dice', async () => {
+  // Resultados sueltos, sin antepasados: lo que se mide aquí es el tope, no el
+  // tamaño de las cadenas.
   const pagina = (desde) => ({
     size: 2,
-    results: [desde, desde + 1].map((i) => ({ id: String(1000 + i), type: 'page', title: 'p' + i, space: { key: 'SIMPL' }, ancestors: [] })),
+    totalSize: 999,
+    results: [desde, desde + 1].map((i) => ({ id: String(1000 + i), type: 'page', title: 'p' + i, ancestors: [] })),
     _links: { next: '/siempre-hay-mas' },
   })
   let desde = 0
-  const { fn, calls } = fakeFetch({ '/rest/api/content?spaceKey=SIMPL': () => pagina((desde += 2)) })
+  const rutas = () => ({ '/rest/api/content/search': () => pagina((desde += 2)), '/rest/api/content?spaceKey=SIMPL': PORTADA })
+  const { fn, calls } = fakeFetch(rutas())
   const porPaginas = await fetchSpacePages(fn, DC, 'SIMPL', { limit: 2, maxPages: 5, maxRequests: 12 })
   eq(porPaginas.truncated, true)
   eq(porPaginas.pages.length, 5, 'ni una más del tope')
-  eq(calls.length, 3)
+  eq(calls.length, 4, 'la portada y tres páginas de resultados')
 
   desde = 0
-  const { fn: fn2, calls: c2 } = fakeFetch({ '/rest/api/content?spaceKey=SIMPL': () => pagina((desde += 2)) })
+  const { fn: fn2, calls: c2 } = fakeFetch(rutas())
   const porPeticiones = await fetchSpacePages(fn2, DC, 'SIMPL', { limit: 2, maxPages: 300, maxRequests: 3 })
   eq(porPeticiones.truncated, true)
   eq(c2.length, 3, 'nunca más peticiones que el tope')
@@ -847,10 +1072,10 @@ test('H7: el árbol para en el tope de páginas o en el de peticiones, y lo dice
   // páginas, porque `slice(0, NaN)` es `[]`. Ahora vale el del índice.
   for (const malo of [NaN, undefined, null, 0, -1, 2.5, '5']) {
     desde = 0
-    const { fn: f3 } = fakeFetch({ '/rest/api/content?spaceKey=SIMPL': () => pagina((desde += 2)) })
+    const { fn: f3 } = fakeFetch(rutas())
     const r = await fetchSpacePages(f3, DC, 'SIMPL', { limit: 2, maxPages: malo, maxRequests: 2 })
     eq(r.ok, true, String(malo))
-    eq(r.pages.length, 4, 'un tope de páginas raro no vacía el árbol: ' + String(malo))
+    eq(r.pages.length, 2, 'un tope de páginas raro no vacía el árbol: ' + String(malo))
   }
 
   // Los topes por defecto son los del ÍNDICE, no unos propios.
@@ -860,19 +1085,42 @@ test('H7: el árbol para en el tope de páginas o en el de peticiones, y lo dice
 
 test('H7: una página vacía o sin `next` cierra el recorrido; un fallo lo corta y lo dice', async () => {
   const vacia = { size: 0, results: [], _links: { next: '/otra' } }
-  const { fn, calls } = fakeFetch({ '/rest/api/content?spaceKey=SIMPL': vacia })
+  const { fn, calls } = fakeFetch({ '/rest/api/content/search': vacia, '/rest/api/content?spaceKey=SIMPL': PORTADA })
   const r = await fetchSpacePages(fn, DC, 'SIMPL', { limit: 2 })
   eq(r.ok, true)
   eq(r.pages, [])
-  eq(calls.length, 1, 'un `next` que viniera siempre no puede ser un bucle')
+  eq(calls.length, 2, 'un `next` que viniera siempre no puede ser un bucle')
+  eq(r.truncated, true, 'no vino nada y el servidor dice que hay más')
+
+  // Un servidor que ignorase el `start` devolvería siempre lo mismo: sin una sola
+  // página nueva el recorrido también se acaba.
+  const { fn: terco, calls: c3 } = fakeFetch({ '/rest/api/content/search': BUSCA_1, '/rest/api/content?spaceKey=SIMPL': PORTADA })
+  const igual = await fetchSpacePages(terco, DC, 'SIMPL', { limit: 2, maxRequests: 12 })
+  eq(c3.length, 3, 'a la segunda sin nada nuevo se para')
+  eq(igual.pages.length, 4)
 
   let n = 0
-  const { fn: falla } = fakeFetch({ '/rest/api/content?spaceKey=SIMPL': () => (++n === 1 ? ESPACIO_1 : 401) })
+  const { fn: falla } = fakeFetch({
+    '/rest/api/content/search': () => (++n === 1 ? BUSCA_1 : 401),
+    '/rest/api/content?spaceKey=SIMPL': PORTADA,
+  })
   const corte = await fetchSpacePages(falla, DC, 'SIMPL', { limit: 2 })
   eq(corte.ok, false)
   eq(corte.status, 401)
 
-  const { fn: raro } = fakeFetch({ '/rest/api/content?spaceKey=SIMPL': { paginas: [] } })
+  // Y un 400 a media lectura tampoco se degrada: sería tirar lo leído y empezar
+  // de cero por el otro camino.
+  let k = 0
+  const { fn: media, calls: c4 } = fakeFetch({
+    '/rest/api/content/search': () => (++k === 1 ? BUSCA_1 : 400),
+    '/rest/api/content?spaceKey=SIMPL': PORTADA,
+  })
+  const aMedias = await fetchSpacePages(media, DC, 'SIMPL', { limit: 2 })
+  eq(aMedias.ok, false, 'un fallo a media lectura no se degrada: sería empezar de cero')
+  eq(aMedias.status, 400)
+  eq(c4.length, 3, 'y no se vuelve a empezar por la lista')
+
+  const { fn: raro } = fakeFetch({ '/rest/api/content': { paginas: [] } })
   const forma = await fetchSpacePages(raro, DC, 'SIMPL')
   eq(forma.ok, false)
   assert(/forma esperada/.test(forma.reason), forma.reason)

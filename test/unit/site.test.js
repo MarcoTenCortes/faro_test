@@ -1,6 +1,14 @@
 import { test, eq, assert } from '../harness.js'
 import { samePage } from '../../src/atlassian/site.js'
-import { parseAtlassianUrl, describeLocation, defaultScope, wikiBase, productFromHostname, jiraContextPath } from '../../src/atlassian/site.js'
+import {
+  parseAtlassianUrl,
+  describeLocation,
+  defaultScope,
+  wikiBase,
+  productFromHostname,
+  jiraContextPath,
+  isJiraRoute,
+} from '../../src/atlassian/site.js'
 
 test('site: página de Confluence Cloud', () => {
   const s = parseAtlassianUrl('https://acme.atlassian.net/wiki/spaces/ENG/pages/1234567/ADR-014+Rotacion')
@@ -247,6 +255,47 @@ test('H7: jiraContextPath lee UN segmento de ruta de contexto, y sólo delante d
   eq(jiraContextPath('/jira/'), '')
   for (const raro of ['/', '', null, undefined, 'browse/ENG-7', 'https://jira.corp/jira/browse/ENG-7', 123]) {
     eq(jiraContextPath(raro), '', JSON.stringify(raro))
+  }
+})
+
+test('H14: isJiraRoute dice si una ruta es de las que sirve Jira, y es la MISMA lista que la ruta de contexto', () => {
+  // Existe porque `pageLinks` tiene que saber que un `/browse/…` o un
+  // `/secure/…` del propio sitio no es una página que nadie haya enlazado, y la
+  // lista de rutas de Jira ya estaba aquí: se saca detrás de una función en vez
+  // de copiarla (§9, «lo que ya tenía dueño no se duplica»).
+  for (const propia of [
+    '/browse/ENG-7',
+    '/browse',
+    '/projects/ENG/issues/ENG-7',
+    '/issues/?jql=project%20%3D%20ENG',
+    '/secure/DeleteRemoteIssueLink!default.jspa?remoteIssueLinkId=1',
+    '/rest/api/2/issue/ENG-7/remotelink',
+    '/plugins/servlet/mobile',
+    '/BROWSE/ENG-7',
+  ]) {
+    eq(isJiraRoute(propia), true, propia)
+  }
+  for (const ajena of [
+    '/wiki/spaces/ENG/pages/200/ADR-014',
+    '/display/ENG/Runbook',
+    '/spaces/SIMPL/pages/44171766/Titulo',
+    '/pages/viewpage.action?pageId=200',
+    '/jira/browse/ENG-7', // con ruta de contexto delante ya no empieza por una de Jira
+    '/browsealbum/x', // la frontera es «/» o el fin, no un prefijo
+    '/restaurante',
+    '/',
+    '',
+    null,
+    undefined,
+    123,
+  ]) {
+    eq(isJiraRoute(ajena), false, JSON.stringify(ajena))
+  }
+  // Y es la misma lista que usa `jiraContextPath`: si una deja de reconocer una
+  // ruta, la otra tampoco.
+  for (const ruta of ['/browse/ENG-7', '/secure/Dashboard.jspa', '/rest/api/2/search', '/plugins/servlet/x', '/issues/?jql=x', '/projects/ENG']) {
+    eq(jiraContextPath('/jira' + ruta), '/jira', ruta)
+    eq(isJiraRoute(ruta), true, ruta)
   }
 })
 

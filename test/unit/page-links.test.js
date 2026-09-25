@@ -15,7 +15,7 @@
 import { test, eq, assert } from '../harness.js'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { linkHref, LINK_LIMITS } from '../../src/content/page-links.js'
+import { linkHref, isOwnJiraRoute, LINK_LIMITS } from '../../src/content/page-links.js'
 
 const ROOT = join(import.meta.dirname, '..', '..')
 
@@ -105,6 +105,64 @@ test('los topes son enteros positivos y el del texto cabe en una fila', () => {
   assert(LINK_LIMITS.textMax <= 200 && LINK_LIMITS.max <= 200)
 })
 
+// ------------------------------------- una ruta propia de Jira no es una página
+
+test('H14 real: un enlace a una ruta propia de Jira del mismo sitio no es una página', () => {
+  // Pasó de verdad: una épica del Jira del usuario tiene 254 enlaces y el tope
+  // de 60 se lo comían los suyos —22 `/browse/`, 21 `/rest/`, 12 `/secure/`
+  // («Borrar este enlace»)—, así que los de los COMENTARIOS, que van al final
+  // del documento, se quedaban fuera. Ninguno de ésos es una página que alguien
+  // haya enlazado para esta incidencia: los pone Jira en todas.
+  for (const propia of [
+    'https://jira.example.test/browse/ENG-42',
+    'https://jira.example.test/browse/ENG-42?focusedCommentId=1',
+    'https://jira.example.test/secure/DeleteRemoteIssueLink!default.jspa?remoteIssueLinkId=10500',
+    'https://jira.example.test/rest/api/2/issue/ENG-7/remotelink',
+    'https://jira.example.test/issues/?jql=project%20%3D%20ENG',
+    'https://jira.example.test/projects/ENG/issues',
+    'https://jira.example.test/plugins/servlet/x',
+    '/browse/ENG-42',
+  ]) {
+    eq(isOwnJiraRoute(propia, BASE), true, propia)
+  }
+  // Y con ruta de contexto, lo mismo: la deduce `jiraContextPath`, no una lista
+  // nueva escrita aquí.
+  eq(isOwnJiraRoute('https://jira.example.test/jira/browse/ENG-42', 'https://jira.example.test/jira/browse/ENG-7'), true)
+  eq(isOwnJiraRoute('https://jira.example.test/jira/secure/Dashboard.jspa', 'https://jira.example.test/jira/browse/ENG-7'), true)
+  // Lo que sí puede ser una página se queda: las de Confluence en cualquiera de
+  // sus formas, y lo que no es del sitio.
+  for (const pagina of [
+    'https://jira.example.test/wiki/spaces/ENG/pages/200/ADR-014',
+    'https://jira.example.test/display/ENG/Runbook+de+guardia',
+    'https://jira.example.test/pages/viewpage.action?pageId=200',
+    'https://confluence.example.test/browse/ENG-42',
+    'https://otro.example.test/rest/api/2/x',
+    'https://git.example.com/eng/exporter',
+  ]) {
+    eq(isOwnJiraRoute(pagina, BASE), false, pagina)
+  }
+  // SEGURIDAD: «del mismo sitio» es el origen EXACTO. Otro host, un subdominio
+  // que empieza igual, otro puerto u otro esquema son otro sitio, y ahí un
+  // `/browse/` puede ser cualquier cosa: eso lo decide el panel, no esto.
+  eq(isOwnJiraRoute('https://jira.example.test.evil.example/browse/ENG-42', BASE), false)
+  eq(isOwnJiraRoute('https://jira.example.test:8443/browse/ENG-42', BASE), false)
+  eq(isOwnJiraRoute('http://jira.example.test/browse/ENG-42', BASE), false)
+  // Sin una base que valga no hay «mismo sitio» del que hablar.
+  for (const sinBase of ['', null, undefined, 'jira.example.test']) {
+    eq(isOwnJiraRoute('/browse/ENG-42', sinBase), false, JSON.stringify(sinBase))
+  }
+  // Lo que no llega a ser un enlace no es la ruta de nada.
+  for (const raro of ['', null, undefined, 'javascript:alert(1)', 'mailto:a@b.test', '#', '#seccion']) {
+    eq(isOwnJiraRoute(raro, BASE), false, JSON.stringify(raro))
+  }
+  // Y un href relativo se resuelve como lo resolvería el navegador, que es lo
+  // que cierra una trampa de paso: en una incidencia, un `<a href="200">` es
+  // `/browse/200`, o sea Jira, y no «la página 200 de este sitio» —que es como
+  // habría podido colarse por `pageRefFromUrl`, según su propia prueba—.
+  eq(isOwnJiraRoute('200', BASE), true)
+  eq(isOwnJiraRoute('ENG-8', BASE), true)
+})
+
 // --------------------------------------------------------------- el cableado
 
 test('SEGURIDAD: lo que el ámbito declara interfaz no se lee, y lo que no se ve tampoco', () => {
@@ -120,6 +178,15 @@ test('SEGURIDAD: lo que el ámbito declara interfaz no se lee, y lo que no se ve
   const iChrome = cuerpo.indexOf('a.closest(chrome)')
   const iHref = cuerpo.indexOf('linkHref(a.getAttribute')
   assert(iChrome >= 0 && iHref > iChrome, 'la interfaz se descarta antes de mirar el href')
+  // Y una ruta propia de Jira, antes de medir si se ve: mirar si algo se ve
+  // cuesta un `getBoundingClientRect` y un `getComputedStyle` por enlace.
+  assert(cuerpo.includes('if (isOwnJiraRoute(href, base)) continue'), 'un enlace a una ruta de Jira no cuenta')
+  const iJira = cuerpo.indexOf('isOwnJiraRoute(href, base)')
+  const iVisible = cuerpo.indexOf('if (!visible(a)) continue')
+  assert(iJira > iHref && iVisible > iJira, 'entre resolver el href y medir si se ve')
+  // Y se descarta ANTES del tope, que es de lo que iba el arreglo: si contara,
+  // seguiría comiéndose los enlaces de los comentarios.
+  assert(iJira < cuerpo.indexOf('out.push('), 'no cuenta para el tope: no llega a entrar')
 })
 
 test('el href pasa siempre por linkHref, y la región por ISSUE_LINK_REGIONS', () => {

@@ -7,7 +7,18 @@
     "consulta con 'updated >= -7d' sigue partiendo la lista igual dentro de un año. Qué incidencias casan es",
     "determinista; los instantes concretos, no.",
     "'history' = la has mirado (issuekey in issueHistory()); 'watched' = la sigues (watchedIssues());",
-    "'links' = enlazadas (issue in linkedIssues(KEY), simétrico)."
+    "'links' = enlazadas (issue in linkedIssues(KEY), simétrico).",
+    "'catalog' = qué id tiene cada tipo, estado y prioridad, y con qué nombre los DEVUELVE la API: 'name' es el",
+    "nombre que acepta una consulta JQL y 'display' el que ve el usuario. Los dos son distintos en los valores que",
+    "Jira trae de serie cuando la interfaz no está en inglés (H14, observado en el Jira real: «Task» se ve «Tarea»",
+    "y «In Progress» se ve «En progreso»), y entonces JQL RECHAZA el traducido con un 400 y sólo vale el id. Las",
+    "incidencias de arriba nombran su tipo, estado y prioridad por el nombre de JQL; las prioridades llevan sólo id",
+    "porque ningún chip filtra por prioridad.",
+    "'remoteLinks' = los enlaces remotos de ENG-7 con la forma REAL (H14, observada en el Jira del usuario): el de",
+    "Confluence señala la página por el 'pageId' de su globalId, 'relationship' es «mentioned in» y 'object.title'",
+    "es «Page» —el nombre del TIPO de enlace, no el de la página—, que es justo lo que no puede acabar llamándose",
+    "una sugerencia. Es la MISMA página que el módulo de enlaces de la incidencia enseña en el DOM con su título de",
+    "verdad. 'PAGINA_<id>' lo sustituye el servidor por la URL de esa página en este mismo banco."
   ],
   "currentUser": { "name": "marco", "displayName": "Marco Tenorio" },
   "people": {
@@ -58,6 +69,33 @@
     { "key": "OPS-11", "summary": "Actualizar los agentes de monitorización", "type": "Task", "status": "Resolved", "statusCategory": "done", "priority": "Baja", "resolution": "Done", "assignee": "luis", "reporter": "luis", "labels": [], "components": ["Operación"], "epic": null, "parent": null, "sprint": null, "updatedHoursAgo": 640, "lastViewedHoursAgo": null, "watched": false, "history": false, "links": [] },
     { "key": "OPS-12", "summary": "Revisar los permisos del bastión", "type": "Task", "status": "To Do", "statusCategory": "new", "priority": "Crítica", "resolution": null, "assignee": null, "reporter": "marco", "labels": ["seguridad"], "components": ["Operación"], "epic": null, "parent": null, "sprint": null, "updatedHoursAgo": 400, "lastViewedHoursAgo": null, "watched": false, "history": false, "links": [] }
   ],
+  "catalog": {
+    "issuetype": [
+      { "id": "10000", "name": "Epic" },
+      { "id": "10001", "name": "Story", "display": "Historia" },
+      { "id": "10002", "name": "Task", "display": "Tarea" },
+      { "id": "1", "name": "Bug" },
+      { "id": "10100", "name": "API Definition" },
+      { "id": "10101", "name": "Documentation" },
+      { "id": "10102", "name": "Test" }
+    ],
+    "status": [
+      { "id": "1", "name": "Open" },
+      { "id": "3", "name": "In Progress", "display": "En progreso" },
+      { "id": "6", "name": "Done", "display": "Listo" },
+      { "id": "10000", "name": "In Review" },
+      { "id": "10001", "name": "Selected for Development" },
+      { "id": "10002", "name": "Blocked" },
+      { "id": "5", "name": "Resolved" },
+      { "id": "10003", "name": "To Do" }
+    ],
+    "priority": [
+      { "id": "1", "name": "Crítica" },
+      { "id": "2", "name": "Alta" },
+      { "id": "3", "name": "Media" },
+      { "id": "4", "name": "Baja" }
+    ]
+  },
   "filters": [
     { "id": "10100", "name": "Mis API en revisión", "jql": "project = ENG AND issuetype = \"API Definition\" AND status = \"In Review\"" },
     { "id": "10200", "name": "Operación sin resolver", "jql": "project = OPS AND resolution = Unresolved ORDER BY updated DESC" }
@@ -65,10 +103,10 @@
   "remoteLinks": {
     "ENG-7": [
       {
-        "globalId": "appId=9a1b2c3d-0000-4444-8888-aaaabbbbcccc&pageId=200",
+        "globalId": "appId=9a1b2c3d-0000-4444-8888-aaaabbbbcccc&pageId=301",
         "application": { "type": "com.atlassian.confluence", "name": "Confluence" },
-        "relationship": "Wiki Page",
-        "object": { "title": "ADR-014 Rotación de tokens de servicio", "url": "PAGINA_200" }
+        "relationship": "mentioned in",
+        "object": { "title": "Page", "url": "PAGINA_301" }
       },
       {
         "globalId": "sin-pagina",

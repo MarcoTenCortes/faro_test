@@ -26,10 +26,29 @@ const CONTAINER_SELECTORS = [
   '[data-vc*="page-tree" i]',
   '[data-testid*="page-tree" i]',
   '[data-testid*="space-navigation" i]',
+  // El pagetree clásico de un Confluence Server/Data Center. Comprobado en el
+  // Confluence 9.2 del usuario (F9 de la verificación en real, 2026-09-21):
+  // ahí NO hay `<aside>`, ni `[role="tree"]`, ni `nav[aria-label*="página"]`,
+  // ni un solo `data-testid`, así que ninguno de los de arriba casaba y
+  // `describeTree()` contestaba «(ninguno) — sin contenedor no hay recorrido
+  // posible»: ni «Paso a paso» ni «Árbol leído de la página». Todo lo demás ya
+  // funcionaba con ese contenedor señalado a mano (filas `li`, chevrones
+  // `a.plugin_pagetree_childtoggle` sin href útil, `snapshotTree` con padres,
+  // un `expand` de verdad), así que lo único que faltaba era reconocerlo.
+  // Va DETRÁS de los anteriores y no delante: en Cloud manda el `data-testid`
+  // y en el árbol ARIA el `role="tree"`, de modo que lo que se elige donde ya
+  // funcionaba no cambia.
+  '.plugin_pagetree',
   'nav[aria-label*="ágina" i]',
   'nav[aria-label*="page" i]',
   'aside nav',
   'aside',
+  // Y los dos envoltorios de esa misma barra, por si un día el pagetree llega
+  // con otra clase. Van LOS ÚLTIMOS a propósito: `[role="complementary"]` es
+  // también el panel de «Actividad reciente» o el de etiquetas de un espacio,
+  // y sólo se acepta si de verdad contiene árbol (`looksLikeTree`).
+  '.ia-secondary-content',
+  '[role="complementary"]',
 ]
 
 /** Selectores que identifican la fila de una página dentro del árbol. */

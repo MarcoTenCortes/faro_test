@@ -7,6 +7,9 @@ import {
   FORBIDDEN_ACTIONS,
   cssEscape,
 } from '../../src/content/locators.js'
+// Qué es un menú y qué no lo decide tree-dom.js, y locators.js no lo reexporta
+// a propósito: quien lo necesite lo importa de allí.
+import { isMenuTrigger } from '../../src/content/tree-dom.js'
 
 /** Elemento de mentira: sólo lo que `isSafeToClick` mira de verdad. */
 function fake(tag, attrs = {}, text = '') {
@@ -136,6 +139,27 @@ test('un chevron del árbol sigue siendo «desplegar», con aria-haspopup=false 
   const suelto = fake('button', { 'aria-expanded': 'false', 'aria-controls': 'no-existe' }, 'Arquitectura')
   suelto.ownerDocument = { getElementById: () => null }
   eq(isSafeToClick(suelto, ORIGIN).kind, 'desplegar')
+})
+
+// F9 (verificación en real, 2026-09-21): el chevron del pagetree clásico de un
+// Confluence Data Center es un `<a href="" role="button" aria-expanded="false">`
+// con el título de la página en su `aria-label`. Vale «ancla» y no «desplegar»
+// —el bloque de los enlaces va antes que el de `aria-expanded`—, y da igual:
+// quien lo pulsa (`_abrirRama`) sólo mira `ok`. Se pina porque es lo que se
+// pulsa de verdad en ese Confluence, no una forma inventada.
+test('F9: el chevron del pagetree de un Data Center se puede pulsar', () => {
+  const chevron = fake('a', {
+    href: '',
+    role: 'button',
+    tabindex: '0',
+    'aria-expanded': 'false',
+    'aria-label': 'Ampliar elemento 1080 - Architecture',
+  })
+  eq(isSafeToClick(chevron, ORIGIN), { ok: true, kind: 'ancla' })
+  eq(isMenuTrigger(chevron), false, 'no es un disparador de menú: no lleva aria-haspopup ni aria-controls')
+  // Y el «Borrar este enlace» que ese mismo Jira pinta al lado de cada enlace
+  // remoto sigue siendo intocable, aunque también sea un <a>.
+  eq(isSafeToClick(fake('a', { href: '/secure/DeleteRemoteIssueLink.jspa?id=1' }, 'Borrar este enlace'), ORIGIN).ok, false)
 })
 
 test('un div cualquiera no se pulsa', () => {

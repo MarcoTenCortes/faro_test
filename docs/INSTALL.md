@@ -48,6 +48,13 @@ en `shell:startup` que ejecute ese comando minimizado.
 
 ## 2. La extensión
 
+Hace falta **Chrome 130 o más nuevo** (`minimum_chrome_version` del manifest). El
+panel lateral y el subrayado existen desde la 116, pero la protección que hace
+que los módulos de Faro sólo se sirvan a la página por una URL distinta en cada
+sesión —para que ninguna web pueda comprobar si la tienes instalada— sólo actúa
+desde la 130; entre la 116 y la 129 Chrome ignoraba esa clave, así que el mínimo
+se subió para que no fuera opcional.
+
 1. `chrome://extensions`
 2. Activa **Modo desarrollador**
 3. **Cargar descomprimida** → selecciona esta carpeta
@@ -386,7 +393,11 @@ Junto al selector de modelo, abajo, hay otras dos cosas:
     acciones y los menús no cuentan) y, en una incidencia de Jira Data Center,
     sus enlaces remotos por la API con tu sesión. Un enlace `/display/…` sin id
     sólo se reconoce si esa página está en el índice del sitio o si el enlace
-    remoto trae su id: el título nunca se manda a ninguna API.
+    remoto trae su id: el título nunca se manda a ninguna API. En una incidencia,
+    los enlaces que Jira pone en todas —a otra incidencia, a su propia API, los
+    «Borrar este enlace» del módulo de enlaces— no cuentan y no gastan el tope
+    de sesenta: eran 55 de los 60 en una épica real, y por eso los enlaces de
+    los **comentarios** no llegaban a leerse.
   - «el contexto la nombra como guía / como decisión…» — sale del CONTEXT.md
     del sitio, y sólo de las páginas que ahí aparecen **con su id numérico**.
     Los contextos generados antes de que Faro empezara a pedir ese id casi
@@ -780,11 +791,24 @@ distinta. Se regenera sólo cuando el cambio es intencionado, revisando el
 
 `npm run harness` levanta en <http://127.0.0.1:5175> una Confluence y un Jira de
 mentira con las piezas reales encima. El botón **Autocomprobación completa**
-recorre hoy **59 tramos numerados (111 comprobaciones)**; hay que correrla con el panel del navegador a
+recorre hoy **62 tramos numerados (124 comprobaciones)**; hay que correrla con el panel del navegador a
 la vista y a 1280×900, porque con la ventana oculta Chrome estrangula los
 temporizadores y no ejecuta los fotogramas.
 
-Los cuatro últimos (56-59) son **«Qué mirar hoy»**, y tampoco navegan: que la
+Los tres últimos (60-62) son **la barra lateral de un Confluence Data Center**,
+la que estaba rota: en un Confluence 9 el árbol de páginas no tiene ninguna de
+las señales que Faro buscaba —no es un `<aside>`, no lleva `role="tree"` y no
+tiene un solo `data-testid`—, así que **no lo encontraba**, y en ese Confluence
+no había ni «Paso a paso» ni «Árbol leído de la página». El banco trae ahora una
+tercera barra lateral con ese marcado, con las hijas llegando por AJAX al abrir
+una rama como en el producto de verdad, y los tres tramos comprueban que se
+reconoce el contenedor, la fila, el chevron y el scroller; que de ahí se lee
+quién cuelga de quién **exactamente igual** que de la barra clásica; y que un
+recorrido de dos niveles despliega las dos ramas de en medio y navega una sola
+vez. Se cambia de barra con el botón **«Cambiar de barra lateral»**, que ahora
+recorre las tres.
+
+Los tramos 56-59 son **«Qué mirar hoy»**, y tampoco navegan: que la
 página de mentira lleve su id en una etiqueta `meta` y que de una URL se saque
 la ruta **sin la parte de detrás del «?» ni del «#»**; que dos avisos de la
 misma navegación cuenten una sola visita y que apuntar un análisis no toque lo
@@ -840,11 +864,14 @@ corto y un detalle. Todos los títulos, por dónde salen:
   primero y detrás «health» (¿está opencode?), «modelos y almacenamiento» (la
   lista de modelos, todo lo que este sitio tiene guardado —sitio, índice,
   contexto y memoria, en una sola lectura— y la sesión abierta, las tres cosas
-  pedidas a la vez, así que la fase mide lo que tarde la más lenta), «MCP» (las
-  dos consultas a opencode: `GET /mcp` y `GET /config`), «enlazado» (adoptar el
-  MCP si hacía falta y, desde Jira, leer lo del Confluence enlazado —contexto,
+  pedidas a la vez, así que la fase mide lo que tarde la más lenta), «enlazado»
+  (desde Jira, leer lo del Confluence enlazado —contexto,
   índice y prefijo del wiki, también en una sola lectura—, que es otro sitio y
-  no cabe en lo del propio) y «restaurar» (repintar la conversación).
+  no cabe en lo del propio) y «restaurar» (repintar la conversación). Hay una
+  quinta fase, «MCP» (las dos consultas a opencode: `GET /mcp` y `GET /config`),
+  pero **sólo la primera vez que usas un sitio**, que es la única en la que el
+  panel las espera; en un sitio ya configurado esa comprobación va en segundo
+  plano y lo que tarda se apunta aparte, en «MCP comprobado».
   Sale también cuando el arranque acaba en la pantalla de claves o en la de
   contexto, sin las fases que no llegó a hacer. Si opencode no contesta NO sale
   nada (sería un arranque verde que no hubo) y la fila «tiempos (arranque)» del
@@ -876,6 +903,17 @@ corto y un detalle. Todos los títulos, por dónde salen:
   configuración y Faro lo adopta (con qué productos sirve).
 - «MCP sin conectar» — el MCP que lleva este dominio existe pero no está
   conectado: se arregla o se quita del `opencode.json`.
+- «MCP comprobado» — cuánto ha tardado saber si el MCP de este sitio está
+  conectado (`GET /mcp` y `GET /config`) y cómo ha quedado: su nombre y
+  «conectado», «registrado pero en «failed»» o «no está en opencode». Desde
+  esta versión el panel NO espera esa comprobación para enseñarte el chat (la
+  primera vez tras arrancar opencode tarda hasta quince segundos, porque es
+  cuando carga sus servidores MCP): mientras dura, la cabecera dice
+  «comprobando MCP…», y si al terminar no hay MCP sale la pantalla de claves —o,
+  si estabas escribiendo o esperando una respuesta, un aviso en el chat con el
+  botón **Cambiar las claves**, para no taparte lo que estabas haciendo. Un
+  sitio que todavía no has configurado sí la espera: ahí la pantalla de claves
+  es lo primero que hay que ver.
 - «MCP verificado» — los tokens se comprobaron, con una línea por producto
   («Jira: … · Confluence: …»).
 - «Sitio enlazado» — el otro host (Jira o Confluence) comparte el MCP de
@@ -1148,11 +1186,16 @@ en Confluence no hay nada de esto.
 
 - «Índice leído de la API» — el árbol del espacio se leyó de la API de tu
   Confluence con tu sesión, antes de gastar un turno del modelo: cuántas
-  entradas tiene el índice, cuántas peticiones hicieron falta, «recortado en N»
-  si el espacio es más grande que el tope, y los milisegundos. Ni un token.
+  entradas tiene el índice, cuántas peticiones hicieron falta, **«N de M»** si el
+  espacio es más grande que el tope —lo que entra son las páginas que se han
+  movido más recientemente, cada una con su rama entera— y los milisegundos. Si
+  tu Confluence no sabe hacer esa consulta ordenada, se lee la lista de siempre y
+  lo dice («por la lista, sin ordenar por fecha»). Ni un token.
 - «Perfil del proyecto» — se contó una muestra del proyecto de tu Jira (Data
-  Center) para saber los nombres exactos de tipos, estados, componentes,
-  etiquetas y convenciones: de cuántas incidencias era la muestra y cuántos
+  Center) para saber los tipos, estados, componentes,
+  etiquetas y convenciones que usa de verdad, **con el id de cada tipo y de cada
+  estado** (que es lo único que una búsqueda JQL acepta cuando el nombre te lo
+  traduce Jira): de cuántas incidencias era la muestra y cuántos
   tipos y estados salieron. Sale al levantar el mapa y también cuando se
   refresca solo, como mucho una vez al día y siempre en segundo plano; si el
   refresco no pudo, lo dice con el motivo. No mira quién es quién: del perfil
@@ -1198,8 +1241,9 @@ te muestra el comando exacto, con el `--cors` ya relleno.
 Recarga la pestaña: el content script se inyecta al cargar la página, y el
 que tiene cargado es el anterior. Si sigue igual, mira en la consola de la
 página si hay errores al cargar `chrome-extension://…/src/…`: Faro sirve sus
-módulos con `use_dynamic_url` (desde Chrome 130 la URL cambia en cada sesión,
-para que ninguna web pueda detectar la extensión) y los pide siempre con
+módulos con `use_dynamic_url` (la URL cambia en cada sesión, para que ninguna web
+pueda detectar la extensión; esa protección sólo funciona desde Chrome 130, que
+es por eso el mínimo del manifest) y los pide siempre con
 `chrome.runtime.getURL()`, así que un módulo bloqueado significa que su carpeta
 no está en `web_accessible_resources` del manifest (lo vigila
 `web-accessible.test.js` en `npm run check`).
@@ -1414,9 +1458,16 @@ del tema del sistema o del brillo de la pantalla, no del panel. Quien quiera la 
 alguna baja de su umbral.
 
 **El panel tarda en abrirse la primera vez tras arrancar opencode**
-Es `GET /mcp`: opencode arranca sus servidores MCP en la primera consulta, y el
-panel la espera. Mira «Arranque del panel» en el registro: si «MCP» dice
-segundos y el resto milisegundos, es eso. La segunda vez baja a milisegundos.
+Ya no debería: era `GET /mcp` —opencode arranca sus servidores MCP en la primera
+consulta, y eso tardó **catorce segundos y medio** medido contra un opencode de
+verdad—, y el panel la esperaba. Desde esta versión el chat aparece sin esperarla
+y la comprobación va en segundo plano; mientras dura, la cabecera dice
+«comprobando MCP…». Lo que tarda se apunta en el registro como **«MCP
+comprobado»** (ahí verás los segundos la primera vez y milisegundos las
+siguientes); en «Arranque del panel» ya no hay fase «MCP» salvo la primera vez
+que usas un sitio, que es la única en la que sí se espera. Si aun así el panel
+tarda, mira las otras fases de «Arranque del panel»: «health» es si opencode
+contesta y «modelos y almacenamiento» la lista de modelos.
 
 **«El modelo no contesta nunca» o «Turno colgado» con un modelo de la lista**
 El nivel gratuito de opencode (`opencode/*-free`, y también `big-pickle`) sólo
@@ -1424,6 +1475,46 @@ funciona desde la TUI de opencode: desde `opencode serve` —que es con quien
 habla Faro— contesta «OpenCode's free tier can only be used from within
 OpenCode» o no contesta nada. Usa un modelo de tu proveedor (por ejemplo
 `github-copilot/gpt-5.6-luna`). Comprobado el 2026-09-19.
+
+**En Jira las búsquedas por tipo o por estado no devolvían nada (o daban error)**
+Si tu Jira está en español —o en cualquier idioma que no sea inglés—, tanto la
+pantalla como su API te dicen «Tarea», «Historia», «En progreso» o «Crítica»…
+pero una consulta JQL **no acepta esos nombres traducidos**: `issuetype =
+"Tarea"` contesta «El valor 'Tarea' no existe para el campo 'issuetype'» y
+`issuetype = Task` devuelve miles. No es un fallo de Faro ni del modelo, es cómo
+funciona Jira. Desde esta versión, cuando Faro cuenta tu proyecto se guarda
+también **el id** de cada tipo y de cada estado, se lo enseña al modelo al lado
+del nombre y le explica que en el JQL va el número; los botones de «búsquedas al
+instante» preguntan por ese id y siguen enseñándote el nombre. Los componentes y
+las etiquetas los escribió tu equipo, Jira no los traduce, y ésos siguen yendo
+por su nombre. **Si acabas de actualizar**, el perfil guardado es de la versión
+anterior y se descarta: Faro lo vuelve a contar solo la primera vez que abras ese
+Jira (una consulta con tu sesión, no un turno del modelo), y hasta entonces la
+Skill Búsqueda va sin el bloque «DATOS DEL PROYECTO» y la lista de **Ajustes →
+Qué guarda Faro de mí** dice «(nada)» en la fila del perfil. Si no se recuenta,
+es que falta el permiso sobre ese dominio: vuelve a generar el contexto con
+**Reconstruir el contexto**, en Ajustes.
+
+**En mi Confluence Data Center no había «Paso a paso» ni «Árbol leído de la página»**
+Arreglado. El árbol de páginas de un Confluence 9 (Server o Data Center) no lleva
+ninguna de las señales por las que Faro lo buscaba —no es un `<aside>`, no tiene
+`role="tree"` y no tiene ni un `data-testid`—, así que no lo encontraba y
+**Ajustes → Diagnóstico del árbol** contestaba «(ninguno) — sin contenedor no hay
+recorrido posible». Ahora reconoce también el pagetree clásico
+(`.plugin_pagetree`). Si vuelve a pasar en otra versión de Confluence, ese mismo
+diagnóstico es lo que hay que mirar: dice qué contenedor eligió, cuántas filas y
+cuántos controles encontró, y lo deja copiado.
+
+**El mapa del espacio no tiene la página que yo estaba mirando**
+Un espacio de verdad tiene miles de páginas —2 697 en el que se probó— y el mapa
+cabe unos cientos. Antes se leían **las más antiguas**, porque es lo que la API de
+Confluence devuelve por defecto, así que el mapa podía no contener nada de lo que
+usas. Ahora se leen **las que se han movido más recientemente, cada una con su
+rama entera hasta la raíz**, y el registro dice «N de M» para que se vea que viene
+recortado. Si tu Confluence no sabe hacer esa consulta ordenada, Faro se lo dice
+en el registro («por la lista, sin ordenar por fecha») y lee la lista de siempre.
+Lo que quede fuera se completa con el uso: cada vez que Faro te lleva a una
+página, aprende su rama.
 
 **Sólo me ofrece «Llévame», nunca «Paso a paso»**
 Lo primero: **Ajustes → Cómo te lleva Faro** tiene que estar en *Guiada*. En
@@ -1530,6 +1621,22 @@ de cada número, cómo se resolvió: `block+quote` es la cita dentro de su bloqu
 `block+whole` el bloque entero, `block-moved` que el número no coincidía pero
 el texto sí, y `global` que el bloque ya no estaba y la cita se buscó en toda
 la página.
+
+**En Jira el análisis no sabía en qué estado estaba la incidencia, o decía que un campo valía «Ninguno»**
+Las dos cosas están arregladas, y las dos salieron de probar Faro contra un Jira
+Data Center de verdad. El **estado**: en ese Jira no aparece en la lista de
+detalles ni como pastilla en la cabecera —está sólo en el botón de transiciones,
+el que abre el menú de «mover a…»—, así que Faro lo leía vacío y el análisis se
+quedaba sin saber si la incidencia estaba por empezar, en revisión o cerrada. Ahora
+lo lee de ahí, y del **nombre entero**: el texto que se ve en ese botón lo recorta
+Jira («DevTeam PBI is ready f...») y el nombre completo está en su tooltip. De paso
+lee la **categoría** del estado (nueva / en curso / cerrada), que es lo único que
+no depende de cómo haya llamado tu equipo a sus estados: con nombres como «FOR SC
+TO RESPOND» o «PBI INTERNAL QA», el nombre no dice nada y la categoría sí. Y
+«Ninguno»: un campo vacío se pinta como texto («Ninguno», «None»), y Faro lo
+tomaba por un valor, así que el prompt decía componentes «Ninguno» y el botón
+«Mismo componente «Ninguno»» era un error de Jira. Ahora esos marcadores no
+cuentan como valor; «Sin asignar» y «Sin resolver» sí, que son información.
 
 **En Jira el análisis habla de botones o de la barra lateral**
 La incidencia se lee por sus módulos —título, campos, descripción, comentarios—
@@ -1641,10 +1748,24 @@ vez, y en Confluence sólo distingue «la usaste en esta página». Y si la pág
 está abierta en el **editor**, la fuente de los enlaces no funciona mientras
 editas, igual que no se puede leer la página en bloques.
 
+**Una página sugerida se llamaba «Page», o como una dirección web**
+Arreglado, y las dos cosas salieron de probarlo en un Jira de verdad. El título
+que Jira guarda en un enlace remoto a Confluence es, en todos los que se vieron,
+literalmente «Page»: el nombre del TIPO de enlace, no el de la página. Y en las
+descripciones los enlaces se pegan tal cual, así que el texto del enlace ES la
+dirección entera. Ahora Faro elige el título por orden de fiabilidad —el que leyó
+del propio Confluence, el que se ve en la página, el que guardó Jira, el que lleva
+la propia dirección— y descarta los que no nombran nada; si no puede saberlo, la
+fila dice «Página 12345» y al añadirla lo pregunta por su id, que es justo lo que
+hacía falta.
+
 **Las páginas base no se han podido leer**
 Este sitio no tiene el MCP conectado, así que el modelo no llega a ellas y el
 análisis sale sólo de la página abierta. Configúralo en **Ajustes → Cambiar las
-claves**. La pantalla de páginas base lo avisa antes, y la respuesta después.
+claves**. La pantalla de páginas base lo avisa antes, y la respuesta después. Ese
+aviso puede tardar un segundo en aparecer: la comprobación del MCP ya no bloquea
+nada, así que la pantalla se abre antes de saberlo y decir «no hay MCP» sin
+saberlo sería peor.
 
 **No se resalta nada**
 Comprueba que no estás en el editor de Confluence: ahí Faro se aparta a

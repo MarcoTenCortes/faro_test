@@ -127,11 +127,16 @@ function busquedaJira({ projectKey = '', cloud = false, profile = null, preloade
     '- Apóyate en el CONTEXTO DE ESTE SITIO de más abajo, si lo hay: ahí están los tipos de incidencia, los estados del flujo y las convenciones de nombre de los tickets (los prefijos y separadores de los resúmenes). Un «issuetype = …», un «status = …» o un «summary ~ "[Backend]"» que salgan de ahí dan con lo que una búsqueda por palabras sueltas no encuentra.',
     // El contexto de arriba es prosa que escribió un modelo hace semanas; estos
     // datos los contó la extensión de la API de este Jira. Cuando los hay, son
-    // la fuente buena para los NOMBRES, que es donde un JQL falla en silencio:
-    // «status = Revisión» no da error, da cero resultados.
+    // la fuente buena para los VALORES de un JQL, que es donde falla en silencio:
+    // un componente que no existe no da error, da cero resultados.
+    // Y con el tipo y el estado no basta el nombre: Jira traduce los que trae de
+    // serie al idioma de cada usuario y JQL rechaza los traducidos con un 400
+    // («El valor 'Tarea' no existe para el campo 'issuetype'»), mientras que por
+    // id funciona siempre. Comprobado en el Jira Data Center real (H14): lo que
+    // esta viñeta decía antes —«cópialos tal cual»— producía justo ese error.
     ...(profile
       ? [
-          '- Y sobre todo en los DATOS DEL PROYECTO de más abajo: esos los leyó la extensión de la API de este Jira, no un modelo, así que los nombres de tipo, estado, componente y etiqueta que hay ahí son los EXACTOS. Cópialos tal cual en el JQL (entre comillas si llevan espacios) y no te inventes ni traduzcas ninguno: un nombre que no existe no da error, da cero resultados.',
+          '- Y sobre todo en los DATOS DEL PROYECTO de más abajo: esos los leyó la extensión de la API de este Jira, no un modelo. Ojo con una cosa: los nombres de tipo y de estado que Jira trae de serie los traduce al idioma del usuario y en un JQL no valen traducidos, así que ésos van en la consulta por su ID, el número que verás al lado del nombre (issuetype = 10002, status = 10045, sin comillas); si alguno no trae id, por su nombre entre comillas. Los componentes y las etiquetas no se traducen: sus nombres son los EXACTOS y van entrecomillados, copiados tal cual. No te inventes ni traduzcas ninguno: un nombre que no existe no da error, da cero resultados.',
         ]
       : []),
     // La tarjeta «Abrir la búsqueda en Jira» sale de la llamada REAL a

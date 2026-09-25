@@ -16,6 +16,7 @@ import {
   ISSUE_REF_KEYS,
   ISSUE_FAMILIES,
   ISSUE_PHASES,
+  STATUS_CATEGORIES,
   normalizeIssueFields,
   issueFamily,
   issuePhase,
@@ -73,10 +74,88 @@ test('sin nada que valga no hay campos', () => {
   eq(normalizeIssueFields({ epicKey: 'ENG-1' }), null)
 })
 
+// --- lo que Jira pinta cuando un campo está VACÍO (H14) --------------------
+
+test('H14 real: «Ninguno» no es un valor, ni en una lista ni en un campo de texto', () => {
+  // Pasó de verdad en el Jira Data Center del usuario, con la interfaz en
+  // español: un campo sin valor se pinta como texto («<span id="components-val"
+  // class="value"> Ninguno </span>»), y de ahí salían un chip «Mismo componente
+  // «Ninguno»» que la API rechaza con un 400 («El valor 'Ninguno' no existe
+  // para el campo 'component'») y un prompt de Análisis que decía componentes
+  // «Ninguno». La barrera es ésta, la del panel, porque es por donde pasa TODO
+  // lo que llega de la pantalla antes de un prompt o de una consulta.
+  const f = normalizeIssueFields({
+    ...ENG7,
+    components: ['Ninguno'],
+    labels: ['None'],
+    fixVersions: ['Ninguna'],
+    affectsVersions: ['ningún'],
+    epic: 'Ninguno',
+    sprint: 'none',
+  })
+  eq(f.components, [])
+  eq(f.labels, [])
+  eq(f.fixVersions, [])
+  eq(f.affectsVersions, [])
+  eq(f.epic, '')
+  eq(f.sprint, '')
+  // Un marcador en medio de una lista se cae él solo, no se lleva la lista.
+  eq(normalizeIssueFields({ labels: ['seguridad', 'Ninguno', 'tokens'] }).labels, ['seguridad', 'tokens'])
+  // Y si TODO lo que había eran marcadores, no hay campos que enseñar.
+  eq(normalizeIssueFields({ components: ['Ninguno'], labels: ['None'], epic: 'Ninguna' }), null)
+  // Lo que SÍ es información se queda: «Sin asignar» y «Sin resolver» dicen
+  // algo del ticket (quién falta, que no se ha resuelto) y el prompt las usa.
+  const g = normalizeIssueFields({ assignee: 'Sin asignar', reporter: 'Unassigned', resolution: 'Unresolved', status: 'Sin resolver' })
+  eq(g.assignee, 'Sin asignar')
+  eq(g.reporter, 'Unassigned')
+  eq(g.resolution, 'Unresolved')
+  eq(g.status, 'Sin resolver')
+  // «N/A» y «-» son valores que alguien puede escribir a mano: no son marcadores.
+  eq(normalizeIssueFields({ components: ['N/A', '-', 'Core'] }).components, ['N/A', '-', 'Core'])
+  // Ni una palabra que sólo EMPIECE por el marcador: «Ninguna prioridad» es un valor.
+  eq(normalizeIssueFields({ components: ['Ninguna prioridad'] }).components, ['Ninguna prioridad'])
+})
+
+// --- la categoría del estado (H14) ----------------------------------------
+
+test('H14 real: la categoría del estado entra como referencia y no se enseña a nadie', () => {
+  eq(ISSUE_REF_KEYS, ['epicKey', 'statusCategory'])
+  eq(STATUS_CATEGORIES, ['new', 'indeterminate', 'done'], 'las tres de Jira, y «undefined» de la API no es una')
+  // Como `epicKey`: no cuenta para «hay campos» y no entra en el prompt.
+  eq(normalizeIssueFields({ statusCategory: 'done' }), null)
+  eq(issueBlock({ ...ENG7, statusCategory: 'done' }), issueBlock(ENG7), 'con categoría y sin ella, byte a byte lo mismo')
+  eq(normalizeIssueFields({ ...ENG7, statusCategory: 'indeterminate' }).statusCategory, 'indeterminate')
+  // SEGURIDAD: sale de una clase CSS de la página, así que sólo pasan las tres.
+  for (const raro of ['Done', 'undefined', 'cerrada', 'constructor', '', null, 1, {}, ['done']]) {
+    eq(normalizeIssueFields({ ...ENG7, statusCategory: raro }).statusCategory, '', 'no es una categoría: ' + JSON.stringify(raro))
+  }
+})
+
+test('H14 real: la fase cae en la categoría cuando el nombre del estado no dice nada', () => {
+  // Los estados de un Jira a medida no se parecen a los de fábrica: «FOR SC TO
+  // RESPOND», «For PSO Review», «PBI INTERNAL QA», «QA PASSED». Por nombre casi
+  // ninguno dice nada, y la categoría del flujo sí.
+  eq(issuePhase('FOR SC TO RESPOND'), '', 'por nombre no dice nada')
+  eq(issuePhase('FOR SC TO RESPOND', 'indeterminate'), 'en-curso')
+  eq(issuePhase('Estado raro', 'done'), 'cerrada')
+  eq(issuePhase('Estado raro', 'new'), 'nueva')
+  eq(issuePhase('', 'done'), 'cerrada', 'sin nombre, la categoría es lo único que hay')
+  // El nombre MANDA: la categoría es respaldo, no sustituto (un flujo puede
+  // dejar en «indeterminate» un estado que se llama «Blocked»).
+  eq(issuePhase('Blocked', 'indeterminate'), 'bloqueada')
+  eq(issuePhase('Done', 'new'), 'cerrada')
+  eq(issuePhase('In Review', 'indeterminate'), 'en-revision')
+  // Y una categoría que no es una de las tres no inventa una fase.
+  for (const raro of ['Done', 'undefined', 'constructor', 'toString', '', null, undefined, 1, {}]) {
+    eq(issuePhase('Estado raro', raro), '', 'no es una categoría: ' + JSON.stringify(raro))
+  }
+  eq(issueProfile({ type: 'Tarea', status: 'FOR SC TO RESPOND', statusCategory: 'indeterminate' }), { family: 'task', phase: 'en-curso' })
+})
+
 // --- la épica, como CLAVE (H8) --------------------------------------------
 
 test('H8: la clave de la épica entra validada, y no es un campo que se enseñe', () => {
-  eq(ISSUE_REF_KEYS, ['epicKey'])
+  assert(ISSUE_REF_KEYS.includes('epicKey'))
   eq(normalizeIssueFields({ ...ENG7, epicKey: 'eng-1' }).epicKey, 'ENG-1', 'con forma de clave y en mayúsculas')
   // SEGURIDAD: de aquí sale el valor de una consulta JQL («'Epic Link' = X»),
   // así que lo que no tenga forma de clave no pasa.

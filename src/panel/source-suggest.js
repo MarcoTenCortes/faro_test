@@ -37,6 +37,7 @@
 import { clean } from '../nav/validate.js'
 import { isPlaceholderTitle } from '../atlassian/index-store.js'
 import { isRealSpaceKey, parseAtlassianUrl } from '../atlassian/site.js'
+import { isGenericTitle } from '../shared/jira-rest.js'
 import { decodeSlug } from './indexer.js'
 import { issueProfile } from './issue-profile.js'
 import { roleForFamily } from './references.js'
@@ -141,14 +142,67 @@ const ID = /^\d+$/
 
 // ------------------------------------------------------- enlaces a páginas
 
-/** El último segmento de la ruta de una URL, que en un `/display/` es el título. */
-function ultimoSegmento(href) {
+/**
+ * De dónde puede salir el título de una página, de lo más fiable a lo menos, y
+ * por qué en ese orden:
+ *
+ *  1. el ÍNDICE, que es el título que Faro leyó de la propia Confluence;
+ *  2. el TEXTO del enlace en el DOM, que es lo que el usuario tiene delante;
+ *  3. el título del ENLACE REMOTO que guardó Jira, que puede estar viejo (se
+ *     escribió el día que se creó el enlace) o ser genérico;
+ *  4. el SLUG de la ruta, que es el título con los espacios como «+»;
+ *  5. y el marcador «Página N», que no es un título sino la señal de que hay que
+ *     leerlo: al añadirla, `chooseSuggestion` la manda por `addSourceById`, que
+ *     pregunta el título de verdad por su id (revisión adversaria de H10).
+ *
+ * El título y la PROCEDENCIA (`where`) se deciden por separado. Pasó de verdad
+ * (Jira Data Center del usuario, 2026-09-21): la misma página llegaba por el
+ * enlace remoto de la API —que la titula «Page»— y por el `a.link-title` del
+ * módulo de enlaces del DOM —que trae el título de verdad—; los remotos se leen
+ * primero, así que el primer título no vacío se quedaba y la sugerencia se
+ * llamaba «Page» con la procedencia correcta.
+ */
+const TITULO = { indice: 1, dom: 2, remoto: 3, slug: 4, marcador: 5 }
+
+/**
+ * Un texto que es una URL pegada, no el nombre de nada. Real: en las
+ * descripciones de las incidencias los enlaces a Confluence se pegan tal cual y
+ * el texto del `<a>` ES la URL, de 80 a 106 caracteres.
+ */
+const PARECE_URL = /^(?:https?:\/\/|\/\/|www\.)/i
+
+/**
+ * Un título con el que se puede LLAMAR a una página en una lista, o ''.
+ *
+ * Se cae lo que no nombra la página: un marcador «Página N», un genérico como
+ * «Page» (la misma regla que aplica `parseRemoteLinks` a lo que viene de la API:
+ * una sola lista, en `jira-rest.js`) y una URL pegada. Lo que salga de aquí se
+ * enseña en la fila, va dentro de su `aria-label` y, si el usuario la añade,
+ * acaba nombrando la página base en el prompt del Análisis.
+ */
+function tituloUtil(raw) {
+  const t = clean(raw, SOURCE_LIMITS.titleMax)
+  return !t || isPlaceholderTitle(t) || isGenericTitle(t) || PARECE_URL.test(t) ? '' : t
+}
+
+/**
+ * El título que la propia ruta lleva dentro, cuando lo lleva: el último segmento
+ * de `/spaces/KEY/pages/ID/Slug` y de `/display/KEY/Slug`, con o sin prefijo del
+ * wiki delante. '' en cualquier otra forma, y ahí está lo importante: el último
+ * segmento de `/pages/viewpage.action?pageId=200` es «viewpage.action» y el de
+ * `/display/ENG` es la clave del espacio, no un título.
+ */
+const SLUG_EN_RUTA = /\/(?:spaces\/[^/]+\/pages\/\d+|display\/[^/]+)\/([^/]+)\/?$/
+
+function slugDeRuta(href) {
+  let ruta = ''
   try {
-    const partes = new URL(href).pathname.split('/').filter(Boolean)
-    return partes[partes.length - 1] || ''
+    ruta = new URL(String(href ?? '')).pathname
   } catch {
     return ''
   }
+  const m = SLUG_EN_RUTA.exec(ruta)
+  return m ? decodeSlug(m[1]) : ''
 }
 
 /**
@@ -163,7 +217,7 @@ function ultimoSegmento(href) {
 function porIndice(href, index) {
   const parsed = parseAtlassianUrl(href)
   if (!parsed || parsed.product !== 'confluence') return ''
-  const titulo = foldText(clean(decodeSlug(ultimoSegmento(href)), SOURCE_LIMITS.titleMax))
+  const titulo = foldText(clean(slugDeRuta(href), SOURCE_LIMITS.titleMax))
   if (!titulo) return ''
   const espacio = parsed.spaceKey || ''
   const candidatos = []
@@ -187,6 +241,10 @@ function porIndice(href, index) {
  * comprobación: `pageRefFromUrl` acepta además un número suelto como id, y una
  * ruta relativa que fuera un número se habría colado por ahí. Pura.
  *
+ * De cada página salen dos cosas y se deciden por separado: la PROCEDENCIA, que
+ * es la mejor de `LINK_WHERE`, y el TÍTULO, que es el de la mejor fuente de
+ * `TITULO` (ahí está el porqué). Una misma página enlazada dos veces sale una.
+ *
  * @param {Array<{href?:string, text?:string, where?:string}>} links los del DOM
  * @param {{ok?:boolean, links?:Array<{pageId?:string, title?:string, url?:string}>}|null} remote
  *        los enlaces remotos de la incidencia, si la API contestó
@@ -194,35 +252,53 @@ function porIndice(href, index) {
  */
 export function confluenceLinksIn(links, remote, { site = null, linkedHost = '', index = null } = {}) {
   const porId = new Map()
+  /**
+   * De qué fuente salió el título que lleva puesto cada candidata. Va aparte y
+   * no dentro del objeto porque lo que se devuelve tiene claves EXACTAS (§6) y
+   * esto es cocina de aquí dentro.
+   */
+  const rangos = new Map()
 
-  const anotar = (id, where, { title = '', spaceKey = null, path = '' } = {}) => {
+  const anotar = (id, where, { title = '', from = 'dom', spaceKey = null, path = '', href = '' } = {}) => {
     if (!ID.test(String(id ?? ''))) return
     if (!LINK_WHERE.includes(where)) return
     if (!porId.has(id) && porId.size >= SUGGEST_LIMITS.linksMax) return
 
     const delIndice = index?.pages?.[id] || null
-    const tituloIndice = clean(delIndice?.title, SOURCE_LIMITS.titleMax)
-    const propuesto = clean(title, SOURCE_LIMITS.titleMax)
     const espacio = clean(delIndice?.spaceKey ?? spaceKey, SOURCE_LIMITS.spaceKeyMax)
+    // El mejor título de los que esta llegada puede dar, por el orden de `TITULO`.
+    let titulo = `Página ${id}`
+    let rango = TITULO.marcador
+    for (const [cual, texto] of [
+      [TITULO.indice, tituloUtil(delIndice?.title)],
+      [from === 'remoto' ? TITULO.remoto : TITULO.dom, tituloUtil(title)],
+      [TITULO.slug, tituloUtil(slugDeRuta(href))],
+    ]) {
+      if (texto && cual < rango) {
+        titulo = texto
+        rango = cual
+      }
+    }
     const candidato = {
       id,
       path: typeof delIndice?.path === 'string' && delIndice.path ? delIndice.path : typeof path === 'string' ? path : '',
       spaceKey: isRealSpaceKey(espacio) ? espacio : null,
-      title:
-        tituloIndice && !isPlaceholderTitle(tituloIndice)
-          ? tituloIndice
-          : propuesto && !isPlaceholderTitle(propuesto)
-            ? propuesto
-            : `Página ${id}`,
+      title: titulo,
       where,
     }
     const previo = porId.get(id)
     if (!previo) {
       porId.set(id, candidato)
+      rangos.set(id, rango)
       return
     }
     if (LINK_WHERE.indexOf(where) < LINK_WHERE.indexOf(previo.where)) previo.where = where
-    if (isPlaceholderTitle(previo.title) && !isPlaceholderTitle(candidato.title)) previo.title = candidato.title
+    // La procedencia se queda con la mejor y el título con el de mejor fuente,
+    // cada uno por su cuenta: la llegada que gana una cosa no gana la otra.
+    if (rango < (rangos.get(id) ?? TITULO.marcador)) {
+      previo.title = titulo
+      rangos.set(id, rango)
+    }
     if (!previo.spaceKey && candidato.spaceKey) previo.spaceKey = candidato.spaceKey
     if (!previo.path && candidato.path) previo.path = candidato.path
   }
@@ -231,7 +307,7 @@ export function confluenceLinksIn(links, remote, { site = null, linkedHost = '',
   // el módulo de enlaces de un Jira Data Center no garantiza.
   if (remote?.ok) {
     for (const l of Array.isArray(remote.links) ? remote.links : []) {
-      anotar(String(l?.pageId ?? '').trim(), 'remoto', { title: l?.title })
+      anotar(String(l?.pageId ?? '').trim(), 'remoto', { title: l?.title, from: 'remoto', href: l?.url })
     }
   }
 
@@ -244,14 +320,14 @@ export function confluenceLinksIn(links, remote, { site = null, linkedHost = '',
     const where = LINK_WHERE.includes(l?.where) && l.where !== 'remoto' ? l.where : 'pagina'
     const ref = pageRefFromUrl(href, site, { linkedHost })
     if (ref.ok) {
-      anotar(ref.id, where, { title: l?.text, spaceKey: parseAtlassianUrl(href)?.spaceKey, path: ref.path })
+      anotar(ref.id, where, { title: l?.text, spaceKey: parseAtlassianUrl(href)?.spaceKey, path: ref.path, href })
       continue
     }
     // Sólo un `/display/` del sitio o del enlazado llega aquí: `pageRefFromUrl`
     // ya descartó otro host, Jira y lo que no es una URL.
     if (ref.reason !== 'sin-id') continue
     const id = porIndice(href, index)
-    if (id) anotar(id, where, { title: l?.text, spaceKey: parseAtlassianUrl(href)?.spaceKey })
+    if (id) anotar(id, where, { title: l?.text, spaceKey: parseAtlassianUrl(href)?.spaceKey, href })
   }
 
   return [...porId.values()]
@@ -345,8 +421,14 @@ export function suggestSources({
   const datos = new Map()
   const anotar = (id, { title = '', spaceKey: espacio = null, path = '' } = {}) => {
     const previo = datos.get(id) || { id, path: '', spaceKey: null, title: '' }
-    const nuevo = clean(title, SOURCE_LIMITS.titleMax)
-    if (nuevo && (!previo.title || (isPlaceholderTitle(previo.title) && !isPlaceholderTitle(nuevo)))) previo.title = nuevo
+    // El primero que sirva. Como el índice se anota antes que la fuente en los
+    // tres bucles de abajo, «el primero» es el del índice cuando lo hay; y lo
+    // que no sirve —un marcador, un genérico, una URL— ni se guarda, así que ya
+    // no hay que mirar si lo de antes era un marcador para reemplazarlo. Un
+    // historial de antes de H14 pudo guardar una página base llamada «Page», y
+    // el título de una referencia lo escribió el modelo en el CONTEXTO DEL SITIO.
+    const nuevo = tituloUtil(title)
+    if (nuevo && !previo.title) previo.title = nuevo
     if (!previo.spaceKey && isRealSpaceKey(espacio)) previo.spaceKey = espacio
     if (!previo.path && typeof path === 'string' && path) previo.path = path
     datos.set(id, previo)

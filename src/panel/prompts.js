@@ -414,15 +414,40 @@ function dato(value, max = 200) {
   return sinInvisibles(value).replace(ESPACIOS, ' ').trim().slice(0, max)
 }
 
-/** «nombre (12) · otro (3)», con los valores ya limpios. Pura. */
+/**
+ * El id de un valor de campo, si lo hay: sólo dígitos. Pura.
+ *
+ * SEGURIDAD: de aquí sale un número que el modelo va a copiar SIN comillas dentro
+ * de una JQL (`status = 10045`). `normalizeProfile` ya lo valida al leer el
+ * perfil del almacén, y aquí se valida otra vez porque este módulo no puede saber
+ * de dónde viene el objeto que le dan (§9: lo que entra en un prompt se
+ * reconstruye donde se escribe).
+ */
+const ID_DE_CAMPO = /^\d{1,19}$/
+function idDeCampo(value) {
+  const id = dato(value, 20)
+  return ID_DE_CAMPO.test(id) ? id : ''
+}
+
+/**
+ * «nombre (12) · otro (3)», con los valores ya limpios; y «nombre (12, id 10002)»
+ * cuando el valor trae su id (los tipos y los estados, desde H14). Pura.
+ */
 function contados(lista, max = 200) {
   return (Array.isArray(lista) ? lista : [])
     .map((x) => {
       const nombre = dato(x?.name, max)
-      return nombre ? `${nombre} (${Number(x?.count) || 0})` : ''
+      if (!nombre) return ''
+      const id = idDeCampo(x?.id)
+      return `${nombre} (${Number(x?.count) || 0}${id ? `, id ${id}` : ''})`
     })
     .filter(Boolean)
     .join(' · ')
+}
+
+/** ¿Alguno de estos valores trae su id? Es lo que decide si se explica cómo usarlo. */
+function conIds(...listas) {
+  return listas.some((lista) => (Array.isArray(lista) ? lista : []).some((x) => idDeCampo(x?.id)))
 }
 
 /**
@@ -483,6 +508,16 @@ export function profileBlock(profile) {
     cuerpo.join('\n').slice(0, CONTEXT_BUDGET.profile),
     PROFILE_CLOSE,
     contentRule('nombres y resúmenes de tickets de Jira, contados por la extensión', { plural: true }),
+    // Cómo se usan, FUERA de los delimitadores —aquí habla Faro— y en el propio
+    // bloque, como en `preloadedSearchBlock`: la viñeta que lo enmarca sólo existe
+    // en Búsqueda, y lo que dice esta línea vale para cualquier consulta que el
+    // modelo escriba. Sólo si hay ids que usar: prometerlos sin tenerlos sería
+    // mandar copiar algo que no está (H14).
+    ...(conIds(profile.types, profile.statuses)
+      ? [
+          'Los nombres de tipo y de estado que Jira trae de serie los TRADUCE al idioma de cada usuario, y una consulta JQL no acepta los traducidos: dentro del JQL usa el id que va al lado de cada nombre (issuetype = 10002, status = 10045), sin comillas. Si alguno no trae id, escríbelo por su nombre entre comillas. Los componentes y las etiquetas los puso el equipo, no se traducen: ésos van por su nombre entre comillas, copiado tal cual.',
+        ]
+      : []),
   ].join('\n')
 }
 
@@ -1009,8 +1044,11 @@ function indexExploreJira(scope, site, linkedContext, profile = null) {
     perfil
       ? '- Usa las herramientas MCP de Jira. Tipos de incidencia del proyecto (la herramienta de tipos de incidencia); componentes y versiones si las hay; tableros y sprints activos. La MUESTRA de incidencias ya la leyó la extensión de la API de Jira y va contada más abajo, en DATOS DEL PROYECTO: no la vuelvas a pedir.'
       : `- Usa las herramientas MCP de Jira. Tipos de incidencia del proyecto (la herramienta de tipos de incidencia); componentes y versiones si las hay; tableros y sprints activos; y una MUESTRA de incidencias recientes con jira_search (${proyecto ? `project = ${proyecto} ` : ''}ORDER BY created DESC, con los campos summary, issuetype, status, labels, components, priority), de ${INDEX_LIMITS.maxIssues} como mucho.`,
+    // Con el perfil contado, cada tipo y cada estado llevan su id, y el documento
+    // tiene que recogerlo: este CONTEXTO DE ESTE SITIO es lo que leerá Búsqueda
+    // dentro de semanas, y un nombre traducido copiado a un JQL es un 400 (H14).
     perfil
-      ? '- Los ESTADOS ya vienen contados ahí abajo, con cuáles son de cierre. Di qué significa cada uno, en qué orden se recorren y si hay estados que sólo usan algunos tipos.'
+      ? '- Los ESTADOS ya vienen contados ahí abajo, con cuáles son de cierre y con el id de cada uno. Di qué significa cada uno, en qué orden se recorren y si hay estados que sólo usan algunos tipos; y cada vez que nombres un tipo o un estado en el documento, pon su id al lado («En progreso (id 3)»): Jira traduce esos nombres al idioma de cada usuario y dentro de una consulta JQL sólo vale el id.'
       : '- Los ESTADOS no se preguntan: se cuentan en la muestra. Di qué estados aparecen, cuáles son de trabajo en curso y cuáles de cierre, y si hay estados que sólo usan algunos tipos.',
     perfil
       ? '- Las CONVENCIONES DE NOMBRE también vienen contadas ahí abajo, con ejemplos literales: prefijos entre corchetes («[Backend][Update] …»), separadores («PSO | …»). Para cada patrón, di qué significa y con qué tipo de incidencia o equipo va.'

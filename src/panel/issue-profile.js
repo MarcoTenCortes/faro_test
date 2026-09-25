@@ -15,8 +15,10 @@
  * tiene en pantalla (`jiraIssueFields`, en el content script), no el modelo:
  * llegan por mensaje y aquí se reconstruyen con claves blancas y valores
  * cortos de una línea (`normalizeIssueFields`), como todo lo que viene de una
- * página. La familia y la fase se deducen por nombre, en español y en inglés,
- * y sirven para elegir QUÉ decirle al modelo (`issueBlock`); lo que ese tipo y
+ * página. La familia y la fase se deducen por nombre, en español y en inglés
+ * —y la fase, si el nombre no dice nada, por la CATEGORÍA que Jira le da al
+ * estado en su flujo, que es lo único que sitúa los estados a medida de un Jira
+ * real—, y sirven para elegir QUÉ decirle al modelo (`issueBlock`); lo que ese tipo y
  * ese estado significan en ESTE proyecto lo sabe el CONTEXTO DE ESTE SITIO
  * (el indexador de Jira apunta tipos, estados y convenciones), y el prompt le
  * manda apoyarse en él. Si no se reconoce nada, el modelo lo deduce él: se le
@@ -54,13 +56,54 @@ export const ISSUE_LIST_KEYS = ['fixVersions', 'affectsVersions', 'components', 
  * de su épica no tiene nada que enseñar, y `issueBlock` imprimiría una línea de
  * campos vacía.
  */
-export const ISSUE_REF_KEYS = ['epicKey']
+export const ISSUE_REF_KEYS = ['epicKey', 'statusCategory']
+
+/**
+ * Las tres categorías con las que Jira agrupa los estados de cualquier flujo.
+ *
+ * Es su vocabulario, no el nuestro: el nombre sale de la clase que el botón de
+ * transiciones lleva en la página (`opsbar-transitions__status-category_done`,
+ * que lee `jira-issue.js`) y es el mismo que la API pone en `statusCategory`.
+ * La lista de `jira-rest.js` tiene además el `'undefined'` con el que la API
+ * dice «ninguna»; aquí eso no es una categoría, es no tenerla, o sea ''.
+ *
+ * Hace falta porque los estados de un Jira a medida no se parecen a los de
+ * fábrica: en el Data Center del usuario son «For PSO Review», «FOR SC TO
+ * RESPOND», «DevTeam PBI is ready for Implementation check», «PBI INTERNAL QA»,
+ * y por nombre `issuePhase` no reconoce casi ninguno. La categoría sí dice en
+ * qué punto del flujo está.
+ */
+export const STATUS_CATEGORIES = ['new', 'indeterminate', 'done']
+
+/**
+ * Qué forma tiene cada clave de REFERENCIA. No son texto libre: una acaba
+ * dentro de una consulta JQL y la otra sale de una clase CSS de la página, así
+ * que cada una se valida contra lo que puede ser y no con `clean`.
+ */
+const REF_FORM = {
+  epicKey: (v) => validIssueKey(v),
+  statusCategory: (v) => (STATUS_CATEGORIES.includes(v) ? v : ''),
+}
 
 /** Las comillas latinas rompen la forma «campo «valor»» con la que se enseñan los valores. */
 const QUOTES = /[«»]/g
 
+/**
+ * Los marcadores con los que Jira pinta un campo VACÍO: no son un valor.
+ *
+ * Pasó de verdad en el Jira del usuario (interfaz en español): un campo sin
+ * valor se pinta como texto —«Ninguno» en los componentes, las etiquetas y las
+ * versiones, «None» en inglés—, y de ahí salían un chip «Mismo componente
+ * «Ninguno»» que la API rechaza con un 400 y un prompt de Análisis que decía
+ * componentes «Ninguno». Sólo la palabra entera: «Ninguna prioridad» es un
+ * valor, y «N/A» o «-» los puede haber escrito alguien a mano. Lo que dice algo
+ * del ticket se queda: «Sin asignar» y «Sin resolver» son información.
+ */
+const SIN_VALOR = /^(?:ning[uú]n[oa]?|none)$/i
+
 function valor(v) {
-  return clean(typeof v === 'string' ? v.replace(QUOTES, '"') : '', ISSUE_FIELD_LIMITS.valueMax)
+  const limpio = clean(typeof v === 'string' ? v.replace(QUOTES, '"') : '', ISSUE_FIELD_LIMITS.valueMax)
+  return SIN_VALOR.test(limpio) ? '' : limpio
 }
 
 /**
@@ -92,8 +135,10 @@ export function normalizeIssueFields(raw) {
     if (out[k].length) alguno = true
   }
   // Las referencias van aparte y NO cuentan para `alguno`: son para construir
-  // una consulta, no para enseñar.
-  for (const k of ISSUE_REF_KEYS) out[k] = validIssueKey(raw[k])
+  // una consulta o para deducir la fase, no para enseñar. Cada una con su
+  // forma, y una clave que no la declare no pasa (la lección de las ramas por
+  // nombre: `Object.hasOwn`, nunca el prototipo).
+  for (const k of ISSUE_REF_KEYS) out[k] = Object.hasOwn(REF_FORM, k) ? REF_FORM[k](raw[k]) : ''
   return alguno ? out : null
 }
 
@@ -251,16 +296,36 @@ export const ISSUE_PHASES = [
   },
 ]
 
-/** La fase por el nombre del estado, o '' si no se reconoce. Pura. */
-export function issuePhase(status) {
+/**
+ * La fase que dice la CATEGORÍA del estado cuando su nombre no dice nada. Es
+ * respaldo y no sustituto: un flujo puede llamar «Blocked» a un estado que Jira
+ * agrupa en «indeterminate», y ahí el nombre acierta más.
+ */
+const FASE_POR_CATEGORIA = { new: 'nueva', indeterminate: 'en-curso', done: 'cerrada' }
+
+/**
+ * La fase por el nombre del estado y, si el nombre no dice nada, por la
+ * categoría que Jira le da en su flujo. '' si ninguna de las dos lo dice. Pura.
+ *
+ * El nombre primero, para no cambiar ni un resultado de los que ya se
+ * reconocían. La categoría la lee la extensión de la clase del botón de
+ * transiciones (`jira-issue.js`) y es lo único que sitúa los estados a medida
+ * de un Jira real: «FOR SC TO RESPOND» no se parece a nada de fábrica y su
+ * categoría es «indeterminate», o sea que está en marcha.
+ *
+ * @param {string} status el nombre tal como se ve en pantalla
+ * @param {string} [category] una de `STATUS_CATEGORIES`, o nada
+ */
+export function issuePhase(status, category = '') {
   const s = clean(status, ISSUE_FIELD_LIMITS.valueMax)
-  if (!s) return ''
-  return ISSUE_PHASES.find((p) => p.match.test(s))?.id || ''
+  const porNombre = s ? ISSUE_PHASES.find((p) => p.match.test(s))?.id || '' : ''
+  if (porNombre) return porNombre
+  return Object.hasOwn(FASE_POR_CATEGORIA, category) ? FASE_POR_CATEGORIA[category] : ''
 }
 
 /** Las dos cosas juntas. Pura. */
 export function issueProfile(fields, ctx = {}) {
-  return { family: issueFamily(fields, ctx), phase: issuePhase(fields?.status) }
+  return { family: issueFamily(fields, ctx), phase: issuePhase(fields?.status, fields?.statusCategory) }
 }
 
 /**

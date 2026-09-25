@@ -680,6 +680,22 @@ test('H9: el árbol de la API se convierte en índice con las mismas validadoras
   eq(index.spaces['ENG'].key, 'ENG', 'el espacio del ámbito entra con sus páginas')
   eq(index.host, CONF.host)
 
+  // H14: desde que el árbol se lee por la búsqueda del espacio, los eslabones
+  // altos son ANTEPASADOS de un resultado y pueden venir pelados —la API sólo
+  // garantiza su id—. El índice les fabrica la ruta canónica por id y un título
+  // de marcador, igual que hacía con lo que devolvía el modelo, así que una
+  // cadena entera vale para navegar aunque falten títulos por el camino.
+  const pelado = indexFromSpacePages(
+    [
+      { id: '900', title: '', parentId: null, url: '', spaceKey: 'ENG' },
+      { id: '901', title: 'Hija', parentId: '900', url: '/display/ENG/Hija', spaceKey: 'ENG' },
+    ],
+    { site: CONF, scope: ESPACIO }
+  )
+  eq(pelado.pages['900'].path, '/pages/viewpage.action?pageId=900', 'sin ruta, la canónica por id')
+  eq(pelado.pages['900'].title, 'Página 900')
+  eq(pelado.pages['901'].parentId, '900', 'y la hija sigue colgando de él')
+
   eq(indexFromSpacePages([], { site: CONF, scope: ESPACIO }), null, 'sin páginas no hay índice')
   eq(indexFromSpacePages(null, { site: CONF }), null)
   eq(indexFromSpacePages(paginasDeEspacio(), {}), null, 'sin sitio tampoco: no habría host contra el que validar')

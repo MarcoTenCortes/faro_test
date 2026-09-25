@@ -150,7 +150,7 @@ test('el plan completo marca las acciones', () => {
 // prueba con elementos de mentira: `visible()` necesita `getComputedStyle`,
 // que se instala DENTRO de cada prueba y se restaura al salir.
 
-import { isMenuTrigger, expandersIn, toggleFor } from '../../src/content/tree-dom.js'
+import { isMenuTrigger, expandersIn, toggleFor, treeContainer } from '../../src/content/tree-dom.js'
 
 /** Un control de mentira: lo justo para `visible()`, `matches` y `closest`. */
 function control(attrs = {}, { fila = null } = {}) {
@@ -211,6 +211,79 @@ test('SEGURIDAD: expandersIn salta los disparadores de menu y se queda con los c
     assert(out[0] === chevron, 'solo el chevron')
   })
   eq(expandersIn(null), [])
+})
+
+// --- el contenedor del pagetree clasico (F9, verificacion en real 2026-09-21)
+// En el Confluence 9.2 Data Center del usuario `describeTree()` contestaba
+// «(ninguno) — sin contenedor no hay recorrido posible»: en esa pagina no hay
+// <aside>, ni role=tree, ni nav[aria-label*=pagina], ni un solo data-testid. El
+// arbol es el pagetree clasico, y con el contenedor senalado a mano TODO lo
+// demas ya funcionaba. `treeContainer` no toca el estilo de nada, asi que estas
+// dos pruebas no necesitan `conEstilos`.
+
+/** Un contenedor de mentira: lo justo para `looksLikeTree`. */
+function caja(nombre, { paginas = [], expandibles = false } = {}) {
+  return {
+    nombre,
+    querySelectorAll: (sel) =>
+      sel === 'a[href]' ? paginas.map((href) => ({ getAttribute: () => href })) : [],
+    querySelector: (sel) => (sel === '[aria-expanded]' && expandibles ? { nombre: 'chevron' } : null),
+  }
+}
+
+/** Una raiz que contesta a cada selector con lo que se le diga, y nada mas. */
+function raiz(porSelector) {
+  return { querySelectorAll: (sel) => porSelector[sel] || [] }
+}
+
+const PAGETREE_REAL = '/spaces/SIMPL/pages/44171766/Architecture+Topics?src=contextnavpagetreemode'
+
+test('F9: el pagetree de un Data Center se reconoce, y no le quita el sitio a las dos barras que ya funcionaban', () => {
+  const pagetree = caja('.plugin_pagetree', { paginas: [PAGETREE_REAL], expandibles: true })
+
+  // Lo que pasaba en real: el pagetree es lo UNICO que hay.
+  eq(treeContainer(raiz({ '.plugin_pagetree': [pagetree] })), pagetree, 'sin el, describeTree decia «(ninguno)»')
+
+  // Y lo que no puede cambiar: donde hay un arbol ARIA o el contenedor de Cloud,
+  // siguen mandando ellos (el banco lo pina en los tramos 15 y 16).
+  const aria = caja('[role="tree"]', { paginas: ['/wiki/spaces/ENG/pages/100/Arquitectura'], expandibles: true })
+  eq(
+    treeContainer(raiz({ '[role="tree"]': [aria], '.plugin_pagetree': [pagetree] })),
+    aria,
+    'el arbol ARIA es lo primero de la cascada'
+  )
+  const cloud = caja('[data-testid="side-navigation"]', { paginas: ['/wiki/spaces/ENG/pages/1080/Architecture'] })
+  eq(
+    treeContainer(raiz({ '[data-testid="side-navigation"]': [cloud], '.plugin_pagetree': [pagetree] })),
+    cloud,
+    'y el contenedor de Cloud va antes que el pagetree'
+  )
+})
+
+test('un [role="complementary"] que no parece un arbol no le gana al que si', () => {
+  const pagetree = caja('.plugin_pagetree', { paginas: [PAGETREE_REAL], expandibles: true })
+  const ajeno = caja('ajeno')
+  const conArbol = caja('con arbol', { paginas: [PAGETREE_REAL] })
+
+  // Dentro del mismo selector, gana el que contiene arbol de verdad.
+  eq(
+    treeContainer(raiz({ '[role="complementary"]': [ajeno, conArbol] })),
+    conArbol,
+    'el panel de «Actividad reciente» no es el arbol de paginas'
+  )
+
+  // Y el pagetree, que es el selector exacto, gana a los dos envoltorios.
+  eq(
+    treeContainer(
+      raiz({ '.plugin_pagetree': [pagetree], '.ia-secondary-content': [conArbol], '[role="complementary"]': [ajeno] })
+    ),
+    pagetree
+  )
+
+  // Sin ningun candidato con arbol se devuelve el primero que caso, que es lo
+  // que `describeTree` ensena para poder ajustar los selectores con datos.
+  eq(treeContainer(raiz({ '[role="complementary"]': [ajeno] })), ajeno)
+  eq(treeContainer(raiz({})), null)
 })
 
 test('toggleFor no toma el «···» de la fila por su control de desplegar', () => {

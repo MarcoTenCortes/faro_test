@@ -102,6 +102,11 @@ body {
 .cloud-row .cloud-kids { grid-column: 1 / -1; padding-left: 20px; }
 .cloud-kids.collapsed { display: none; }
 
+/* La tercera barra —el pagetree clásico de un Confluence Server/Data Center—
+   se estiliza más abajo, DETRÁS de `.sidebar a`: la página abierta se marca con
+   `.plugin_pagetree_current > a`, que tiene la misma especificidad que
+   `.sidebar a`, así que tiene que ir después para ganarle. */
+
 .twisty {
   width: 18px; height: 22px;
   background: transparent; border: 0; cursor: pointer;
@@ -121,6 +126,33 @@ body {
 }
 .sidebar a:hover { background: #E4E6EA; color: var(--ink); }
 .sidebar a.current { background: #E9F2FF; color: var(--blue); font-weight: 600; }
+
+/* El pagetree clásico de un Confluence Server/Data Center. Dos cosas que no son
+   maquillaje: el scroll NO lo hace la barra sino
+   `.acs-side-bar.ia-scrollable-section`, que es lo que `treeScroller` tiene que
+   encontrar, y el chevron es un `<a>` y no un `<button>`, así que sin tamaño
+   propio se comería la fila entera por el `display: block` de `.sidebar a` —y un
+   control de 0 px de alto no lo ve `visible()`—. */
+.sidebar.pagetree { overflow: visible; padding: 16px 0 0; }
+/* Alto FIJO y no `calc(100vh - …)`: con 44 filas el árbol mide ~1 200 px, así que
+   así desborda —y hay scroller que encontrar— en cualquier pantalla, mientras
+   que atado al viewport una ventana muy alta lo dejaría sin scroll y el tramo 60
+   se volvería flaky por entorno, como le pasa al 18 con la barra Cloud. */
+.acs-side-bar { overflow-y: auto; height: 560px; padding: 0 10px; }
+.plugin_pagetree ul { list-style: none; margin: 0; padding: 0; }
+.plugin_pagetree li { display: grid; grid-template-columns: 20px 1fr; align-items: start; }
+.plugin_pagetree_children_content { min-width: 0; }
+.plugin_pagetree_children_container { grid-column: 1 / -1; padding-left: 20px; }
+.plugin_pagetree_children_container.oculta { display: none; }
+.no-children.icon { display: block; width: 18px; height: 22px; }
+.sidebar a.plugin_pagetree_childtoggle {
+  width: 18px; height: 22px; padding: 0;
+  color: var(--muted); font-size: 11px; line-height: 22px; text-align: center;
+}
+.sidebar a.plugin_pagetree_childtoggle::before { content: '▸'; }
+.sidebar a.plugin_pagetree_childtoggle[aria-expanded="true"]::before { content: '▾'; }
+.sidebar a.plugin_pagetree_childtoggle:hover { background: #E4E6EA; }
+.plugin_pagetree_current > a { background: #E9F2FF; color: var(--blue); font-weight: 600; }
 
 main { padding: 34px 40px 200px; }
 .doc { max-width: 720px; }

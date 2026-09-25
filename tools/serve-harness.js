@@ -12,6 +12,7 @@ import { readFile, stat } from 'node:fs/promises'
 import { readFileSync } from 'node:fs'
 import { join, extname, normalize, sep } from 'node:path'
 import { searchResponse } from './jql-eval.mjs'
+import { contentSearch, contentWithAncestors, spaceContent } from './cql-eval.mjs'
 
 const ROOT = join(import.meta.dirname, '..')
 const PORT = Number(process.argv[2] || 5175)
@@ -29,184 +30,10 @@ const TYPES = {
 //
 // Lo que Faro lee de ella: los antepasados de una página, la búsqueda por
 // título, las consultas de plantilla (lo que viste, lo tuyo, unos ids) y el
-// árbol entero de un espacio paginado. Es el mismo árbol que pintan las dos
-// barras laterales del banco, con una portada de espacio (la 1) por encima de
-// todo, como en el Confluence real, para poder comprobar que se quita del
-// camino.
-
-/** hijo -> padre */
-const PARENT = {
-  100: '1', 300: '1', 400: '1', 1080: '1',
-  200: '100', 201: '100', 301: '300',
-  1081: '1080', 1082: '1081', 1083: '1082', 1084: '1083', 1085: '1084', 1086: '1085',
-  2001: '1081', 2002: '2001', 2003: '2002',
-  3001: '1081', 3002: '3001', 3003: '3002',
-}
-
-const PAGE = {
-  1: ['Ingeniería', 'Ingenieria'],
-  100: ['Arquitectura', 'Arquitectura'],
-  200: ['ADR-014 Rotación de tokens de servicio', 'ADR-014'],
-  201: ['ADR-015 Colas de eventos', 'ADR-015'],
-  300: ['Operación', 'Operacion'],
-  301: ['Runbook de guardia', 'Runbook'],
-  400: ['Onboarding', 'Onboarding'],
-  1080: ['1080 - Architecture', 'Architecture'],
-  1081: ['1081 - D1.3.x', 'D13x'],
-  1082: ['Simpl-Open Application Architecture', 'AppArch'],
-  1083: ['Application Components Views', 'Components'],
-  1084: ['ACV - Domain 1 - Access Control & Trust', 'ACVDomain1'],
-  1085: ['ACV - Domain 1 - Static Views', 'StaticViews'],
-  1086: ['ACV Static - Identity Provider Service', 'ACV+Static+-+Identity+Provider+Service'],
-  2001: ['Simpl-Open Application Architecture', 'AppArch'],
-  2002: ['ACV - Domain 1 - Static Views', 'ACVStatic'],
-  2003: ['ACV Static - Identity Provider Service', 'ACV+Static+-+Identity+Provider+Service'],
-  3001: ['Simpl-Open Technology Architecture', 'TechArch'],
-  3002: ['TCV - Domain 1 - Static Views', 'TCVStatic'],
-  3003: ['TCV Static - Identity Provider Service', 'TCV+Static+-+Identity+Provider+Service'],
-}
-
-/** Una página con la forma de la API v1: `_links.webui` relativa a /wiki. */
-function pageNode(id) {
-  const [title, slug] = PAGE[id]
-  return { id: String(id), type: 'page', status: 'current', title, _links: { webui: `/spaces/ENG/pages/${id}/${slug}` } }
-}
-
-/** `GET /rest/api/content/<id>?expand=ancestors,space.homepage`, o null si no existe. */
-function contentWithAncestors(id) {
-  if (!PAGE[id]) return null
-  const ancestors = []
-  const seen = new Set()
-  let cur = PARENT[id]
-  while (cur && !seen.has(cur)) {
-    seen.add(cur)
-    ancestors.unshift(pageNode(cur))
-    cur = PARENT[cur]
-  }
-  return {
-    ...pageNode(id),
-    ancestors,
-    space: { key: 'ENG', name: 'Ingeniería', homepage: pageNode(1) },
-  }
-}
-
-/**
- * `GET /wiki/rest/api/content/search?cql=…`, como busca CQL de verdad, para
- * que la autocomprobación detecte que sin comodín no hay prefijo: cada
- * `title~"…"` es un término; sin `*` tiene que coincidir con una palabra ENTERA
- * del título (sin mayúsculas ni acentos) y con `*` al final, con el principio
- * de una palabra. Todos los términos tienen que cumplirse.
- */
-const DIACRITICS = new RegExp('[\\u0300-\\u036f]', 'g')
-function fold(s) {
-  return String(s).normalize('NFD').replace(DIACRITICS, '').toLowerCase()
-}
-
-/**
- * Cuándo y quién tocó cada página, para las consultas de plantilla que preguntan
- * «qué ha cambiado». Horas hacia atrás, como la fixture de incidencias: lo que
- * se compara son ids y nombres, no instantes.
- */
-const PAGE_META = {
-  200: { horas: 26, quien: 'Marta Ruiz', version: 7 },
-  1086: { horas: 5, quien: 'Marta Ruiz', version: 2 },
-  2003: { horas: 2, quien: 'Ana Pérez', version: 3 },
-  3003: { horas: 50, quien: 'Luis Gómez', version: 12 },
-}
-
-/** Lo que devuelve `recentlyViewedContent(N)`: lo último que «viste», en ese orden. */
-const VISTAS_RECIENTES = ['2003', '3003', '200', '1086', '100']
-/** Lo que devuelve la plantilla «lo tuyo» de Confluence. */
-const MIAS = ['3003', '1086', '200']
-
-function metaDe(id) {
-  return PAGE_META[id] || { horas: (Number(id) % 97) + 1, quien: 'Ana Pérez', version: 1 }
-}
-
-function cuando(horas) {
-  return new Date(Date.now() - horas * 3600000).toISOString().replace('Z', '+0000')
-}
-
-/** Una página con `version` e `history.lastUpdated`, como cuando se pide `expand=version,history.lastUpdated`. */
-function pageConVersion(id) {
-  const meta = metaDe(id)
-  const sello = { when: cuando(meta.horas), by: { displayName: meta.quien } }
-  return {
-    ...pageNode(id),
-    space: { key: 'ENG', name: 'Ingeniería' },
-    version: { ...sello, number: meta.version },
-    history: { lastUpdated: sello },
-  }
-}
-
-/**
- * Las tres CQL de PLANTILLA que `confluence-rest.js` sabe escribir (lo que
- * viste, lo tuyo, unos ids sueltos). Se miran ANTES que `title~`, y cualquier
- * otra cosa sigue por la búsqueda por título de siempre. null si no es una
- * plantilla.
- */
-function searchByTemplate(cql, limit) {
-  const q = String(cql)
-  const n = Math.min(30, Math.max(1, Number(limit) || 30))
-  let ids = null
-  const vistas = /^type = page AND id in recentlyViewedContent\((\d{1,3})\)$/.exec(q)
-  if (vistas) ids = VISTAS_RECIENTES.slice(0, Number(vistas[1]))
-  else if (/^type = page AND \(contributor = currentUser\(\)/.test(q)) ids = MIAS
-  else {
-    const sueltos = /^type = page AND id in \(([\d,]+)\)$/.exec(q)
-    if (sueltos) ids = sueltos[1].split(',')
-  }
-  if (!ids) return null
-  const results = ids.filter((id) => PAGE[id]).slice(0, n).map(pageConVersion)
-  return { results, start: 0, limit: n, size: results.length }
-}
-
-/**
- * `GET /rest/api/content?spaceKey=ENG&type=page&expand=ancestors,space.homepage&start&limit`:
- * el árbol entero del espacio, paginado como lo pagina Confluence (`size` y
- * `_links.next`), con la cadena de antepasados de cada página dentro de la LISTA.
- */
-function spaceContent(url) {
-  if (url.searchParams.get('spaceKey') !== 'ENG') return { results: [], start: 0, limit: 0, size: 0 }
-  const todas = Object.keys(PAGE).map(Number).sort((a, b) => a - b).map(String)
-  const start = Math.max(0, Number(url.searchParams.get('start')) || 0)
-  const limit = Math.min(200, Math.max(1, Number(url.searchParams.get('limit')) || 25))
-  const trozo = todas.slice(start, start + limit)
-  const quedan = start + trozo.length < todas.length
-  // `contentWithAncestors` ya trae la cadena de antepasados y el `space` con su
-  // portada: es lo mismo que Confluence devuelve en la LISTA cuando se le pide
-  // `expand=ancestors,space.homepage`.
-  const body = {
-    results: trozo.map((id) => contentWithAncestors(id)),
-    start,
-    limit,
-    size: trozo.length,
-    _links: { base: '/wiki', context: '' },
-  }
-  if (quedan) body._links.next = `/rest/api/content?spaceKey=ENG&type=page&start=${start + trozo.length}&limit=${limit}`
-  return body
-}
-
-function searchByTitle(cql, limit) {
-  const terms = [...String(cql).matchAll(/title~"([^"]*)"/g)].map((m) => m[1]).filter(Boolean)
-  const n = Math.min(20, Math.max(1, Number(limit) || 8))
-  const hits = Object.keys(PAGE)
-    .map(Number)
-    .sort((a, b) => a - b)
-    .filter((id) => {
-      const words = fold(PAGE[id][0]).split(/[^\p{L}\p{N}]+/u).filter(Boolean)
-      return (
-        terms.length > 0 &&
-        terms.every((t) => {
-          const prefijo = t.endsWith('*')
-          const term = fold(prefijo ? t.slice(0, -1) : t)
-          return term.length > 0 && words.some((w) => (prefijo ? w.startsWith(term) : w === term))
-        })
-      )
-    })
-  const results = hits.slice(0, n).map((id) => ({ ...pageNode(id), space: { key: 'ENG', name: 'Ingeniería' } }))
-  return { results, start: 0, limit: n, size: results.length }
-}
+// árbol de un espacio. Todo eso vive en tools/cql-eval.mjs, que SÍ se puede
+// importar desde una prueba de Node; aquí sólo se enchufa a su ruta, porque
+// este fichero abre un servidor al importarlo y nada de lo que tuviera dentro
+// se podría ejecutar sin levantarlo (H14, el mismo motivo que jql-eval.mjs).
 
 // ------------------------------------------------- la API REST de la Jira falsa
 //
@@ -215,6 +42,11 @@ function searchByTitle(cql, limit) {
 // remotos de una incidencia. Las incidencias salen de harness/issues.json y el
 // filtrado lo hace el mini-evaluador de tools/jql-eval.mjs, que contesta 400 con
 // `errorMessages` a lo que no entiende, como el Jira real.
+//
+// Desde H14 contesta también con el ID de cada tipo, estado y prioridad y con el
+// nombre TRADUCIDO que ve el usuario (el `catalog` de la fixture), y rechaza con
+// un 400 la consulta que pregunte por ese nombre traducido: es lo que hace el Jira
+// del usuario, y lo que obliga a que los chips pregunten por id.
 
 const FIXTURE = JSON.parse(readFileSync(join(ROOT, 'harness', 'issues.json'), 'utf8'))
 
@@ -255,13 +87,19 @@ function rutaDeApi(path) {
   return resto.startsWith('/rest/api/') ? { modo, resto } : null
 }
 
-/** Los enlaces remotos de una incidencia, con la URL de la página resuelta contra este servidor. */
+/**
+ * Los enlaces remotos de una incidencia, con la URL de la página resuelta contra
+ * este servidor. `PAGINA_<id>` se convierte en la dirección que devuelve un Jira
+ * Data Center de verdad (H14, observado): `/pages/viewpage.action?pageId=<id>`,
+ * sin el título por ninguna parte. Va por id y no por una URL escrita aquí para
+ * que cambiar a qué página apunta la fixture no obligue a tocar el servidor.
+ */
 function remoteLinks(key, host) {
   const base = `http://${host}`
-  return (FIXTURE.remoteLinks?.[key] || []).map((l) => ({
-    ...l,
-    object: { ...l.object, url: l.object.url === 'PAGINA_200' ? `${base}/wiki/spaces/ENG/pages/200/ADR-014` : l.object.url },
-  }))
+  return (FIXTURE.remoteLinks?.[key] || []).map((l) => {
+    const m = /^PAGINA_(\d+)$/.exec(String(l.object?.url || ''))
+    return { ...l, object: { ...l.object, url: m ? `${base}/wiki/pages/viewpage.action?pageId=${m[1]}` : l.object.url } }
+  })
 }
 
 /** Contesta una ruta de API, o null si esa ruta no existe aquí. */
@@ -301,12 +139,21 @@ function contestarApi({ modo, resto }, url, req) {
 
   if (resto === '/rest/api/content/search') {
     const cql = url.searchParams.get('cql') || ''
-    const limit = url.searchParams.get('limit')
-    return { status: 200, body: searchByTemplate(cql, limit) || searchByTitle(cql, limit) }
+    return {
+      status: 200,
+      body: contentSearch(cql, { start: url.searchParams.get('start'), limit: url.searchParams.get('limit') }),
+    }
   }
 
   if (resto === '/rest/api/content') {
-    return { status: 200, body: spaceContent(url) }
+    return {
+      status: 200,
+      body: spaceContent({
+        spaceKey: url.searchParams.get('spaceKey'),
+        start: url.searchParams.get('start'),
+        limit: url.searchParams.get('limit'),
+      }),
+    }
   }
 
   const contenido = /^\/rest\/api\/content\/(\d+)$/.exec(resto)

@@ -11,14 +11,14 @@
 
 import { NavRunner, STEP_RESULT } from '../src/content/runner.js'
 import { isSafeToClick } from '../src/content/locators.js'
-import { treeContainer, rowFor, toggleFor, treeScroller } from '../src/content/tree-dom.js'
+import { treeContainer, rowFor, toggleFor, treeScroller, describeTree } from '../src/content/tree-dom.js'
 import { scrollWithinScrollers } from '../src/content/dom-utils.js'
 import { pageIdFromDom } from '../src/content/page-id.js'
 import { imagesWithin } from '../src/content/anchor.js'
 import { Picker } from '../src/content/picker.js'
 import { pageDigest, digestScope, resolveBlockQuote } from '../src/content/digest.js'
 import { jiraIssueFields, jiraIssueKey } from '../src/content/jira-issue.js'
-import { pageLinks } from '../src/content/page-links.js'
+import { pageLinks, isOwnJiraRoute } from '../src/content/page-links.js'
 import { formatDigest, blockHint, DIGEST_LIMITS } from '../src/shared/digest.js'
 
 // --------------------------------------------------------------- contenido
@@ -244,6 +244,19 @@ const PAGES = {
               <div id="summary-val" class="issue-summary">Rotar los tokens de servicio antes del despliegue de marzo</div>
               <div class="command-bar">
                 <ul class="ops-menus aui-toolbar2">
+                  <!-- El estado, donde lo pinta el Data Center real (H14): en el
+                       botón de transiciones, con el nombre ENTERO dentro del
+                       atributo title (que es HTML), el texto visible RECORTADO
+                       por Jira y la categoría del flujo en la clase. Está en la
+                       barra de acciones, o sea que es interfaz: su texto no entra
+                       en ningún bloque y nadie lo pulsa (abre un menú). -->
+                  <li id="opsbar-opsbar-transitions" class="aui-buttons pluggable-ops">
+                    <a id="opsbar-transitions_more" class="aui-button aui-dropdown2-trigger opsbar-transitions__status-category_indeterminate"
+                       role="button" aria-haspopup="true" aria-expanded="false" href="#"
+                       title='<span class="jira-issue-status-tooltip-title">PENDING SECURITY SIGN-OFF</span><br><span class="jira-issue-status-tooltip-desc">El equipo de seguridad tiene que firmar la rotación</span>'>
+                      <span class="dropdown-text">PENDING SECURITY S...</span>
+                    </a>
+                  </li>
                   <li><a href="#" class="tb-btn">Editar</a></li>
                   <li><a href="#" class="tb-btn">Añadir comentario</a></li>
                   <li><a href="#" class="tb-btn">Asignar</a></li>
@@ -264,7 +277,12 @@ const PAGES = {
                 <div class="mod-content">
                   <ul id="issuedetails" class="property-list two-cols">
                     <li class="item"><div class="wrap"><strong class="name">Tipo:</strong> <span id="type-val" class="value">Tarea</span></div></li>
-                    <li class="item item-right"><div class="wrap"><strong class="name">Estado:</strong> <span id="status-val" class="value"><span class="lozenge">En curso</span></span></div></li>
+                    <!-- Un campo VACÍO se pinta como texto, no se omite (H14): de
+                         aquí salían un chip «Mismo componente «Ninguno»» que la
+                         API rechaza con un 400 y un prompt que decía componentes
+                         «Ninguno». Y el estado NO está aquí: en este Jira, como
+                         en el real, vive en el botón de transiciones. -->
+                    <li class="item item-right"><div class="wrap"><strong class="name">Componentes:</strong> <span id="components-val" class="value"> Ninguno </span></div></li>
                     <li class="item"><div class="wrap"><strong class="name">Prioridad:</strong> <span id="priority-val" class="value">Crítica</span></div></li>
                     <li class="item item-right"><div class="wrap"><strong class="name">Versión correctora:</strong> <span id="fixfor-val" class="value">Major Release Q4-2026</span></div></li>
                     <li class="item"><div class="wrap"><strong class="name">Etiquetas:</strong> <span class="value"><ul class="labels"><li><a href="#">seguridad</a></li><li><a href="#">tokens</a></li></ul></span></div></li>
@@ -277,6 +295,11 @@ const PAGES = {
               <div id="descriptionmodule" class="module toggle-wrap">
                 <div class="mod-header"><h3 class="toggle-header">Descripción</h3><button class="aui-button toggle-title" type="button"><span>Contraer Descripción</span></button></div>
                 <div class="mod-content"><a href="/wiki/spaces/ENG/pages/997/Plantilla" role="button" class="aui-button">Usar plantilla</a><div id="description-val" class="field-ignore-highlight"><div class="user-content-block">
+                  <!-- Enlaces internos de Jira DELANTE de los de Confluence, como
+                       en la épica real (H14): ahí eran 55 de los 60 que caben y
+                       los de los comentarios no llegaban a leerse. No son páginas
+                       y no cuentan para el tope. -->
+                  <p>Depende de <a href="/browse/ENG-42">ENG-42</a> y el panel de administración lo expone en <a href="/rest/api/2/issue/ENG-7/remotelink">/rest/api/2/issue/ENG-7/remotelink</a>.</p>
                   <p><b>Objetivo:</b> rotar los <a href="/wiki/spaces/ENG/pages/200/ADR-014">tokens de servicio</a> de todos los componentes antes del despliegue de marzo, sin ventana de corte.</p>
                   <p>Por política de seguridad el token expira a los 90 días naturales y debe rotarse desde el panel de administración.</p>
                   <p><b>Criterios de aceptación:</b></p>
@@ -292,7 +315,7 @@ const PAGES = {
               </div>
               <div id="linkingmodule" class="module toggle-wrap">
                 <div class="mod-header"><h3 class="toggle-header">Enlace a Incidencias</h3></div>
-                <div class="mod-content"><dl class="links-list"><dt>relates to</dt><dd><div class="link-content"><a href="/browse/ENG-8">ENG-8</a> Revisar permisos del exportador</div></dd></dl><dl class="links-list"><dt>Wiki Page</dt><dd><div class="link-content"><a class="link-title" href="/display/ENG/Runbook+de+guardia">Runbook de guardia</a></div></dd></dl></div>
+                <div class="mod-content"><dl class="links-list"><dt>relates to</dt><dd><div class="link-content"><a href="/browse/ENG-8">ENG-8</a> Revisar permisos del exportador</div></dd></dl><dl class="links-list"><dt>Wiki Page</dt><dd class="remote-link"><div class="link-content"><a class="link-title" href="/display/ENG/Runbook+de+guardia">Runbook de guardia</a></div><div class="delete-link"><a href="/secure/DeleteRemoteIssueLink!default.jspa?remoteIssueLinkId=10500&amp;id=1007" title="Borrar este enlace"><span class="aui-icon">Borrar este enlace</span></a></div></dd></dl></div>
               </div>
               <div id="activitymodule" class="module toggle-wrap">
                 <div class="mod-header"><h3 class="toggle-header">Actividad</h3></div>
@@ -315,7 +338,14 @@ const PAGES = {
                           <button class="twixi icon-default" type="button"><span>Contraer el comentario: Marco</span></button>
                           <div class="action-details"><a class="user-hover" href="#">Marco</a> añadió un comentario - <span class="date">15/ago/26 9:02 AM</span></div>
                         </div>
-                        <div class="action-body flooded"><p>De acuerdo. Entonces el criterio de «ningún servicio queda fuera» no se cumple para <a href="https://git.example.com/eng/exporter">el exportador</a>: hay que decirlo en la descripción.</p></div>
+                        <!-- H14: un enlace PEGADO, que es como llegan los de
+                             Confluence en las incidencias reales: el texto del
+                             <a> ES la URL, de 80 a 106 caracteres, así que la
+                             sugerencia se llamaba como una URL. El título está
+                             en el slug de la ruta. El href va relativo porque el
+                             banco no sabe su propio origen al escribir la
+                             fixture; el TEXTO es la URL tal como se pega. -->
+                        <div class="action-body flooded"><p>De acuerdo. Entonces el criterio de «ningún servicio queda fuera» no se cumple para <a href="https://git.example.com/eng/exporter">el exportador</a>: hay que decirlo en la descripción.</p><p>Contexto: <a href="/wiki/spaces/ENG/pages/200/ADR-014">https://confluence.example.com/wiki/spaces/ENG/pages/200/ADR-014</a></p></div>
                         <div class="action-links action-comment-actions"><button class="pinbutton" type="button">Anclar</button></div>
                       </div>
                     </div>
@@ -357,6 +387,10 @@ function renderPage(key, { push = true } = {}) {
   // Como el Confluence real: la pagina en la que estas se pinta en negrita y
   // SIN enlace. Es justo el caso que hacia decir «no encuentro este paso».
   document.querySelectorAll('.sidebar a, .sidebar span[data-nav]').forEach((el) => {
+    // El pagetree de un Data Center deja la página abierta COMO ENLACE y sólo
+    // marca su span (`marcarPagetreeActual`, más abajo). Cambiar el <a> por un
+    // <span> es lo que hace Confluence Cloud, y lo que prueba el tramo 12.
+    if (el.closest('.plugin_pagetree')) return
     const esActual = el.dataset.nav === key
     el.classList.toggle('current', esActual)
     if (esActual && el.tagName === 'A') {
@@ -375,6 +409,7 @@ function renderPage(key, { push = true } = {}) {
       el.replaceWith(a)
     }
   })
+  marcarPagetreeActual(key)
   if (push && location.pathname !== page.path) history.pushState({ key }, '', page.path)
   document.title = page.title + (page.raw ? ' - Jira' : ' · Confluence')
   ponerIdDeLaPagina(page)
@@ -539,13 +574,234 @@ function buildCloudSidebar() {
   return aside
 }
 
+// ------------------------------- la barra lateral «pagetree» (Data Center 9.2)
+//
+// La tercera forma, y la única que estaba ROTA: el pagetree clásico de un
+// Confluence Server/Data Center. El marcado está copiado del Confluence 9.2 del
+// usuario (F9 de la verificación en real, 2026-09-21), donde `treeContainer()`
+// no encontraba nada y `describeTree()` contestaba «(ninguno) — sin contenedor
+// no hay recorrido posible»: ni «Paso a paso» ni «Árbol leído de la página».
+//
+// Lo que tiene de distinto, y por lo que hace falta tenerla aquí:
+//  - No hay `<aside>`, ni `role="tree"`, ni un solo `data-testid`: la barra es
+//    un `div.ia-fixed-sidebar[role="complementary"]` y el árbol, un
+//    `div.plugin_pagetree`.
+//  - El que hace scroll es `.acs-side-bar.ia-scrollable-section`, no la barra.
+//  - Cada fila es un `<li>` con su chevron aparte, que es un `<a href="">`
+//    (sin dirección útil) con `role="button"` y el título en su `aria-label`.
+//  - La página abierta SIGUE siendo un enlace: sólo su span se marca con
+//    `plugin_pagetree_current` (las otras dos barras cambian el `<a>` por un
+//    `<span>`, que es lo que hace Cloud y lo que prueba el tramo 12).
+//  - Y las hijas NO están en el DOM hasta pulsar el chevron: llegan por AJAX.
+//    Eso es lo que de verdad pone a prueba al ejecutor, porque un paso de
+//    desplegar tiene que encontrar en el árbol una fila que todavía no existe.
+//
+// El árbol de páginas es el MISMO que el de la barra clásica, para que comparar
+// lo que `snapshotTree()` lee de una con lo que lee de la otra signifique algo.
+const PAGETREE = [
+  { id: '100', kids: [{ id: '200' }, { id: '201' }] },
+  { id: '300', kids: [{ id: '301' }] },
+  { id: '400' },
+  {
+    id: '1080',
+    kids: [
+      {
+        id: '1081',
+        kids: [
+          { id: '1082', kids: [{ id: '1083', kids: [{ id: '1084', kids: [{ id: '1085', kids: [{ id: '1086' }] }] }] }] },
+        ],
+      },
+    ],
+  },
+]
+
+/** Qué hijas le toca cargar a cada fila cuando se la despliegue. */
+const pagetreePendientes = new WeakMap()
+let pagetreeSeq = 0
+
+/**
+ * La dirección que pone el pagetree de un Confluence 9: `/spaces/KEY/pages/ID/
+ * Slug` (sin `/wiki`) y con la consulta `?src=contextnavpagetreemode` detrás.
+ * No es la ruta con la que el banco enruta —eso es `PAGES[...].path`—, y ahí
+ * está la gracia: el paso se localiza por el `/pages/<id>/` que lleva dentro.
+ */
+function pagetreeHref(id) {
+  return PAGES['page:' + id].path.replace(/^\/wiki/, '') + '?src=contextnavpagetreemode'
+}
+
+function pagetreeRow(nodo) {
+  const page = PAGES['page:' + nodo.id]
+  const sufijo = nodo.id + '-' + pagetreeSeq++
+  const li = document.createElement('li')
+
+  const cajaToggle = document.createElement('div')
+  cajaToggle.className = 'plugin_pagetree_childtoggle_container'
+  if (nodo.kids?.length) {
+    const chevron = document.createElement('a')
+    chevron.id = 'plusminus' + sufijo
+    chevron.className = 'plugin_pagetree_childtoggle aui-icon aui-icon-small aui-iconfont-chevron-right'
+    // Sin dirección útil, como el real: pulsarlo no navega, pide las hijas.
+    chevron.setAttribute('href', '')
+    chevron.setAttribute('role', 'button')
+    chevron.setAttribute('tabindex', '0')
+    chevron.setAttribute('data-type', 'toggle')
+    chevron.setAttribute('data-page-id', nodo.id)
+    chevron.setAttribute('aria-expanded', 'false')
+    chevron.setAttribute('aria-label', 'Ampliar elemento ' + page.title)
+    cajaToggle.appendChild(chevron)
+  } else {
+    const hoja = document.createElement('span')
+    hoja.className = 'no-children icon'
+    cajaToggle.appendChild(hoja)
+  }
+  li.appendChild(cajaToggle)
+
+  const contenido = document.createElement('div')
+  contenido.className = 'plugin_pagetree_children_content'
+  const span = document.createElement('span')
+  span.id = 'childrenspan' + sufijo
+  span.className = 'plugin_pagetree_children_span'
+  const a = document.createElement('a')
+  a.setAttribute('href', pagetreeHref(nodo.id))
+  a.dataset.nav = 'page:' + nodo.id
+  a.textContent = page.title
+  span.appendChild(a)
+  contenido.appendChild(span)
+  li.appendChild(contenido)
+
+  const caja = document.createElement('div')
+  caja.id = 'children' + sufijo
+  caja.className = 'plugin_pagetree_children_container oculta'
+  li.appendChild(caja)
+  if (nodo.kids?.length) pagetreePendientes.set(li, nodo.kids)
+
+  return li
+}
+
+/** Una hoja de relleno: sin ellas la barra no tiene scroll propio que probar. */
+function pagetreeRelleno(i) {
+  const li = document.createElement('li')
+  const cajaToggle = document.createElement('div')
+  cajaToggle.className = 'plugin_pagetree_childtoggle_container'
+  const hoja = document.createElement('span')
+  hoja.className = 'no-children icon'
+  cajaToggle.appendChild(hoja)
+  const contenido = document.createElement('div')
+  contenido.className = 'plugin_pagetree_children_content'
+  const span = document.createElement('span')
+  span.className = 'plugin_pagetree_children_span'
+  const a = document.createElement('a')
+  a.setAttribute('href', '/spaces/ENG/pages/9' + String(i).padStart(3, '0') + '/Relleno')
+  a.textContent = 'Otra página del espacio ' + i
+  span.appendChild(a)
+  contenido.appendChild(span)
+  li.append(cajaToggle, contenido)
+  return li
+}
+
+/**
+ * El AJAX del pagetree: al pulsar el chevron, `aria-expanded` pasa a «true» y
+ * el `ul` de las hijas aparece VACÍO y con `aria-busy`; las filas llegan un
+ * momento después. Al plegar no se tiran: el real deja `data-children-loaded`
+ * puesto y sólo las esconde, así que la segunda vez no hay petición.
+ */
+document.addEventListener('click', (ev) => {
+  const chevron = ev.target.closest?.('.plugin_pagetree_childtoggle')
+  if (!chevron) return
+  ev.preventDefault()
+  const fila = chevron.closest('li')
+  const caja = fila?.querySelector(':scope > .plugin_pagetree_children_container')
+  if (!caja) return
+
+  if (chevron.getAttribute('aria-expanded') === 'true') {
+    chevron.setAttribute('aria-expanded', 'false')
+    caja.classList.add('oculta')
+    return
+  }
+  chevron.setAttribute('aria-expanded', 'true')
+  caja.classList.remove('oculta')
+  if (chevron.dataset.childrenLoaded === 'true') return
+  chevron.dataset.childrenLoaded = 'true'
+
+  const ul = document.createElement('ul')
+  ul.className = 'plugin_pagetree_children_list'
+  ul.setAttribute('role', 'list')
+  ul.setAttribute('aria-busy', 'true')
+  caja.appendChild(ul)
+  setTimeout(() => {
+    for (const hijo of pagetreePendientes.get(fila) || []) ul.appendChild(pagetreeRow(hijo))
+    ul.removeAttribute('aria-busy')
+    marcarPagetreeActual()
+  }, 180)
+})
+
+/** La página abierta del pagetree: sigue siendo enlace, sólo se marca su span. */
+function marcarPagetreeActual(key = keyForPath(location.pathname)) {
+  for (const span of document.querySelectorAll('.plugin_pagetree_children_span')) {
+    const a = span.querySelector('a[data-nav]')
+    span.classList.toggle('plugin_pagetree_current', !!a && a.dataset.nav === key)
+  }
+}
+
+function buildPagetreeSidebar() {
+  pagetreeSeq = 0
+  // `sidebar` es la clase de maquetación del banco, y lo que `setSidebar` y
+  // `renderPage` buscan; `ia-fixed-sidebar` y el rol son los del DC real.
+  const fuera = document.createElement('div')
+  fuera.className = 'sidebar pagetree ia-fixed-sidebar'
+  fuera.setAttribute('role', 'complementary')
+  fuera.setAttribute('aria-label', 'barra lateral del espacio Ingeniería')
+
+  const scroll = document.createElement('div')
+  scroll.className = 'acs-side-bar ia-scrollable-section'
+  const contenido = document.createElement('div')
+  contenido.className = 'acs-side-bar-content'
+  const secundario = document.createElement('div')
+  secundario.className = 'ia-secondary-container tipsy-enabled'
+  const dentro = document.createElement('div')
+  dentro.className = 'ia-secondary-content'
+
+  const head = document.createElement('div')
+  head.className = 'space-head'
+  const avatar = document.createElement('span')
+  avatar.className = 'space-avatar'
+  avatar.textContent = 'EN'
+  const enlace = document.createElement('a')
+  enlace.setAttribute('href', '/spaces/ENG')
+  enlace.dataset.nav = 'space:ENG'
+  enlace.textContent = 'Ingeniería'
+  head.append(avatar, enlace)
+
+  const arbol = document.createElement('div')
+  arbol.className = 'plugin_pagetree conf-macro output-inline'
+  const raiz = document.createElement('ul')
+  raiz.className = 'plugin_pagetree_children_list plugin_pagetree_children_list_noleftspace'
+  raiz.setAttribute('role', 'list')
+  for (const nodo of PAGETREE) raiz.appendChild(pagetreeRow(nodo))
+  // Cuarenta hojas de relleno: el espacio real tiene 83 filas, y aquí hacen
+  // falta suficientes para que `.acs-side-bar` desborde su alto y tenga scroll
+  // propio de verdad — sin él no hay `treeScroller` que encontrar.
+  for (let i = 1; i <= 40; i++) raiz.appendChild(pagetreeRelleno(i))
+  arbol.appendChild(raiz)
+
+  dentro.append(head, arbol)
+  secundario.appendChild(dentro)
+  contenido.appendChild(secundario)
+  scroll.appendChild(contenido)
+  fuera.appendChild(scroll)
+  return fuera
+}
+
 let sidebarActual = 'clasica'
 const SIDEBAR_CLASICA = document.querySelector('.sidebar')
+/** El botón las recorre en círculo: las tres formas, una tras otra. */
+const SIGUIENTE_SIDEBAR = { clasica: 'cloud', cloud: 'pagetree', pagetree: 'clasica' }
 
 function setSidebar(cual) {
   if (cual === sidebarActual) return
   const viva = document.querySelector('.sidebar')
-  viva.replaceWith(cual === 'cloud' ? buildCloudSidebar() : SIDEBAR_CLASICA)
+  const nueva = cual === 'cloud' ? buildCloudSidebar() : cual === 'pagetree' ? buildPagetreeSidebar() : SIDEBAR_CLASICA
+  viva.replaceWith(nueva)
   sidebarActual = cual
   renderPage(keyForPath(location.pathname) || 'page:400', { push: false })
 }
@@ -884,8 +1140,12 @@ const actions = {
   },
 
   sidebar() {
-    setSidebar(sidebarActual === 'cloud' ? 'clasica' : 'cloud')
-    say('barra lateral: ' + sidebarActual)
+    setSidebar(SIGUIENTE_SIDEBAR[sidebarActual])
+    // Se dice con qué contenedor se queda `treeContainer()`: es lo único que
+    // distinguía a la barra que estaba rota, y así se ve de un vistazo.
+    const cont = treeContainer()
+    const nombre = cont ? cont.className.split(' ')[0] || cont.tagName.toLowerCase() : '(ninguno)'
+    say(`barra lateral: ${sidebarActual} · contenedor: ${nombre}`)
   },
 
   async 'acv-tcv'() {
@@ -1137,7 +1397,15 @@ const actions = {
       homeId: arbol.homeId,
     })
     const entradas = Object.keys(indice?.pages || {}).length
-    say(`índice del espacio ENG por la API: ${entradas} páginas en ${arbol.requests} peticiones · ${arbol.ms} ms`, entradas ? 'ok' : 'bad')
+    // Desde H14 se dice cuántas de cuántas y por dónde: el árbol son las páginas
+    // más recientes del espacio, no todas, y con la lista de antes serían las más
+    // viejas (F8).
+    say(
+      `índice del espacio ENG por la API: ${arbol.own} de ${arbol.total} páginas` +
+        ` (${entradas} entradas con antepasados) en ${arbol.requests} peticiones vía ${arbol.via}` +
+        `${arbol.truncated ? ' · recortado' : ''} · ${arbol.ms} ms`,
+      entradas ? 'ok' : 'bad'
+    )
     for (const id of Object.keys(indice?.pages || {}).slice(0, 5)) {
       const p = indice.pages[id]
       say(`  ${id} ← ${p.parentId ?? 'raíz'} · ${p.title}`)
@@ -1161,11 +1429,13 @@ const actions = {
     if (!muestra.ok) return say(`sin muestra: ${muestra.reason}`, 'bad')
     const perfil = jiraRest.profileFromSample(muestra.issues, { projectKey: 'ENG' })
     say(`perfil de ENG contado de ${perfil.sampled} incidencias (de ${muestra.total}) en ${muestra.ms} ms`, 'ok')
-    say(`  tipos: ${perfil.types.map((t) => `${t.name} ${t.count}`).join(' · ')}`)
-    say(`  estados: ${perfil.statuses.map((s) => `${s.name} ${s.count} (${s.category})`).join(' · ')}`)
+    // Con el id de cada tipo y de cada estado (H14): el nombre lo devuelve la API
+    // traducido al idioma del usuario y una consulta JQL sólo acepta el id.
+    say(`  tipos: ${perfil.types.map((t) => `${t.name} ${t.count} (id ${t.id || '—'})`).join(' · ')}`)
+    say(`  estados: ${perfil.statuses.map((s) => `${s.name} ${s.count} (${s.category}, id ${s.id || '—'})`).join(' · ')}`)
     say(`  convenciones: ${perfil.prefixes.map((p) => `${p.pattern} ${p.count} (p. ej. ${p.examples[0]?.key})`).join(' · ')}`)
     const chips = searchChips({ product: 'jira', cloud: false, projectKey: 'ENG' }, { profile: perfil })
-    say(`  chips que salen del perfil: ${chips.map((c) => c.label).join(' · ') || 'ninguno'}`)
+    say(`  chips que salen del perfil: ${chips.map((c) => `${c.label} [${c.jql}]`).join(' · ') || 'ninguno'}`)
   },
 
   /**
@@ -1182,6 +1452,10 @@ const actions = {
     const clave = jiraIssueKey(document, location.href)
     say(`${enlaces.length} enlaces en el contenido${clave ? ' de ' + clave : ' de esta página'}`)
     for (const l of enlaces) say(`  [${l.where}] ${l.text} → ${l.href}`)
+    // Y los que NO son una página porque son de Jira (H14): en una épica real
+    // eran 55 de los 60 que caben y dejaban fuera los de los comentarios.
+    const deJira = [...document.querySelectorAll('#page-content a[href]')].filter((a) => isOwnJiraRoute(a.getAttribute('href'), location.href))
+    if (deJira.length) say(`  ${deJira.length} enlaces a rutas propias de Jira, que no son páginas: ${deJira.slice(0, 4).map((a) => a.getAttribute('href')).join(' · ')}`)
     if (!enlaces.length) return say('no hay enlaces en el contenido de esta página', 'bad')
 
     const jiraRest = await import('/src/shared/jira-rest.js')
@@ -1203,6 +1477,10 @@ const actions = {
         hosts: [location.hostname],
       })
       say(remoto.ok ? `remotos: ${remoto.links.length} a Confluence` : `remotos: ${remoto.reason}`, remoto.ok ? 'ok' : 'bad')
+      // H14: y con qué título los manda la API. En el Jira real es «Page» en
+      // todos —el nombre del TIPO de enlace—, así que aquí sale vacío y el
+      // título de abajo tiene que venir de otra parte.
+      if (remoto.ok) for (const l of remoto.links) say(`  remoto ${l.pageId} · título que da la API: «${l.title}»`)
     }
     const site = { host: location.hostname, origin: location.origin, product: clave ? 'jira' : 'confluence', cloud: false }
     const quedan = confluenceLinksIn(enlaces, remoto, { site, linkedHost: location.hostname, index: indice })
@@ -2161,7 +2439,11 @@ const actions = {
     // propósito en la interfaz (la barra de acciones y un botón del módulo de
     // descripción). Los lee el 53 para comprobar que NO salen como enlaces de
     // la incidencia; aquí, que tampoco se cuelan en los bloques.
-    const interfaz = ['Editar', 'Añadir comentario', 'Asignar', 'Contraer', 'Main', 'Planning', 'Anclar', 'Suelte los archivos', 'Consejo de expertos', 'Sprint:', 'Git Integration', 'Create branch', '45196', 'Opciones', 'Ayuda', 'Usar plantilla']
+    // «PENDING SECURITY S...» es de H14: el estado vive en el botón de
+    // transiciones, que está en la barra de acciones. Su texto no es un bloque
+    // —y además viene recortado por Jira—; el nombre entero lo lee el 37 del
+    // atributo `title`.
+    const interfaz = ['Editar', 'Añadir comentario', 'Asignar', 'Contraer', 'Main', 'Planning', 'Anclar', 'Suelte los archivos', 'Consejo de expertos', 'Sprint:', 'Git Integration', 'Create branch', '45196', 'Opciones', 'Ayuda', 'Usar plantilla', 'PENDING SECURITY']
     const colada = interfaz.filter((t) => textosJira.some((x) => x.includes(t)))
     ok(
       'jira: la incidencia en bloques empieza por su titulo y trae campos, descripcion y comentarios',
@@ -2220,16 +2502,16 @@ const actions = {
     )
     runner.clearNotes()
 
-    // 37. Los campos de la incidencia: el tipo y el estado por su id (como en
-    //     el Data Center real), lo demás por su etiqueta —también lo de la
-    //     pestaña de campos oculta y el panel de personas—, y nada de la
-    //     interfaz. En una página de Confluence, ninguno.
+    // 37. Los campos de la incidencia: el tipo por su id, el ESTADO donde lo
+    //     pinta el Data Center real —el botón de transiciones, con el nombre
+    //     entero dentro del `title` y la categoría en la clase—, y lo demás por
+    //     su etiqueta, también lo de la pestaña de campos oculta y el panel de
+    //     personas. Nada de la interfaz. En una página de Confluence, ninguno.
     const campos = jiraIssueFields()
     ok(
       'jira: los campos de la incidencia se leen por su id y por su etiqueta',
       !!campos &&
         campos.type === 'Tarea' &&
-        campos.status === 'En curso' &&
         campos.priority === 'Crítica' &&
         campos.resolution === '' &&
         campos.assignee === 'Sin asignar' &&
@@ -2238,9 +2520,55 @@ const actions = {
         campos.sprint === 'S37 Infra' &&
         campos.fixVersions.join('|') === 'Major Release Q4-2026' &&
         campos.affectsVersions.length === 0 &&
-        campos.components.length === 0 &&
         campos.labels.join('|') === 'seguridad|tokens',
       campos ? `tipo ${campos.type} · estado ${campos.status} · ${campos.labels.length} etiquetas` : 'sin campos'
+    )
+    // H14: el estado ENTERO sale del `title` del botón de transiciones y NO de
+    // su texto visible, que Jira recorta él mismo («PENDING SECURITY S...»).
+    // Pasó de verdad: en el Jira del usuario no hay `#status-val` ni pastilla de
+    // estado en ninguna parte, y el análisis se quedaba sin estado y sin fase.
+    const boton37 = document.getElementById('opsbar-transitions_more')
+    const visible37 = (boton37?.querySelector('.dropdown-text')?.textContent || '').trim()
+    const { issuePhase: fase37, normalizeIssueFields: normal37 } = await import('/src/panel/issue-profile.js')
+    ok(
+      'jira: el estado sale entero del title del boton de transiciones, y su categoria de la clase',
+      campos?.status === 'PENDING SECURITY SIGN-OFF' &&
+        visible37.endsWith('...') &&
+        campos.status !== visible37 &&
+        !/</.test(campos.status) &&
+        campos.statusCategory === 'indeterminate' &&
+        // Y por eso hay fase: por nombre, un estado a medida no dice nada.
+        fase37(campos.status) === '' &&
+        fase37(campos.status, campos.statusCategory) === 'en-curso',
+      `estado «${campos?.status}» · categoría ${campos?.statusCategory} · visible «${visible37}» · fase ${fase37(campos?.status, campos?.statusCategory) || '(ninguna)'}`
+    )
+    // H14: un campo VACÍO se pinta como texto («Ninguno»), y eso no es un valor.
+    // La barrera es la del panel, que es por donde pasa todo lo que llega de la
+    // pantalla antes de un prompt o de una consulta: sin ella salía un chip
+    // «Mismo componente «Ninguno»» que la API rechaza con un 400.
+    const normalizados37 = normal37(campos)
+    ok(
+      'jira: «Ninguno» se lee de la pantalla tal cual y la barrera del panel lo tira',
+      campos.components.join('|') === 'Ninguno' &&
+        normalizados37.components.length === 0 &&
+        normalizados37.labels.join('|') === 'seguridad|tokens' &&
+        normalizados37.status === 'PENDING SECURITY SIGN-OFF' &&
+        normalizados37.statusCategory === 'indeterminate',
+      `pantalla «${campos.components.join(', ')}» → panel ${normalizados37.components.length} componentes`
+    )
+    // Y donde SÍ están los selectores de siempre, mandan ellos y en su orden:
+    // otras instalaciones tienen `#status-val`, y el botón es sólo el respaldo.
+    const val37 = document.createElement('span')
+    val37.id = 'status-val'
+    val37.className = 'value'
+    val37.textContent = 'En curso'
+    document.querySelector('#details-module .mod-content')?.appendChild(val37)
+    const conVal37 = jiraIssueFields()
+    val37.remove()
+    ok(
+      'jira: con el campo de estado de siempre delante, manda el de siempre',
+      conVal37?.status === 'En curso' && conVal37?.statusCategory === 'indeterminate',
+      `estado ${conVal37?.status} · categoría ${conVal37?.statusCategory}`
     )
     // Y un <dl> escrito en la descripción no es un campo: un «Estado:» de un
     // usuario no puede cambiar la fase del análisis.
@@ -2249,7 +2577,7 @@ const actions = {
     document.querySelector('#description-val .user-content-block').appendChild(dl)
     const conDl = jiraIssueFields()
     dl.remove()
-    ok('jira: un campo escrito en la descripcion no es un campo', conDl?.status === 'En curso', `estado ${conDl?.status}`)
+    ok('jira: un campo escrito en la descripcion no es un campo', conDl?.status === 'PENDING SECURITY SIGN-OFF', `estado ${conDl?.status}`)
     renderPage('page:200')
     await wait(320)
     ok('confluence: una página no tiene campos de incidencia', jiraIssueFields() === null)
@@ -2622,7 +2950,10 @@ const actions = {
     }
     const sitioJira = { origin: location.origin, jiraPrefix: '', cloud: false }
     const sitioConf = { origin: location.origin, wikiPrefix: '/wiki', cloud: false }
-    const CLAVES_FILA = 'assignee,components,epicKey,key,labels,lastViewedAt,parentKey,priority,reporter,status,statusCategory,summary,type,updatedAt'
+    // `typeId`, `statusId` y `priorityId` desde H14: el nombre viene traducido al
+    // idioma del usuario y el id es lo único con lo que se puede preguntar.
+    const CLAVES_FILA =
+      'assignee,components,epicKey,key,labels,lastViewedAt,parentKey,priority,priorityId,reporter,status,statusCategory,statusId,summary,type,typeId,updatedAt'
     const vistas44 = FIX.issues
       .filter((i) => i.history)
       .sort((a, b) => a.lastViewedHoursAgo - b.lastViewedHoursAgo)
@@ -2638,13 +2969,15 @@ const actions = {
       busca44.ok ? `${busca44.issues.map((i) => i.key).join(' ')} · ${busca44.total} en total · ${busca44.ms} ms` : busca44.reason
     )
     const fila44 = busca44.issues?.[0] || {}
+    const digitos44 = [fila44.typeId, fila44.statusId, fila44.priorityId].every((id) => /^\d+$/.test(String(id)))
     ok(
-      'cada fila llega con claves blancas: del JSON de Jira no se cuela ninguna',
+      'cada fila llega con claves blancas —y con el id de tipo, estado y prioridad— sin que del JSON de Jira se cuele ninguna',
       Object.keys(fila44).sort().join(',') === CLAVES_FILA &&
         fila44.statusCategory === 'indeterminate' &&
         fila44.assignee?.displayName === 'Ana Pérez' &&
+        digitos44 &&
         !('fields' in fila44),
-      Object.keys(fila44).sort().join(' ')
+      `${Object.keys(fila44).sort().join(' ')} · ids ${fila44.typeId}/${fila44.statusId}/${fila44.priorityId}`
     )
 
     // 45. Cuando la API dice que no. El mensaje es del SERVIDOR y se devuelve
@@ -2690,22 +3023,27 @@ const actions = {
       `${pedidasRest.length - antes46b} peticiones · prefijo «${otraRuta46.prefix}»`
     )
 
-    // 47. El árbol ENTERO de un espacio leído de la lista de la API, paginado:
-    //     es lo que sustituye las dos fases de modelo del indexador. El padre de
-    //     cada página sale de `expand=ancestors`, no de que nadie lo adivine, y
-    //     se comprueba contra la cadena que da la otra ruta de la misma API.
+    // 47. El árbol de un espacio leído de la API, paginado: es lo que sustituye
+    //     las dos fases de modelo del indexador. Desde H14 se lee por la
+    //     BÚSQUEDA ordenada por fecha —las más recientes primero, porque la
+    //     lista da las más viejas y en un espacio de verdad el tope se gastaba
+    //     en páginas de hace años (F8)—, y el padre de cada página sale de
+    //     `expand=ancestors`, no de que nadie lo adivine: se comprueba contra la
+    //     cadena que da la otra ruta de la misma API.
     const arbol47 = await confRest.fetchSpacePages(pideApi, sitioConf, 'ENG', { limit: 5 })
     const porId47 = new Map((arbol47.pages || []).map((p) => [p.id, p]))
     const cadena47 = await confRest.fetchAncestors(pideApi, sitioConf, '1086')
     const padres47 = cadena47.ok ? cadena47.pages.map((p) => p.id) : []
-    // Las peticiones no se escriben a mano: son las que hacen falta para las
-    // páginas que trajo, de cinco en cinco. Así una página vacía de más, o un
-    // `_links.next` que no acabe nunca, se ven aquí.
-    const peticiones47 = Math.ceil((arbol47.pages || []).length / 5)
+    // Las peticiones no se escriben a mano: la de la portada más las que hacen
+    // falta para las páginas propias que trajo, de cinco en cinco. Así una
+    // página vacía de más, o un `_links.next` que no acabe nunca, se ven aquí.
+    const peticiones47 = 1 + Math.ceil((arbol47.own || 0) / 5)
     ok(
-      'el árbol del espacio se lee paginado y el padre de cada página es el que dice la API',
+      'el árbol del espacio se lee por fecha y el padre de cada página es el que dice la API',
       arbol47.ok &&
-        arbol47.pages.length === 20 &&
+        arbol47.via === 'busqueda' &&
+        arbol47.own === 20 &&
+        arbol47.total === 20 &&
         arbol47.requests === peticiones47 &&
         !arbol47.truncated &&
         arbol47.homeId === '1' &&
@@ -2713,14 +3051,39 @@ const actions = {
         padres47.length === 7 &&
         padres47.every((id, i) => i === 0 || porId47.get(id)?.parentId === padres47[i - 1]),
       arbol47.ok
-        ? `${arbol47.pages.length} páginas en ${arbol47.requests} peticiones · portada ${arbol47.homeId} · cadena ${padres47.join('>')}`
+        ? `${arbol47.own} de ${arbol47.total} páginas (${arbol47.pages.length} con antepasados) en ${arbol47.requests} peticiones ` +
+          `vía ${arbol47.via} · portada ${arbol47.homeId} · cadena ${padres47.join('>')}`
         : arbol47.reason
+    )
+    // Leyendo las más recientes, los padres casi nunca están entre ellas: entran
+    // como antepasados. Lo que no puede pasar es que una página quede con la
+    // cadena a medias, porque entonces no habría por dónde empezar a llevar a
+    // nadie.
+    const raizDe47 = (p) => {
+      let cur = p
+      const vistos = new Set()
+      while (cur?.parentId && !vistos.has(cur.id)) {
+        vistos.add(cur.id)
+        cur = porId47.get(cur.parentId)
+      }
+      return cur && !cur.parentId ? cur.id : ''
+    }
+    const rotas47 = (arbol47.pages || []).filter((p) => !raizDe47(p))
+    ok(
+      'cada página incluida trae su cadena entera: subiendo por parentId se llega siempre a una raíz del árbol',
+      arbol47.ok && rotas47.length === 0 && raizDe47(porId47.get('1086')) === '1',
+      `${(arbol47.pages || []).length} páginas · ${rotas47.length} con la cadena a medias · la 1086 sube hasta ${raizDe47(porId47.get('1086'))}`
     )
     const corto47 = await confRest.fetchSpacePages(pideApi, sitioConf, 'ENG', { limit: 5, maxRequests: 3 })
     ok(
-      'con tope de peticiones se para y lo dice: lo que quede se completa como hasta ahora',
-      corto47.ok && corto47.requests === 3 && corto47.pages.length === 15 && corto47.truncated === true,
-      `${corto47.pages.length} páginas · ${corto47.requests} peticiones · recortado ${corto47.truncated}`
+      'con tope de peticiones se para y dice cuántas de cuántas: lo que quede se completa como hasta ahora',
+      corto47.ok &&
+        corto47.requests === 3 &&
+        corto47.own === 5 * (corto47.requests - 1) &&
+        corto47.pages.length >= corto47.own &&
+        corto47.total === 20 &&
+        corto47.truncated === true,
+      `${corto47.own} de ${corto47.total} páginas (${corto47.pages.length} con antepasados) · ${corto47.requests} peticiones · recortado ${corto47.truncated}`
     )
 
     // 48. Lo demás que se lee con la sesión: los filtros que el usuario tiene
@@ -2736,10 +3099,21 @@ const actions = {
       filtros48.ok ? filtros48.filters.map((f) => f.name).join(' | ') : filtros48.reason
     )
     const enlaces48 = await jiraRest.fetchRemoteLinks(pideApi, sitioJira, 'ENG-7', { hosts: [location.hostname] })
+    // H14: el título que manda este Jira es «Page» —el nombre del TIPO de enlace,
+    // lo que se vio en los quince enlaces remotos del Jira real—, y ése no es el
+    // nombre de la página: llega vacío y lo busca el panel donde sí está (el
+    // índice, el texto del enlace del DOM o el slug de la ruta). Cuál es el
+    // genérico no se escribe aquí: lo dice la fixture.
+    const generico48 = FIX.remoteLinks['ENG-7'][0].object.title
     ok(
-      'de los enlaces remotos sólo cuentan los que señalan una página de Confluence por id',
-      enlaces48.ok && enlaces48.links.length === 1 && enlaces48.links[0].pageId === '200' && enlaces48.links[0].url.startsWith(location.origin),
-      enlaces48.ok ? enlaces48.links.map((l) => `${l.pageId} ${l.title}`).join(' | ') : enlaces48.reason
+      'de los enlaces remotos sólo cuentan los que señalan una página por id, y «Page» no es un título',
+      enlaces48.ok &&
+        enlaces48.links.length === 1 &&
+        enlaces48.links[0].pageId === '301' &&
+        enlaces48.links[0].url.startsWith(location.origin) &&
+        generico48 === 'Page' &&
+        enlaces48.links[0].title === '',
+      enlaces48.ok ? enlaces48.links.map((l) => `${l.pageId} «${l.title}» (la API dice «${generico48}»)`).join(' | ') : enlaces48.reason
     )
     const vistas48 = await confRest.searchContent(pideApi, sitioConf, confRest.viewedCql(3))
     ok(
@@ -2878,10 +3252,10 @@ const actions = {
         deLaBarra51.length > 10 &&
         comunes51.length === deLaBarra51.length &&
         otroPadre51.length === 0 &&
-        arbol51.requests === Math.ceil(arbol51.pages.length / 8) &&
+        arbol51.requests === 1 + Math.ceil(arbol51.own / 8) &&
         !arbol51.truncated,
       `${comunes51.length} de ${deLaBarra51.length} páginas del árbol lateral · ${otroPadre51.length} con otro padre · ` +
-        `${arbol51.pages.length} de la API en ${arbol51.requests} peticiones`
+        `${arbol51.own} de la API (${arbol51.pages.length} con antepasados) en ${arbol51.requests} peticiones`
     )
     // La portada del espacio está por encima de todo en la API y NO es una rama
     // que se despliegue en la barra lateral: tiene que quedar como destino y no
@@ -2935,9 +3309,11 @@ const actions = {
       `${gente52.length} personas en la fixture, ${enElPerfil52.length} en el perfil · campos ${jiraRest.SAMPLE_FIELDS.join(',')}`
     )
     // Y con el perfil contado, los chips de estado que H8 dejó previstos tienen
-    // por fin qué ofrecer: los nombres EXACTOS del flujo de este proyecto, no
-    // los que el modelo supondría. Se ejecutan contra la API y cuadran con lo
-    // que el perfil contó, porque la muestra cubre el proyecto entero.
+    // por fin qué ofrecer: los estados de verdad del flujo de este proyecto, no
+    // los que el modelo supondría. Desde H14 la consulta va por el ID que el
+    // perfil guardó —el nombre viene traducido y JQL lo rechaza— y la etiqueta
+    // sigue enseñando el nombre. Se ejecutan contra la API y cuadran con lo que el
+    // perfil contó, porque la muestra cubre el proyecto entero.
     const chips52 = chipsDe({ product: 'jira', cloud: false, projectKey: 'ENG' }, { profile: perfil52 })
     const porEstado52 = chips52.filter((c) => c.kind === 'estado')
     const abiertos52 = perfil52.statuses.filter((s) => s.category !== 'done').slice(0, 2)
@@ -2945,16 +3321,64 @@ const actions = {
     for (const chip of porEstado52) {
       corridas52.push({ chip, r: await jiraRest.searchIssues(pideApi, sitioJira, chip.jql, { limit: 5 }) })
     }
+    const deSuEstado52 = (chip) => abiertos52.find((s) => s.id && chip.jql.endsWith('status = ' + s.id))
     ok(
-      'con el perfil contado, los chips de estado llevan los nombres exactos del proyecto y la API devuelve justo lo que el perfil contó',
+      'con el perfil contado, los chips de estado preguntan por el id de cada estado y la API devuelve justo lo que el perfil contó',
       porEstado52.length === abiertos52.length &&
-        abiertos52.every((s) => porEstado52.some((c) => c.jql.includes('"' + s.name + '"'))) &&
+        abiertos52.every((s) => !!s.id && porEstado52.some((c) => c.jql.endsWith('status = ' + s.id))) &&
+        porEstado52.every((c) => !/status = "/.test(c.jql)) &&
+        porEstado52.every((c) => abiertos52.some((s) => c.label.includes('«' + s.name + '»'))) &&
         perfil52.sampled === muestra52.total &&
         corridas52.length > 0 &&
         corridas52.every(({ chip, r }) => chip.run && r.ok) &&
-        corridas52.every(({ chip, r }) => r.total === abiertos52.find((s) => chip.jql.includes('"' + s.name + '"'))?.count),
-      corridas52.map(({ chip, r }) => `${chip.label} → ${r.ok ? r.total : 'FALLO ' + r.reason}`).join(' · ') ||
+        corridas52.every(({ chip, r }) => r.total === deSuEstado52(chip)?.count),
+      corridas52.map(({ chip, r }) => `${chip.label} [${chip.jql}] → ${r.ok ? r.total : 'FALLO ' + r.reason}`).join(' · ') ||
         'ningún chip de estado'
+    )
+
+    // Y por qué el id y no el nombre: el que la API DEVUELVE está traducido al
+    // idioma del usuario y JQL lo rechaza con un 400. Cuál está traducido no se
+    // escribe a mano: lo dice la fixture, y el nombre que el perfil contó es
+    // justamente ése.
+    const traducido52 = (FIX.catalog?.status || []).find((e) => e.display && e.display !== e.name)
+    const contado52 = perfil52.statuses.find((s) => s.name === traducido52?.display)
+    const porNombre52 = await jiraRest.searchIssues(pideApi, sitioJira, `project = ENG AND status = ${jiraRest.jqlQuote(traducido52?.display || '')}`, {
+      limit: 5,
+    })
+    const porIdDeEse52 = await jiraRest.searchIssues(pideApi, sitioJira, `project = ENG AND status = ${contado52?.id || 'x'}`, { limit: 5 })
+    ok(
+      'el nombre de estado que la API devuelve viene traducido y la consulta con él la rechaza el SERVIDOR; con el id que el perfil guardó, la misma consulta contesta',
+      !!traducido52 &&
+        !!contado52?.id &&
+        !porNombre52.ok &&
+        porNombre52.reason === 'jql' &&
+        porNombre52.status === 400 &&
+        /no existe para el campo/.test(porNombre52.messages?.[0] || '') &&
+        porIdDeEse52.ok &&
+        porIdDeEse52.total === contado52.count,
+      `«${traducido52?.display}» (JQL lo llama «${traducido52?.name}») → ${porNombre52.ok ? 'la aceptó' : (porNombre52.messages || []).join(' | ')} · ` +
+        `id ${contado52?.id} → ${porIdDeEse52.ok ? porIdDeEse52.total + ' de ' + contado52?.count + ' contadas' : 'FALLO ' + porIdDeEse52.reason}`
+    )
+
+    // El otro lado del mismo problema: el TIPO se lee de la pantalla (el DOM da el
+    // nombre y nada más) y el id lo tiene el perfil. Que las dos mitades casen no
+    // se puede probar en Node: una necesita el DOM de la incidencia y la otra un
+    // servidor que conteste como Jira. `campos50` es lo que el tramo 50 leyó de
+    // `issue:ENG-7`.
+    const sugeridas52 = jiraRest.suggestedQueries({ site: sitio50, issue: campos50, profile: perfil52 })
+    const chipTipo52 = sugeridas52.find((c) => c.kind === 'tipo')
+    const tipoDelPerfil52 = perfil52.types.find((t) => t.name === campos50?.type)
+    const corridaTipo52 = chipTipo52 ? await jiraRest.searchIssues(pideApi, sitioJira, chipTipo52.jql, { limit: 5 }) : null
+    ok(
+      'el tipo que se lee de la pantalla se cruza con el perfil por su nombre para preguntar por el id, y la API contesta',
+      !!chipTipo52 &&
+        !!tipoDelPerfil52?.id &&
+        chipTipo52.jql.includes('issuetype = ' + tipoDelPerfil52.id) &&
+        !chipTipo52.jql.includes('"' + campos50.type + '"') &&
+        !!corridaTipo52?.ok &&
+        corridaTipo52.issues.length > 0,
+      `pantalla «${campos50?.type}» → perfil id ${tipoDelPerfil52?.id} · ${chipTipo52?.jql} → ` +
+        `${corridaTipo52?.ok ? corridaTipo52.issues.length + ' de ' + corridaTipo52.total : 'FALLO ' + corridaTipo52?.reason}`
     )
 
     // ------------------------------------------------------------------
@@ -2979,10 +3403,9 @@ const actions = {
     const corto53 = (l) => l.href.replace(location.origin, '') + ' ' + l.where
     const mapa53 = enlaces53.map(corto53).sort().join(' | ')
     const esperado53 = [
-      '/browse/ENG-1 pagina',
-      '/browse/ENG-8 enlaces',
       '/display/ENG/Runbook+de+guardia enlaces',
       '/wiki/spaces/ENG/pages/100/Arquitectura comentario',
+      '/wiki/spaces/ENG/pages/200/ADR-014 comentario',
       '/wiki/spaces/ENG/pages/200/ADR-014 descripcion',
       'https://git.example.com/eng/exporter comentario',
     ].join(' | ')
@@ -3001,10 +3424,28 @@ const actions = {
       trampas53.length === 0 && document.querySelectorAll('a[href*="/pages/99"]').length === 3 && enlaces53.every((l) => l.text && !/\n/.test(l.text)),
       trampas53.length ? 'se colaron: ' + trampas53.join(', ') : `${enlaces53.length} enlaces, 3 trampas fuera`
     )
+    // H14: y las rutas PROPIAS de Jira tampoco, ni cuentan para el tope. Pasó de
+    // verdad: en una épica real eran 55 de los 60 que caben —`/browse/`,
+    // `/rest/`, `/secure/`— y los enlaces de los COMENTARIOS, que van al final
+    // del documento, no llegaban a leerse. Los de la incidencia se cuentan del
+    // DOM, no de una lista escrita a mano.
+    const propias53 = [...document.querySelectorAll('#issue-content a[href]')].filter((a) => isOwnJiraRoute(a.getAttribute('href'), location.href))
+    const tope53 = pageLinks({ limits: { max: 3 } })
+    ok(
+      'jira: las rutas propias de Jira no se leen ni se comen el tope, asi que los comentarios entran',
+      propias53.length >= 5 &&
+        !enlaces53.some((l) => isOwnJiraRoute(l.href, location.href)) &&
+        tope53.length === 3 &&
+        tope53.some((l) => l.where === 'comentario') &&
+        !tope53.some((l) => isOwnJiraRoute(l.href, location.href)),
+      `${propias53.length} enlaces internos de Jira fuera · con tope 3: ${tope53.map((l) => l.where).join(' ')}`
+    )
 
     // 54. Y en una página de Confluence, sólo los del contenido: el árbol
     //     lateral tiene decenas de enlaces y ninguno lo puso nadie para ESTA
-    //     página. Salen sin región, porque en Confluence no hay regiones.
+    //     página. Salen sin región, porque en Confluence no hay regiones. El
+    //     `/browse/ENG-7` del contenido tampoco es una página (H14): aquí la
+    //     Jira y la Confluence de mentira comparten origen, como en un Cloud.
     renderPage('page:200')
     await wait(320)
     const enlaces54 = pageLinks()
@@ -3018,7 +3459,8 @@ const actions = {
     const soloDelArbol54 = delArbol54.filter((h) => !/\/pages\/301\//.test(h))
     ok(
       'confluence: los enlaces son los del contenido, y ninguno de los del arbol lateral',
-      enlaces54.map(corto53).sort().join(' | ') === '/browse/ENG-7 pagina | /wiki/spaces/ENG/pages/301/Runbook pagina' &&
+      enlaces54.map(corto53).sort().join(' | ') === '/wiki/spaces/ENG/pages/301/Runbook pagina' &&
+        document.querySelectorAll('#page-content a[href*="/browse/"]').length === 1 &&
         delArbol54.length > 10 &&
         soloDelArbol54.length === delArbol54.length - 1 &&
         !enlaces54.some((l) => soloDelArbol54.includes(l.href)),
@@ -3054,15 +3496,42 @@ const actions = {
     const sitio55 = { host: location.hostname, origin: location.origin, product: 'jira', cloud: false, issueKey: 'ENG-7', projectKey: 'ENG' }
     const candidatas55 = confluenceLinksIn(pageLinks(), remoto55, { site: sitio55, linkedHost: location.hostname, index: indice55 })
     const dondeSale55 = (id) => candidatas55.find((c) => c.id === id)?.where || '(no está)'
+    // H14: el enlace remoto de la API y el `dd.remote-link` del módulo de enlaces
+    // son el MISMO —el Runbook—, como en el Jira real, así que su procedencia es
+    // «remoto» y no «enlaces». Que el `/display/` sin id se resuelva contra el
+    // ÍNDICE se comprueba SIN el remoto: con él, el id vendría de ahí y no
+    // probaría nada.
+    const sinRemoto55 = confluenceLinksIn(pageLinks(), null, { site: sitio55, linkedHost: location.hostname, index: indice55 })
     ok(
       'de los enlaces leidos solo quedan los que llevan a una pagina, y el /display/ se resuelve por el INDICE',
       candidatas55.length === 3 &&
-        dondeSale55('200') === 'remoto' &&
-        dondeSale55('301') === 'enlaces' &&
+        dondeSale55('301') === 'remoto' &&
+        dondeSale55('200') === 'descripcion' &&
         dondeSale55('100') === 'comentario' &&
         candidatas55.find((c) => c.id === '301').title === 'Runbook de guardia' &&
-        !candidatas55.some((c) => c.title.startsWith('Página ')),
+        !candidatas55.some((c) => c.title.startsWith('Página ')) &&
+        sinRemoto55.find((c) => c.id === '301')?.where === 'enlaces',
       candidatas55.map((c) => `${c.id}:${c.where}`).join(' ') + ` · remotos ${remoto55.ok ? remoto55.links.length : remoto55.reason}`
+    )
+    // H14: y el TÍTULO se decide aparte de la procedencia. Sin índice —que es lo
+    // que tapa el fallo, porque el título de verdad lo sabe él— el «Page» que
+    // manda la API sólo deja el marcador, que es la señal de «lee el título por
+    // su id» (`addSourceById`); y el enlace PEGADO del comentario, cuyo texto ES
+    // una URL, saca el suyo del slug de la ruta. Los enlaces pegados se cuentan
+    // del DOM, no de una lista escrita aquí.
+    const pegados55 = pageLinks().filter((l) => /^https?:\/\//i.test(l.text))
+    const soloPegado55 = confluenceLinksIn(pegados55, null, { site: sitio55, linkedHost: location.hostname, index: null })
+    const sinIndice55 = confluenceLinksIn(pageLinks(), remoto55, { site: sitio55, linkedHost: location.hostname, index: null })
+    ok(
+      'ni «Page» ni una URL pegada llaman a una pagina: queda el marcador, o el titulo que la ruta lleva dentro',
+      pegados55.length === 1 &&
+        soloPegado55.length === 1 &&
+        soloPegado55[0].title === 'ADR-014' &&
+        sinIndice55.find((c) => c.id === '301')?.title === 'Página 301' &&
+        !sinIndice55.concat(candidatas55).some((c) => c.title === 'Page' || /^https?:\/\//i.test(c.title)),
+      `pegados ${pegados55.length} → «${soloPegado55.map((c) => c.title).join('» «')}» · sin índice: ${sinIndice55
+        .map((c) => `${c.id}:${c.title}`)
+        .join(' ')}`
     )
 
     // Dos análisis anteriores de la misma clase de trabajo y del mismo
@@ -3123,8 +3592,8 @@ const actions = {
       sugeridas55.length === 5 &&
         sugeridas55.map((s) => s.id).join(' ') === '100 200 301 1080 2003' &&
         linea55(sugeridas55[0]) === '100 65 desde un comentario · la usaste en 2 análisis de tareas en ENG' &&
-        linea55(sugeridas55[1]) === '200 62 enlazada en Jira a esta incidencia · el título la señala como referencia' &&
-        linea55(sugeridas55[2]) === '301 45 desde los enlaces de la incidencia' &&
+        linea55(sugeridas55[1]) === '200 62 enlazada desde la descripción · el título la señala como referencia' &&
+        linea55(sugeridas55[2]) === '301 50 enlazada en Jira a esta incidencia' &&
         linea55(sugeridas55[3]) === '1080 25 el contexto la nombra como arquitectura' &&
         linea55(sugeridas55[4]) === '2003 25 el contexto la nombra como proceso' &&
         Object.keys(refs55.items).sort().join(',') === '1080,2003',
@@ -3277,9 +3746,12 @@ const actions = {
     const motivo57 = (id) => filas57.find((f) => corto57(f) === id)?.why || '(no está)'
     const sinDiario57 = hoy57.rankToday(hoy57.buildCandidates({ reads: todas57, activity: {}, here: null, now: ahora57 }), { now: ahora57 })
     const conCambio = (lista) => lista.filter((f) => f.group === 'cambio').length
+    // El tipo de la fila es el NOMBRE con el que la API lo devuelve, que desde
+    // H14 viene traducido («Tarea», no «Task»): es lo que el usuario ve en su
+    // Jira, y el id sólo se usa para preguntar (§8.23).
     ok(
       'cada fila dice por que esta ahi, y sin el diario ni el orden ni los grupos son los mismos',
-      motivo57('ENG-12') === 'cambió ayer · es tuya o la sigues · Task' &&
+      motivo57('ENG-12') === 'cambió ayer · es tuya o la sigues · Tarea' &&
         motivo57('ENG-7') === 'cambió hace 3 h · la analizaste hace 2 días con 6 observaciones · es tuya o la sigues' &&
         motivo57('p2003') === 'cambió hace 2 h · modificada por Ana Pérez · la sueles mirar (4 veces)' &&
         motivo57('p200') === 'página base de tus análisis · cambió ayer · modificada por Marta Ruiz' &&
@@ -3352,6 +3824,161 @@ const actions = {
       resumen59
     )
 
+    // 60. La TERCERA barra lateral: el pagetree clásico de un Confluence
+    //     Server/Data Center. En el Confluence 9.2 real (F9, 2026-09-21) no hay
+    //     `<aside>`, ni `role="tree"`, ni `nav[aria-label*="página"]`, ni un
+    //     solo `data-testid`, así que `treeContainer()` no encontraba nada y
+    //     `describeTree()` contestaba «(ninguno) — sin contenedor no hay
+    //     recorrido posible»: ni «Paso a paso» ni «Árbol leído de la página».
+    //     Todo lo demás ya funcionaba con el contenedor señalado a mano, así que
+    //     lo que estos tres tramos pinan es que se siga reconociendo.
+    setSidebar('pagetree')
+    renderPage('page:400')
+    await wait(320)
+
+    const barra60 = document.querySelector('.sidebar')
+    const cont60 = treeContainer()
+    const enlace60 = document.querySelector('.plugin_pagetree a[data-nav="page:1080"]')
+    const fila60 = rowFor(enlace60, cont60)
+    const chevron60 = toggleFor(fila60)
+    const scroller60 = treeScroller(cont60)
+    ok(
+      'pagetree de un Data Center: encuentra contenedor, fila, chevron y scroller',
+      !!cont60 &&
+        cont60.classList.contains('plugin_pagetree') &&
+        // Y lo hace SIN ninguna de las pistas que conocía la cascada de antes:
+        // esa barra no es un <aside>, no lleva role=tree y no tiene un solo
+        // data-testid, que es exactamente lo que pasa en el Confluence 9.2.
+        !barra60.matches('aside, [role="tree"], [data-testid]') &&
+        !barra60.querySelector('[role="tree"], [data-testid], nav') &&
+        fila60?.tagName === 'LI' &&
+        !!chevron60 &&
+        chevron60.toggle.classList.contains('plugin_pagetree_childtoggle') &&
+        chevron60.toggle.getAttribute('aria-expanded') === 'false' &&
+        chevron60.toggle.getAttribute('href') === '' &&
+        isSafeToClick(chevron60.toggle, ORIGIN).ok &&
+        !!scroller60 &&
+        scroller60.classList.contains('ia-scrollable-section'),
+      `contenedor=${cont60?.className.split(' ')[0]} fila=${fila60?.tagName} chevron=${chevron60?.toggle.className.split(' ')[0]} scroller=${scroller60?.className.split(' ')[0]}`
+    )
+
+    const diag60 = describeTree()
+    const elegida60 = diag60.split('\n').find((l) => l.includes('<== ELEGIDO')) || ''
+    ok(
+      'y el diagnostico ya no dice «(ninguno)»: nombra el pagetree como elegido',
+      !diag60.includes('(ninguno)') &&
+        elegida60.includes('.plugin_pagetree ->') &&
+        /árbol=true/.test(diag60) &&
+        !/\(ningún enlace a página dentro del contenedor\)/.test(diag60),
+      elegida60.trim() || '(sin línea de elegido)'
+    )
+
+    // 61. Y con ese contenedor, leer del DOM quién cuelga de quién. Aquí las
+    //     hijas NO están en el DOM hasta desplegar, así que primero se lee lo
+    //     que hay (sólo raíces), y al abrir dos ramas aparecen las que se ven —y
+    //     sólo ésas, que es lo que significa «perezosas»—. Se importa aparte
+    //     para poder repetir el tramo desde fuera sin pasar por los sesenta de
+    //     antes.
+    const treeScan61 = await import('/src/content/tree-scan.js')
+    const chevronDe = (id) =>
+      document
+        .querySelector(`.plugin_pagetree a[data-nav="page:${id}"]`)
+        ?.closest('li')
+        ?.querySelector(':scope > .plugin_pagetree_childtoggle_container > .plugin_pagetree_childtoggle')
+
+    const plegado61 = treeScan61.snapshotTree()
+    for (const id of ['1080', '1081']) {
+      chevronDe(id)?.click()
+      await wait(360)
+    }
+    const abierto61 = treeScan61.snapshotTree()
+    const padre61 = (id) => abierto61.pages.find((p) => p.id === id)?.parentId
+    ok(
+      'del pagetree se leen las hijas que ya se ven, con su padre, y ni una mas',
+      plegado61.pages.length > 0 &&
+        !plegado61.pages.some((p) => p.parentId) &&
+        !plegado61.pages.some((p) => p.id === '1081') &&
+        padre61('1081') === '1080' &&
+        padre61('1082') === '1081' &&
+        !abierto61.pages.some((p) => p.id === '1083'),
+      `plegado ${plegado61.scanned} filas sin padre · abierto ${abierto61.scanned} · 1081→${padre61('1081')} 1082→${padre61('1082')}`
+    )
+
+    // Y desplegado entero, las relaciones que se leen son las MISMAS que las de
+    // la barra clásica: sin eso, comparar una barra con otra no querría decir
+    // nada (es lo que hace valer el tramo 51, que lee la clásica).
+    for (let i = 0; i < 12; i++) {
+      const plegados = [...document.querySelectorAll('.plugin_pagetree .plugin_pagetree_childtoggle[aria-expanded="false"]')]
+      if (!plegados.length) break
+      for (const ch of plegados) ch.click()
+      await wait(320)
+    }
+    const IDS61 = new Set(['100', '200', '201', '300', '301', '400', '1080', '1081', '1082', '1083', '1084', '1085', '1086'])
+    const relaciones61 = (snap) =>
+      snap.pages
+        .filter((p) => IDS61.has(p.id))
+        .map((p) => `${p.id}→${p.parentId || '-'}`)
+        .sort()
+        .join(' ')
+    const delPagetree61 = relaciones61(treeScan61.snapshotTree())
+
+    setSidebar('clasica')
+    renderPage('page:400')
+    await wait(320)
+    document.querySelectorAll('.children.collapsed').forEach((c) => c.classList.remove('collapsed'))
+    const deLaClasica61 = relaciones61(treeScan61.snapshotTree())
+    ok(
+      'y son exactamente las MISMAS relaciones que se leen de la barra clasica',
+      delPagetree61 === deLaClasica61 && IDS61.size === delPagetree61.split(' ').length,
+      delPagetree61 === deLaClasica61 ? delPagetree61 : `pagetree «${delPagetree61}» ≠ clasica «${deLaClasica61}»`
+    )
+
+    // 62. Y el recorrido paso a paso de dos niveles: las dos ramas de en medio
+    //     no están en el DOM cuando arranca, llegan por AJAX al desplegarlas, y
+    //     sólo el último paso navega. Es lo que en el Confluence real ya
+    //     funcionaba con el contenedor señalado a mano.
+    setSidebar('pagetree')
+    renderPage('page:400')
+    await wait(320)
+
+    const enElDom62 = (id) => !!document.querySelector(`.plugin_pagetree a[data-nav="page:${id}"]`)
+    const antes62 = ['1081', '1082'].filter(enElDom62)
+    const cadena62 = ['1080', '1081', '1082']
+    const pasos62 = cadena62.map((id, i) => ({
+      kind: 'confluence-page',
+      id,
+      title: PAGES['page:' + id].title,
+      label: PAGES['page:' + id].title,
+      path: PAGES['page:' + id].path,
+      url: ORIGIN + PAGES['page:' + id].path,
+      action: i === cadena62.length - 1 ? 'open' : 'expand',
+    }))
+    const estados62 = []
+    const rutas62 = []
+    for (let i = 0; i < pasos62.length; i++) {
+      const paso = await runner.executeStep({
+        step: pasos62[i],
+        index: i,
+        total: pasos62.length,
+        isLast: i === pasos62.length - 1,
+      })
+      estados62.push(paso.status)
+      rutas62.push(location.pathname)
+      await wait(340)
+      if (paso.status === STEP_RESULT.CANCELLED) break
+    }
+    ok(
+      'recorrido en el pagetree: despliega las ramas que llegan por AJAX y navega UNA vez',
+      antes62.length === 0 &&
+        estados62.length === 3 &&
+        estados62.slice(0, -1).every((e) => e === STEP_RESULT.EXPANDED) &&
+        estados62[2] === STEP_RESULT.CLICKED &&
+        new Set(rutas62).size === 2 &&
+        location.pathname.includes('/pages/1082'),
+      `${estados62.join(',')} · ${new Set(rutas62).size} rutas · ${location.pathname}`
+    )
+
+    setSidebar('clasica')
     renderPage('page:200')
     await wait(320)
 
@@ -3388,6 +4015,11 @@ window.faroHarness = {
   runner,
   picker,
   renderPage,
+  // Las tres formas de barra lateral, por su nombre («clasica», «cloud»,
+  // «pagetree»): `actions.sidebar()` las recorre en círculo, pero los tramos
+  // 60-62 piden una concreta y desde fuera hay que poder ponerla sin dar tres
+  // vueltas al botón.
+  setSidebar,
   PAGES,
   OBSERVACIONES,
   pageDigest,

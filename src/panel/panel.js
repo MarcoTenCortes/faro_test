@@ -215,6 +215,12 @@ const state = {
   // sitio anterior.
   sources: emptySources(),
   mcpConnected: false,
+  // La comprobación del MCP de este sitio, que desde P5 (H14) NO bloquea el
+  // arranque: una promesa que resuelve a si está conectado, nunca rechaza y la
+  // pone `bootForSite` en su paso 3. `send()` la captura al mandar y le pregunta
+  // al terminar el turno, porque mientras está en vuelo `mcpConnected` todavía
+  // dice «false» y el aviso «Páginas base sin leer» saldría mintiendo.
+  mcpCheck: null,
   // Desde Jira, el contexto del Confluence enlazado: {host, contextMd, index,
   // wikiPrefix} o null. El prefijo es el observado al visitarlo, si se
   // visitó: hace falta para preguntarle a su API desde aquí.
@@ -568,6 +574,11 @@ async function refreshTab() {
     state.favouriteFilters = null
     state.recentJql = []
     state.profile = null
+    // Y si el MCP está conectado, que es de ESTE sitio: lo vuelve a comprobar el
+    // arranque del nuevo, en segundo plano (P5). Hasta que conteste no se sabe,
+    // y quien pregunte por él se lleva el lado prudente.
+    state.mcpConnected = false
+    state.mcpCheck = null
     // Y lo que alimenta las páginas base sugeridas, que también es de ESTE
     // host: el historial de análisis (lo recarga `bootForSite` con el paquete
     // del sitio nuevo), las referencias de su contexto y lo que la pestaña
@@ -657,10 +668,13 @@ async function bootForSite() {
   state.bootPending = ''
 
   // Cuánto cuesta abrir el panel, fase por fase. Hasta H3 nadie lo veía: el
-  // `GET /mcp` del paso 3 tarda entre 2,8 y 13,8 s la primera vez tras
-  // arrancar opencode (medido en la auditoría del 2026-09-13 contra un
-  // servidor desechable) y el chat lo espera entero. Sin el número no se puede
-  // decidir si vale la pena sacarlo del camino, así que primero se mide.
+  // `GET /mcp` del paso 3 tarda entre 2,8 y 14,5 s la primera vez tras arrancar
+  // opencode (medido en la auditoría del 2026-09-13 contra un servidor
+  // desechable y el 2026-09-21 contra el opencode del usuario) y el chat lo
+  // esperaba entero. Ese número es el que decidió sacarlo del camino en H14, así
+  // que desde entonces sólo lo espera —y sólo entonces hay fase «MCP»— el sitio
+  // que todavía no está configurado; el resto lo comprueba en segundo plano y lo
+  // registra aparte.
   // El arranque tiene cuatro salidas —sin opencode, pantalla de claves,
   // pantalla de contexto y el chat— y justo las cortas son las que enseñan lo
   // que cuesta el MCP: TRES miden, y nunca en un arranque que ya no manda. La de
@@ -737,47 +751,11 @@ async function bootForSite() {
     showNotice('No he podido leer la lista de modelos: ' + (modelos?.error?.message || modelos?.error || 'respuesta vacía'), true)
   }
 
-  // 3. ¿Tiene claves este sitio, y están de verdad conectadas? Se mira lo que
-  // opencode tiene de verdad: el MCP que lleve este dominio en JIRA_URL o
-  // CONFLUENCE_URL (lo configuró el otro producto, o el usuario a mano) se
-  // adopta y se apunta, con el otro host enlazado. Sólo después cuenta el
-  // nombre que Faro guardó, y en último lugar el que deriva del host. De la
-  // configuración sólo se miran los hosts: las claves van ahí en claro y no
-  // pueden acabar en el estado ni en el registro.
-  const [mcp, config] = await Promise.all([client.listMcp().catch(() => ({})), client.config().catch(() => null)])
-  if (state.bootToken !== testigo) return
-  // La fase que se viene a leer: son las DOS peticiones, sin lo que se guarde
-  // después. `GET /mcp` en frío es lo que hace que el panel tarde en abrirse.
-  cron.mark('MCP')
-  const found = mcpForHost(config, state.site.host, { status: mcp })
-  // Se adopta sólo lo que está conectado: apuntar un MCP caído pisaba lo que
-  // sí funcionaba. Y también cuando el MCP ya apuntado trae un host nuevo —el
-  // usuario añadió el otro producto al bloque a mano—: sin esto, el enlace
-  // sólo se aprendía si cambiaba el nombre.
-  const enlaceNuevo =
-    !!found &&
-    ((found.jiraHost && found.jiraHost !== state.site.host && saved?.jiraHost !== found.jiraHost) ||
-      (found.confluenceHost && found.confluenceHost !== state.site.host && saved?.confluenceHost !== found.confluenceHost))
-  if (found && found.connected && (saved?.mcpName !== found.name || !saved?.configured || enlaceNuevo)) {
-    const registros = siteRecords({
-      host: state.site.host,
-      product: state.site.product,
-      mcpName: found.name,
-      jiraHost: found.jiraHost,
-      confluenceHost: found.confluenceHost,
-    })
-    for (const { host, patch } of registros) await saveSite(host, patch)
-    saved = await getSite(state.site.host)
-    if (state.bootToken !== testigo) return
-    log.ok('MCP reconocido', `${found.name} · ${found.products === 2 ? 'Jira y Confluence' : found.jiraHost ? 'sólo Jira' : 'sólo Confluence'}`)
-  } else if (found && !found.connected) {
-    log.warn('MCP sin conectar', `${found.name} lleva este dominio pero no está conectado`)
-  }
-  const status = mcpStatusFor(mcp, state.site.host, chosenMcpName(config, saved, state.site.host, { status: mcp }))
-
-  // Las páginas base de ESTE sitio, y si hay quien pueda leerlas: sin el MCP
-  // el modelo no llega a ellas, y la pantalla lo dice.
-  state.mcpConnected = !!status.connected
+  // Las páginas base de ESTE sitio. Salen del paquete que ya está leído, así
+  // que van ANTES del MCP —que desde H14 no se espera— y no después: el chip
+  // las enseña con el chat, sin depender de una comprobación que puede tardar
+  // catorce segundos. Que haya quien pueda LEERLAS es otra cosa, y eso lo dice
+  // el MCP cuando conteste (`paintSourcesMcp` en la pantalla).
   state.sources = normalizeSources(saved?.analysisSources, { host: state.site.host })
   // Y las últimas búsquedas que se ejecutaron aquí, del mismo registro: se
   // reconstruyen al leer, como las páginas base, porque son consultas que
@@ -796,38 +774,68 @@ async function bootForSite() {
   state.sourceHistory = normalizeHistory(bundle.extras?.sourceHistory, { host: state.site.host })
   paintSourcesUi()
 
-  if (!status.connected && !saved?.skippedKeys) {
-    hideScreens()
-    showSetupScreen()
-    if (status.present) {
-      $('setup-status').textContent = `El MCP «${status.name}» está registrado pero en «${status.status}». Revisa ese bloque y reinicia opencode, o quítalo si sobra.`
+  // 3. ¿Tiene claves este sitio, y están de verdad conectadas? Saberlo cuesta un
+  // `GET /mcp` que EN FRÍO tarda 14,5 s en la máquina del usuario (14 463 ms
+  // medidos el 2026-09-21 contra su opencode 1.2.25; 2 ms en caliente), y hasta
+  // H14 el chat esperaba esos catorce segundos cada vez que se reiniciaba
+  // opencode. Desde P5 la comprobación va en SEGUNDO PLANO (`checkMcp`): el chat
+  // se pinta sin ella y lo que decida llega después.
+  // La espera sólo el sitio que todavía no está en marcha —ni configurado ni con
+  // las claves saltadas a propósito—: ahí no hay conversación que pintar, sin MCP
+  // no se puede hacer nada y la pantalla de claves es justo lo primero que hay
+  // que ver. El caso diario, el sitio ya configurado, no espera nada.
+  const primeraVez = !saved?.configured && !saved?.skippedKeys
+  const comprobacion = checkMcp(client, testigo, saved)
+  // Lo que `send()` captura al mandar: siempre un booleano y nunca un rechazo,
+  // porque de esto depende un aviso que el usuario lee («Páginas base sin leer»).
+  state.mcpCheck = comprobacion.then(
+    (r) => !!r.connected,
+    () => false
+  )
+  if (primeraVez) {
+    const r = await comprobacion
+    if (state.bootToken !== testigo) return
+    // La ÚNICA salida que espera al MCP, así que es la única con esa fase: la
+    // comprobación en segundo plano mide lo suyo con su propio reloj y lo
+    // registra aparte («MCP comprobado»).
+    cron.mark('MCP')
+    saved = r.saved
+    if (faltanClaves(r)) {
+      showMcpSetup(r.status)
+      medir()
+      return
     }
-    medir()
-    return
+  } else {
+    // Se dice donde el usuario ya está mirando (decisión 4 de H5): el faro en
+    // «ocupado» y el hueco del título de la pestaña con el motivo, hasta que
+    // `onMcpResult` lo devuelva.
+    setStatus('busy', COMPROBANDO_MCP)
+    mcpResultSoon(comprobacion, testigo)
   }
 
   // 4. Desde Jira, el contexto del Confluence enlazado: es de OTRO host, así
-  // que no viene en el paquete de éste y hay que ir a por él (y sólo se sabe a
-  // cuál después de mirar el MCP). Es lo único que queda por leer.
+  // que no viene en el paquete de éste y hay que ir a por él. Con el registro
+  // que hay AHORA: si la comprobación del MCP acaba adoptando uno que trae un
+  // host enlazado nuevo, lo vuelve a leer ella (`onMcpResult`), porque aquí ya
+  // no se la espera.
   // Un arranque más nuevo pone su testigo antes de su primer await: éste
   // siempre va por delante, así que lo que escriba aquí antes de comprobarlo
   // lo pisa el nuevo en su propio paso 4.
   state.linkedContext = await loadLinkedContext(saved)
   if (state.bootToken !== testigo) return
-  // Lo que va desde la marca del MCP hasta aquí: adoptarlo si hacía falta
-  // (dos escrituras y una relectura, sólo la primera vez), pintar las páginas
-  // base y este contexto enlazado, que es lo único que de verdad se lee. Antes
-  // no tenía marca propia y esos milisegundos se contaban como «restaurar».
+  // Lo que cuesta ese contexto enlazado, que es de otro host y es lo único que
+  // de verdad queda por leer. Antes no tenía marca propia y esos milisegundos
+  // se contaban como «restaurar».
   cron.mark('enlazado')
 
   // `onboarded` sale de lo leído al empezar (o de la relectura tras adoptar el
-  // MCP), y entre esa lectura y aquí hay segundos: el `GET /mcp` en frío tarda
-  // de 2,8 a 13,8 s. Antes el comentario decía que durante el arranque nada lo
-  // cambia, y no era verdad: «Omitir» de esta misma pantalla lo escribía sin
-  // rearrancar y un arranque lento volvía a enseñarla (revisión adversaria de
-  // H6). Ahora, quien lo escribe en ese hueco —«Omitir» y el contexto que se
-  // sube a mano— apagan este arranque con un testigo nuevo y repintan ellos el
-  // chat, así que aquí sólo se llega con un arranque que sigue mandando.
+  // MCP), y entre esa lectura y aquí hay un hueco. Antes el comentario decía
+  // que durante el arranque nada lo cambia, y no era verdad: «Omitir» de esta
+  // misma pantalla lo escribía sin rearrancar y un arranque lento volvía a
+  // enseñarla (revisión adversaria de H6). Ahora, quien lo escribe en ese hueco
+  // —«Omitir» y el contexto que se sube a mano— apagan este arranque con un
+  // testigo nuevo y repintan ellos el chat, así que aquí sólo se llega con un
+  // arranque que sigue mandando.
   if (!saved?.onboarded) {
     hideScreens()
     showContextScreen()
@@ -956,6 +964,221 @@ async function countProfile(sitio, scope, { tabId = state.tabId, signal = null }
       `${Number.isFinite(r.ms) ? ` · ${r.ms} ms` : ''}`
   )
   return { ok: true, profile, ms: r.ms }
+}
+
+// ------------------------------------------------------- el MCP, en segundo plano
+
+/** Lo que el chip de la cabecera dice mientras se comprueba el MCP (P5, H14). */
+const COMPROBANDO_MCP = 'comprobando MCP…'
+
+/**
+ * ¿Está de verdad conectado el MCP de Atlassian de este sitio?
+ *
+ * Era el paso 3 del arranque y desde H14 es su propia función, porque ya NO va
+ * en el camino crítico (P5 del anexo E): `GET /mcp` tarda 14 463 ms la primera
+ * vez tras arrancar opencode —medido el 2026-09-21 contra el opencode 1.2.25 del
+ * usuario; 2 ms en caliente— y el chat lo esperaba entero. Ahora el chat se pinta
+ * sin esperarla y esto llega cuando llegue.
+ *
+ * Se mira lo que opencode tiene de verdad: el MCP que lleve este dominio en
+ * JIRA_URL o CONFLUENCE_URL (lo configuró el otro producto, o el usuario a mano)
+ * se adopta y se apunta, con el otro host enlazado. Sólo después cuenta el
+ * nombre que Faro guardó, y en último lugar el que deriva del host. De la
+ * configuración sólo se miran los hosts: las claves van ahí en claro y no pueden
+ * acabar en el estado ni en el registro.
+ *
+ * Devuelve `{connected, status, saved, enlaceNuevo}` y NO decide qué se le
+ * enseña al usuario: eso no se pinta igual desde el arranque que catorce
+ * segundos después, y lo decide quien llama (`showMcpSetup` / `attachMcpNotice`).
+ *
+ * @param {object} client el cliente con el que se pregunta, pasado a propósito:
+ *        `state.client` puede ser ya otro cuando esto conteste.
+ */
+async function checkMcp(client, testigo, previo) {
+  // El host y el producto con los que se comprueba, capturados ANTES del primer
+  // await: entre pedir y contestar hay hasta catorce segundos y la pestaña puede
+  // irse al correo, que deja `state.site` en null sin tocar el testigo del
+  // arranque (§8.22). Todo lo de abajo habla de ESTE host, siempre.
+  const host = state.site.host
+  const product = state.site.product
+  let saved = previo
+
+  // Lo que tardan las DOS peticiones, con su propio reloj: la fase «MCP» del
+  // arranque ya sólo existe cuando se las espera, así que esto se registra con su
+  // línea propia en cuanto se sabe.
+  const cron = startTiming(() => performance.now())
+  const [mcp, config] = await Promise.all([client.listMcp().catch(() => ({})), client.config().catch(() => null)])
+  cron.mark('MCP')
+
+  const found = mcpForHost(config, host, { status: mcp })
+  // Se adopta sólo lo que está conectado: apuntar un MCP caído pisaba lo que
+  // sí funcionaba. Y también cuando el MCP ya apuntado trae un host nuevo —el
+  // usuario añadió el otro producto al bloque a mano—: sin esto, el enlace
+  // sólo se aprendía si cambiaba el nombre.
+  const enlaceNuevo =
+    !!found &&
+    ((found.jiraHost && found.jiraHost !== host && saved?.jiraHost !== found.jiraHost) ||
+      (found.confluenceHost && found.confluenceHost !== host && saved?.confluenceHost !== found.confluenceHost))
+  if (found && found.connected && (saved?.mcpName !== found.name || !saved?.configured || enlaceNuevo)) {
+    // Esto se escribe aunque el panel ya esté en otro sitio: va bajo el host que
+    // lo aprendió, como el índice y el contexto de §4.6, y es lo que hace que al
+    // volver el MCP ya esté reconocido.
+    const registros = siteRecords({
+      host,
+      product,
+      mcpName: found.name,
+      jiraHost: found.jiraHost,
+      confluenceHost: found.confluenceHost,
+    })
+    for (const registro of registros) await saveSite(registro.host, registro.patch)
+    saved = await getSite(host)
+    log.ok('MCP reconocido', `${found.name} · ${found.products === 2 ? 'Jira y Confluence' : found.jiraHost ? 'sólo Jira' : 'sólo Confluence'}`)
+  } else if (found && !found.connected) {
+    log.warn('MCP sin conectar', `${found.name} lleva este dominio pero no está conectado`)
+  }
+  const status = mcpStatusFor(mcp, host, chosenMcpName(config, saved, host, { status: mcp }))
+
+  // En el ESTADO del panel sólo se escribe si el panel sigue siendo de este
+  // sitio: el resultado se devuelve igual —el turno que capturó esta promesa al
+  // mandar lo está esperando—, pero `state.mcpConnected` es del sitio que hay
+  // delante (§8.22). Mirar el correo no cuenta como irse: el panel sigue siendo
+  // de este host (`state.lastHost`), igual que para el turno en vuelo.
+  if (state.bootToken === testigo && (state.site?.host ?? state.lastHost) === host) {
+    state.mcpConnected = !!status.connected
+  }
+
+  // Y lo que ha costado saberlo, con su estado: es el número que justificó P5 y
+  // el que dice que el MCP de este sitio está caído sin tener que preguntárselo.
+  const comoEsta = status.connected ? 'conectado' : status.present ? `registrado pero en «${status.status}»` : 'no está en opencode'
+  const linea = timingLine(cron.done(), { extra: `${status.name || 'sin nombre'}: ${comoEsta}` })
+  if (status.connected) log.ok('MCP comprobado', linea)
+  else log.warn('MCP comprobado', linea)
+
+  return { connected: !!status.connected, status, saved, enlaceNuevo }
+}
+
+/**
+ * El resultado del MCP cuando llega tarde, sin que nada lo espere.
+ *
+ * Se lanza sin `await`, como `refreshProfileSoon` y `loadTodaySoon`: el chat ya
+ * está puesto y un fallo aquí no puede tumbarlo.
+ */
+function mcpResultSoon(comprobacion, testigo) {
+  comprobacion
+    .then((r) => onMcpResult(r, testigo))
+    .catch((err) => log.warn('MCP comprobado', 'no se pudo terminar: ' + String(err?.message || err)))
+}
+
+/**
+ * El MCP ya está comprobado y el chat llevaba rato puesto.
+ *
+ * Aquí está la decisión que P5 no tenía tomada: hasta H14 la pantalla de claves
+ * salía ANTES del chat, y ahora puede llegar catorce segundos después, con el
+ * usuario escribiendo o esperando una respuesta. Una pantalla deja `#app`
+ * inerte, se lleva el foco y tapa lo que esté llegando, así que sólo se abre si
+ * no hay nada en marcha; si lo hay, se dice en el chat con un botón que la abre
+ * cuando el usuario quiera. Encolarla para «cuando acabe el turno» se descartó:
+ * sería una pantalla que aparece sola minutos después, mientras se lee la
+ * respuesta, y al llegar tendría que volver a preguntarse justo esto mismo.
+ */
+async function onMcpResult(r, testigo) {
+  if (state.bootToken !== testigo) return
+  // La cabecera devuelve el hueco al título de la pestaña. Sólo si ese texto
+  // sigue siendo el nuestro: con un turno en vuelo ahí manda «pensando…», y
+  // quien lo puso es quien lo quita.
+  if (state.statusLine === COMPROBANDO_MCP) {
+    setStatus(state.client?.connected ? 'ok' : 'bad', state.client?.connected ? 'conectado' : 'sin conexión')
+  }
+  if (faltanClaves(r)) {
+    if (puedeAbrirPantalla()) showMcpSetup(r.status)
+    else attachMcpNotice(r.status)
+  }
+  // Y si la adopción ha traído un host enlazado que no estaba cuando se leyó el
+  // contexto, se lee ahora: desde un Jira, el CONTEXT.md del Confluence enlazado
+  // es lo que dice qué páginas mirar (§4.7). Sólo pasa la primera vez que se
+  // reconoce ese enlace; lo demás de `saved` no cambia al adoptar un MCP.
+  if (r.enlaceNuevo) {
+    const enlazado = await loadLinkedContext(r.saved)
+    // Sólo si de verdad hay algo: esto viene a RELLENAR un enlace que no se
+    // sabía, y `loadLinkedContext` devuelve null con la pestaña fuera de
+    // Atlassian (mira `state.site`), así que asignarlo a secas podría borrar el
+    // contexto que el arranque sí había cargado.
+    if (state.bootToken === testigo && enlazado) state.linkedContext = enlazado
+  }
+}
+
+/** ¿Hay que pedirle las claves a este sitio? El MCP no está y no se saltaron. */
+function faltanClaves(r) {
+  return !r.connected && !r.saved?.skippedKeys
+}
+
+/**
+ * ¿Se puede abrir una pantalla encima de lo que el usuario está haciendo?
+ *
+ * No mientras se responde (taparía la respuesta y `#app` queda inerte), ni con
+ * otra pantalla o el velo de «Trabajando…» abiertos (los dos mandan sobre el
+ * foco), ni con algo escrito y sin mandar en el cuadro (se perdería el foco a
+ * mitad de una frase).
+ */
+function puedeAbrirPantalla() {
+  if (state.streaming) return false
+  if (document.querySelector('.screen:not(.hidden)')) return false
+  if (!el.busy.classList.contains('hidden')) return false
+  return !el.input.value.trim()
+}
+
+/**
+ * La pantalla de claves con el motivo: el MISMO texto desde el arranque que
+ * desde la comprobación tardía, escrito en un solo sitio para que no puedan
+ * acabar diciendo cosas distintas.
+ */
+function showMcpSetup(status) {
+  hideScreens()
+  showSetupScreen()
+  if (status.present) {
+    $('setup-status').textContent = `El MCP «${status.name}» está registrado pero en «${status.status}». Revisa ese bloque y reinicia opencode, o quítalo si sobra.`
+  }
+}
+
+/**
+ * El aviso en el chat cuando no se puede abrir la pantalla: la contraparte
+ * visible de «MCP comprobado» sin conexión (§8.14), con la salida a mano y sin
+ * robarle el foco a nadie. El botón NO lleva `NEEDS_IDLE`: no necesita el turno
+ * parado —abrir las claves a mitad de una respuesta es cosa del usuario, y la
+ * respuesta sigue llegando debajo—, lo que no puede es abrirse sola.
+ */
+function attachMcpNotice(status) {
+  const texto =
+    `He comprobado el MCP de Atlassian de este sitio y no está conectado${status.present ? ` (${status.status})` : ''}: ` +
+    'el modelo no podrá leer Jira ni Confluence. Puedes revisarlo cuando termines.'
+  const wrap = document.createElement('div')
+  wrap.appendChild(noticeNode(texto, true))
+  const row = document.createElement('div')
+  row.className = 'nav-actions'
+  const btn = document.createElement('button')
+  btn.className = 'ghost small'
+  btn.type = 'button'
+  btn.textContent = 'Cambiar las claves'
+  btn.addEventListener('click', () => showMcpSetup(status))
+  row.appendChild(btn)
+  wrap.appendChild(row)
+  clearEmpty()
+  el.chat.appendChild(wrap)
+  announce(texto)
+  scrollChat()
+  return wrap
+}
+
+/**
+ * Lo que diga la comprobación del MCP de este sitio, esperándola si sigue en
+ * vuelo (P5).
+ *
+ * Sin ninguna en marcha —el hueco de un cambio de sitio, antes de que el
+ * arranque nuevo llegue a su paso 3— vale lo que el estado sepa, que es el lado
+ * prudente: avisar de que las páginas base no se han podido leer.
+ */
+function currentMcpCheck() {
+  return state.mcpCheck || Promise.resolve(state.mcpConnected)
 }
 
 /**
@@ -1983,7 +2206,15 @@ async function send() {
   const productoAlPedir = state.site.product
   const tituloAlPedir = state.tabTitle
   const tabUrlAlPedir = state.tabUrl
-  const mcpAlPedir = state.mcpConnected
+  // El MCP no es un booleano que se pueda leer al mandar: desde P5 (H14) su
+  // comprobación puede seguir en vuelo, así que se captura la PROMESA y se le
+  // pregunta al TERMINAR el turno —decenas de segundos, contra los quince que
+  // tarda ella como mucho—. Con `state.mcpConnected` de ahora, un turno mandado
+  // nada más abrir el panel acabaría con un «Páginas base sin leer» mentiroso.
+  // Esa espera no tiene plazo a propósito: un plazo que venciera diría «no hay
+  // MCP» sin saberlo, que es justo el aviso falso que esto evita. Y sólo se
+  // llega aquí con un turno que ha respondido, o sea con opencode contestando.
+  const mcpCheckAlPedir = currentMcpCheck()
   // Y el host: si al terminar el panel está en OTRO sitio, la respuesta no
   // entra en su chat ni en su índice (queda en la sesión de opencode de éste).
   const hostAlPedir = state.site.host
@@ -2275,7 +2506,7 @@ async function send() {
       product: productoAlPedir,
       title: tituloAlPedir,
       pageUrl: digest?.url || tabUrlAlPedir,
-      mcpConnected: mcpAlPedir,
+      mcpConnected: await mcpCheckAlPedir,
     })
 
     // Y lo que este turno ha añadido a lo que la sesión arrastra: pasado el
@@ -4357,13 +4588,31 @@ function paintSourcesUi() {
   el.sourcesChipText.textContent = label
 }
 
+/**
+ * El aviso de «este sitio no tiene el MCP conectado», cuando se sepa.
+ *
+ * Desde P5 (H14) el arranque no espera a la comprobación, así que la pantalla
+ * puede abrirse con ella en vuelo: se esconde el aviso —decir que no hay MCP sin
+ * saberlo es peor que tardar un segundo en decirlo— y se pinta al resolverse.
+ * Con el host capturado: la pantalla sigue abierta al cambiar de pestaña dentro
+ * del mismo sitio, pero una respuesta de OTRO host no pinta aquí (§8.22).
+ */
+async function paintSourcesMcp() {
+  const aviso = $('sources-mcp')
+  aviso.classList.add('hidden')
+  const host = state.site?.host || ''
+  const conectado = await currentMcpCheck()
+  if ($('screen-sources').classList.contains('hidden')) return
+  if ((state.site?.host || '') !== host) return
+  aviso.classList.toggle('hidden', conectado)
+}
+
 async function showSourcesScreen() {
   if (!state.site) return
   const s = state.sources
   $('sources-mode-exclusive').checked = s.mode === 'exclusive'
   $('sources-mode-open').checked = s.mode !== 'exclusive'
   $('sources-query').value = ''
-  $('sources-mcp').classList.toggle('hidden', state.mcpConnected)
   $('sources-perm').classList.add('hidden')
   setSourcesStatus('')
   clearSourceSuggestions()
@@ -4375,6 +4624,13 @@ async function showSourcesScreen() {
   paintSuggestedSources().catch(console.error)
   showScreen('screen-sources')
   $('sources-query').focus()
+  // Y el MCP, que puede seguir comprobándose (P5): esta pantalla no puede decir
+  // «no hay MCP» sin saberlo todavía, ni callárselo si no lo hay, así que se
+  // pinta en cuanto se sepa y sin que lo demás espere (§8.14: si no llegara
+  // nunca, el aviso no sale y la pantalla funciona igual). DESPUÉS de abrirla,
+  // para que su guarda de «¿sigue abierta?» signifique eso y no dependa de en
+  // qué orden se vacíe la cola de microtareas.
+  paintSourcesMcp().catch(console.error)
 
   // Las páginas base son de Confluence: desde Jira, según el despliegue, se
   // buscan en el sitio de la pestaña (Cloud comparte host) o en el Confluence
@@ -6740,10 +6996,15 @@ async function restIndexFor(scope, { sitio, report = () => {}, tabId = state.tab
     }
     const index = indexFromSpacePages(r.pages, { site: sitio, scope, homeId: r.homeId })
     if (!index) return falla('vacío', `La API de ${host} no devuelve ninguna página en ${scope.label}.`)
+    // Cuántas de cuántas, no sólo cuántas: desde H14 el árbol son las páginas más
+    // RECIENTES del espacio (F8), así que en un espacio grande siempre viene
+    // recortado y lo honesto es decir de cuántas. Si la API no dice el total
+    // —pasa por el camino de respaldo—, se dice en qué tope se paró.
+    const deCuantas = r.total ? `${r.own} de ${r.total}` : `recortado en ${INDEX_LIMITS.maxPages}`
     log.ok(
       'Índice leído de la API',
-      `${host} · ${indexSize(index)} entradas · ${r.requests} petición(es)${r.truncated ? ` · recortado en ${INDEX_LIMITS.maxPages}` : ''}` +
-        `${Number.isFinite(r.ms) ? ` · ${r.ms} ms` : ''}`
+      `${host} · ${indexSize(index)} entradas · ${r.requests} petición(es)${r.truncated ? ` · ${deCuantas}` : ''}` +
+        `${r.via === 'lista' ? ' · por la lista, sin ordenar por fecha' : ''}${Number.isFinite(r.ms) ? ` · ${r.ms} ms` : ''}`
     )
     return { index, profile: guardado, aviso: '' }
   }

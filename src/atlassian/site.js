@@ -184,6 +184,23 @@ const CTX_SEGMENT = /^[A-Za-z0-9_~-]{1,40}$/
 const JIRA_ROUTES = /^\/(browse|projects|issues|secure|rest|plugins)(\/|$)/i
 
 /**
+ * ¿Esta ruta es de las que sirve Jira? Pura.
+ *
+ * La misma lista con la que se reconoce una ruta de contexto, detrás de una
+ * función para que no haya que copiarla (§9). La pide `page-links.js`: un
+ * enlace del contenido de una incidencia a `/browse/…`, `/secure/…` o
+ * `/rest/…` del propio sitio no es una página que nadie haya elegido —lo pone
+ * Jira en todas—, y en una épica real esos enlaces se comían el tope de
+ * enlaces que se leen antes de llegar a los comentarios.
+ *
+ * Es la ruta SIN la de contexto: quien la tenga se la quita antes
+ * (`jiraContextPath`), como hace `jira-rest.js` para montar la suya.
+ */
+export function isJiraRoute(pathname) {
+  return JIRA_ROUTES.test(String(pathname || ''))
+}
+
+/**
  * La ruta de contexto de un Jira Data Center, deducida de la URL de la pestaña:
  * `''` o UN segmento («/jira»). Pura.
  *

@@ -22,6 +22,16 @@
  * de la que dan los paréntesis (se evalúa de izquierda a derecha, y las
  * plantillas van siempre con paréntesis). Si un hito necesita más, se añade la
  * cláusula aquí y su prueba al lado.
+ *
+ * DESDE H14 SABE DE IDS, y de que un nombre traducido no vale. En el Jira real
+ * del usuario, con la interfaz en español, la API devuelve «Tarea» donde JQL
+ * espera «Task» y `issuetype = "Tarea"` contesta 400; por id funciona siempre.
+ * Aquí eso se finge con el `catalog` de la fixture: cada tipo, estado y prioridad
+ * tiene un `id`, el `name` que acepta una consulta y —si Jira lo traduce— el
+ * `display` con el que la API lo devuelve. Entonces `casaIgual` casa por nombre de
+ * JQL o por id, y una consulta que pregunte por el nombre TRADUCIDO sale por
+ * donde sale en el Jira real: 400 con el mensaje del servidor. Sin `catalog` se
+ * comporta como antes de H14, que es lo que dejan las pruebas que no lo pasan.
  */
 
 /** Campos que se pueden comparar con `=`, y de qué parte de la incidencia salen. */
@@ -251,6 +261,79 @@ export function parseJql(jql) {
 
 const igual = (a, b) => String(a ?? '').toLowerCase() === String(b ?? '').toLowerCase()
 
+/** Los campos cuyos valores tienen id y pueden venir traducidos. */
+const CAMPOS_CON_CATALOGO = ['issuetype', 'status', 'priority']
+
+/**
+ * El catálogo de valores de campo de la fixture, con lo justo: qué id tiene cada
+ * tipo, estado y prioridad, con qué nombre lo acepta JQL (`name`) y con cuál lo
+ * devuelve la API (`display`, el traducido si lo hay). Pura.
+ *
+ * @returns {{issuetype:Array, status:Array, priority:Array}}
+ */
+export function fieldCatalog(fixture) {
+  const out = {}
+  for (const campo of CAMPOS_CON_CATALOGO) {
+    out[campo] = (fixture?.catalog?.[campo] || [])
+      .map((e) => ({ id: String(e?.id ?? ''), name: String(e?.name ?? ''), display: String(e?.display ?? e?.name ?? '') }))
+      .filter((e) => e.name)
+  }
+  return out
+}
+
+/** La entrada del catálogo de un valor, buscada por su nombre de JQL. */
+function delCatalogo(catalogo, campo, nombre) {
+  return (catalogo?.[campo] || []).find((e) => igual(e.name, nombre)) || null
+}
+
+/**
+ * Cómo devuelve la API un valor de campo: su id y el nombre que VE el usuario
+ * (el traducido, si Jira lo traduce). Pura.
+ */
+export function fieldValue(catalogo, campo, nombre) {
+  const e = delCatalogo(catalogo, campo, nombre)
+  return { id: e?.id || '', name: e?.display || String(nombre ?? '') }
+}
+
+/**
+ * ¿Jira rechazaría este valor? El mensaje del servidor, o null. Pura.
+ *
+ * Sólo se rechaza lo que el Jira real rechaza y H14 vino a arreglar: preguntar
+ * por el nombre TRADUCIDO de un valor que Jira trae de serie. Un valor que no
+ * existe en ningún sitio sigue dando lista vacía aquí —el Jira real lo rechaza
+ * también, pero esta Jira de mentira no sabe qué valores existen «en general» y
+ * fingirlo cambiaría lo que ya prueban otras comprobaciones—.
+ */
+function valorRechazado(catalogo, campo, valor) {
+  const lista = catalogo?.[campo]
+  const v = String(valor ?? '').trim()
+  if (!lista?.length || !v) return null
+  if (lista.some((e) => (e.id && igual(e.id, v)) || igual(e.name, v))) return null
+  const traducido = lista.find((e) => e.display && !igual(e.display, e.name) && igual(e.display, v))
+  // En español porque es lo que contesta la instancia del usuario: el panel
+  // enseña el mensaje del servidor tal cual y no interpreta ninguno.
+  return traducido ? `El valor '${v}' no existe para el campo '${campo}'.` : null
+}
+
+/** El primer valor de la consulta que Jira rechazaría, o null. */
+function valorNoAdmitido(nodo, catalogo) {
+  if (!nodo || !catalogo) return null
+  if (nodo.clase === 'and' || nodo.clase === 'or') {
+    return valorNoAdmitido(nodo.izq, catalogo) || valorNoAdmitido(nodo.der, catalogo)
+  }
+  if (nodo.clase !== 'igual' || nodo.valor?.clase !== 'literal') return null
+  const campo = nodo.campo === 'type' ? 'issuetype' : nodo.campo
+  if (!CAMPOS_CON_CATALOGO.includes(campo)) return null
+  return valorRechazado(catalogo, campo, nodo.valor.valor)
+}
+
+/** Casa un valor de campo por su nombre de JQL o por su id. */
+function casaValor(ctx, campo, suyo, esperado) {
+  if (igual(suyo, esperado)) return true
+  const e = delCatalogo(ctx?.catalogo, campo, suyo)
+  return !!e?.id && igual(e.id, esperado)
+}
+
 /** Las incidencias enlazadas con una clave, en los dos sentidos. */
 function enlazadas(issues, clave) {
   const key = String(clave || '').toUpperCase()
@@ -264,19 +347,20 @@ function valorLiteral(nodo, ctx) {
   return null
 }
 
-function casaIgual(issue, campo, esperado) {
+function casaIgual(issue, campo, esperado, ctx) {
   switch (campo) {
     case 'project':
       return igual(String(issue.key).split('-')[0], esperado)
     case 'key':
       return igual(issue.key, esperado)
+    // Los tres que tienen id: por su nombre de JQL o por su id, como en Jira.
     case 'status':
-      return igual(issue.status, esperado)
+      return casaValor(ctx, 'status', issue.status, esperado)
     case 'issuetype':
     case 'type':
-      return igual(issue.type, esperado)
+      return casaValor(ctx, 'issuetype', issue.type, esperado)
     case 'priority':
-      return igual(issue.priority, esperado)
+      return casaValor(ctx, 'priority', issue.priority, esperado)
     case 'resolution':
       return igual(issue.resolution || 'Unresolved', esperado)
     case 'sprint':
@@ -343,7 +427,7 @@ export function casa(issue, nodo, ctx) {
   if (nodo.clase === 'igual') {
     const esperado = valorLiteral(nodo.valor, ctx)
     if (esperado === null) return null
-    return casaIgual(issue, nodo.campo, esperado)
+    return casaIgual(issue, nodo.campo, esperado, ctx)
   }
   if (nodo.clase === 'fecha') return casaFecha(issue, nodo)
   if (nodo.clase === 'en') {
@@ -380,15 +464,21 @@ function ordena(issues, orden) {
  *
  * @param {Array} issues la fixture (harness/issues.json)
  * @param {string} jql
- * @param {{user?:string}} ctx quién es `currentUser()`
+ * @param {{user?:string, catalog?:object}} ctx quién es `currentUser()` y el
+ *        catálogo de valores de campo (`fieldCatalog`), que es lo que permite
+ *        preguntar por id y rechazar un nombre traducido; sin él, como antes de H14
  * @returns {{ok:true, issues:Array}|{ok:false, errorMessages:string[]}}
  */
-export function runJql(issues, jql, { user = '' } = {}) {
+export function runJql(issues, jql, { user = '', catalog = null } = {}) {
   const lista = Array.isArray(issues) ? issues : []
   const p = parseJql(jql)
   if (!p.ok) return p
+  // Jira valida los valores contra el campo ANTES de ejecutar nada: un nombre
+  // traducido es un 400, no una lista vacía.
+  const rechazo = valorNoAdmitido(p.filtro, catalog)
+  if (rechazo) return error(rechazo)
   const clave = buscarLinked(p.filtro)
-  const contexto = { user, enlazadas: clave ? enlazadas(lista, clave) : new Set() }
+  const contexto = { user, catalogo: catalog, enlazadas: clave ? enlazadas(lista, clave) : new Set() }
   const out = []
   for (const issue of lista) {
     const r = casa(issue, p.filtro, contexto)
@@ -431,17 +521,25 @@ function iso(horas, ahora) {
 /**
  * Una incidencia con la forma que devuelve `GET /rest/api/2/search`, con sólo
  * los campos pedidos. Pura (el reloj se inyecta).
+ *
+ * El tipo, el estado y la prioridad van con su `id` y con el nombre que VE el
+ * usuario, que es lo que hace la API de verdad: si Jira traduce ese valor, el
+ * nombre llega traducido y el id es lo único que sirve para volver a preguntar
+ * por él (H14). Sin `catalog` el id va vacío y el nombre es el de la fixture.
  */
-export function issueJson(issue, campos, { people = {}, now = Date.now() } = {}) {
+export function issueJson(issue, campos, { people = {}, now = Date.now(), catalog = null } = {}) {
   const pedidos = new Set((campos && campos.length ? campos : CAMPOS_POR_DEFECTO).map((c) => String(c).trim()))
   const fields = {}
   const pon = (nombre, valor) => {
     if (pedidos.has(nombre)) fields[nombre] = valor
   }
+  const tipo = fieldValue(catalog, 'issuetype', issue.type)
+  const estado = fieldValue(catalog, 'status', issue.status)
+  const prioridad = fieldValue(catalog, 'priority', issue.priority)
   pon('summary', issue.summary)
-  pon('issuetype', { name: issue.type, subtask: false })
-  pon('status', { name: issue.status, statusCategory: { key: issue.statusCategory, name: issue.statusCategory } })
-  pon('priority', { name: issue.priority })
+  pon('issuetype', { id: tipo.id, name: tipo.name, subtask: false })
+  pon('status', { id: estado.id, name: estado.name, statusCategory: { key: issue.statusCategory, name: issue.statusCategory } })
+  pon('priority', { id: prioridad.id, name: prioridad.name })
   pon('resolution', issue.resolution ? { name: issue.resolution } : null)
   pon('assignee', persona(issue.assignee, people))
   pon('reporter', persona(issue.reporter, people))
@@ -466,7 +564,8 @@ export function issueJson(issue, campos, { people = {}, now = Date.now() } = {})
  */
 export function searchResponse(fixture, { jql, fields, maxResults, startAt, now = Date.now() } = {}) {
   const issues = fixture?.issues || []
-  const r = runJql(issues, jql, { user: fixture?.currentUser?.name || '' })
+  const catalog = fieldCatalog(fixture)
+  const r = runJql(issues, jql, { user: fixture?.currentUser?.name || '', catalog })
   if (!r.ok) return { status: 400, body: { errorMessages: r.errorMessages, errors: {} } }
   const tope = Number.isInteger(Number(maxResults)) && Number(maxResults) > 0 ? Math.min(Number(maxResults), 100) : 50
   const desde = Number.isInteger(Number(startAt)) && Number(startAt) > 0 ? Number(startAt) : 0
@@ -481,7 +580,7 @@ export function searchResponse(fixture, { jql, fields, maxResults, startAt, now 
       startAt: desde,
       maxResults: tope,
       total: r.issues.length,
-      issues: r.issues.slice(desde, desde + tope).map((issue) => issueJson(issue, campos, { people: fixture?.people, now })),
+      issues: r.issues.slice(desde, desde + tope).map((issue) => issueJson(issue, campos, { people: fixture?.people, now, catalog })),
     },
   }
 }

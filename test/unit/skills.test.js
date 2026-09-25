@@ -118,11 +118,19 @@ test('H9: con los datos del proyecto delante, Búsqueda copia los nombres exacto
   // Un nombre de estado que no existe no da error: da cero resultados, y eso
   // parece «no hay nada». El CONTEXTO DE ESTE SITIO es prosa que escribió un
   // modelo hace semanas; el perfil lo contó la extensión de la API de ese Jira.
-  const perfil = { version: 1, projectKey: 'SIMPL', types: [{ name: 'Story', count: 3 }], statuses: [] }
+  const perfil = { version: 2, projectKey: 'SIMPL', types: [{ name: 'Story', count: 3, id: '10001' }], statuses: [] }
   const s = skillSystem('busqueda', { product: 'jira', projectKey: 'SIMPL', profile: perfil })
   assert(/DATOS DEL PROYECTO de más abajo/.test(s), 'se le dice dónde están')
   assert(/los leyó la extensión de la API de este Jira, no un modelo/.test(s), 'y de dónde salieron')
-  assert(/EXACTOS/.test(s) && /no te inventes ni traduzcas ninguno/.test(s))
+  assert(/EXACTOS/.test(s) && /No te inventes ni traduzcas ninguno/.test(s))
+  // H14: el nombre no sirve para PREGUNTAR. Jira traduce los de serie al idioma
+  // del usuario y JQL los rechaza con un 400, así que tipo y estado van por id y
+  // sólo los componentes y las etiquetas —que no se traducen— por nombre.
+  assert(/por su ID/.test(s), 'y que el tipo y el estado van por id')
+  assert(/issuetype = 10002, status = 10045, sin comillas/.test(s), 'con el ejemplo literal de cómo se escribe')
+  assert(/los traduce al idioma del usuario/.test(s), 'y por qué el nombre no vale ahí')
+  assert(/si alguno no trae id, por su nombre entre comillas/.test(s), 'y qué hacer si un tipo no trae id')
+  assert(/Los componentes y las etiquetas no se traducen/.test(s), 'ésos siguen yendo por nombre')
   assert(/CONTEXTO DE ESTE SITIO/.test(s), 'la viñeta del contexto sigue: no lo sustituye, lo completa')
   assert(s.indexOf('CONTEXTO DE ESTE SITIO') < s.indexOf('DATOS DEL PROYECTO'), 'y el orden es el mismo que el de los bloques')
 

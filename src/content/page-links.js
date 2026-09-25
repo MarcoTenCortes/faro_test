@@ -6,7 +6,8 @@
  * a una decisión de arquitectura, esa decisión es justo lo que hay que tener
  * delante al analizarlo, y hoy el usuario la busca a mano en cada ticket.
  *
- * Tres reglas, y las tres vienen de decisiones que ya estaban escritas:
+ * Cuatro reglas; las tres primeras vienen de decisiones que ya estaban escritas
+ * y la cuarta, de lo que se vio en el Jira real (`isOwnJiraRoute`):
  *
  *  - Se lee por el ÁMBITO de lectura de siempre (`digestScope()`, §4.8): los
  *    puntos de lectura de una incidencia de Jira —título, campos, descripción,
@@ -21,6 +22,9 @@
  *  - Y lo que no se ve tampoco: el enlace de una pestaña de campos plegada está
  *    en el DOM pero no delante del usuario (`visible`, la misma de tree-dom.js
  *    con la que se decide si una fila del árbol existe).
+ *  - Y un enlace a una ruta PROPIA de Jira de este mismo sitio no es una página:
+ *    no se devuelve y no cuenta para el tope. En una épica real eran 55 de los
+ *    60 que caben, y los de los comentarios no llegaban a leerse.
  *
  * Aquí NO se decide si un enlace lleva a una página que se puede añadir: eso lo
  * hace `confluenceLinksIn` en el panel, que es quien sabe cuál es el sitio y
@@ -32,6 +36,7 @@
  * puro —qué href es siquiera un enlace— se prueba en Node.
  */
 
+import { isJiraRoute, jiraContextPath } from '../atlassian/site.js'
 import { digestScope } from './digest.js'
 import { ISSUE_LINK_REGIONS } from './jira-issue.js'
 import { visible } from './tree-dom.js'
@@ -95,6 +100,45 @@ export function linkHref(raw, base) {
 }
 
 /**
+ * ¿Este enlace lleva a una ruta PROPIA de Jira de este mismo sitio? Pura.
+ *
+ * Pasó de verdad (Jira Data Center del usuario, 2026-09-21): una épica tiene 254
+ * enlaces dentro de la incidencia y el tope de `LINK_LIMITS.max` se lo comían
+ * los de Jira —22 a `/browse/`, 21 a `/rest/`, 12 a `/secure/` (los «Borrar este
+ * enlace» del módulo de enlaces remotos)—, así que los de los COMENTARIOS, que
+ * van al final del documento, no llegaban a leerse. Ninguno de ésos es una
+ * página que alguien haya enlazado para esta incidencia: los pone Jira en todas.
+ *
+ * «Del mismo sitio» es el origen EXACTO: en otro host un `/browse/` puede ser
+ * cualquier cosa, y qué se hace con un enlace de fuera lo decide el panel
+ * (§8.12), no esto. La lista de rutas es la de `site.js` (`isJiraRoute`), que es
+ * la misma con la que se reconoce una ruta de contexto, y el prefijo se quita
+ * con `jiraContextPath`: un Data Center puede vivir bajo `/jira` y entonces todo
+ * cuelga de ahí. En una página de Confluence no cambia nada —`/display/…`,
+ * `/spaces/…` y `/pages/viewpage.action` no son rutas de Jira—; lo que se cae
+ * ahí es un `/rest/…` o un `/plugins/servlet/…`, que tampoco son páginas.
+ *
+ * @param {string} href la URL del enlace, absoluta o relativa a `base`
+ * @param {string} base la URL de la pestaña
+ */
+export function isOwnJiraRoute(href, base) {
+  // Lo que no llega a ser un enlace no es una ruta de nada, y qué es un enlace
+  // lo decide `linkHref`: una sola idea de eso en el módulo.
+  const abs = linkHref(href, base)
+  if (!abs) return false
+  let aqui = null
+  try {
+    aqui = new URL(String(base ?? ''))
+  } catch {
+    return false
+  }
+  const u = new URL(abs)
+  if (u.origin !== aqui.origin) return false
+  const ctx = jiraContextPath(u.pathname)
+  return isJiraRoute(ctx ? u.pathname.slice(ctx.length) : u.pathname)
+}
+
+/**
  * De qué parte de la incidencia viene un enlace. En una página de Confluence
  * ninguna región casa y todo es «pagina», que es lo que se quiere decir.
  *
@@ -139,6 +183,10 @@ export function pageLinks({ scope = null, limits = LINK_LIMITS } = {}) {
       if (chrome && a.closest(chrome)) continue
       const href = linkHref(a.getAttribute('href'), base)
       if (!href) continue
+      // Una ruta propia de Jira no es una página, y se descarta antes de medir
+      // si se ve (eso cuesta una medida y un estilo calculado por enlace) y
+      // antes del tope: contarla es lo que dejaba fuera los comentarios.
+      if (isOwnJiraRoute(href, base)) continue
       if (!visible(a)) continue
       const where = regionDe(a)
       const clave = where + '\n' + href

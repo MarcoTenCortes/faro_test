@@ -14,19 +14,37 @@
 import { test, eq, assert } from '../harness.js'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { tokenize, parseJql, runJql, casa, horasDe, issueJson, searchResponse, CAMPOS_POR_DEFECTO } from '../../tools/jql-eval.mjs'
-import { parseSearchIssues, SEARCH_FIELDS, historyJql, mineJql, projectJql, relatedJql, sampleQuery } from '../../src/shared/jira-rest.js'
+import { tokenize, parseJql, runJql, casa, horasDe, issueJson, searchResponse, fieldCatalog, fieldValue, CAMPOS_POR_DEFECTO } from '../../tools/jql-eval.mjs'
+import {
+  parseSearchIssues,
+  parseRemoteLinks,
+  SEARCH_FIELDS,
+  historyJql,
+  mineJql,
+  projectJql,
+  relatedJql,
+  sampleQuery,
+} from '../../src/shared/jira-rest.js'
+import { contentSearch, spaceContent, metaDe, PAGE } from '../../tools/cql-eval.mjs'
+import { spaceCql, viewedCql, parseSpaceSearch, parseSpacePages } from '../../src/shared/confluence-rest.js'
 
 const ROOT = join(import.meta.dirname, '..', '..')
 const FIXTURE = JSON.parse(readFileSync(join(ROOT, 'harness', 'issues.json'), 'utf8'))
 const USUARIO = { user: FIXTURE.currentUser.name }
 
-/** Las claves que devuelve una consulta sobre la fixture, en orden. */
-function claves(jql) {
-  const r = runJql(FIXTURE.issues, jql, USUARIO)
+/**
+ * Las claves que devuelve una consulta sobre la fixture, en orden. Sin `ctx` va
+ * sin catálogo, que es como se comportaba esta Jira de mentira antes de H14: las
+ * comprobaciones de siempre preguntan por el nombre de JQL y así siguen valiendo.
+ */
+function claves(jql, ctx = USUARIO) {
+  const r = runJql(FIXTURE.issues, jql, ctx)
   assert(r.ok, 'la consulta tenía que valer: ' + (r.errorMessages || []).join(' · '))
   return r.issues.map((i) => i.key)
 }
+
+/** Con el catálogo, que es como lo sirve `searchResponse`. */
+const CON_CATALOGO = { user: FIXTURE.currentUser.name, catalog: fieldCatalog(FIXTURE) }
 
 // ---------------------------------------------------------------------------
 // tokenize
@@ -187,6 +205,11 @@ test('issueJson: los campos van con la forma que lee parseSearchIssues, y sin pe
   assert(/^\d{4}-\d{2}-\d{2}T/.test(f.updated), 'la fecha va en ISO, como la devuelve Jira: ' + f.updated)
   eq(issueJson(eng7, ['summary'], {}).fields, { summary: eng7.summary }, 'sólo lo pedido')
   eq(Object.keys(issueJson(eng7, [], {}).fields).sort(), [...CAMPOS_POR_DEFECTO].sort(), 'sin pedir nada, los de siempre')
+  // Sin catálogo (H14) el nombre es el de la fixture y el id va vacío: es lo que
+  // devolvería una instancia que no diera los ids, y lo que dejaba esta Jira de
+  // mentira antes del hito.
+  eq(f.issuetype.id, '')
+  eq(f.status.id, '')
 })
 
 test('lo que contesta el banco lo entiende el cliente de verdad: searchResponse → parseSearchIssues', () => {
@@ -207,6 +230,83 @@ test('lo que contesta el banco lo entiende el cliente de verdad: searchResponse 
   assert(eng7.updatedAt > 0 && eng7.lastViewedAt > 0, 'las fechas llegan como número')
 })
 
+// ---------------------------------------------------------------------------
+// H14: los ids, y que un nombre traducido no vale
+// ---------------------------------------------------------------------------
+
+test('H14: el catálogo cubre todos los valores que usa la fixture, con su id', () => {
+  // Si un tipo o un estado de una incidencia no está en el catálogo, la API falsa
+  // lo devolvería sin id y el perfil contado aquí no se parecería al del Jira
+  // real: el chip volvería a preguntar por el nombre.
+  const catalogo = fieldCatalog(FIXTURE)
+  eq(Object.keys(catalogo).sort(), ['issuetype', 'priority', 'status'])
+  const campos = { issuetype: 'type', status: 'status', priority: 'priority' }
+  for (const [campo, propiedad] of Object.entries(campos)) {
+    const ids = new Set()
+    for (const e of catalogo[campo]) {
+      assert(/^\d{1,19}$/.test(e.id), `${campo} «${e.name}» necesita un id numérico: ${JSON.stringify(e)}`)
+      assert(!ids.has(e.id), `dos ${campo} con el id ${e.id}`)
+      ids.add(e.id)
+    }
+    for (const issue of FIXTURE.issues) {
+      const valor = issue[propiedad]
+      assert(
+        catalogo[campo].some((e) => e.name.toLowerCase() === String(valor).toLowerCase()),
+        `${issue.key}: ${campo} «${valor}» no está en el catálogo`
+      )
+    }
+  }
+  // Y al menos un tipo y un estado TRADUCIDOS: sin ellos, el tramo del selfcheck
+  // que prueba el 400 no probaría nada.
+  for (const campo of ['issuetype', 'status']) {
+    assert(catalogo[campo].some((e) => e.display && e.display !== e.name), `${campo} necesita un valor traducido`)
+  }
+  eq(fieldValue(catalogo, 'issuetype', 'Task'), { id: '10002', name: 'Tarea' }, 'la API devuelve el nombre traducido')
+  eq(fieldValue(catalogo, 'status', 'In Review'), { id: '10000', name: 'In Review' }, 'y el de siempre si no se traduce')
+  eq(fieldValue(catalogo, 'status', 'No existe'), { id: '', name: 'No existe' }, 'lo que no está en el catálogo pasa sin id')
+  eq(fieldCatalog({}), { issuetype: [], status: [], priority: [] }, 'sin catálogo, listas vacías y nada más')
+})
+
+test('H14: la API falsa devuelve el nombre traducido con su id, y JQL sólo acepta el id', () => {
+  // Es el hallazgo que abre este hito, fingido tal cual: lo que la API DEVUELVE no
+  // sirve para volver a preguntar, y el id sí.
+  const r = searchResponse(FIXTURE, { jql: 'project = ENG AND issuetype = Task ORDER BY key ASC', fields: SEARCH_FIELDS.join(','), maxResults: 30 })
+  eq(r.status, 200)
+  const filas = parseSearchIssues(r.body)
+  assert(filas.length > 0)
+  eq(filas[0].type, 'Tarea', 'la API contesta con el nombre que ve el usuario')
+  eq(filas[0].typeId, '10002', 'y con su id')
+  assert(
+    filas.every((f) => f.typeId === '10002' && /^\d+$/.test(f.statusId) && /^\d+$/.test(f.priorityId)),
+    'cada fila trae los tres ids: ' + JSON.stringify(filas[0])
+  )
+
+  // Por el nombre traducido —el que la extensión acaba de leer— es un 400 con el
+  // mensaje del servidor, que es lo que el panel enseña tal cual.
+  const rechazada = searchResponse(FIXTURE, { jql: 'project = ENG AND issuetype = "Tarea"', maxResults: 5 })
+  eq(rechazada.status, 400)
+  eq(rechazada.body.errorMessages, ["El valor 'Tarea' no existe para el campo 'issuetype'."])
+  eq(searchResponse(FIXTURE, { jql: 'status = "En progreso"', maxResults: 5 }).body.errorMessages, ["El valor 'En progreso' no existe para el campo 'status'."])
+  eq(searchResponse(FIXTURE, { jql: 'project = ENG AND status = Listo' }).status, 400, 'también sin comillas')
+
+  // Por id, lo mismo que por el nombre de JQL, exactamente.
+  const porId = claves('project = ENG AND issuetype = 10002 ORDER BY key ASC', CON_CATALOGO)
+  eq(porId, claves('project = ENG AND issuetype = Task ORDER BY key ASC', CON_CATALOGO), 'el id y el nombre de JQL son la misma consulta')
+  assert(porId.length > 0)
+  eq(
+    claves('project = ENG AND status = 3 ORDER BY key ASC', CON_CATALOGO),
+    claves('project = ENG AND status = "In Progress" ORDER BY key ASC', CON_CATALOGO)
+  )
+  eq(claves('priority = 1 ORDER BY key ASC', CON_CATALOGO), claves('priority = "Crítica" ORDER BY key ASC', CON_CATALOGO))
+  // Un valor que no existe en ninguna parte sigue dando lista vacía, como hasta
+  // ahora: esta Jira de mentira no sabe qué valores existen «en general».
+  eq(claves('project = ENG AND status = "Ni existe"', CON_CATALOGO), [])
+  // Y sin catálogo se comporta como antes de H14: el nombre de la fixture manda y
+  // el id no significa nada.
+  eq(runJql(FIXTURE.issues, 'project = ENG AND issuetype = "Tarea"', { user: 'marco' }).issues, [])
+  assert(runJql(FIXTURE.issues, 'project = ENG AND issuetype = Task', { user: 'marco' }).issues.length > 0)
+})
+
 test('los filtros favoritos y los enlaces remotos de la fixture tienen la forma que se parsea', () => {
   eq(FIXTURE.filters.map((f) => f.id), ['10100', '10200'])
   for (const f of FIXTURE.filters) {
@@ -215,7 +315,69 @@ test('los filtros favoritos y los enlaces remotos de la fixture tienen la forma 
   }
   const links = FIXTURE.remoteLinks['ENG-7']
   eq(links.length, 2)
-  assert(/pageId=200/.test(links[0].globalId), 'el enlace a Confluence señala la página por id')
+  assert(/pageId=301/.test(links[0].globalId), 'el enlace a Confluence señala la página por id')
   eq(links[0].application.type, 'com.atlassian.confluence')
   eq(links[1].application.type, 'com.atlassian.bitbucket', 'y uno que no es de Confluence, para que se descarte')
+  // H14: la fixture tiene la forma REAL, y en el Jira real el título de un enlace
+  // remoto a Confluence es «Page» (el nombre del TIPO de enlace). Que lo tenga es
+  // lo que hace que el tramo 48 del banco pruebe algo: si alguien lo «arregla»
+  // poniendo aquí el título de la página, la comprobación pasa sin comprobar nada.
+  eq(links[0].relationship, 'mentioned in')
+  eq(links[0].object.title, 'Page')
+  // La URL sale vacía porque en la fixture es el marcador `PAGINA_301`, que la
+  // monta el servidor al contestar; lo que se comprueba aquí es el título.
+  eq(parseRemoteLinks(links), [{ pageId: '301', title: '', url: '' }], 'el título genérico no llega como título')
+})
+
+// ----------------------------------- la Confluence de mentira del banco (H14)
+//
+// Vive en tools/cql-eval.mjs justo para poder ejercitarla desde aquí: mientras
+// estuvo dentro de tools/serve-harness.js, que abre un servidor al importarlo, el
+// banco podía contestar con una forma que el Confluence real no devuelve y la
+// autocomprobación pasaba en verde.
+
+test('H14: el árbol del espacio se sirve por fecha, con antepasados y con totalSize', () => {
+  const cql = spaceCql('ENG')
+  const p1 = contentSearch(cql, { start: 0, limit: 5 })
+  eq(p1.results.length, 5)
+  eq(p1.size, 5)
+  eq(p1.totalSize, Object.keys(PAGE).length, 'cuántas hay en el espacio, no cuántas vinieron')
+  assert(!!p1._links.next, 'y dice que hay más')
+  // Las más recientes primero: es lo que H14 vino a arreglar, porque la lista las
+  // da en orden ascendente de id, o sea las más viejas (F8).
+  const horas = p1.results.map((r) => metaDe(r.id).horas)
+  eq(horas, [...horas].sort((a, b) => a - b), 'ordenadas por lastmodified DESC')
+  // Cada resultado trae su cadena ENTERA, que es lo que permite que el árbol no
+  // salga desmigajado aunque los padres no estén entre las recientes.
+  const profunda = contentSearch(cql, { start: 0, limit: 20 }).results.find((r) => r.id === '1086')
+  eq(profunda.ancestors.map((a) => a.id), ['1', '1080', '1081', '1082', '1083', '1084', '1085'])
+  assert(!('space' in profunda), 'con expand=ancestors el Confluence real no expande el espacio')
+  // Se pagina con el `start` que manda el cliente, y los trozos no se solapan.
+  const p2 = contentSearch(cql, { start: 5, limit: 5 })
+  eq(p2.start, 5)
+  eq(p2.results.filter((r) => p1.results.some((x) => x.id === r.id)), [])
+  eq(contentSearch(spaceCql('OTRO'), { limit: 5 }).results, [], 'de otro espacio no hay nada')
+  // Y por la misma ruta siguen contestando las consultas de H7.
+  eq(contentSearch(viewedCql(3), {}).results.length, 3, 'lo que viste')
+  assert(contentSearch('type=page AND title~"Arqui*"', {}).results.length > 0, 'y la búsqueda por título')
+})
+
+test('H14: lo que contesta el banco lo entiende parseSpaceSearch, y la lista sigue dando la portada', () => {
+  const p = parseSpaceSearch(contentSearch(spaceCql('ENG'), { start: 0, limit: 6 }), { wikiPrefix: '/wiki', spaceKey: 'ENG' })
+  eq(p.groups.length, 6)
+  eq(p.total, Object.keys(PAGE).length)
+  eq(p.next, true)
+  for (const grupo of p.groups) {
+    eq(grupo[0].parentId, null, 'cada cadena empieza en una raíz')
+    for (let i = 1; i < grupo.length; i++) eq(grupo[i].parentId, grupo[i - 1].id, 'y cada eslabón cuelga del anterior')
+    for (const pagina of grupo) {
+      eq(pagina.spaceKey, 'ENG')
+      assert(pagina.url.startsWith('/wiki/spaces/ENG/pages/'), pagina.url)
+    }
+  }
+  // La portada sigue saliendo de la LISTA de siempre, que es la que sabe
+  // expandirla, y con una sola página basta.
+  const lista = spaceContent({ spaceKey: 'ENG', start: 0, limit: 1 })
+  eq(lista.results.length, 1)
+  eq(parseSpacePages(lista, '/wiki').homeId, '1')
 })

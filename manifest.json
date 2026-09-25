@@ -4,7 +4,7 @@
   "short_name": "Faro",
   "version": "1.0.0",
   "description": "Chatea con tu opencode local dentro de Jira y Confluence, y deja que te lleve hasta donde está la respuesta.",
-  "minimum_chrome_version": "116",
+  "minimum_chrome_version": "130",
   "icons": {
     "16": "src/assets/icon-16.png",
     "32": "src/assets/icon-32.png",

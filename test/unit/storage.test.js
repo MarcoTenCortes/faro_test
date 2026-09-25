@@ -230,8 +230,10 @@ const PERFIL = {
   projectKey: 'SIMPL',
   sampled: 40,
   at: 1757664000000,
-  types: [{ name: 'Story', count: 30 }],
-  statuses: [{ name: 'Done', count: 12, category: 'done' }],
+  // Tipos y estados con su id desde H14: es lo único que una JQL acepta cuando
+  // Jira devuelve el nombre traducido al idioma del usuario.
+  types: [{ name: 'Story', count: 30, id: '10001' }],
+  statuses: [{ name: 'Done', count: 12, category: 'done', id: '6' }],
   components: [],
   labels: [],
   prefixes: [],
@@ -248,10 +250,10 @@ test('H9: el perfil entra y sale por normalizeProfile, y el de otra versión no 
     eq(await getProfile(OTRO), null, 'el perfil es de ESTE host')
     eq(diario.sets, [], 'leer no escribe')
   })
-  await conChrome({ [CLAVE_PERFIL]: { ...PERFIL, onclick: 'x', types: [{ name: 'Story', count: 30, extra: 1 }] } }, async () => {
+  await conChrome({ [CLAVE_PERFIL]: { ...PERFIL, onclick: 'x', types: [{ name: 'Story', count: 30, id: '10001', extra: 1 }] } }, async () => {
     const p = await getProfile(HOST)
     eq(Object.keys(p).sort(), ['at', 'components', 'labels', 'prefixes', 'projectKey', 'sampled', 'statuses', 'types', 'version'])
-    eq(p.types, [{ name: 'Story', count: 30 }], 'y cada entrada también')
+    eq(p.types, [{ name: 'Story', count: 30, id: '10001' }], 'y cada entrada también')
   })
   // Otra versión: null, y se vuelve a contar. NO se borra del almacén, a
   // diferencia del índice: un índice viejo lleva a un 404 y hay que tirarlo en

@@ -346,18 +346,22 @@ const PERFIL_JIRA = normalizeProfile({
   projectKey: 'SIMPL',
   sampled: 120,
   at: Date.UTC(2026, 8, 12, 9, 0, 0),
+  // Cada tipo y cada estado con su id (H14): son los números de un Jira Data
+  // Center de verdad (los de serie van por debajo de 10 000; los que añade un
+  // proyecto, por encima), y es lo único que una JQL acepta cuando el nombre
+  // llega traducido al idioma del usuario.
   types: [
-    { name: 'Story', count: 61 },
-    { name: 'Bug', count: 24 },
-    { name: 'Task', count: 21 },
-    { name: 'Epic', count: 14 },
+    { name: 'Story', count: 61, id: '10001' },
+    { name: 'Bug', count: 24, id: '1' },
+    { name: 'Task', count: 21, id: '10002' },
+    { name: 'Epic', count: 14, id: '10000' },
   ],
   statuses: [
-    { name: 'To Do', count: 38, category: 'new' },
-    { name: 'In Progress', count: 31, category: 'indeterminate' },
-    { name: 'Done', count: 27, category: 'done' },
-    { name: 'In Review', count: 18, category: 'indeterminate' },
-    { name: 'Blocked', count: 6, category: 'indeterminate' },
+    { name: 'To Do', count: 38, category: 'new', id: '10100' },
+    { name: 'In Progress', count: 31, category: 'indeterminate', id: '3' },
+    { name: 'Done', count: 27, category: 'done', id: '10101' },
+    { name: 'In Review', count: 18, category: 'indeterminate', id: '10102' },
+    { name: 'Blocked', count: 6, category: 'indeterminate', id: '10103' },
   ],
   components: [
     { name: 'consent', count: 22 },

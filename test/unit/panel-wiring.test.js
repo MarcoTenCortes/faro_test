@@ -255,7 +255,10 @@ test('EL CAMBIO: las páginas base del análisis viajan con el turno, se ven y s
   assert((aviso.match(/noticeNode\(/g) || []).length >= 2, 'los dos avisos se ven')
   assert(/'Fuera del alcance'/.test(aviso) && /'Páginas base sin leer'/.test(aviso), 'y quedan en el registro')
   assert(!/state\.(site|mcpConnected|tabTitle|tabUrl)/.test(aviso), 'nunca el estado de después del turno')
-  assert(/mcpConnected: mcpAlPedir/.test(envio), 'si había MCP se captura al mandar')
+  // Desde H14 lo que se captura es la PROMESA de la comprobación del MCP (P5:
+  // ya no bloquea el arranque) y se le pregunta al terminar el turno; el detalle
+  // lo pina la prueba de H14.
+  assert(/mcpConnected: await mcpCheckAlPedir/.test(envio), 'si había MCP se pregunta al terminar, con lo capturado al mandar')
 
   // Se cargan con el sitio, antes de cualquier pantalla, y se vacían al
   // cambiar de host —con el índice y el contexto, que también son del sitio—:
@@ -337,8 +340,11 @@ test('EL CAMBIO: claves por producto, host enlazado y contexto de Confluence des
   // desde Jira se carga el contexto del Confluence enlazado.
   const arranque = JS.slice(JS.indexOf('async function bootForSite'), JS.indexOf('async function ensureContentAccess'))
   // El nombre guardado cuenta por detrás de lo que opencode tiene de verdad
-  // (`chosenMcpName`: opencode → lo apuntado → el nombre por host).
-  assert(/mcpStatusFor\(mcp, state\.site\.host, chosenMcpName\(config, saved, state\.site\.host, \{ status: mcp \}\)\)/.test(arranque), 'el nombre guardado cuenta')
+  // (`chosenMcpName`: opencode → lo apuntado → el nombre por host). Desde H14
+  // esto vive en `checkMcp`, que está dentro de este trozo, y habla del host
+  // CAPTURADO antes de preguntar: entre la pregunta y la respuesta hay hasta
+  // catorce segundos y la pestaña puede haberse ido (§8.22).
+  assert(/mcpStatusFor\(mcp, host, chosenMcpName\(config, saved, host, \{ status: mcp \}\)\)/.test(arranque), 'el nombre guardado cuenta')
   // Y se lee ANTES. Desde H6 sale del paquete del sitio (`bundle.site`), no de
   // un `getSite` propio; el pin exige que la línea exista, porque escrito como
   // `indexOf(...) < indexOf(...)` un nombre que ya no está da -1 y pasa siempre.
@@ -368,11 +374,11 @@ test('EL CAMBIO: un MCP que ya existe en opencode para este dominio se adopta, s
   // Confluence se pedían claves para un MCP que ya estaba conectado.
   const arranque = JS.slice(JS.indexOf('async function bootForSite'), JS.indexOf('async function ensureContentAccess'))
   assert(/client\.config\(\)\.catch\(\(\) => null\)/.test(arranque), 'se pregunta a opencode qué configuración tiene')
-  assert(/const found = mcpForHost\(config, state\.site\.host, \{ status: mcp \}\)/.test(arranque), 'y se busca el MCP que lleva este dominio, mirando su estado')
+  assert(/const found = mcpForHost\(config, host, \{ status: mcp \}\)/.test(arranque), 'y se busca el MCP que lleva este dominio, mirando su estado')
   assert(/if \(found && found\.connected && \(/.test(arranque), 'sólo se adopta lo que está conectado: apuntar uno caído pisaba lo que funcionaba')
   assert(/saved\?\.jiraHost !== found\.jiraHost/.test(arranque) && /saved\?\.confluenceHost !== found\.confluenceHost/.test(arranque), 'y también cuando el MCP ya apuntado trae un host nuevo')
   assert(/siteRecords\(\{[^}]*mcpName: found\.name/.test(arranque), 'el que se encuentra se apunta, con el otro host enlazado')
-  assert(/chosenMcpName\(config, saved, state\.site\.host, \{ status: mcp \}\)/.test(arranque), 'y se comprueba con ese nombre')
+  assert(/chosenMcpName\(config, saved, host, \{ status: mcp \}\)/.test(arranque), 'y se comprueba con ese nombre')
   assert(arranque.indexOf('const found = mcpForHost') < arranque.indexOf('showSetupScreen()'), 'antes de pedir claves')
   assert(/'MCP reconocido'/.test(arranque) && /'MCP sin conectar'/.test(arranque))
   assert(/«\$\{status\.name\}» está registrado pero en/.test(arranque), 'la pantalla de claves dice QUÉ bloque está caído')
@@ -905,11 +911,15 @@ test('H2 A3: Escape en Ajustes cierra sin guardar', () => {
 })
 
 test('H3: el arranque dice cuánto tardó cada fase, y la del MCP es la que se viene a leer', () => {
-  // El `GET /mcp` tarda entre 2,8 y 13,8 s la PRIMERA vez tras arrancar
-  // opencode (auditoría del 2026-09-13 contra un servidor desechable) y
-  // `bootForSite` lo espera antes de enseñar el chat. Nadie lo veía: sin el
-  // número en el registro, sacarlo del camino (H6) sería a ciegas.
-  const arranque = JS.slice(JS.indexOf('async function bootForSite'), JS.indexOf('async function loadLinkedContext'))
+  // El `GET /mcp` tarda entre 2,8 y 14,5 s la PRIMERA vez tras arrancar opencode
+  // (auditoría del 2026-09-13 contra un servidor desechable; 14 463 ms el
+  // 2026-09-21 contra el del usuario) y `bootForSite` lo esperaba antes de
+  // enseñar el chat. Nadie lo veía: sin el número en el registro, sacarlo del
+  // camino (H14 P5) habría sido a ciegas.
+  // El trozo es el arranque SOLO: desde H14 el MCP es otra función y sus fases
+  // son suyas (`currentProfile` es lo primero que viene detrás). Sin recortar
+  // aquí, la fase «MCP» de `checkMcp` daría por buena la del arranque.
+  const arranque = sinComentarios(JS.slice(JS.indexOf('async function bootForSite'), JS.indexOf('function currentProfile(')))
   // Reloj MONÓTONO: `Date.now` salta con el reloj del sistema (NTP, cambio de
   // hora) y una fase podía salir negativa o de horas. El content script ya medía
   // con `performance.now`; el panel también (revisión adversaria de H3).
@@ -921,32 +931,41 @@ test('H3: el arranque dice cuánto tardó cada fase, y la del MCP es la que se v
   // dos fases de antes son una con su nombre, y lo que queda por leer después
   // del MCP —el contexto del Confluence enlazado, que es de otro host— tiene la
   // suya: sin eso, esos milisegundos se contaban como «restaurar».
-  for (const fase of ['health', 'modelos y almacenamiento', 'MCP', 'enlazado', 'restaurar']) {
+  for (const fase of ['health', 'modelos y almacenamiento', 'enlazado', 'restaurar']) {
     assert(arranque.includes(`cron.mark('${fase}')`), `falta la fase ${fase}`)
   }
   assert(!/cron\.mark\('modelos'\)/.test(arranque) && !/cron\.mark\('almacenamiento'\)/.test(arranque), 'y las dos de antes ya no están: una fase no puede llamarse como otra que medía otra cosa')
-  // La fase «MCP» son las DOS peticiones y nada más: si se marcara después de
-  // adoptar el MCP y guardar los sitios, el número dejaría de ser el del GET.
-  const mcp = arranque.indexOf("cron.mark('MCP')")
-  assert(arranque.lastIndexOf('client.listMcp()', mcp) > -1, 'la marca va después de pedir /mcp y /config')
-  assert(mcp < arranque.indexOf('siteRecords({'), 'y antes de adoptar el MCP y escribir en storage')
+  // Y la fase «MCP» ya sólo existe en la ÚNICA salida que lo espera: el sitio que
+  // todavía no está configurado (H14 P5). En cualquier otro sitio del arranque
+  // sería una fase de una espera que ya no hay.
+  const espera = arranque.slice(arranque.indexOf('if (primeraVez) {'), arranque.indexOf('} else {', arranque.indexOf('if (primeraVez) {')))
+  assert(espera.includes('const r = await comprobacion') && espera.includes("cron.mark('MCP')"), 'la fase MCP vive donde se espera al MCP')
+  eq(arranque.split("cron.mark('MCP')").length - 1, 1, 'y en ningún otro sitio del arranque')
+  // La fase «MCP» sigue siendo las DOS peticiones y nada más, ahora dentro de la
+  // comprobación: si se marcara después de adoptar el MCP y guardar los sitios,
+  // el número dejaría de ser el del GET. Y se registra aparte, para que el
+  // número siga saliendo aunque ya no bloquee.
+  const comprobar = sinComentarios(JS.slice(JS.indexOf('async function checkMcp'), JS.indexOf('function mcpResultSoon')))
+  const mcp = comprobar.indexOf("cron.mark('MCP')")
+  assert(comprobar.lastIndexOf('client.listMcp()', mcp) > -1, 'la marca va después de pedir /mcp y /config')
+  assert(mcp < comprobar.indexOf('siteRecords({'), 'y antes de adoptar el MCP y escribir en storage')
+  assert(/'MCP comprobado'/.test(comprobar) && /timingLine\(cron\.done\(\)/.test(comprobar), 'y lo que costó se registra con su propia línea')
   // El arranque tiene cuatro salidas: tres miden —pantalla de claves, pantalla de
-  // contexto y el chat, y las dos cortas son justo las que enseñan lo que cuesta
+  // contexto y el chat, y la de las claves es justo la que enseña lo que cuesta
   // el MCP— y la de «sin opencode» no mide nada. Se cuenta sobre el fuente SIN
   // comentarios: el pin contaba 4 llamadas y una era la del comentario de encima.
-  const codigo = sinComentarios(arranque)
-  eq(codigo.split('medir()').length - 1, 3, 'medir() se llama en las tres salidas que llegan a medir algo')
-  const claves = codigo.slice(codigo.indexOf('if (!status.connected && !saved?.skippedKeys) {'))
+  eq(arranque.split('medir()').length - 1, 3, 'medir() se llama en las tres salidas que llegan a medir algo')
+  const claves = arranque.slice(arranque.indexOf('if (faltanClaves(r)) {'))
   assert(claves.indexOf('medir()') < claves.indexOf('return'), 'la salida por la pantalla de claves mide antes de volver')
   // La salida «sin opencode» no registra un arranque verde que no hubo, y además
   // VACÍA la fila: si no, «tiempos (arranque)» se quedaba con la línea del
   // arranque anterior, que era de otro momento y quizá de otro sitio.
-  const sinOpencode = codigo.slice(codigo.indexOf('await client.health()'), codigo.indexOf("cron.mark('health')"))
+  const sinOpencode = arranque.slice(arranque.indexOf('await client.health()'), arranque.indexOf("cron.mark('health')"))
   assert(/state\.timing\.boot = ''/.test(sinOpencode), 'sin opencode, la fila de tiempos vuelve a «(sin medir)»')
   assert(!sinOpencode.includes('medir()'), 'y no se registra ningún «Arranque del panel»')
   // SEGURIDAD: de la configuración de opencode no sale nada al registro; una
   // línea de tiempos son etiquetas de Faro y números.
-  assert(!/log\.\w+\([^)]*\bconfig\b/.test(arranque), 'la configuración no se registra')
+  assert(!/log\.\w+\([^)]*\bconfig\b/.test(arranque) && !/log\.\w+\([^)]*\bconfig\b/.test(comprobar), 'la configuración no se registra')
 })
 
 test('H6 P4: el arranque lee el sitio de UNA vez y no espera en fila lo que puede ir a la vez', () => {
@@ -2475,6 +2494,15 @@ test('H9: el mapa se levanta con lo que la API da exacto, y si no puede sigue po
   assert(!/\borigin:/.test(rest) && !/location\./.test(rest) && !/maxPages:/.test(rest), 'ni por otro camino, ni un segundo tope por mensaje')
   assert(/indexFromSpacePages\(r\.pages, \{ site: sitio, scope, homeId: r\.homeId \}\)/.test(rest), 'lo que vuelve pasa por las validadoras del índice')
   assert(/'Índice leído de la API'/.test(rest) && /'Índice por la API no disponible'/.test(rest), 'las dos salidas se registran (§8.14)')
+  // H14: el árbol son las páginas MÁS RECIENTES del espacio, no todas (F8), así
+  // que en un espacio de verdad siempre viene recortado y lo honesto es decir de
+  // cuántas; y si vino por el camino de respaldo, que no está ordenado por fecha.
+  assert(
+    rest.includes('const deCuantas = r.total ? `${r.own} de ${r.total}` : `recortado en ${INDEX_LIMITS.maxPages}`'),
+    'se dice cuántas de cuántas cuando la API dice el total'
+  )
+  assert(rest.includes("r.truncated ? ` · ${deCuantas}` : ''"), 'y sólo cuando se quedó corto')
+  assert(rest.includes("r.via === 'lista' ? ' · por la lista, sin ordenar por fecha' : ''"), 'por dónde vino el árbol')
 
   // Jira: aquí lo que la API da no es un árbol, es la muestra con la que se
   // cuenta el perfil. Y en Cloud no hay REST de Jira que leer (410).
@@ -3791,4 +3819,123 @@ test('H13: Ajustes dice qué guarda Faro de este sitio, con su medida y sin ense
   assert(espejo.includes("'espacio usado'") && JS.includes("'espacio usado'"), 'con la misma última fila que el panel: los dos textos se han separado')
   const cajas = espejo.slice(espejo.indexOf('const CAJAS ='), espejo.indexOf('function check() {'))
   assert(cajas.includes("'.privacy li'"), 'y la fila entra en la medida de desbordamiento')
+})
+
+test('H14 P5: el chat no espera al MCP, y lo que la comprobación decide llega después sin pisar nada', () => {
+  // `GET /mcp` EN FRÍO tarda 14 463 ms en la máquina del usuario (medido el
+  // 2026-09-21 contra su opencode 1.2.25; 2 ms en caliente) y hasta H14 el chat
+  // esperaba eso entero cada vez que se reiniciaba opencode. Ahora la
+  // comprobación va en segundo plano y el arranque sigue sin ella.
+  const arranque = sinComentarios(JS.slice(JS.indexOf('async function bootForSite'), JS.indexOf('function currentProfile(')))
+  assert(/const primeraVez = !saved\?\.configured && !saved\?\.skippedKeys/.test(arranque), 'sólo el sitio que todavía no está en marcha espera al MCP')
+  assert(/const comprobacion = checkMcp\(client, testigo, saved\)/.test(arranque), 'la comprobación se lanza con el cliente, el testigo y lo guardado')
+  assert(/state\.mcpCheck = comprobacion\.then\(/.test(arranque), 'y queda a mano para el turno que se mande mientras tanto')
+  eq(arranque.split('await comprobacion').length - 1, 1, 'se espera UNA vez, y en un solo sitio')
+  const espera = arranque.slice(arranque.indexOf('if (primeraVez) {'), arranque.indexOf('} else {', arranque.indexOf('if (primeraVez) {')))
+  assert(espera.includes('const r = await comprobacion'), 'y es el camino de la primera vez, donde la pantalla de claves es lo primero que hay que ver')
+  assert(/if \(state\.bootToken !== testigo\) return/.test(espera), 'con el testigo comprobado al volver (§8.22)')
+  assert(/if \(faltanClaves\(r\)\) \{/.test(espera), 'y ahí sí se pide lo que falta antes de seguir')
+  // El camino de todos los días: ni se espera ni se cuela por otro sitio.
+  assert(/setStatus\('busy', COMPROBANDO_MCP\)/.test(arranque), 'mientras dura, la cabecera dice qué pasa')
+  assert(/mcpResultSoon\(comprobacion, testigo\)/.test(arranque), 'y el resultado se recoge sin esperarlo')
+  assert(
+    !/await mcpResultSoon\(/.test(arranque) && !/await state\.mcpCheck/.test(arranque) && !/await currentMcpCheck\(/.test(arranque),
+    'nada del arranque espera al MCP por otro camino'
+  )
+  assert(
+    arranque.indexOf('mcpResultSoon(comprobacion, testigo)') < arranque.indexOf('await restoreConversation(testigo)'),
+    'la conversación se pinta después, sin esperarlo'
+  )
+
+  // La comprobación habla del host con el que se pidió: entre la pregunta y la
+  // respuesta hay hasta catorce segundos y la pestaña puede irse al correo, que
+  // deja `state.site` en null sin tocar el testigo del arranque (§8.22).
+  const comprobar = sinComentarios(JS.slice(JS.indexOf('async function checkMcp'), JS.indexOf('function mcpResultSoon')))
+  assert(comprobar.length > 800, 'el cuerpo de checkMcp existe entero')
+  assert(comprobar.indexOf('const host = state.site.host') < comprobar.indexOf('await Promise.all(['), 'el host se captura ANTES de preguntar')
+  const tras = comprobar.slice(comprobar.indexOf('await Promise.all(['))
+  assert(!/state\.site\.host/.test(tras) && !/state\.site\.product/.test(tras), 'y después nadie vuelve a leerlo de la pestaña')
+  assert(/mcpForHost\(config, host, \{ status: mcp \}\)/.test(tras) && /mcpStatusFor\(mcp, host,/.test(tras), 'todo lo de después habla del host capturado')
+  // Lo que aprende del MCP se guarda bajo el host que lo aprendió, esté el panel
+  // donde esté (§4.6); lo que NO se escribe en otro sitio es el estado del panel.
+  assert(/for \(const registro of registros\) await saveSite\(registro\.host, registro\.patch\)/.test(comprobar), 'la adopción se guarda por host')
+  eq(
+    comprobar.split('state.bootToken').length - 1,
+    1,
+    'y un solo testigo en toda la comprobación: lo aprendido se guarda pase lo que pase, y del panel sólo se mira si se le puede tocar el estado'
+  )
+  assert(
+    /if \(state\.bootToken === testigo && \(state\.site\?\.host \?\? state\.lastHost\) === host\) \{\s*\n\s*state\.mcpConnected = !!status\.connected/.test(comprobar),
+    'y el estado sólo se toca si el panel sigue siendo de este sitio'
+  )
+  assert(/return \{ connected: !!status\.connected, status, saved, enlaceNuevo \}/.test(comprobar), 'el resultado vuelve entero: lo espera el turno que lo capturó')
+
+  // El turno captura la PROMESA y le pregunta al terminar: con el booleano de
+  // ahora, un turno mandado nada más abrir el panel acabaría con un «Páginas
+  // base sin leer» mentiroso.
+  const envio = JS.slice(JS.indexOf('async function send('), JS.indexOf('function paintTurn('))
+  assert(/const mcpCheckAlPedir = currentMcpCheck\(\)/.test(envio), 'se captura la comprobación, no su resultado de ahora')
+  assert(envio.indexOf('const mcpCheckAlPedir') < envio.indexOf('runTurn('), 'antes de mandar nada')
+  assert(/mcpConnected: await mcpCheckAlPedir/.test(envio), 'y se le pregunta al terminar')
+  assert(!/mcpConnected: state\.mcpConnected/.test(envio), 'nunca el estado de ahora')
+
+  // Lo que llega tarde no puede taparle el chat a nadie.
+  const tarde = sinComentarios(JS.slice(JS.indexOf('async function onMcpResult'), JS.indexOf('function faltanClaves')))
+  assert(/if \(state\.bootToken !== testigo\) return/.test(tarde), 'lo de un arranque viejo no pinta nada')
+  assert(/if \(state\.statusLine === COMPROBANDO_MCP\) \{/.test(tarde), 'la cabecera sólo se devuelve si el texto sigue siendo el suyo')
+  assert(/if \(puedeAbrirPantalla\(\)\) showMcpSetup\(r\.status\)/.test(tarde), 'la pantalla de claves sólo se abre si no tapa nada')
+  assert(/else attachMcpNotice\(r\.status\)/.test(tarde), 'y si tapa, se dice en el chat con la salida a mano')
+  assert(/if \(r\.enlaceNuevo\) \{/.test(tarde) && /await loadLinkedContext\(r\.saved\)/.test(tarde), 'y un host enlazado descubierto tarde se lee al saberlo')
+  assert(
+    /if \(state\.bootToken === testigo && enlazado\) state\.linkedContext = enlazado/.test(tarde),
+    'y sólo se escribe si trae algo: esto rellena un enlace que faltaba, no borra el que había'
+  )
+  const puede = sinComentarios(JS.slice(JS.indexOf('function puedeAbrirPantalla'), JS.indexOf('function showMcpSetup')))
+  assert(/if \(state\.streaming\) return false/.test(puede), 'no a mitad de una respuesta')
+  assert(/document\.querySelector\('\.screen:not\(\.hidden\)'\)/.test(puede), 'ni encima de otra pantalla')
+  assert(/el\.busy\.classList\.contains\('hidden'\)/.test(puede), 'ni encima del velo de «Trabajando…»')
+  assert(/return !el\.input\.value\.trim\(\)/.test(puede), 'ni con algo escrito y sin mandar')
+  // El motivo de la pantalla de claves se escribe UNA vez: las dos salidas
+  // llaman a la misma función, o un día dirían cosas distintas.
+  eq(sinComentarios(JS).split('está registrado pero en').length - 1, 1, 'el texto del MCP caído vive en un solo sitio')
+  const avisoMcp = sinComentarios(JS.slice(JS.indexOf('function attachMcpNotice'), JS.indexOf('function currentMcpCheck')))
+  assert(/noticeNode\(texto, true\)/.test(avisoMcp) && /'Cambiar las claves'/.test(avisoMcp), 'el aviso se ve y lleva la salida a mano')
+  assert(/btn\.addEventListener\('click', \(\) => showMcpSetup\(status\)\)/.test(avisoMcp), 'el botón abre la misma pantalla')
+  assert(/announce\(texto\)/.test(avisoMcp), 'y se anuncia al lector de pantalla (A2)')
+  assert(!/innerHTML/.test(avisoMcp), 'todo con createElement y textContent')
+
+  // La pantalla de páginas base no dice «no hay MCP» sin saberlo todavía.
+  const pantalla = sinComentarios(JS.slice(JS.indexOf('async function paintSourcesMcp'), JS.indexOf('async function showSourcesScreen')))
+  assert(/aviso\.classList\.add\('hidden'\)/.test(pantalla), 'mientras no se sabe, no se dice nada')
+  assert(pantalla.indexOf("aviso.classList.add('hidden')") < pantalla.indexOf('await currentMcpCheck()'), 'y eso va antes de esperar')
+  assert(/const conectado = await currentMcpCheck\(\)/.test(pantalla), 'se espera a la comprobación')
+  assert(/if \(\(state\.site\?\.host \|\| ''\) !== host\) return/.test(pantalla), 'y lo que llegue de otro sitio no pinta aquí (§8.22)')
+  const sources = sinComentarios(JS.slice(JS.indexOf('async function showSourcesScreen'), JS.indexOf('function setSourcesStatus')))
+  assert(/paintSourcesMcp\(\)\.catch\(console\.error\)/.test(sources), 'la pantalla se abre sin esperar al MCP')
+  assert(
+    sources.indexOf("showScreen('screen-sources')") < sources.indexOf('paintSourcesMcp()'),
+    'y se pinta DESPUÉS de abrirla, para que su guarda de «¿sigue abierta?» signifique eso'
+  )
+  assert(!/sources-mcp'\)\.classList\.toggle\('hidden', state\.mcpConnected\)/.test(sources), 'y ya no lo lee del estado, que en vuelo dice que no hay')
+
+  // Y es del sitio: cambiar de host lo deja sin comprobar, como el perfil o el
+  // índice, y quien pregunte antes de que el arranque nuevo lo ponga se lleva el
+  // lado prudente (avisar).
+  const refresco = sinComentarios(JS.slice(JS.indexOf('async function refreshTab'), JS.indexOf('async function bootForSite')))
+  assert(/state\.mcpCheck = null/.test(refresco) && /state\.mcpConnected = false/.test(refresco), 'el MCP comprobado no viaja al sitio siguiente')
+  const fallback = sinComentarios(JS.slice(JS.indexOf('function currentMcpCheck'), JS.indexOf('async function loadLinkedContext')))
+  assert(/return state\.mcpCheck \|\| Promise\.resolve\(state\.mcpConnected\)/.test(fallback), 'sin comprobación en marcha vale lo que el estado sepa')
+
+  // Lo único que P5 añade a la vista se mira en el espejo, que es donde se mide:
+  // el panel no corre en el banco (`init()` muere en `getSettings`).
+  const espejo = readFileSync(join(ROOT, 'harness/panel-preview.html'), 'utf8')
+  assert(/function avisoMcpSinConectar\(\)/.test(espejo) && /chat\.appendChild\(avisoMcpSinConectar\(\)\)/.test(espejo), 'el espejo enseña el aviso del MCP caído')
+  // Sobre la pieza que PINTA, no sobre el fichero: el comentario de encima
+  // nombra lo mismo y dejaba el pin en verde con el texto ya separado (la
+  // lección de `.older-turns` en la revisión de H6).
+  const piezaMcp = espejo.slice(espejo.indexOf('function avisoMcpSinConectar()'), espejo.indexOf('function tarjetaBusqueda(plan)'))
+  assert(piezaMcp.length > 300 && piezaMcp.length < 1200, 'el cuerpo de avisoMcpSinConectar está donde se espera')
+  for (const trozo of ['no está conectado', 'Cambiar las claves']) {
+    assert(piezaMcp.includes(trozo) && JS.includes(trozo), 'el espejo y el panel dicen lo mismo: se han separado en «' + trozo + '»')
+  }
 })

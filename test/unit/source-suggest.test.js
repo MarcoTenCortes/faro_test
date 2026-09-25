@@ -128,10 +128,15 @@ test('un enlace con id se resuelve solo, en sus dos formas, y con el título del
   eq(r[0].where, 'descripcion')
   eq(r[0].spaceKey, 'ENG')
   eq(r[1].where, 'comentario')
-  // Sin índice, el texto del enlace; y sin texto, el id.
+  // Sin índice, el texto del enlace; y sin texto, lo que la propia ruta dice.
+  // H14: ese segundo título era `Página 456790` hasta que el slug de la ruta
+  // entró en la escalera, y el slug ES el título de la página («Runbook»), así
+  // que gana al marcador; el marcador se queda para las rutas que no lo llevan.
   const sinIndice = confluenceLinksIn(dentro, null, { site: SITIO, linkedHost: CONF, index: null })
   eq(sinIndice[0].title, 'esta decisión')
-  eq(sinIndice[1].title, `Página ${RUNBOOK}`)
+  eq(sinIndice[1].title, 'Runbook')
+  const porId = [{ href: `https://${CONF}/pages/viewpage.action?pageId=${RUNBOOK}`, text: '', where: 'comentario' }]
+  eq(confluenceLinksIn(porId, null, { site: SITIO, linkedHost: CONF, index: null })[0].title, `Página ${RUNBOOK}`)
 })
 
 test('el host del Confluence enlazado vale desde Jira, sin distinguir mayúsculas', () => {
@@ -159,6 +164,75 @@ test('un /display/ sin id se resuelve por el índice —título plegado y espaci
   // `/display/` de otro sitio con el mismo título no puede convertirse en
   // nuestra página: si no, una página ajena elegiría qué se sugiere.
   eq(confluenceLinksIn([{ href: 'https://evil.example/display/ENG/Runbook+de+guardia', where: 'descripcion' }], null, { site: SITIO, linkedHost: CONF, index: INDICE }), [])
+})
+
+test('H14: título y procedencia se deciden por separado — la mejor procedencia, el primer título de verdad', () => {
+  // EL CASO REAL (Jira Data Center del usuario, 2026-09-21): la misma página
+  // llega por el enlace remoto de la API, que la titula «Page» (el nombre del
+  // TIPO de enlace), y por el `a.link-title` del módulo de enlaces del DOM, que
+  // trae el título de verdad. Antes ganaba «Page» —los remotos se leen primero y
+  // el primer título no vacío se quedaba—, así que la sugerencia se llamaba
+  // «Page» y la página base se añadía con ese nombre.
+  const FUERA = '999999' // no está en el índice: si no, el índice taparía el fallo
+  const url = `https://${CONF}/pages/viewpage.action?pageId=${FUERA}`
+  const enElDom = [{ href: url, text: 'Sprint Activity Report For S36', where: 'enlaces' }]
+  const r = confluenceLinksIn(enElDom, { ok: true, links: [{ pageId: FUERA, title: 'Page', url }] }, { site: SITIO, linkedHost: CONF, index: INDICE })
+  eq(r.length, 1, 'la misma página por dos caminos sale una vez')
+  eq(r[0].where, 'remoto', 'la PROCEDENCIA es la mejor de las dos')
+  eq(r[0].title, 'Sprint Activity Report For S36', 'y el TÍTULO, el que se lee en la pantalla')
+  // Y aunque el remoto traiga un título de verdad, el del DOM es el que el
+  // usuario tiene delante: manda él.
+  const conTitulo = confluenceLinksIn(enElDom, { ok: true, links: [{ pageId: FUERA, title: 'Título viejo del enlace remoto', url }] }, {
+    site: SITIO,
+    linkedHost: CONF,
+    index: INDICE,
+  })
+  eq(conTitulo[0].title, 'Sprint Activity Report For S36')
+  // Sin nada en el DOM, el del remoto: es mejor que un marcador.
+  const soloRemoto = confluenceLinksIn([], { ok: true, links: [{ pageId: FUERA, title: 'Título viejo del enlace remoto', url }] }, {
+    site: SITIO,
+    linkedHost: CONF,
+    index: INDICE,
+  })
+  eq(soloRemoto[0].title, 'Título viejo del enlace remoto')
+  // Y el del índice por encima de los dos: es el que Faro leyó de la propia
+  // Confluence, no el que escribió quien puso el enlace.
+  const enElIndice = confluenceLinksIn([{ href: `https://${CONF}/pages/viewpage.action?pageId=${ADR}`, text: 'esa decisión', where: 'enlaces' }], {
+    ok: true,
+    links: [{ pageId: ADR, title: 'Page' }],
+  }, { site: SITIO, linkedHost: CONF, index: INDICE })
+  eq(enElIndice[0].title, 'ADR-014 Rotación de tokens de servicio')
+  // Un genérico del DOM tampoco es un título (defensa en dos capas: lo mismo que
+  // ya hace `parseRemoteLinks` con lo que viene de la API).
+  const generico = confluenceLinksIn([{ href: url, text: 'Wiki Page', where: 'descripcion' }], null, { site: SITIO, linkedHost: CONF, index: INDICE })
+  eq(generico[0].title, `Página ${FUERA}`, 'sin título de verdad, el marcador: al añadirla se lee el de la página')
+})
+
+test('H14: un texto que es una URL no es un título, y el slug de la ruta sí', () => {
+  // Real: en las descripciones los enlaces a Confluence son URLs PEGADAS —el
+  // texto del `<a>` ES la URL, de 80 a 106 caracteres—, así que la sugerencia se
+  // llamaba como una URL. El título está en la propia ruta.
+  const pegada = `https://${CONF}/spaces/ENG/pages/999999/Informe+de+actividad+S36`
+  const r = confluenceLinksIn([{ href: pegada, text: pegada, where: 'descripcion' }], null, { site: SITIO, linkedHost: CONF, index: INDICE })
+  eq(r[0].title, 'Informe de actividad S36', 'el slug de la ruta, decodificado')
+  // Cualquier forma de URL: con http, sin esquema y con «www.».
+  for (const texto of [pegada, `http://${CONF}/x`, `//${CONF}/x`, 'www.confluence.corp/pages/1', '  HTTPS://X/y  ']) {
+    const uno = confluenceLinksIn([{ href: pegada, text: texto, where: 'descripcion' }], null, { site: SITIO, linkedHost: CONF, index: INDICE })
+    eq(uno[0].title, 'Informe de actividad S36', `el texto «${texto}» no es un título`)
+  }
+  // Sin slug del que sacarlo, el marcador: y entonces al añadirla se lee el
+  // título de verdad por su id (`addSourceById`, revisión adversaria de H10).
+  const sinSlug = `https://${CONF}/pages/viewpage.action?pageId=999999`
+  const marcador = confluenceLinksIn([{ href: sinSlug, text: sinSlug, where: 'descripcion' }], null, { site: SITIO, linkedHost: CONF, index: INDICE })
+  eq(marcador[0].title, 'Página 999999')
+  // Un slug genérico tampoco vale, y el espacio de la ruta no es el título.
+  const slugRaro = `https://${CONF}/spaces/ENG/pages/999998/Page`
+  eq(confluenceLinksIn([{ href: slugRaro, text: 'https://x/y', where: 'pagina' }], null, { site: SITIO, linkedHost: CONF, index: INDICE })[0].title, 'Página 999998')
+  const sinTitulo = `https://${CONF}/spaces/ENG/pages/999997`
+  eq(confluenceLinksIn([{ href: sinTitulo, text: `https://${CONF}/x`, where: 'pagina' }], null, { site: SITIO, linkedHost: CONF, index: INDICE })[0].title, 'Página 999997')
+  // SEGURIDAD: el slug sale de la ruta que YA pasó `pageRefFromUrl`, y de ahí no
+  // sale ninguna petición: un título no se manda nunca a ninguna API (§8.12).
+  eq(confluenceLinksIn([{ href: 'https://evil.example/spaces/ENG/pages/999999/Informe', text: 'x', where: 'pagina' }], null, { site: SITIO, linkedHost: CONF, index: INDICE }), [])
 })
 
 test('el pageId de un enlace remoto manda, y su título vale si el índice no lo conoce', () => {
@@ -360,6 +434,50 @@ test('una página de la que sólo se sabe el id sólo se sugiere si viene enlaza
   const r = sugerir({ history: h, links: enlazada, issue: SIN_ETIQUETAS })
   eq(ids(r), ['777777'])
   eq(r[0].title, 'Página 777777', 'venir enlazada es motivo suficiente de por sí')
+})
+
+test('H14: ninguna sugerencia se llama «Page» ni como una URL, venga el nombre de donde venga', () => {
+  // El nombre de una sugerencia se enseña en la fila, va dentro de su
+  // `aria-label` y, si el usuario la añade, nombra la página base en el prompt
+  // del Análisis: no puede ser «Page» ni una URL de 100 caracteres. Y el nombre
+  // no llega sólo de los enlaces: un historial escrito antes de H14 pudo guardar
+  // una página base llamada «Page», y el CONTEXTO DEL SITIO lo escribe el modelo.
+  const FUERA = '888888'
+  const entrada = historyEntry({
+    sources: { mode: 'open', pages: [{ id: FUERA, title: 'Page', spaceKey: 'ENG' }] },
+    issue: ISSUE,
+    summary: '[API Definition] - Consent API v2',
+    issueKey: 'SIMPL-30',
+    projectKey: 'SIMPL',
+    product: 'jira',
+    now: AHORA - DAY_MS,
+  })
+  const h = historial(entrada, { ...entrada, issueKey: 'SIMPL-31' })
+  // Sin nada más, una página que sólo se sabe usar y de la que no se sabe el
+  // nombre no entra en la lista: es la regla de siempre para «Página N».
+  eq(sugerir({ history: h }), [], '«Page» no dice más que «Página 888888»')
+  // Y viniendo enlazada, entra con el marcador, que es lo que hace que al
+  // añadirla se lea el título de verdad por su id (revisión adversaria de H10).
+  const enlazada = confluenceLinksIn([{ href: `https://${CONF}/pages/viewpage.action?pageId=${FUERA}`, text: 'Page', where: 'descripcion' }], null, {
+    site: SITIO,
+    linkedHost: CONF,
+    index: INDICE,
+  })
+  const r = sugerir({ history: h, links: enlazada })
+  eq(ids(r), [FUERA])
+  eq(r[0].title, `Página ${FUERA}`)
+  // Lo mismo con el contexto del sitio: ahí el título lo escribe el modelo.
+  const conUrl = referencesFromContext(`- «https://${CONF}/pages/viewpage.action?pageId=${FUERA}» (id ${FUERA}) — la guía.`, { index: null })
+  const porContexto = sugerir({ references: conUrl, links: enlazada })
+  eq(porContexto[0].title, `Página ${FUERA}`, 'una URL no es un nombre ni cuando la escribe el indexador')
+  for (const s of [...r, ...porContexto]) {
+    assert(s.title !== 'Page' && !/^https?:/i.test(s.title), `una sugerencia no puede llamarse «${s.title}»`)
+  }
+  // Y cuando el índice sabe cómo se llama, manda él: el nombre que trae un
+  // enlace lo escribió quien lo puso, el del índice lo leyó Faro de la propia
+  // Confluence. El primero que sirva gana, y el índice se mira primero.
+  const conOtroNombre = sugerir({ links: [{ id: GUIA, where: 'descripcion', title: 'esa guía de por ahí' }] })
+  eq(conOtroNombre[0].title, 'Guía de API del programa')
 })
 
 test('la forma de una sugerencia: claves EXACTAS y, desde un Jira DC, sin ruta', () => {

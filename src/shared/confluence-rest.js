@@ -33,12 +33,12 @@
  * no encuentra «Arquitectura», que es lo que se espera de un autocompletado.
  *
  * Y desde H7 hay un tercer tipo de lectura: las CONSULTAS DE PLANTILLA FIJA
- * (`viewedCql`, `mineCql`, `idsCql`) y el árbol entero de un espacio
- * (`fetchSpacePages`). Su texto no lo escribe nadie de fuera: lo escribe Faro
- * con cláusulas fijas y parámetros validados (un número de días, ids
- * numéricos), y `searchContent` sólo acepta un CQL que salga de una de esas
- * plantillas —lo comprueba contra ellas antes de pedir nada—. Un título leído
- * del DOM NUNCA se convierte en CQL (CLAUDE.md §8.12, §8.19).
+ * (`viewedCql`, `mineCql`, `idsCql`, y desde H14 `spaceCql`) y el árbol entero
+ * de un espacio (`fetchSpacePages`). Su texto no lo escribe nadie de fuera: lo
+ * escribe Faro con cláusulas fijas y parámetros validados (un número de días,
+ * ids numéricos, una clave de espacio), y ninguna se ejecuta sin pasar por
+ * `isTemplateCql` —se comprueba contra las plantillas antes de pedir nada—. Un
+ * título leído del DOM NUNCA se convierte en CQL (CLAUDE.md §8.12, §8.19).
  *
  * El GET y la guardia de mismo origen viven en rest-get.js: la misma barrera
  * que usa jira-rest.js, en un solo sitio.
@@ -499,12 +499,18 @@ export async function searchPages(fetchFn, site, text, { limit, timeoutMs = 6000
  * Las CQL que Faro sabe escribir, y las ÚNICAS que `searchContent` ejecuta.
  *
  * Son literales con un hueco: un número de páginas, un número de días, una lista
- * de ids numéricos. Nada de lo que escribe el usuario, ni el modelo, ni el DOM
- * entra en ellas (para el texto del usuario está `cqlTitleQuery`, que es otra
- * cosa y tiene sus propios límites). `mineCql` ordena por `lastmodified` con
- * `startOfDay()`, que es la función que la referencia de campos de Data Center
- * lista para ese campo, y usa `watcher`, que en Confluence SÍ está en esa
- * referencia (docs/plan/anexo-A, «APIs externas»).
+ * de ids numéricos, una clave de espacio. Nada de lo que escribe el usuario, ni
+ * el modelo, ni el DOM entra en ellas (para el texto del usuario está
+ * `cqlTitleQuery`, que es otra cosa y tiene sus propios límites). `mineCql`
+ * ordena por `lastmodified` con `startOfDay()`, que es la función que la
+ * referencia de campos de Data Center lista para ese campo, y usa `watcher`,
+ * que en Confluence SÍ está en esa referencia (docs/plan/anexo-A, «APIs
+ * externas»).
+ *
+ * La del árbol de un espacio (`spaceCql`) no está aquí porque lleva dentro la
+ * clave, y la forma de una clave la decide `validSpaceKey`: copiarla en una
+ * regex más sería tener dos ideas de lo mismo (§9). Se reconoce haciendo que la
+ * plantilla la reproduzca ENTERA (ver `isTemplateCql`).
  */
 const CQL_PLANTILLAS = [
   /^type = page AND id in recentlyViewedContent\(\d{1,3}\)$/,
@@ -548,10 +554,17 @@ export function idsCql(ids) {
   return limpios.length ? `type = page AND id in (${limpios.join(',')})` : null
 }
 
-/** ¿Este CQL lo escribió una de las plantillas de arriba? Pura. */
+/** ¿Este CQL lo escribió una de las plantillas de este módulo? Pura. */
 export function isTemplateCql(cql) {
   const q = str(cql)
-  return CQL_PLANTILLAS.some((re) => re.test(q))
+  if (CQL_PLANTILLAS.some((re) => re.test(q))) return true
+  // La del árbol de un espacio se comprueba a la inversa: se lee la clave de la
+  // propia consulta y se exige que `spaceCql` —que la valida con
+  // `validSpaceKey`— devuelva EXACTAMENTE lo mismo. Con `[^"]*` una comilla ni
+  // llega a leerse como clave, y con la vuelta entera tampoco cuela nada que
+  // `validSpaceKey` no admita.
+  const m = /^type = page AND space = "([^"]*)" ORDER BY lastmodified DESC$/.exec(q)
+  return !!m && spaceCql(m[1]) === q
 }
 
 /**
@@ -642,14 +655,121 @@ export async function searchContent(
 // ------------------------------------------------- el árbol de un espacio
 
 /**
+ * El CQL con el que se lee el árbol de un espacio: sus páginas, LAS MÁS
+ * RECIENTES PRIMERO. Pura; null si la clave no tiene forma de clave.
+ *
+ * Por qué no vale la lista de `/rest/api/content?spaceKey=…`, que es lo que
+ * usaba H9: esa lista devuelve las páginas en orden ASCENDENTE de id, o sea las
+ * más VIEJAS primero. En el espacio real del usuario (2 697 páginas) el tope de
+ * `INDEX_LIMITS.maxPages` se gastaba entero en las trescientas más antiguas y la
+ * página que él tenía abierta ni estaba: un índice «exacto» que no contiene nada
+ * de lo que se usa (H14, F8). Ordenando por `lastmodified DESC`, las que entran
+ * son las que alguien ha tocado, que son las que se van a buscar.
+ *
+ * La clave va entre comillas dobles y la valida `validSpaceKey`, que sólo admite
+ * `~?[A-Za-z0-9_.@:-]`: ahí dentro no hay comillas ni barras con las que cerrar
+ * el literal, ni espacios, ni paréntesis con los que añadir una cláusula
+ * (pinado con claves hostiles).
+ */
+export function spaceCql(spaceKey) {
+  const key = validSpaceKey(spaceKey)
+  return key ? `type = page AND space = "${key}" ORDER BY lastmodified DESC` : null
+}
+
+/**
+ * La ruta de una página de resultados del árbol de un espacio. Pura.
+ *
+ * Lo que puede entrar en ella es una clave de espacio y nada más, y eso lo
+ * decide `spaceCql`: aquí NO se vuelve a preguntar `isTemplateCql`, porque sería
+ * preguntarle a la plantilla por sí misma —la reconoce reproduciéndola— y una
+ * barrera que ninguna prueba puede mover es una barrera que se cae sin que nadie
+ * lo note. Lo que sí está pinado es la propiedad: el CQL que acaba en la ruta lo
+ * reconoce `isTemplateCql` siempre.
+ *
+ * `expand=ancestors` es lo que trae la cadena entera de cada resultado:
+ * verificado contra el Confluence 9.2 real, 100 resultados y los 100 con sus
+ * antepasados. El tamaño de página lo acota este módulo, y el `start` lo lleva
+ * quien pagina.
+ */
+export function spaceSearchPath(spaceKey, wikiPrefix = '', { start, limit } = {}) {
+  const cql = spaceCql(spaceKey)
+  if (!cql) return null
+  const desde = entre(start, 0, 100000) || 0
+  const cuantas = entre(limit, 1, CONFLUENCE_REST_LIMITS.maxPageSize) || CONFLUENCE_REST_LIMITS.pageSize
+  return (
+    `${prefix(wikiPrefix)}/rest/api/content/search?cql=${encodeURIComponent(cql)}` +
+    `&expand=ancestors&start=${desde}&limit=${cuantas}`
+  )
+}
+
+/**
+ * De una página de resultados de esa búsqueda a GRUPOS: cada resultado con su
+ * cadena de antepasados, de la raíz a él. Pura.
+ *
+ * Los antepasados entran como páginas del índice, no sólo como un `parentId`:
+ * leyendo las más recientes primero, sus padres casi nunca están entre ellas, y
+ * sin ellos el árbol sale desmigajado —cada página como su propia raíz— y el
+ * paso a paso no tendría por dónde empezar.
+ *
+ * Vienen agrupados y no en una lista plana porque el tope se aplica por GRUPO:
+ * una página incluida sin su cadena entera es una página a la que no se sabe
+ * llegar. De cada cadena se conservan los `MAX_CHAIN` antepasados más CERCANOS,
+ * así que el padre de un resultado siempre es el de verdad; una página a más de
+ * cincuenta de la raíz empezaría su cadena en su antepasado número cincuenta.
+ *
+ * @returns {{groups:Array<Array<{id,title,parentId,url,spaceKey}>>, size:number,
+ *          total:number, next:boolean}|null}
+ */
+export function parseSpaceSearch(json, { wikiPrefix = '', spaceKey = null } = {}) {
+  if (!json || typeof json !== 'object' || !Array.isArray(json.results)) return null
+  // Los antepasados de una página están en su mismo espacio, y el espacio es el
+  // que se pidió: no hace falta expandir `space` en cada resultado para saberlo.
+  const clave = validSpaceKey(spaceKey) || null
+  const groups = []
+  for (const r of json.results) {
+    if (!r || typeof r !== 'object') continue
+    if (r.type != null && str(r.type) !== 'page') continue
+    const id = cleanId(r.id)
+    if (!id) continue
+    const cadena = []
+    const vistos = new Set([id])
+    const ancestros = Array.isArray(r.ancestors) ? r.ancestors.slice(-MAX_CHAIN) : []
+    for (const a of ancestros) {
+      const aid = cleanId(a?.id)
+      if (!aid || vistos.has(aid)) continue
+      vistos.add(aid)
+      cadena.push(eslabon(a, aid, wikiPrefix, cadena, clave))
+    }
+    cadena.push(eslabon(r, id, wikiPrefix, cadena, clave || cleanTitle(r.space?.key) || null))
+    groups.push(cadena)
+  }
+  const size = entre(json.size, 0, 100000) || groups.length
+  return { groups, size, total: entre(json.totalSize, 0, 100000000), next: !!str(json._links?.next) }
+}
+
+/** Una página de la cadena, colgada de la anterior. Mismas claves que `parseSpacePages`. */
+function eslabon(node, id, wikiPrefix, cadena, spaceKey) {
+  const base = entry(node, id, wikiPrefix)
+  return {
+    id: base.id,
+    title: base.title,
+    parentId: cadena.length ? cadena[cadena.length - 1].id : null,
+    url: base.url,
+    spaceKey,
+  }
+}
+
+/**
  * La ruta de una página de resultados del contenido de un espacio. Pura.
  *
- * `expand=ancestors` es lo que hace que una sola lista traiga el árbol entero
- * con su forma: el último antepasado de cada página es su padre. Está
- * documentado en `/rest/api/content/{id}` (que Faro ya usa) y no se pudo
- * confirmar letra a letra como `expand` de la LISTA: si no viene, las páginas
- * salen sin padre y quien llama se queda como estaba (docs/plan/anexo-C,
- * «Riesgos»). `space.homepage` trae la portada, que hay que quitar del camino.
+ * `expand=ancestors` hace que la lista traiga el árbol con su forma: el último
+ * antepasado de cada página es su padre (verificado contra el Confluence 9.2
+ * real). `space.homepage` trae la portada, que hay que quitar del camino.
+ *
+ * Desde H14 esta lista ya no es de donde sale el árbol —devuelve las páginas más
+ * VIEJAS primero, ver `spaceCql`—, pero sigue haciendo falta para dos cosas: la
+ * PORTADA (con `limit=1` basta) y como camino de respaldo si la instancia no
+ * sabe hacer la búsqueda ordenada.
  */
 export function spacePagesPath(spaceKey, wikiPrefix = '', { start, limit } = {}) {
   const key = validSpaceKey(spaceKey)
@@ -707,24 +827,31 @@ export function parseSpacePages(json, wikiPrefix = '') {
 }
 
 /**
- * El árbol de páginas de un espacio, entero, paginado y con tope.
+ * El árbol de páginas de un espacio, paginado y con tope.
  *
  * Es lo que sustituye las dos fases de modelo del indexador (el volcado del
- * índice y la jerarquía): la lista lo dice exacto y en milisegundos. Los topes
- * son los del ÍNDICE (`INDEX_LIMITS.maxPages` y `restMaxRequests`), no unos
- * propios: dos topes para lo mismo acabarían diciendo cosas distintas. Si se
- * llega a alguno, `truncated` lo dice y quien llama sigue completando cada
- * destino como hasta ahora.
+ * índice y la jerarquía): la API lo dice exacto y en milisegundos. Los topes son
+ * los del ÍNDICE (`INDEX_LIMITS.maxPages` y `restMaxRequests`), no unos propios:
+ * dos topes para lo mismo acabarían diciendo cosas distintas.
  *
- * La guardia de mismo origen se comprueba en CADA página, porque cada página es
- * un `getJson` y la comprobación vive dentro.
+ * Qué entra cuando no cabe todo (H14, F8): las páginas MÁS RECIENTES, cada una
+ * con su cadena de antepasados ENTERA. Un espacio de verdad tiene miles de
+ * páginas y el tope no da para todas; lo que no se puede es devolver una
+ * rebanada arbitraria —las trescientas más viejas— en la que ni está lo que el
+ * usuario está mirando. `truncated` dice que se quedó corto, `total` cuántas hay
+ * y `own` cuántas de ellas entraron (los antepasados que vinieron de propina no
+ * cuentan: no son «lo que se ha leído del espacio»).
  *
- * La PORTADA del espacio viene en `pages` como una más y su id aparte, en
- * `homeId`: quitarla del camino es decisión de quien monta el índice (lo hace
- * `finish` para la cadena de antepasados, porque en la barra lateral no es una
- * rama que se despliegue), y aquí no se decide por él.
+ * La guardia de mismo origen se comprueba en CADA petición, porque cada petición
+ * es un `getJson` y la comprobación vive dentro.
  *
- * @returns {Promise<{ok:true, pages:Array, homeId:string|null, requests:number, truncated:boolean, ms:number}
+ * La PORTADA del espacio viene en `homeId`: quitarla del camino es decisión de
+ * quien monta el índice (lo hace `finish` para la cadena de antepasados, porque
+ * en la barra lateral no es una rama que se despliegue), y aquí no se decide por
+ * él. Cuesta una petición a la lista de siempre, que es la que sabe expandirla.
+ *
+ * @returns {Promise<{ok:true, pages:Array, homeId:string|null, requests:number,
+ *          truncated:boolean, total:number, own:number, via:'busqueda'|'lista', ms:number}
  *          |{ok:false, reason:string, status?:number}>}
  */
 export async function fetchSpacePages(
@@ -757,35 +884,118 @@ export async function fetchSpacePages(
   // para devolver un árbol vacío con `ok: true` (revisión adversaria de H7). Un
   // tope que no vale es el del índice, que es el que tiene dueño.
   const topePaginas = Number.isInteger(maxPages) && maxPages >= 1 ? maxPages : INDEX_LIMITS.maxPages
+
   const pages = []
   const vistos = new Set()
-  let homeId = null
-  let start = 0
+  /** Páginas del espacio que entraron; los antepasados de propina no cuentan. */
+  const propias = new Set()
   let requests = 0
-  let truncated = false
+  let total = 0
+  let corto = false
 
-  while (requests < tope) {
-    const r = await getJson(fetchFn, base + spacePagesPath(spaceKey, wiki, { start, limit }), opts)
-    requests++
-    if (!r.ok) return { ok: false, reason: r.reason, status: r.status }
-    const parsed = parseSpacePages(r.json, wiki)
-    if (!parsed) return { ok: false, reason: 'la respuesta de la API no tiene la forma esperada', status: r.status }
-    if (!homeId) homeId = parsed.homeId
-    for (const p of parsed.pages) {
-      if (vistos.has(p.id)) continue
+  /**
+   * Un grupo entra ENTERO o no entra: una página sin su cadena es una página a
+   * la que Faro no sabría llevar. Devuelve si cupo.
+   */
+  const meter = (grupo) => {
+    const nuevos = grupo.filter((p) => !vistos.has(p.id))
+    if (pages.length + nuevos.length > topePaginas) return false
+    for (const p of nuevos) {
       vistos.add(p.id)
       pages.push(p)
     }
-    if (pages.length >= topePaginas) {
-      truncated = true
-      break
-    }
-    // Una página vacía cierra el recorrido aunque el servidor diga que hay más:
-    // sin esto, un `_links.next` que viniera siempre sería un bucle hasta el tope.
-    if (!parsed.next || !parsed.pages.length) break
-    start += parsed.size || parsed.pages.length
-    if (requests >= tope) truncated = true
+    propias.add(grupo[grupo.length - 1].id)
+    return true
   }
 
-  return { ok: true, pages: pages.slice(0, topePaginas), homeId, requests, truncated, ms: Math.round(nowMs() - t0) }
+  // La portada, con una petición a la lista de siempre (`limit=1`): hace falta
+  // su id para que sus hijas no cuelguen de ella (§4.6) y la búsqueda no la
+  // distingue de cualquier otra página. Si falla, o si no cabe en el tope de
+  // peticiones, el árbol vale igual: como mucho el recorrido lleva un peldaño de
+  // más. La página que traiga esa petición NO se guarda: es la más vieja del
+  // espacio, y aquí se leen las más recientes.
+  let homeId = null
+  if (tope >= 2) {
+    const r = await getJson(fetchFn, base + spacePagesPath(spaceKey, wiki, { start: 0, limit: 1 }), opts)
+    requests++
+    if (r.ok) homeId = parseSpacePages(r.json, wiki)?.homeId || null
+  }
+
+  let via = 'busqueda'
+  let fallo = null
+  let hayMas = false
+  let start = 0
+  while (requests < tope) {
+    const r = await getJson(fetchFn, base + spaceSearchPath(spaceKey, wiki, { start, limit }), opts)
+    requests++
+    const parsed = r.ok ? parseSpaceSearch(r.json, { wikiPrefix: wiki, spaceKey }) : null
+    if (!parsed) {
+      fallo = r.ok ? { reason: 'la respuesta de la API no tiene la forma esperada', status: r.status } : r
+      break
+    }
+    if (parsed.total) total = parsed.total
+    const antes = propias.size
+    hayMas = parsed.next
+    for (const grupo of parsed.groups) {
+      if (!meter(grupo)) {
+        corto = true
+        break
+      }
+    }
+    // Sin `next`, con una página vacía, o sin una sola página nueva —un servidor
+    // que ignore el `start` devolvería siempre la misma—, el recorrido se acaba:
+    // seguir sería gastar el tope entero para nada.
+    if (corto || !parsed.next || !parsed.groups.length || propias.size === antes) break
+    start += parsed.size || parsed.groups.length
+  }
+
+  if (fallo) {
+    // Una instancia que no acepte este ORDER BY o este `expand` contesta 400, o
+    // algo que no tiene la forma esperada. Antes que dejar al usuario sin índice
+    // se degrada UNA vez al camino de antes —la lista ascendente, que devuelve
+    // una rebanada arbitraria pero cierta— y se dice por dónde vino. Una sesión
+    // que no vale no se reintenta: tampoco valdría allí. Y si ya se había leído
+    // algo, tampoco: sería empezar de cero a mitad de camino.
+    if (pages.length || fallo.status === 401 || fallo.status === 403) {
+      return { ok: false, reason: fallo.reason, status: fallo.status }
+    }
+    via = 'lista'
+    total = 0
+    hayMas = false
+    start = 0
+    while (requests < tope) {
+      const r = await getJson(fetchFn, base + spacePagesPath(spaceKey, wiki, { start, limit }), opts)
+      requests++
+      if (!r.ok) return { ok: false, reason: r.reason, status: r.status }
+      const parsed = parseSpacePages(r.json, wiki)
+      if (!parsed) return { ok: false, reason: 'la respuesta de la API no tiene la forma esperada', status: r.status }
+      if (!homeId) homeId = parsed.homeId
+      const antes = propias.size
+      hayMas = parsed.next
+      for (const p of parsed.pages) {
+        if (!meter([p])) {
+          corto = true
+          break
+        }
+      }
+      if (corto || !parsed.next || !parsed.pages.length || propias.size === antes) break
+      start += parsed.size || parsed.pages.length
+    }
+  }
+
+  // Recortado es lo que el servidor dice que hay frente a lo que entró; y si no
+  // lo dice (la lista no trae `totalSize`), haber parado por un tope con el
+  // servidor diciendo que quedaban más.
+  const truncated = total ? total > propias.size : corto || hayMas
+  return {
+    ok: true,
+    pages,
+    homeId,
+    requests,
+    truncated,
+    total,
+    own: propias.size,
+    via,
+    ms: Math.round(nowMs() - t0),
+  }
 }

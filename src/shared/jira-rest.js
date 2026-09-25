@@ -50,6 +50,20 @@
  * persona que se leen (hacen falta para «asignada a ti»), y `profileFromSample`
  * —lo único de este módulo que acaba delimitado en un `system`— no los mira
  * siquiera.
+ *
+ * LOS NOMBRES NO SIRVEN PARA PREGUNTAR, LOS IDS SÍ (H14, comprobado en el Jira
+ * Data Center real del usuario, con la interfaz en español): Jira TRADUCE al
+ * idioma de cada usuario los nombres que trae de serie y los devuelve traducidos
+ * tanto en el DOM como en la API —«Task» es «Tarea», «Story» «Historia», «In
+ * Progress» «En progreso», «Critical» «Crítica»—, pero JQL **no acepta los
+ * traducidos**: `issuetype = "Tarea"` contesta 400 («El valor 'Tarea' no existe
+ * para el campo 'issuetype'.») mientras `issuetype = Task` devuelve 2 336, y
+ * `status = "En progreso"` igual. Por id funciona SIEMPRE (`issuetype = 10002`).
+ * Los nombres a medida (los que puso el equipo: «L0 Requirement», «For PSO
+ * Review») no se traducen y sí valen por nombre. Por eso cada fila trae además
+ * `typeId`, `statusId` y `priorityId`, el perfil guarda el id de cada tipo y de
+ * cada estado, y los chips preguntan por id cuando lo conocen: un nombre
+ * traducido no daba cero resultados, daba un error.
  */
 
 import { getJson, nowMs } from './rest-get.js'
@@ -103,8 +117,17 @@ export const JQL_LIMITS = {
   maxChars: 2000,
 }
 
-/** Versión del perfil guardado: si cambia la forma, lo viejo se descarta. */
-export const PROFILE_VERSION = 1
+/**
+ * Versión del perfil guardado: si cambia la forma, lo viejo se descarta.
+ *
+ * 2 desde H14: cada tipo y cada estado llevan su `id`, que es lo único que una
+ * consulta JQL acepta cuando el nombre viene traducido (mira la cabecera). Un
+ * perfil de la versión 1 no tiene esos ids y con él el modelo escribiría un
+ * `status = "En progreso"` que es un 400, así que `normalizeProfile` lo descarta
+ * y se vuelve a contar: es una petición con la sesión del navegador, no un turno
+ * de modelo.
+ */
+export const PROFILE_VERSION = 2
 
 /**
  * Los campos que se pueden pedir. Lista blanca: un nombre que no esté aquí se
@@ -156,6 +179,12 @@ const STATUS_CATEGORIES = ['new', 'indeterminate', 'done', 'undefined']
 // pasar por `cleanJql` (revisión adversaria de H7). U+2028 y U+2029 sí los colapsa `\s`.
 const CONTROL = new RegExp('[\\u0000-\\u001F\\u007F-\\u009F]', 'g')
 const DIGITS = /^\d+$/
+/**
+ * Un id de valor de campo (el de un tipo, un estado o una prioridad). Los de Jira
+ * son números cortos —de una a cinco cifras: «1», «3», «10002»—; el tope está
+ * para que de aquí no salga nunca algo que no quepa en una consulta.
+ */
+const FIELD_ID = /^\d{1,19}$/
 /**
  * El `pageId` con el que un enlace remoto señala una página de Confluence: en el
  * `globalId` («appId=9a1b&pageId=98830281», y también un «pageId=…» a secas) o
@@ -332,6 +361,22 @@ function nombre(node) {
   return linea(node?.name, JIRA_REST_LIMITS.fieldChars)
 }
 
+/**
+ * El id de un valor de campo: sólo dígitos, o ''. Pura.
+ *
+ * SEGURIDAD: un id acaba SIN COMILLAS dentro de una JQL (`status = 10045`), así
+ * que pasa por aquí en los TRES sitios por los que puede entrar: al leerlo de la
+ * API (`parseSearchIssues`), al leerlo del almacén (`normalizeProfile`) y al
+ * escribirlo en la consulta (`porIdONombre`, que es el único que lo mete en una).
+ * Un id que no es un número —o una instancia que devuelva ahí cualquier otra
+ * cosa— se queda en '' y entonces se pregunta por el nombre entrecomillado, que
+ * es lo que se hacía antes de H14.
+ */
+function fieldId(v) {
+  const id = String(v ?? '').trim()
+  return FIELD_ID.test(id) ? id : ''
+}
+
 /** La categoría de un estado, de la lista que Jira define. '' si es otra cosa. */
 function categoria(node) {
   const k = linea(node?.key, JIRA_REST_LIMITS.fieldChars).toLowerCase()
@@ -393,10 +438,18 @@ export function parseSearchIssues(json) {
     out.push({
       key,
       summary: linea(f.summary, JIRA_REST_LIMITS.summaryChars),
+      // El nombre es lo que se ENSEÑA (y viene traducido al idioma del usuario);
+      // el id es lo único con lo que se puede volver a PREGUNTAR por ese valor en
+      // una JQL. Los dos, y cada uno para lo suyo (mira la cabecera).
       type: nombre(f.issuetype),
+      typeId: fieldId(f.issuetype?.id),
       status: nombre(f.status),
+      statusId: fieldId(f.status?.id),
       statusCategory: categoria(f.status?.statusCategory),
       priority: nombre(f.priority),
+      // Nadie ofrece hoy un chip por prioridad: el id está porque la prioridad se
+      // traduce igual («Critical» es «Crítica») y sin él no se podría preguntar.
+      priorityId: fieldId(f.priority?.id),
       assignee: persona(f.assignee),
       reporter: persona(f.reporter),
       updatedAt: instante(f.updated),
@@ -434,6 +487,34 @@ export function parseFilters(json) {
 }
 
 /**
+ * Un título que no nombra la página, sino la CLASE de cosa que es. Pura.
+ *
+ * Pasó de verdad (Jira Data Center del usuario, 2026-09-21): en los quince
+ * enlaces remotos a Confluence que se vieron, `object.title` era literalmente
+ * «Page» —el nombre del tipo de enlace, que es lo que Jira pone cuando la
+ * aplicación remota no le da un título—, mientras el DOM del módulo de enlaces
+ * sí traía el de verdad. Aceptarlo como título hacía que cinco sugerencias se
+ * llamaran «Page» y que la página base se añadiera con ese nombre, porque «Page»
+ * no es un marcador «Página N» y el camino que lee el título de verdad no
+ * saltaba.
+ *
+ * La lista es CORTA a propósito, y no se alarga sin haber visto el caso: cada
+ * palabra que entre aquí es un título de verdad que alguien pierde. Lo que se
+ * compara es el texto en una línea, sin mayúsculas y sin espacios de más; «Page
+ * One», «Homepage» o «Página de bienvenida» son títulos.
+ *
+ * Vive en este módulo, y no junto a `isPlaceholderTitle` de index-store.js,
+ * porque de aquí sale el dato: jira-rest.js ya lo carga el content script, y
+ * arrastrar index-store.js (12 KB) a su cierre por una lista de cuatro palabras
+ * sería la regresión que la revisión de H11 arregló con page-id.js.
+ */
+export function isGenericTitle(title) {
+  return TITULOS_GENERICOS.has(linea(title, JIRA_REST_LIMITS.titleChars).toLowerCase())
+}
+
+const TITULOS_GENERICOS = new Set(['', 'page', 'wiki page', 'pagina', 'página'])
+
+/**
  * De la respuesta de `/issue/KEY/remotelink` a los enlaces a páginas de
  * Confluence. Pura.
  *
@@ -442,11 +523,14 @@ export function parseFilters(json) {
  * con lo que se puede resolver una página sin mandar su título a ninguna API
  * (CLAUDE.md §8.12). Con `hosts` se exige además que la URL sea del sitio propio
  * o del Confluence enlazado: un enlace remoto puede apuntar a cualquier parte.
+ * Un título genérico (`isGenericTitle`) llega como '': el enlace vale por su id
+ * y el título lo busca el panel donde sí está.
  *
- * SIN VERIFICAR contra un enlace real: la forma («globalId» con `appId=…&pageId=…`
- * y `application.type` «com.atlassian.confluence») está en la documentación de
- * Atlassian, y en las incidencias que se pudieron probar el endpoint contestó
- * `200 []` (CLAUDE.md §12, PASO 0).
+ * VERIFICADO en el Jira Data Center del usuario (2026-09-21): 6 de 30
+ * incidencias muestreadas tienen enlaces remotos y la forma es exactamente ésta
+ * —`globalId` = `appId=<uuid>&pageId=<n>`, `application.type` =
+ * «com.atlassian.confluence», `relationship` = «mentioned in», `object.url` =
+ * `…/pages/viewpage.action?pageId=<n>`—; los acepta todos, también con `hosts`.
  */
 export function parseRemoteLinks(json, { hosts = [] } = {}) {
   if (!Array.isArray(json)) return null
@@ -464,7 +548,8 @@ export function parseRemoteLinks(json, { hosts = [] } = {}) {
     if (permitidos.length && !permitidos.includes(hostDe(url))) continue
     if (vistos.has(pageId)) continue
     vistos.add(pageId)
-    out.push({ pageId, title: linea(raw.object?.title, JIRA_REST_LIMITS.titleChars), url })
+    const title = linea(raw.object?.title, JIRA_REST_LIMITS.titleChars)
+    out.push({ pageId, title: isGenericTitle(title) ? '' : title, url })
   }
   return out
 }
@@ -701,6 +786,8 @@ export function profileFromSample(issues, { projectKey, now = Date.now() } = {})
   const tipos = new Map()
   const estados = new Map()
   const categorias = new Map()
+  const idsTipo = new Map()
+  const idsEstado = new Map()
   const componentes = new Map()
   const etiquetas = new Map()
   const patrones = new Map()
@@ -708,9 +795,16 @@ export function profileFromSample(issues, { projectKey, now = Date.now() } = {})
 
   for (const i of muestra) {
     if (!i || typeof i !== 'object') continue
-    suma(tipos, nombre(i.type))
+    const tipo = nombre(i.type)
+    suma(tipos, tipo)
+    // El id del PRIMER ejemplar que lo traiga, y no el de la primera fila con ese
+    // nombre: si la primera viniera sin él, el nombre se quedaría sin id para
+    // siempre aunque el resto de la muestra lo diga. Sigue siendo determinista,
+    // porque depende sólo del orden de la muestra.
+    if (tipo && !idsTipo.has(tipo) && fieldId(i.typeId)) idsTipo.set(tipo, fieldId(i.typeId))
     const estado = nombre(i.status)
     suma(estados, estado)
+    if (estado && !idsEstado.has(estado) && fieldId(i.statusId)) idsEstado.set(estado, fieldId(i.statusId))
     if (estado && !categorias.has(estado)) categorias.set(estado, categoria({ key: i.statusCategory }))
     for (const c of lista(i.components)) suma(componentes, c)
     for (const l of lista(i.labels)) suma(etiquetas, l)
@@ -731,8 +825,14 @@ export function profileFromSample(issues, { projectKey, now = Date.now() } = {})
     projectKey: key,
     sampled: muestra.length,
     at: Number.isFinite(now) ? Math.round(now) : 0,
-    types: contados(tipos, JIRA_REST_LIMITS.profileList),
-    statuses: contados(estados, JIRA_REST_LIMITS.profileList).map((e) => ({ ...e, category: categorias.get(e.name) || '' })),
+    // Tipos y estados llevan su id (H14); componentes y etiquetas no: ésos los
+    // escribió el equipo, Jira no los traduce y valen por nombre.
+    types: contados(tipos, JIRA_REST_LIMITS.profileList).map((t) => ({ ...t, id: idsTipo.get(t.name) || '' })),
+    statuses: contados(estados, JIRA_REST_LIMITS.profileList).map((e) => ({
+      ...e,
+      category: categorias.get(e.name) || '',
+      id: idsEstado.get(e.name) || '',
+    })),
     components: contados(componentes, JIRA_REST_LIMITS.profileList),
     labels: contados(etiquetas, JIRA_REST_LIMITS.profileList),
     prefixes: contados(patrones, JIRA_REST_LIMITS.profilePrefixes).map((p) => ({
@@ -748,8 +848,11 @@ function cuenta(v) {
   return Number.isInteger(n) && n >= 0 ? n : 0
 }
 
-/** `[{name, count}]` reconstruido con claves blancas. */
-function normalizeCounted(v, tope) {
+/**
+ * `[{name, count}]` reconstruido con claves blancas, y con `id` detrás si el
+ * valor lo lleva (los tipos, desde H14; los componentes y las etiquetas no).
+ */
+function normalizeCounted(v, tope, { conId = false } = {}) {
   if (!Array.isArray(v)) return []
   const out = []
   const vistos = new Set()
@@ -758,7 +861,11 @@ function normalizeCounted(v, tope) {
     const name = nombre(item)
     if (!name || vistos.has(name)) continue
     vistos.add(name)
-    out.push({ name, count: cuenta(item?.count) })
+    const fila = { name, count: cuenta(item?.count) }
+    // El orden de las claves importa: lo que sale de aquí se compara con lo que
+    // sale de `profileFromSample` (`normalizeProfile(perfil) === perfil`).
+    if (conId) fila.id = fieldId(item?.id)
+    out.push(fila)
   }
   return out
 }
@@ -797,7 +904,7 @@ export function normalizeProfile(raw) {
     projectKey: validProjectKey(raw.projectKey),
     sampled: cuenta(raw.sampled),
     at: Number.isFinite(raw.at) ? Math.round(raw.at) : 0,
-    types: normalizeCounted(raw.types, JIRA_REST_LIMITS.profileList),
+    types: normalizeCounted(raw.types, JIRA_REST_LIMITS.profileList, { conId: true }),
     statuses: normalizeStatuses(raw.statuses),
     components: normalizeCounted(raw.components, JIRA_REST_LIMITS.profileList),
     labels: normalizeCounted(raw.labels, JIRA_REST_LIMITS.profileList),
@@ -820,7 +927,7 @@ function normalizeStatuses(v) {
     const name = nombre(item)
     if (!name || vistos.has(name)) continue
     vistos.add(name)
-    out.push({ name, count: cuenta(item?.count), category: categoria({ key: item?.category }) })
+    out.push({ name, count: cuenta(item?.count), category: categoria({ key: item?.category }), id: fieldId(item?.id) })
   }
   return out
 }
@@ -898,9 +1005,47 @@ export function rememberJql(list, jql, { count = 0, now = Date.now() } = {}) {
 
 // ------------------------------------------------- búsquedas sugeridas
 
-/** Los estados que no son de cierre, los más frecuentes primero. */
+/**
+ * Los estados que no son de cierre, los más frecuentes primero, con su id.
+ *
+ * El id sale tal cual del perfil: quien lo mete en la consulta es
+ * `porIdONombre`, y es él quien lo valida. Validarlo aquí también sería una
+ * segunda barrera que ninguna prueba puede distinguir de la primera.
+ */
 function estadosAbiertos(profile) {
-  return (profile?.statuses || []).filter((s) => s.name && s.category !== 'done').map((s) => s.name)
+  return (profile?.statuses || [])
+    .filter((s) => s?.name && s.category !== 'done')
+    .map((s) => ({ name: nombre(s), id: s.id }))
+}
+
+/**
+ * El id con el que preguntar por un tipo o un estado en JQL: el que el perfil
+ * contó, cruzado por nombre EXACTO (sin distinguir mayúsculas). '' si no lo hay.
+ *
+ * Hace falta porque el nombre que se lee de la PANTALLA viene solo —el DOM no da
+ * el id— y traducido: para escribir `issuetype = 10002` hay que casar ese nombre
+ * con el del perfil, que sí trae el id (H14).
+ */
+function idDelPerfil(lista, valor) {
+  const buscado = linea(valor, JIRA_REST_LIMITS.quoteMax).toLowerCase()
+  if (!buscado) return ''
+  for (const item of Array.isArray(lista) ? lista : []) {
+    if (nombre(item).toLowerCase() === buscado) return item?.id
+  }
+  return ''
+}
+
+/**
+ * Cómo entra un valor de campo en la consulta: por su id si se conoce (un número
+ * sin comillas, que es lo que JQL acepta siempre) y por su nombre entrecomillado
+ * si no (que vale mientras el nombre no esté traducido).
+ *
+ * SEGURIDAD: es el ÚNICO sitio de este módulo que escribe un id dentro de una
+ * consulta, y por eso el que lo valida (`fieldId`). Lo que no sea un número cae
+ * al nombre, que sí va escapado.
+ */
+function porIdONombre(id, name) {
+  return fieldId(id) || jqlQuote(name)
 }
 
 /**
@@ -913,6 +1058,11 @@ function estadosAbiertos(profile) {
  * `'Epic Link'` se busca por clave, y con el NOMBRE de la épica —que es lo que
  * suele leerse del campo— la consulta no encuentra nada
  * (docs/plan/anexo-C, «APIs externas»).
+ *
+ * El tipo y el estado van por ID cuando el perfil lo trae (`porIdONombre`),
+ * porque Jira traduce esos nombres y JQL rechaza los traducidos (mira la
+ * cabecera del módulo); la ETIQUETA del chip sigue enseñando el nombre, que es
+ * lo que el usuario reconoce.
  *
  * @returns {Array<{jql:string, kind:string, label:string}>} como mucho
  *          `JIRA_REST_LIMITS.suggestions`, sin repetir consulta
@@ -944,14 +1094,22 @@ export function suggestedQueries({ site = null, issue = null, profile = null, fi
   if (etiqueta) add('etiqueta', `Misma etiqueta «${etiqueta}»`, conProyecto(`labels = ${jqlQuote(etiqueta)}`))
   if (abierta) add('enlazadas', `Enlazadas a ${abierta}`, relatedJql(abierta))
   const tipo = linea(issue?.type, JIRA_REST_LIMITS.quoteMax)
-  if (tipo) add('tipo', `Del mismo tipo («${tipo}»), sin resolver`, conProyecto(`issuetype = ${jqlQuote(tipo)} AND resolution = Unresolved`))
+  // El tipo sale de la PANTALLA, que sólo da el nombre —y traducido—: el id se
+  // busca en el perfil por ese mismo nombre, y sin perfil se pregunta por nombre,
+  // que es lo que se hacía hasta H14 y lo que vale si no está traducido.
+  if (tipo) {
+    const valorTipo = porIdONombre(idDelPerfil(profile?.types, tipo), tipo)
+    add('tipo', `Del mismo tipo («${tipo}»), sin resolver`, conProyecto(`issuetype = ${valorTipo} AND resolution = Unresolved`))
+  }
 
   // Lo tuyo, que no necesita saber nada de la pantalla.
   if (proyecto) add('mias', `Mis abiertas de ${proyecto}`, conProyecto('assignee = currentUser() AND resolution = Unresolved'))
 
-  // Del perfil del proyecto: los dos estados no finales más usados.
+  // Del perfil del proyecto: los dos estados no finales más usados. La etiqueta
+  // enseña el NOMBRE (es lo que el usuario reconoce, y lo que ve en su Jira) y la
+  // consulta va por el ID: con el nombre traducido sería un 400 (H14).
   for (const estado of estadosAbiertos(profile).slice(0, 2)) {
-    add('estado', `${proyecto || 'Incidencias'} en «${estado}»`, conProyecto(`status = ${jqlQuote(estado)}`))
+    add('estado', `${proyecto || 'Incidencias'} en «${estado.name}»`, conProyecto(`status = ${porIdONombre(estado.id, estado.name)}`))
   }
 
   // Filtros del propio usuario: su consulta, tal cual la guardó él.

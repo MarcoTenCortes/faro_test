@@ -69,10 +69,16 @@ function incidencia(key, extra = {}) {
   return {
     key,
     summary: `Incidencia ${key}`,
+    // Con los ids que la fila trae desde H14: aquí no sirven para nada —una fila
+    // de «hoy» no ejecuta ninguna consulta— y por eso tienen que quedarse FUERA
+    // del candidato, que es lo que la prueba de las claves exactas comprueba.
     type: 'Task',
+    typeId: '10002',
     status: 'Open',
+    statusId: '1',
     statusCategory: 'new',
     priority: 'Medium',
+    priorityId: '3',
     assignee: null,
     reporter: null,
     updatedAt: AHORA - 6 * H,
@@ -278,6 +284,13 @@ test('buildCandidates: funde las lecturas y cruza cada una con el diario de SU h
     ],
     'claves exactas de un candidato'
   )
+  // H14: la fila de la API trae `typeId`, `statusId` y `priorityId` para escribir
+  // consultas, y aquí no se escribe ninguna. Un candidato se reconstruye clave a
+  // clave dos veces —`deJira` al leer y `buildCandidates` al fundir—, así que lo
+  // que crezca en la fila no se cuela en lo que se guarda en la caché de «hoy».
+  for (const clave of ['typeId', 'statusId', 'priorityId']) {
+    assert(!(clave in eng12), `${clave} no es asunto de «hoy»: ` + JSON.stringify(eng12))
+  }
   eq(eng12.sources, ['history', 'mine'], 'recuerda de qué lecturas salió, ordenadas')
   eq(eng12.analyzedAt, AHORA - 4 * D, 'y lo que el diario de SU host sabe de ella')
   eq(eng12.notes, 6)

@@ -138,7 +138,7 @@ la respuesta**.
 | Qué | Por qué | Comprobado |
 |---|---|---|
 | `opencode` ≥ 1.2 | Es el motor. La extensión no habla con ninguna nube. | 1.2.25 |
-| Chrome ≥ 116 | `chrome.sidePanel` y la CSS Custom Highlight API. Desde Chrome 130, además, los módulos de la extensión sólo se sirven a la página por una URL distinta en cada sesión (`use_dynamic_url`): ninguna web puede comprobar si tienes Faro instalado. Con 116-129 funciona igual, sin esa protección. | |
+| Chrome ≥ 130 | `chrome.sidePanel` y la CSS Custom Highlight API existen desde la 116, pero la protección que hace que los módulos de la extensión sólo se sirvan a la página por una URL distinta en cada sesión (`use_dynamic_url`) sólo ACTÚA desde la 130: con 116-129 Chrome ignora esa clave y cualquier web puede comprobar si tienes Faro instalado. Chrome 130 es de octubre de 2024, así que el mínimo es 130 y esa protección no es opcional. | Chrome 153 |
 | `uvx` (o Docker) | Para ejecutar `mcp-atlassian`. | uvx en Windows |
 | Un API token por producto | Para leer Jira y Confluence. En Cloud el mismo vale para los dos; en Data Center es un token personal por instalación. | |
 
@@ -252,7 +252,7 @@ De ahí que haya dos caminos hasta el mismo sitio: la extensión ve **la página
 que tienes delante**, y opencode consulta **la API**. Ninguno de los dos
 escribe nada.
 
-Diecisiete decisiones que sostienen el diseño:
+Dieciocho decisiones que sostienen el diseño:
 
 1. **El panel es el único que habla con opencode.** El content script vive
    dentro de una página que no controlamos: no conoce la contraseña del
@@ -449,6 +449,18 @@ Diecisiete decisiones que sostienen el diseño:
      recorrerla tres veces por observación.
    - **El razonamiento** de un modelo que piensa en voz alta repintaba la
      respuesta entera por cada trozo, sin que se viera nada: ya no.
+   - **El chat esperaba al MCP.** Comprobar si el MCP de Atlassian de ese sitio
+     está conectado es una consulta a opencode que la primera vez tras
+     arrancarlo tarda **catorce segundos y medio** (medido contra el opencode
+     del usuario: 14 463 ms en frío, 2 ms después), y el panel no pintaba nada
+     hasta tenerla. Ahora la conversación aparece sin esperarla, la cabecera dice
+     «comprobando MCP…» mientras tanto y lo que la comprobación decida llega
+     después: si el MCP no está, la pantalla de claves se abre sola cuando no
+     tapa nada, y si estabas escribiendo o esperando una respuesta se te dice en
+     el chat con un botón para ir a ella cuando quieras. La única vez que se
+     espera es la primera de un sitio nuevo, donde no hay conversación que
+     pintar y sin MCP no se puede hacer nada. Lo que tardó se sigue apuntando en
+     el Registro («MCP comprobado»).
 
 15. **Faro le pregunta a tu propio Jira, no al modelo.** Una búsqueda JQL, el
    árbol de un espacio, los filtros que tienes marcados, los enlaces de una
@@ -531,6 +543,19 @@ Diecisiete decisiones que sostienen el diseño:
    comprobación: después de olvidar un sitio, todo lo suyo sale como «(nada)»
    (el espacio usado sigue contando, porque cuenta el navegador entero).
 
+18. **Los nombres que Jira te enseña están traducidos; una búsqueda va por id.**
+   Si tu Jira está en español, la API y la pantalla dicen «Tarea», «Historia»,
+   «En progreso» y «Crítica»… y una consulta JQL con esos nombres contesta un
+   error: `issuetype = "Tarea"` es un 400 y `issuetype = Task` devuelve dos mil
+   trescientas. No es un fallo de Faro ni del modelo, es cómo funciona Jira, y
+   se descubrió probándolo contra el Jira de verdad. Por eso, cuando Faro cuenta
+   tu proyecto, se guarda también **el id** de cada tipo y de cada estado, se lo
+   enseña al modelo al lado del nombre y le explica que en el JQL va el número;
+   los chips que Faro ejecuta por su cuenta preguntan por ese id, y el botón
+   sigue enseñándote el nombre, que es lo que tú reconoces. Los componentes y
+   las etiquetas los escribió tu equipo, Jira no los traduce, y ésos siguen
+   yendo por su nombre.
+
 ---
 
 ## Qué se conserva al reabrir el panel
@@ -578,7 +603,7 @@ actividad** (30 días), las **páginas base elegidas** con su alcance, las
 ## Comprobaciones
 
 ```bash
-npm run check              # sintaxis + orden + manifest + 1283 pruebas unitarias + docs
+npm run check              # sintaxis + orden + manifest + 1315 pruebas unitarias + docs
 npm run check:docs         # sólo el paso docs: número de pruebas, títulos del registro, mensajes y ficheros del mapa
 npm run test:integration   # contra un opencode real que arranca la propia prueba
 npm run harness            # banco de pruebas visual en http://127.0.0.1:5175
@@ -663,10 +688,15 @@ Con el banco levantado hay dos páginas:
   «abierto» con las hijas ocultas, y el recorrido guiado que despliega seis
   ramas y navega una sola vez.
 
-  El banco trae **dos barras laterales** y se puede cambiar entre ellas: la
-  clásica, con `role="tree"` y `role="treeitem"`, y otra con la forma del
-  Confluence real —contenedor reconocible sólo por `data-testid`, filas que son
-  divs sin rol, scroll propio—. Sobre esa segunda se comprueban las cuatro cosas
+  El banco trae **tres barras laterales** y se puede cambiar entre ellas: la
+  clásica, con `role="tree"` y `role="treeitem"`; otra con la forma del
+  Confluence Cloud real —contenedor reconocible sólo por `data-testid`, filas que
+  son divs sin rol, scroll propio—; y, desde H14, el **pagetree clásico de un
+  Confluence Data Center**, que es la que estaba rota: ahí no hay `<aside>`, ni
+  `role="tree"`, ni un solo `data-testid`, así que Faro no encontraba el árbol y
+  en ese Confluence no había ni «Paso a paso» ni «Árbol leído de la página»; sus
+  hijas llegan por AJAX al desplegar una rama, como en el producto de verdad.
+  Sobre esa segunda se comprueban las cuatro cosas
   nuevas: que el adaptador encuentra contenedor, fila y control; **el caso de la
   captura**, que va de una ACV hasta su TCV hermana desplegando cuatro ramas y
   navegando una sola vez; que la barra lateral se desplaza sola; y que un paso
@@ -771,7 +801,7 @@ Con el banco levantado hay dos páginas:
   exactamente lo que se compara byte a byte. No tiene umbrales, no falla nunca y
   no entra en `npm run check`: los tiempos de una máquina no son un contrato,
   sirven para comparar dos ejecuciones de la MISMA máquina antes y después de un
-  cambio. Hoy el `system` va de 2 767 a 29 159 caracteres (mediana 8 127) y
+  cambio. Hoy el `system` va de 2 767 a 29 159 caracteres (mediana 8 139) y
   ningún módulo puro pasa de 5 ms.
 
 - **`npm run contrast`** imprime la tabla de contraste del panel y del overlay,
@@ -926,7 +956,9 @@ al proceso local de opencode y no al `chrome.storage`, el panel construye
 todo el texto del modelo con `textContent`, nunca con `innerHTML`, y los
 módulos de la extensión que la página puede cargar se sirven con una URL
 distinta en cada sesión (`use_dynamic_url`), para que ninguna web detecte que
-tienes Faro.
+tienes Faro — y desde H14 el mínimo del manifest es **Chrome 130**, que es a
+partir de donde esa protección actúa de verdad: antes se podía instalar en un
+Chrome que la ignoraba.
 
 ---
 
@@ -1013,7 +1045,13 @@ modelo que funciona se recuerda para ese sitio.
 ## Lo que no hace
 
 - **No indexa «todo Confluence» literalmente.** Un espacio real tiene miles de
-  páginas. Indexa en amplitud con tope, y profundiza con el uso.
+  páginas —el del usuario tiene 2 697—, y el mapa cabe unos cientos. Lo que Faro
+  lee de la API son **las páginas que se han movido más recientemente, cada una
+  con su rama entera hasta la raíz**, así que el mapa contiene lo que se está
+  usando y toda página que esté dentro se puede recorrer; el Registro dice
+  cuántas de cuántas. Hasta H14 leía las más ANTIGUAS del espacio, que es lo que
+  la API devuelve por defecto, y el mapa podía no contener ni la página que
+  tenías abierta. Y sigue profundizando con el uso.
 - **No arranca opencode por ti, ni escribe su configuración.** Una extensión no
   puede tocar el disco. Por eso el MCP se pega a mano una vez por sitio y hay
   que reiniciar opencode. Un host de mensajería nativa resolvería ambas cosas;

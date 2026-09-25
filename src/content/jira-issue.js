@@ -29,7 +29,10 @@
  * abría cada comentario). La forma de Cloud NO está comprobada: hay unos
  * selectores de su vista por si acaso, y si no casan se lee como siempre.
  *
- * Sólo se leen nodos; no se toca nada. Es DOM puro: se comprueba en el banco.
+ * Sólo se leen nodos; no se toca nada. Es DOM puro y se comprueba en el banco,
+ * salvo una pieza que no lo es y que sí se ejecuta en Node
+ * (`statusFromTooltip`, jira-issue.test.js): sacar el nombre del estado del
+ * atributo `title` del botón de transiciones, que es HTML escrito por la página.
  */
 
 import { validIssueKey } from '../atlassian/site.js'
@@ -181,7 +184,9 @@ const FIELD_IDS = {
   // Jira 9 DC lo tenía sólo como pastilla en la cabecera, y el modelo se iba
   // a buscarlo con la herramienta). La pastilla de estado tiene una clase
   // propia; se acota a la cabecera y al módulo de detalles para no coger la
-  // de una incidencia enlazada.
+  // de una incidencia enlazada. Y si ninguno de éstos está —el Jira del
+  // usuario no tiene ni uno—, el estado sale del botón de transiciones, que no
+  // es un selector más porque su valor no es su texto (`leerEstado`).
   status: [
     '#status-val',
     '#issue-header .jira-issue-status-lozenge',
@@ -219,11 +224,142 @@ const BROWSE_KEY = /\/browse\/([^/?#]+)/
 /** Lo que escribió un usuario: la descripción, los comentarios y la actividad. Un campo nunca sale de ahí. */
 const USER_CONTENT = '#description-val, .user-content-block, .action-body, .activity-comment, #issue_actions_container'
 
-/** Texto de una línea, como lo ve el usuario. */
-function texto(el) {
-  return String(el?.textContent || '')
+/** Una cadena en una línea, sin espacios de sobra. */
+function linea(s) {
+  return String(s ?? '')
     .replace(/\s+/g, ' ')
     .trim()
+}
+
+/** Texto de una línea, como lo ve el usuario. */
+function texto(el) {
+  return linea(el?.textContent)
+}
+
+// ------------------------------------------------------- el estado, aparte
+
+/**
+ * El botón de transiciones, que es donde un Jira Data Center moderno pinta el
+ * estado. Comprobado en el Jira del usuario (2026-09-21): ahí NO existe
+ * `#status-val` ni ninguna pastilla de estado en la cabecera ni en los
+ * detalles, y sin esto el estado salía vacío y el análisis se quedaba sin fase.
+ *
+ *   li#opsbar-opsbar-transitions.aui-buttons.pluggable-ops   (dentro de .ops-cont)
+ *     a#opsbar-transitions_more.aui-button.aui-dropdown2-trigger
+ *        .opsbar-transitions__status-category_indeterminate
+ *        [role=button][aria-haspopup=true][title='<span class="jira-issue-status-tooltip-title">…</span>…']
+ *       span.dropdown-text  «DevTeam PBI is ready f...»   ← recortado por Jira
+ *
+ * Vive dentro de la barra de acciones, o sea que es ISSUE_CHROME: su texto no
+ * entra en ningún bloque y nadie lo pulsa (es un disparador de menú, M9). Aquí
+ * sólo se lee.
+ */
+const STATUS_BUTTON = '#opsbar-transitions_more'
+
+/**
+ * La categoría del estado tal como Jira la escribe en la clase del control:
+ * `opsbar-transitions__status-category_done` en el botón de transiciones y
+ * `jira-issue-status-lozenge-done` en la pastilla clásica. Las tres son las de
+ * Jira y van en el propio nombre de la clase, así que la lista es esta regex;
+ * el panel las vuelve a validar al normalizar (`STATUS_CATEGORIES`).
+ *
+ * Importa porque el NOMBRE del estado lo traduce Jira y lo pone cada equipo
+ * («For PSO Review», «FOR SC TO RESPOND»), y la categoría no: es lo único que
+ * dice en qué punto del flujo está una incidencia de un Jira a medida.
+ */
+const STATUS_CATEGORY_CLASS = /\b(?:opsbar-transitions__status-category|jira-issue-status-lozenge)[_-](new|indeterminate|done)\b/
+
+/** El nombre del estado dentro del `title` del botón, que es HTML. */
+const TOOLTIP_TITLE = /<span[^>]*\bclass\s*=\s*["'][^"']*\bjira-issue-status-tooltip-title\b[^"']*["'][^>]*>([\s\S]*?)<\/span>/i
+
+/**
+ * Un elemento cuyo contenido NO es texto que nadie lea. Se va con su contenido
+ * antes de quitar las etiquetas: si no, el `alert(1)` de un `<script>` escrito
+ * en el atributo acabaría dentro del nombre del estado (texto inofensivo, pero
+ * un nombre de estado es lo que el usuario LEE, y eso no se lee).
+ */
+const NO_ES_TEXTO = /<(script|style)\b[^>]*>[\s\S]*?<\/\1\s*>/gi
+
+/** Las entidades HTML que se ven en ese atributo. Lo que no esté aquí se deja tal cual. */
+const ENTIDADES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: String.fromCharCode(160) }
+const ENTIDAD = /&(#[0-9]+|#x[0-9a-f]+|[a-z]+);/gi
+
+/**
+ * Las entidades de una cadena, decodificadas en UNA pasada: así un `&amp;lt;`
+ * se queda en «&lt;» y no se decodifica dos veces. Una entidad que no se conoce
+ * se deja como está —inventarle un carácter sería peor que enseñarla—, y el
+ * nombre de un método del prototipo no es una entidad (`Object.hasOwn`).
+ */
+function sinEntidades(s) {
+  return s.replace(ENTIDAD, (m, ref) => {
+    if (ref[0] === '#') {
+      const hex = ref[1] === 'x' || ref[1] === 'X'
+      const n = parseInt(hex ? ref.slice(2) : ref.slice(1), hex ? 16 : 10)
+      return Number.isInteger(n) && n > 0 && n <= 0x10ffff ? String.fromCodePoint(n) : m
+    }
+    const k = ref.toLowerCase()
+    return Object.hasOwn(ENTIDADES, k) ? ENTIDADES[k] : m
+  })
+}
+
+/**
+ * El nombre del estado que lleva dentro el `title` del botón de transiciones,
+ * o ''. Pura: de una cadena a otra cadena.
+ *
+ * El texto visible del botón NO vale: Jira lo recorta él («DevTeam PBI is ready
+ * f...») y un estado recortado acabaría citado como exacto en el prompt y en una
+ * consulta. El nombre entero está en el `title`, que es HTML.
+ *
+ * Se saca con una regex acotada al primer `span` del tooltip, se le quita
+ * cualquier marcado de dentro y se decodifican las entidades, EN ESE ORDEN: así
+ * un `&lt;b&gt;` escrito en el nombre queda como el texto «<b>» y no como una
+ * etiqueta. Nada de esto construye un nodo —ni `innerHTML`, ni `DOMParser`, ni
+ * uno inerte—, que es lo que hace que un `title` hostil no pueda ejecutar ni
+ * inyectar nada: de aquí sale una CADENA, y una cadena no tiene `onerror`.
+ * Además así la barrera se ejecuta en Node contra entradas hostiles
+ * (jira-issue.test.js), que con `DOMParser` no se podría.
+ *
+ * Lo que devuelve es de una línea y sin espacios de sobra —los duros incluidos—,
+ * como cualquier otro valor leído de la pantalla.
+ */
+export function statusFromTooltip(title) {
+  const m = TOOLTIP_TITLE.exec(String(title ?? ''))
+  return m ? linea(sinEntidades(m[1].replace(NO_ES_TEXTO, ' ').replace(/<[^>]*>/g, ' '))) : ''
+}
+
+/** Jira recorta el texto del botón con puntos suspensivos: eso no es el nombre. */
+const RECORTADO = /(?:…|\.\.\.)$/
+
+/** La categoría que declara un control, la suya o la de la pastilla que lleve dentro. */
+function categoriaDe(el) {
+  if (!el?.getAttribute) return ''
+  const dentro = el.querySelector?.('[class*="-category_"], [class*="-lozenge-"]')
+  const clases = (el.getAttribute('class') || '') + ' ' + (dentro?.getAttribute('class') || '')
+  return STATUS_CATEGORY_CLASS.exec(clases)?.[1] || ''
+}
+
+/**
+ * El estado y su categoría. Los selectores de siempre primero y en su orden
+ * —otras instalaciones sí tienen `#status-val`—, y el botón de transiciones
+ * como respaldo. La categoría es la de donde salió el nombre si la declara y,
+ * si no, la del botón: habla del mismo estado.
+ *
+ * @param {Document} doc
+ * @param {string} nombre lo que dieron los selectores de siempre, o ''
+ * @param {Element|null} el de dónde salió ese nombre
+ */
+function leerEstado(doc, nombre, el) {
+  const boton = doc.querySelector(STATUS_BUTTON)
+  let status = nombre
+  if (!status && boton) {
+    status = statusFromTooltip(boton.getAttribute('title'))
+    // Sin `title` queda el texto visible, y sólo si Jira no lo ha recortado.
+    if (!status) {
+      const visto = texto(boton)
+      if (visto && !RECORTADO.test(visto)) status = visto
+    }
+  }
+  return { status, category: (nombre && categoriaDe(el)) || categoriaDe(boton) }
 }
 
 /** Un valor que es una lista (etiquetas, versiones, componentes): sus elementos; si no, el texto entero, separado por comas. */
@@ -258,7 +394,7 @@ function claveDeEnlace(el) {
  * Los campos de la incidencia abierta, o null si esta página no es una.
  *
  * @param {Document} [doc]
- * @returns {{type:string, status:string, priority:string, resolution:string, assignee:string, reporter:string, epic:string, epicKey:string, sprint:string, fixVersions:string[], affectsVersions:string[], components:string[], labels:string[]}|null}
+ * @returns {{type:string, status:string, statusCategory:string, priority:string, resolution:string, assignee:string, reporter:string, epic:string, epicKey:string, sprint:string, fixVersions:string[], affectsVersions:string[], components:string[], labels:string[]}|null}
  */
 export function jiraIssueFields(doc = document) {
   if (!VIEW.some((s) => doc.querySelector(s))) return null
@@ -283,13 +419,21 @@ export function jiraIssueFields(doc = document) {
 
   const out = {}
   let epicEl = null
+  let statusEl = null
   for (const [k, re] of Object.entries(FIELD_LABELS)) {
     // Por id, en orden de preferencia (el primero que exista); si no, por etiqueta.
     const porId = (FIELD_IDS[k] || []).map((s) => doc.querySelector(s)).find(Boolean) || null
     const el = porId || pares.find((p) => re.test(p.nombre))?.el || null
     if (k === 'epic') epicEl = el
+    if (k === 'status') statusEl = el
     out[k] = LIST_FIELDS.has(k) ? lista(el) : texto(el)
   }
+  // El estado, aparte: donde no está en los detalles lo pinta el botón de
+  // transiciones, y de ahí sale también su CATEGORÍA, que es lo que no se
+  // traduce y lo único que sitúa un estado a medida en su flujo.
+  const estado = leerEstado(doc, out.status, statusEl)
+  out.status = estado.status
+  out.statusCategory = estado.category
   // Y la épica otra vez, esta vez como CLAVE: es lo único con lo que se puede
   // escribir una consulta que la encuentre. No sustituye a `epic` —que es lo
   // que el usuario lee en pantalla— ni entra en el prompt: sirve para construir
