@@ -40,9 +40,11 @@ export const CONTEXT_BUDGET = {
   /**
    * El perfil del proyecto (H9): media docena de líneas contadas de una
    * muestra. Su forma ya viene acotada de `jira-rest.js` (30 por lista, 6
-   * prefijos, 3 ejemplos), así que este tope no recorta nada de un perfil de
-   * verdad; está por lo mismo que los demás, porque lo que entra en un prompt
-   * no puede depender de que otro módulo siga acotando.
+   * prefijos, 3 ejemplos), así que con nombres normales este tope no recorta
+   * nada; está por lo mismo que los demás, porque lo que entra en un prompt no
+   * puede depender de que otro módulo siga acotando. Y si recorta —60 nombres
+   * de 60 caracteres con sus ids de H14 pasan de aquí—, lo hace por líneas y
+   * elementos ENTEROS y lo dice en la cabecera: nunca un id a medias.
    */
   profile: 4000,
   /**
@@ -451,6 +453,39 @@ function conIds(...listas) {
 }
 
 /**
+ * Las líneas del perfil que caben en `tope`, por LÍNEAS enteras y, dentro de
+ * una lista, por ELEMENTOS enteros (`nombre (N, id X)`), como `treeTitles` y
+ * `preloadedSearchBlock` cortan por líneas. Pura.
+ *
+ * Cortar por caracteres, como hasta la revisión adversaria de H14, podía dejar
+ * la línea de Estados en «(1, id 1012» de un id que era 10121, justo encima de
+ * la línea que manda copiar «el id que va al lado de cada nombre» sin comillas:
+ * un perfil que `normalizeProfile` acepta (30 tipos y 30 estados de 60
+ * caracteres) pasa del tope con los ids de H14. Se para en la primera línea que
+ * no cabe entera —lo que quepa de ella, por elementos— y se dice si se recortó.
+ */
+function cuerpoRecortado(lineas, tope) {
+  const out = []
+  let chars = 0
+  for (const linea of lineas) {
+    if (chars + linea.length + 1 <= tope) {
+      out.push(linea)
+      chars += linea.length + 1
+      continue
+    }
+    let acc = ''
+    for (const parte of linea.split(' · ')) {
+      const con = acc ? `${acc} · ${parte}` : parte
+      if (chars + con.length + 1 > tope) break
+      acc = con
+    }
+    if (acc) out.push(acc)
+    return { lineas: out, recortado: true }
+  }
+  return { lineas: out, recortado: false }
+}
+
+/**
  * El perfil del proyecto en seis líneas, o '' si no hay nada que contar.
  *
  * Lo que el modelo pedía por herramienta —y contaba a ojo— para poder escribir
@@ -503,9 +538,12 @@ export function profileBlock(profile) {
 
   const clave = dato(profile.projectKey, 40)
   const muestra = Number(profile.sampled) || 0
+  const { lineas, recortado } = cuerpoRecortado(cuerpo, CONTEXT_BUDGET.profile)
   return [
-    `${PROFILE_OPEN}${clave ? ' ' + clave : ''} (los leyó la extensión de la API de Jira, contando una muestra de ${muestra} incidencias) ---`,
-    cuerpo.join('\n').slice(0, CONTEXT_BUDGET.profile),
+    `${PROFILE_OPEN}${clave ? ' ' + clave : ''} (los leyó la extensión de la API de Jira, contando una muestra de ${muestra} incidencias${
+      recortado ? '; no caben todos los valores, la lista va recortada' : ''
+    }) ---`,
+    lineas.join('\n'),
     PROFILE_CLOSE,
     contentRule('nombres y resúmenes de tickets de Jira, contados por la extensión', { plural: true }),
     // Cómo se usan, FUERA de los delimitadores —aquí habla Faro— y en el propio

@@ -230,6 +230,17 @@ test('H14: un texto que es una URL no es un título, y el slug de la ruta sí', 
   eq(confluenceLinksIn([{ href: slugRaro, text: 'https://x/y', where: 'pagina' }], null, { site: SITIO, linkedHost: CONF, index: INDICE })[0].title, 'Página 999998')
   const sinTitulo = `https://${CONF}/spaces/ENG/pages/999997`
   eq(confluenceLinksIn([{ href: sinTitulo, text: `https://${CONF}/x`, where: 'pagina' }], null, { site: SITIO, linkedHost: CONF, index: INDICE })[0].title, 'Página 999997')
+  // Un «+» del propio título va codificado (%2B) y es un «+», no un espacio:
+  // decodificar antes de cambiar los «+» daba «C Guide» (revisión adversaria de
+  // H14). Y un slug que no se deja decodificar no es un título: queda el
+  // marcador, no «%E0%A4%A».
+  const conMas = `https://${CONF}/spaces/ENG/pages/999996/C%2B%2B+Guide`
+  eq(confluenceLinksIn([{ href: conMas, text: conMas, where: 'pagina' }], null, { site: SITIO, linkedHost: CONF, index: INDICE })[0].title, 'C++ Guide')
+  const malCodificado = `https://${CONF}/spaces/ENG/pages/999995/%E0%A4%A`
+  eq(confluenceLinksIn([{ href: malCodificado, text: malCodificado, where: 'pagina' }], null, { site: SITIO, linkedHost: CONF, index: INDICE })[0].title, 'Página 999995')
+  // Y por el índice, un `/display/` con «+» dentro del título casa con el suyo.
+  const cMasMas = normalizeIndex({ pages: [{ id: GUIA, title: 'C++ Guide', spaceKey: 'ENG', url: '/x' }] }, CONF, null)
+  eq(ids(confluenceLinksIn([{ href: `https://${CONF}/display/ENG/C%2B%2B+Guide`, where: 'enlaces' }], null, { site: SITIO, linkedHost: CONF, index: cMasMas })), [GUIA])
   // SEGURIDAD: el slug sale de la ruta que YA pasó `pageRefFromUrl`, y de ahí no
   // sale ninguna petición: un título no se manda nunca a ninguna API (§8.12).
   eq(confluenceLinksIn([{ href: 'https://evil.example/spaces/ENG/pages/999999/Informe', text: 'x', where: 'pagina' }], null, { site: SITIO, linkedHost: CONF, index: INDICE }), [])

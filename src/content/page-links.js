@@ -134,8 +134,18 @@ export function isOwnJiraRoute(href, base) {
   }
   const u = new URL(abs)
   if (u.origin !== aqui.origin) return false
-  const ctx = jiraContextPath(u.pathname)
-  return isJiraRoute(ctx ? u.pathname.slice(ctx.length) : u.pathname)
+  // La ruta de contexto se OBSERVA de la PESTAÑA, como en cada lectura REST
+  // (§4.9), nunca del enlace: leída del enlace, un Confluence servido en la raíz
+  // con un espacio llamado PROJECTS, ISSUES, REST o SECURE daba «contexto»
+  // `/display` o `/spaces`, lo que quedaba casaba con las rutas de Jira —que no
+  // distinguen mayúsculas— y `/display/PROJECTS/Guia` se caía sin llegar a
+  // sugerirse (revisión adversaria de H14). Con el de la pestaña, en Confluence
+  // el contexto es '' y esos enlaces son lo que son: páginas. Y un enlace que no
+  // cuelgue del contexto de la pestaña no es una ruta propia de ESTE Jira.
+  const ctx = jiraContextPath(aqui.pathname)
+  const ruta = u.pathname
+  if (ctx && ruta !== ctx && !ruta.startsWith(ctx + '/')) return false
+  return isJiraRoute(ctx ? ruta.slice(ctx.length) : ruta)
 }
 
 /**

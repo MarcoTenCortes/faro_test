@@ -116,6 +116,35 @@ test('H14 real: «Ninguno» no es un valor, ni en una lista ni en un campo de te
   eq(normalizeIssueFields({ components: ['Ninguna prioridad'] }).components, ['Ninguna prioridad'])
 })
 
+test('SEGURIDAD: un valor de campo no abre línea ni se lee al revés: el NEL y los invisibles se van', () => {
+  // Los campos se leen de la PANTALLA y acaban citados en la línea «Campos
+  // leídos de la pantalla» de un prompt. `clean` colapsa `\s`, que no cubre el
+  // NEL (U+0085), y dejaba pasar un U+202E que escribe al revés (revisión
+  // adversaria de H14): con ellos, un estado partía la línea de Faro en dos o
+  // se leía del revés. Los separadores van con ESCAPE en el literal, para que
+  // se lean.
+  const NEL = String.fromCharCode(0x85)
+  const RLO = String.fromCharCode(0x202e)
+  const ZWSP = String.fromCharCode(0x200b)
+  const f = normalizeIssueFields({
+    status: `In${NEL}Progress`,
+    type: `A${RLO}B`,
+    epic: `Rota${ZWSP}ción`,
+    sprint: `S\u2028 42`,
+    components: [`API${NEL}v2`],
+  })
+  eq(f.status, 'In Progress', 'el NEL es un espacio, como los demás separadores')
+  eq(f.type, 'AB', 'el RLO se borra: no es texto y no se ve')
+  eq(f.epic, 'Rotación')
+  eq(f.sprint, 'S 42')
+  eq(f.components, ['API v2'])
+  // Y en el prompt, ni una línea de más ni de menos por culpa de un valor.
+  const bloque = issueBlock(f)
+  const porSaltos = bloque.split(/\r?\n|[\u2028\u2029\u0085]/)
+  eq(porSaltos.length, bloque.split('\n').length, 'los cinco separadores de línea dan las mismas líneas que el salto')
+  assert(!bloque.includes(RLO) && !bloque.includes(NEL), 'y ninguno de los dos llega al prompt')
+})
+
 // --- la categoría del estado (H14) ----------------------------------------
 
 test('H14 real: la categoría del estado entra como referencia y no se enseña a nadie', () => {

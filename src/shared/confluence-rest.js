@@ -740,7 +740,10 @@ export function parseSpaceSearch(json, { wikiPrefix = '', spaceKey = null } = {}
       vistos.add(aid)
       cadena.push(eslabon(a, aid, wikiPrefix, cadena, clave))
     }
-    cadena.push(eslabon(r, id, wikiPrefix, cadena, clave || cleanTitle(r.space?.key) || null))
+    // La clave que se estampa es SIEMPRE una validada: la pedida, y si no la
+    // que trae el resultado pasada por `validSpaceKey` (con `cleanTitle` se
+    // copiaba `OTRO"KEY` tal cual; revisión adversaria de H14).
+    cadena.push(eslabon(r, id, wikiPrefix, cadena, clave || validSpaceKey(r.space?.key) || null))
     groups.push(cadena)
   }
   const size = entre(json.size, 0, 100000) || groups.length
@@ -953,10 +956,16 @@ export async function fetchSpacePages(
     // Una instancia que no acepte este ORDER BY o este `expand` contesta 400, o
     // algo que no tiene la forma esperada. Antes que dejar al usuario sin índice
     // se degrada UNA vez al camino de antes —la lista ascendente, que devuelve
-    // una rebanada arbitraria pero cierta— y se dice por dónde vino. Una sesión
-    // que no vale no se reintenta: tampoco valdría allí. Y si ya se había leído
-    // algo, tampoco: sería empezar de cero a mitad de camino.
-    if (pages.length || fallo.status === 401 || fallo.status === 403) {
+    // una rebanada arbitraria pero cierta— y se dice por dónde vino. SÓLO por
+    // forma: con un 5xx, un 404, sin red o sin respuesta se devuelve el fallo,
+    // porque la lista daría `ok: true` con las páginas MÁS VIEJAS por un 503
+    // pasajero —justo lo que F8 vino a quitar— y el índice exacto acabaría
+    // sustituido por esa rebanada (revisión adversaria de H14); el indexado
+    // sigue entonces por el modelo, con su aviso. Una sesión que no vale tampoco
+    // se reintenta: no valdría allí. Y si ya se había leído algo, tampoco: sería
+    // empezar de cero a mitad de camino.
+    const porForma = fallo.status === 400 || (fallo.status >= 200 && fallo.status < 300)
+    if (pages.length || !porForma) {
       return { ok: false, reason: fallo.reason, status: fallo.status }
     }
     via = 'lista'

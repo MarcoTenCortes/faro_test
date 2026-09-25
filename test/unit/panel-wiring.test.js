@@ -941,10 +941,12 @@ test('H3: el arranque dice cuánto tardó cada fase, y la del MCP es la que se v
   const espera = arranque.slice(arranque.indexOf('if (primeraVez) {'), arranque.indexOf('} else {', arranque.indexOf('if (primeraVez) {')))
   assert(espera.includes('const r = await comprobacion') && espera.includes("cron.mark('MCP')"), 'la fase MCP vive donde se espera al MCP')
   eq(arranque.split("cron.mark('MCP')").length - 1, 1, 'y en ningún otro sitio del arranque')
-  // La fase «MCP» sigue siendo las DOS peticiones y nada más, ahora dentro de la
-  // comprobación: si se marcara después de adoptar el MCP y guardar los sitios,
-  // el número dejaría de ser el del GET. Y se registra aparte, para que el
-  // número siga saliendo aunque ya no bloquee.
+  // Lo que se registra en «MCP comprobado» son las DOS peticiones y nada más:
+  // dentro de la comprobación, la marca va antes de adoptar el MCP y guardar los
+  // sitios, o el número dejaría de ser el del GET. La fase «MCP» del ARRANQUE, en
+  // cambio, es lo que ese arranque esperó —la comprobación entera, adopción
+  // incluida, que en la primera vez es cuando se adopta—: son dos números y los
+  // dos se dicen (revisión adversaria de H14).
   const comprobar = sinComentarios(JS.slice(JS.indexOf('async function checkMcp'), JS.indexOf('function mcpResultSoon')))
   const mcp = comprobar.indexOf("cron.mark('MCP')")
   assert(comprobar.lastIndexOf('client.listMcp()', mcp) > -1, 'la marca va después de pedir /mcp y /config')
@@ -3830,6 +3832,11 @@ test('H14 P5: el chat no espera al MCP, y lo que la comprobación decide llega d
   assert(/const primeraVez = !saved\?\.configured && !saved\?\.skippedKeys/.test(arranque), 'sólo el sitio que todavía no está en marcha espera al MCP')
   assert(/const comprobacion = checkMcp\(client, testigo, saved\)/.test(arranque), 'la comprobación se lanza con el cliente, el testigo y lo guardado')
   assert(/state\.mcpCheck = comprobacion\.then\(/.test(arranque), 'y queda a mano para el turno que se mande mientras tanto')
+  // NUNCA rechaza: de ella depende el aviso «Páginas base sin leer» y el
+  // `await` de la primera vez, y `checkMcp` sí puede rechazar (saveSite con la
+  // cuota llena). El pin mira el segundo brazo del `then`, porque quitarlo
+  // dejaba las 1315 en verde (revisión adversaria de H14).
+  assert(/state\.mcpCheck = comprobacion\.then\(\s*\(r\) => !!r\.connected,\s*\(\) => false\s*\)/.test(arranque), 'con un booleano por cada brazo: nunca rechaza')
   eq(arranque.split('await comprobacion').length - 1, 1, 'se espera UNA vez, y en un solo sitio')
   const espera = arranque.slice(arranque.indexOf('if (primeraVez) {'), arranque.indexOf('} else {', arranque.indexOf('if (primeraVez) {')))
   assert(espera.includes('const r = await comprobacion'), 'y es el camino de la primera vez, donde la pantalla de claves es lo primero que hay que ver')
@@ -3837,13 +3844,16 @@ test('H14 P5: el chat no espera al MCP, y lo que la comprobación decide llega d
   assert(/if \(faltanClaves\(r\)\) \{/.test(espera), 'y ahí sí se pide lo que falta antes de seguir')
   // El camino de todos los días: ni se espera ni se cuela por otro sitio.
   assert(/setStatus\('busy', COMPROBANDO_MCP\)/.test(arranque), 'mientras dura, la cabecera dice qué pasa')
-  assert(/mcpResultSoon\(comprobacion, testigo\)/.test(arranque), 'y el resultado se recoge sin esperarlo')
+  // El resultado se recoge con la PROMESA que el panel tiene como suya, no con el
+  // testigo del arranque: «Omitir» y «Subir un contexto» cambian el testigo sin
+  // rearrancar y dejaban la comprobación huérfana (revisión adversaria de H14).
+  assert(/mcpResultSoon\(comprobacion, state\.mcpCheck\)/.test(arranque), 'y el resultado se recoge sin esperarlo, atado a la comprobación vigente')
   assert(
     !/await mcpResultSoon\(/.test(arranque) && !/await state\.mcpCheck/.test(arranque) && !/await currentMcpCheck\(/.test(arranque),
     'nada del arranque espera al MCP por otro camino'
   )
   assert(
-    arranque.indexOf('mcpResultSoon(comprobacion, testigo)') < arranque.indexOf('await restoreConversation(testigo)'),
+    arranque.indexOf('mcpResultSoon(comprobacion, state.mcpCheck)') < arranque.indexOf('await restoreConversation(testigo)'),
     'la conversación se pinta después, sin esperarlo'
   )
 
@@ -3868,7 +3878,7 @@ test('H14 P5: el chat no espera al MCP, y lo que la comprobación decide llega d
     /if \(state\.bootToken === testigo && \(state\.site\?\.host \?\? state\.lastHost\) === host\) \{\s*\n\s*state\.mcpConnected = !!status\.connected/.test(comprobar),
     'y el estado sólo se toca si el panel sigue siendo de este sitio'
   )
-  assert(/return \{ connected: !!status\.connected, status, saved, enlaceNuevo \}/.test(comprobar), 'el resultado vuelve entero: lo espera el turno que lo capturó')
+  assert(/return \{ connected: !!status\.connected, status, saved, enlaceNuevo, host \}/.test(comprobar), 'el resultado vuelve entero: lo espera el turno que lo capturó')
 
   // El turno captura la PROMESA y le pregunta al terminar: con el booleano de
   // ahora, un turno mandado nada más abrir el panel acabaría con un «Páginas
@@ -3880,16 +3890,51 @@ test('H14 P5: el chat no espera al MCP, y lo que la comprobación decide llega d
   assert(!/mcpConnected: state\.mcpConnected/.test(envio), 'nunca el estado de ahora')
 
   // Lo que llega tarde no puede taparle el chat a nadie.
-  const tarde = sinComentarios(JS.slice(JS.indexOf('async function onMcpResult'), JS.indexOf('function faltanClaves')))
-  assert(/if \(state\.bootToken !== testigo\) return/.test(tarde), 'lo de un arranque viejo no pinta nada')
+  const tarde = sinComentarios(JS.slice(JS.indexOf('async function onMcpResult'), JS.indexOf('function showMcpPending')))
+  // Lo que manda es que ESTA comprobación siga siendo la del panel, no el
+  // testigo del arranque: «Omitir» y «Subir un contexto» cambian el testigo sin
+  // rearrancar (apagan la pantalla de contexto) y con él el resultado se
+  // perdía —ni pantalla, ni aviso— y la cabecera se quedaba en «comprobando
+  // MCP…» (revisión adversaria de H14). `state.mcpCheck` lo pone cada arranque
+  // y lo vacía el cambio de host, que es justo cuando no debe pintar nada.
+  assert(/^async function onMcpResult\(r, vigente\)/m.test(tarde), 'el resultado llega con la promesa que el panel tenía como suya')
+  assert(/if \(state\.mcpCheck !== vigente\) return/.test(tarde), 'lo de una comprobación que ya no es la del panel no pinta nada')
+  assert(!/state\.bootToken/.test(tarde), 'y el testigo del arranque no se mira: apagarlo no es cancelar la comprobación')
   assert(/if \(state\.statusLine === COMPROBANDO_MCP\) \{/.test(tarde), 'la cabecera sólo se devuelve si el texto sigue siendo el suyo')
-  assert(/if \(puedeAbrirPantalla\(\)\) showMcpSetup\(r\.status\)/.test(tarde), 'la pantalla de claves sólo se abre si no tapa nada')
-  assert(/else attachMcpNotice\(r\.status\)/.test(tarde), 'y si tapa, se dice en el chat con la salida a mano')
+  assert(/state\.mcpPending = \{ host: r\.host, status: r\.status \}/.test(tarde) && /showMcpPending\(\)/.test(tarde), 'lo que falta se apunta con su host y se enseña si se puede ya')
+  assert(!/showMcpSetup\(/.test(tarde) && !/attachMcpNotice\(/.test(tarde), 'y no se pinta desde aquí: sólo por showMcpPending, que sabe cuándo se puede')
   assert(/if \(r\.enlaceNuevo\) \{/.test(tarde) && /await loadLinkedContext\(r\.saved\)/.test(tarde), 'y un host enlazado descubierto tarde se lee al saberlo')
   assert(
-    /if \(state\.bootToken === testigo && enlazado\) state\.linkedContext = enlazado/.test(tarde),
+    /if \(state\.mcpCheck === vigente && enlazado\) state\.linkedContext = enlazado/.test(tarde),
     'y sólo se escribe si trae algo: esto rellena un enlace que faltaba, no borra el que había'
   )
+  // Cuándo se puede enseñar lo pendiente (revisión adversaria de H14): con la
+  // pestaña en el correo `state.site` es null y `showSetupScreen` reventaba con
+  // él (el TypeError se lo tragaba `mcpResultSoon`: ni pantalla ni aviso, nunca);
+  // y con la pantalla de contexto delante —o el velo— el chat se va a vaciar en
+  // `restoreConversation` y un aviso colgado ahí se perdía. Se guarda y lo
+  // enseñan quienes vuelven a poder: `refreshTab` al volver al sitio y
+  // `restoreConversation` con el chat ya repintado.
+  const pendiente = sinComentarios(JS.slice(JS.indexOf('function showMcpPending'), JS.indexOf('function faltanClaves')))
+  assert(/const pendiente = state\.mcpPending/.test(pendiente) && /if \(!pendiente\) return/.test(pendiente))
+  assert(/\(state\.site\?\.host \?\? state\.lastHost\) !== pendiente\.host/.test(pendiente), 'lo de otro sitio se tira')
+  assert(/if \(!state\.site\) return/.test(pendiente), 'sin sitio delante se espera, no se revienta')
+  assert(/screen-context'\)\.classList\.contains\('hidden'\)/.test(pendiente) && /el\.busy\.classList\.contains\('hidden'\)/.test(pendiente), 'y con el chat a punto de vaciarse, también')
+  assert(pendiente.lastIndexOf('state.mcpPending = null') > pendiente.indexOf("screen-context')"), 'se consume sólo cuando se enseña (lo de otro sitio se tira antes)')
+  assert(/if \(puedeAbrirPantalla\(\)\) showMcpSetup\(pendiente\.status\)/.test(pendiente), 'la pantalla de claves sólo se abre si no tapa nada')
+  assert(/else attachMcpNotice\(pendiente\.status\)/.test(pendiente), 'y si tapa, se dice en el chat con la salida a mano')
+  const cola = sinComentarios(JS.slice(JS.indexOf('async function refreshTab'), JS.indexOf('async function bootForSite')))
+  assert(/await consumePendingIntent\(site\)\s*\n\s*showMcpPending\(\)/.test(cola), 'al volver al sitio se enseña, detrás de la intención de «Analizar»')
+  const restaurar = sinComentarios(JS.slice(JS.indexOf('async function restoreConversation'), JS.indexOf('function markIfRestored')))
+  assert(/state\.restoring = false\s*\n\s*showMcpPending\(\)/.test(restaurar), 'y con el chat repintado, también: un aviso de antes se habría ido')
+  assert(/state\.mcpPending = \{ host: r\.host, status: r\.status \}/.test(espera) && /showMcpPending\(\)/.test(espera), 'la primera vez va por el mismo camino: la pestaña puede irse al correo en esos catorce segundos')
+  assert(!/showMcpSetup\(r\.status\)/.test(espera), 'y tampoco abre la pantalla a ciegas')
+  const cierraBoot = sinComentarios(JS.slice(JS.indexOf('async function bootForSite'), JS.indexOf('const cron = startTiming')))
+  assert(/state\.mcpPending = null/.test(cierraBoot), 'un arranque nuevo tira lo pendiente del anterior: lanza su propia comprobación')
+  const abrir = sinComentarios(JS.slice(JS.indexOf('function showMcpSetup'), JS.indexOf('function attachMcpNotice')))
+  assert(/if \(!state\.site\) \{/.test(abrir) && abrir.indexOf('if (!state.site) {') < abrir.indexOf('showSetupScreen()'), 'la pantalla no se rellena sin sitio: se dice qué hacer')
+  const devuelve = sinComentarios(JS.slice(JS.indexOf('async function checkMcp'), JS.indexOf('function mcpResultSoon')))
+  assert(/return \{ connected: !!status\.connected, status, saved, enlaceNuevo, host \}/.test(devuelve), 'el resultado dice de qué host es')
   const puede = sinComentarios(JS.slice(JS.indexOf('function puedeAbrirPantalla'), JS.indexOf('function showMcpSetup')))
   assert(/if \(state\.streaming\) return false/.test(puede), 'no a mitad de una respuesta')
   assert(/document\.querySelector\('\.screen:not\(\.hidden\)'\)/.test(puede), 'ni encima de otra pantalla')
@@ -3903,6 +3948,11 @@ test('H14 P5: el chat no espera al MCP, y lo que la comprobación decide llega d
   assert(/btn\.addEventListener\('click', \(\) => showMcpSetup\(status\)\)/.test(avisoMcp), 'el botón abre la misma pantalla')
   assert(/announce\(texto\)/.test(avisoMcp), 'y se anuncia al lector de pantalla (A2)')
   assert(!/innerHTML/.test(avisoMcp), 'todo con createElement y textContent')
+  // Y sin `clearEmpty()`: este aviso llega solo, catorce segundos después, y con
+  // algo escrito en el cuadro —o una pantalla abierta encima— se llevaba la
+  // bienvenida entera (sugerencias, chips, «Qué mirar hoy»); va debajo de ella
+  // (revisión adversaria de H14).
+  assert(!/clearEmpty\(\)/.test(avisoMcp), 'el aviso del MCP no se lleva el estado vacío')
 
   // La pantalla de páginas base no dice «no hay MCP» sin saberlo todavía.
   const pantalla = sinComentarios(JS.slice(JS.indexOf('async function paintSourcesMcp'), JS.indexOf('async function showSourcesScreen')))
@@ -3922,7 +3972,14 @@ test('H14 P5: el chat no espera al MCP, y lo que la comprobación decide llega d
   // índice, y quien pregunte antes de que el arranque nuevo lo ponga se lleva el
   // lado prudente (avisar).
   const refresco = sinComentarios(JS.slice(JS.indexOf('async function refreshTab'), JS.indexOf('async function bootForSite')))
-  assert(/state\.mcpCheck = null/.test(refresco) && /state\.mcpConnected = false/.test(refresco), 'el MCP comprobado no viaja al sitio siguiente')
+  // Recortado al bloque del CAMBIO DE HOST, no a `refreshTab` entera: moverlos a
+  // la rama de «fuera de Atlassian» —mirar el correo— también pasaba el pin de
+  // antes, y ahí vaciarlos sería tirar la comprobación del sitio en el que el
+  // panel sigue estando (revisión adversaria de H14).
+  const cambioDeHost = refresco.slice(refresco.indexOf('if (changedHost) {'), refresco.indexOf('state.site = site'))
+  assert(/state\.mcpCheck = null/.test(cambioDeHost) && /state\.mcpConnected = false/.test(cambioDeHost) && /state\.mcpPending = null/.test(cambioDeHost), 'el MCP comprobado no viaja al sitio siguiente')
+  const fueraDeAtlassian = refresco.slice(refresco.indexOf('if (!site) {', refresco.indexOf('paintLocation(site, tab.title)')), refresco.indexOf('if (changedHost) await bootForSite()'))
+  assert(fueraDeAtlassian.length > 100 && !/mcpCheck|mcpConnected|mcpPending/.test(fueraDeAtlassian), 'y mirar el correo no lo toca: el panel sigue siendo de ese sitio')
   const fallback = sinComentarios(JS.slice(JS.indexOf('function currentMcpCheck'), JS.indexOf('async function loadLinkedContext')))
   assert(/return state\.mcpCheck \|\| Promise\.resolve\(state\.mcpConnected\)/.test(fallback), 'sin comprobación en marcha vale lo que el estado sepa')
 

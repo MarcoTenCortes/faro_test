@@ -28,7 +28,7 @@
  */
 
 import { clean } from '../nav/validate.js'
-import { validIssueKey } from '../atlassian/site.js'
+import { validIssueKey, sinInvisibles } from '../atlassian/site.js'
 
 export const ISSUE_FIELD_LIMITS = {
   /** Un nombre de tipo, de estado o de persona es corto; un valor más largo es otra cosa. */
@@ -101,8 +101,18 @@ const QUOTES = /[«»]/g
  */
 const SIN_VALOR = /^(?:ning[uú]n[oa]?|none)$/i
 
+/**
+ * El NEL (U+0085) abre línea y `\s` de JavaScript no lo cubre, así que `clean`
+ * lo dejaba pasar; los invisibles (un U+202E, que escribe al revés) también.
+ * Un valor de campo acaba citado en la línea «Campos leídos de la pantalla» de
+ * un prompt, y una línea de Faro no puede abrir otra ni leerse al revés: la
+ * misma limpieza que `dato()` en prompts.js (revisión adversaria de H14).
+ */
+const NEL = /\u0085/g
+
 function valor(v) {
-  const limpio = clean(typeof v === 'string' ? v.replace(QUOTES, '"') : '', ISSUE_FIELD_LIMITS.valueMax)
+  const texto = typeof v === 'string' ? sinInvisibles(v).replace(NEL, ' ').replace(QUOTES, '"') : ''
+  const limpio = clean(texto, ISSUE_FIELD_LIMITS.valueMax)
   return SIN_VALOR.test(limpio) ? '' : limpio
 }
 

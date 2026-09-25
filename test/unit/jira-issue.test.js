@@ -123,6 +123,28 @@ test('SEGURIDAD: de ese atributo sólo sale texto; ningún marcado sobrevive', (
   }
 })
 
+test('SEGURIDAD: el nombre sale en UNA línea también con el NEL, y un atributo hostil no cuelga la página', () => {
+  // El NEL (U+0085) abre línea y `\s` no lo cubre: como entidad, `&#133;`
+  // acababa dentro del nombre (revisión adversaria de H14). Con escape en el
+  // literal, para que se lea.
+  const NEL = String.fromCharCode(0x85)
+  eq(statusFromTooltip('<span class="jira-issue-status-tooltip-title">In&#133;Progress</span>'), 'In Progress')
+  eq(statusFromTooltip(`<span class="jira-issue-status-tooltip-title">In${NEL}Progress</span>`), 'In Progress')
+  // Y el atributo lo escribe la página: dos mil `<span class="…"` sin cerrar
+  // tardaban 32 s en fallar (cada `<span` se tragaba el resto con `[^>]*` y
+  // retrocedía). Ahora una etiqueta acaba en la siguiente y el atributo se
+  // acota antes de mirarlo: falla en nada.
+  const hostil = '<span class="jira-issue-status-tooltip-title" '.repeat(4000)
+  const t0 = performance.now()
+  eq(statusFromTooltip(hostil), '')
+  assert(performance.now() - t0 < 200, 'un atributo de 180 KB sin cerrar no puede tardar segundos')
+  // El tope no se lleva un nombre que quepa: el tooltip real son dos frases.
+  const largo = '<span class="jira-issue-status-tooltip-title">QA</span>' + '<br>' + 'x'.repeat(100000)
+  eq(statusFromTooltip(largo), 'QA')
+  assert(/const TOOLTIP_MAX = \d+/.test(JS) && /String\(title \?\? ''\)\.slice\(0, TOOLTIP_MAX\)/.test(JS), 'el atributo se acota antes de la regex')
+  assert(!/<span\[\^>\]\*/.test(JS), 'y los atributos de la etiqueta se leen sin cruzar a la siguiente')
+})
+
 // ----------------------------------------------------------- el cableado (DOM)
 
 test('H14: el estado se busca primero donde estaba y después en el botón de transiciones', () => {

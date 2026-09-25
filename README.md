@@ -457,7 +457,8 @@ Dieciocho decisiones que sostienen el diseño:
      «comprobando MCP…» mientras tanto y lo que la comprobación decida llega
      después: si el MCP no está, la pantalla de claves se abre sola cuando no
      tapa nada, y si estabas escribiendo o esperando una respuesta se te dice en
-     el chat con un botón para ir a ella cuando quieras. La única vez que se
+     el chat con un botón para ir a ella cuando quieras (y si te habías ido a
+     otra pestaña, al volver al sitio). La única vez que se
      espera es la primera de un sitio nuevo, donde no hay conversación que
      pintar y sin MCP no se puede hacer nada. Lo que tardó se sigue apuntando en
      el Registro («MCP comprobado»).
@@ -603,7 +604,7 @@ actividad** (30 días), las **páginas base elegidas** con su alcance, las
 ## Comprobaciones
 
 ```bash
-npm run check              # sintaxis + orden + manifest + 1315 pruebas unitarias + docs
+npm run check              # sintaxis + orden + manifest + 1317 pruebas unitarias + docs
 npm run check:docs         # sólo el paso docs: número de pruebas, títulos del registro, mensajes y ficheros del mapa
 npm run test:integration   # contra un opencode real que arranca la propia prueba
 npm run harness            # banco de pruebas visual en http://127.0.0.1:5175

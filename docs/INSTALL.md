@@ -868,10 +868,12 @@ corto y un detalle. Todos los títulos, por dónde salen:
   (desde Jira, leer lo del Confluence enlazado —contexto,
   índice y prefijo del wiki, también en una sola lectura—, que es otro sitio y
   no cabe en lo del propio) y «restaurar» (repintar la conversación). Hay una
-  quinta fase, «MCP» (las dos consultas a opencode: `GET /mcp` y `GET /config`),
-  pero **sólo la primera vez que usas un sitio**, que es la única en la que el
-  panel las espera; en un sitio ya configurado esa comprobación va en segundo
-  plano y lo que tarda se apunta aparte, en «MCP comprobado».
+  quinta fase, «MCP» —la comprobación del MCP entera: las dos consultas a
+  opencode, `GET /mcp` y `GET /config`, y, si Faro reconoce el MCP y lo apunta,
+  guardar eso—, pero **sólo la primera vez que usas un sitio**, que es la única
+  en la que el panel la espera; en un sitio ya configurado esa comprobación va
+  en segundo plano. Lo que tardan SÓLO las dos consultas se apunta aparte y
+  siempre, en «MCP comprobado».
   Sale también cuando el arranque acaba en la pantalla de claves o en la de
   contexto, sin las fases que no llegó a hacer. Si opencode no contesta NO sale
   nada (sería un arranque verde que no hubo) y la fila «tiempos (arranque)» del
@@ -911,9 +913,11 @@ corto y un detalle. Todos los títulos, por dónde salen:
   cuando carga sus servidores MCP): mientras dura, la cabecera dice
   «comprobando MCP…», y si al terminar no hay MCP sale la pantalla de claves —o,
   si estabas escribiendo o esperando una respuesta, un aviso en el chat con el
-  botón **Cambiar las claves**, para no taparte lo que estabas haciendo. Un
-  sitio que todavía no has configurado sí la espera: ahí la pantalla de claves
-  es lo primero que hay que ver.
+  botón **Cambiar las claves**, para no taparte lo que estabas haciendo—. Si en
+  esos segundos te habías ido a otra pestaña, sale cuando vuelvas al sitio; y si
+  tenías delante la pantalla de contexto, al salir de ella. Un sitio que todavía
+  no has configurado sí la espera: ahí la pantalla de claves es lo primero que
+  hay que ver.
 - «MCP verificado» — los tokens se comprobaron, con una línea por producto
   («Jira: … · Confluence: …»).
 - «Sitio enlazado» — el otro host (Jira o Confluence) comparte el MCP de

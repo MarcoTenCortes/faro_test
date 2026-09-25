@@ -965,6 +965,26 @@ test('H14: parseSpaceSearch da cada resultado con su cadena entera, de la raíz 
     { spaceKey: 'a/b' }
   )
   eq(clavePicante.groups[0].map((p) => p.spaceKey), [null, null])
+  // Y la que trae el propio RESULTADO, cuando no se pidió ninguna, pasa por la
+  // misma validadora: con `cleanTitle` se copiaba `OTRO"KEY` tal cual, y la
+  // prueba de arriba sólo cubría el caso sin `space` (revisión adversaria de H14).
+  const delResultado = (key) =>
+    parseSpaceSearch({ results: [{ id: '6', type: 'page', title: 'x', space: { key } }] }, { spaceKey: '' }).groups[0][0].spaceKey
+  eq(delResultado('OTRO"KEY'), null)
+  eq(delResultado('a b'), null)
+  eq(delResultado('ENG'), 'ENG', 'una clave con forma sí se copia')
+
+  // De una cadena más larga que `MAX_CHAIN` se conservan los antepasados más
+  // CERCANOS: el padre de cada página es el de verdad. Tomados por el extremo de
+  // la raíz, una página a más de 50 niveles colgaría de un antepasado lejano, y
+  // ninguna prueba lo miraba (revisión adversaria de H14, por mutación).
+  const larga = parseSpaceSearch(
+    { results: [{ id: '999', type: 'page', title: 'Honda', ancestors: Array.from({ length: 80 }, (_, i) => ({ id: String(100 + i) })) }] },
+    { spaceKey: 'SIMPL' }
+  )
+  eq(larga.groups[0].length, 51, 'los 50 antepasados que se conservan y la página')
+  eq(larga.groups[0][0].id, '130', 'el primero que se conserva es el número 30 de 80, no el 0')
+  eq(larga.groups[0][50].parentId, '179', 'y el padre de la página es el último antepasado, el de verdad')
 
   // Lo que no tiene la forma esperada no se inventa.
   eq(parseSpaceSearch({ results: [{ id: 'x' }, null] }, {}).groups, [])
@@ -1041,6 +1061,27 @@ test('H14: si la instancia no sabe hacer esa búsqueda, se lee la lista de siemp
   eq(sin.ok, false)
   eq(sin.status, 401)
   eq(c2.length, 2, 'no se reintenta por el otro camino')
+
+  // Y SÓLO por forma: un 5xx, un 404, sin red o sin respuesta devuelven el
+  // fallo. Degradar ahí daba `ok: true` con las páginas MÁS VIEJAS por un 503
+  // pasajero —justo lo que F8 vino a quitar— y el índice exacto acababa
+  // sustituido por esa rebanada (revisión adversaria de H14).
+  for (const fallo of [500, 503, 404, new TypeError('Failed to fetch')]) {
+    const { fn: roto, calls: c3 } = fakeFetch({ '/rest/api/content/search': fallo, '/rest/api/content?spaceKey=SIMPL': PORTADA })
+    const r3 = await fetchSpacePages(roto, DC, 'SIMPL', { limit: 2 })
+    eq(r3.ok, false, `con ${fallo instanceof Error ? 'la red caída' : fallo} no se degrada`)
+    eq(c3.length, 2, 'la portada y la búsqueda que falló: la lista no se pide')
+  }
+  // Un 200 que no tiene la forma esperada sí es «por forma», como el 400.
+  let m = 0
+  const { fn: sinForma, calls: c4 } = fakeFetch({
+    '/rest/api/content/search': '{"esto":"no es una busqueda"}',
+    '/rest/api/content?spaceKey=SIMPL': () => (++m === 1 ? PORTADA : m === 2 ? ESPACIO_1 : ESPACIO_2),
+  })
+  const r4 = await fetchSpacePages(sinForma, DC, 'SIMPL', { limit: 2 })
+  eq(r4.ok, true)
+  eq(r4.via, 'lista')
+  eq(c4.length, 4)
 })
 
 test('H7: el árbol para en el tope de páginas o en el de peticiones, y lo dice', async () => {

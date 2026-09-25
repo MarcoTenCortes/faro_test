@@ -256,13 +256,17 @@ test('H14: el catálogo cubre todos los valores que usa la fixture, con su id', 
       )
     }
   }
-  // Y al menos un tipo y un estado TRADUCIDOS: sin ellos, el tramo del selfcheck
-  // que prueba el 400 no probaría nada.
-  for (const campo of ['issuetype', 'status']) {
+  // Y al menos un tipo, un estado y una prioridad TRADUCIDOS: sin ellos, el
+  // tramo del selfcheck que prueba el 400 no probaría nada. Las prioridades
+  // llevaban el nombre en español como nombre de JQL, y la Jira de mentira
+  // aceptaba `priority = "Crítica"`, que en el Jira real es un 400 (revisión
+  // adversaria de H14).
+  for (const campo of ['issuetype', 'status', 'priority']) {
     assert(catalogo[campo].some((e) => e.display && e.display !== e.name), `${campo} necesita un valor traducido`)
   }
   eq(fieldValue(catalogo, 'issuetype', 'Task'), { id: '10002', name: 'Tarea' }, 'la API devuelve el nombre traducido')
   eq(fieldValue(catalogo, 'status', 'In Review'), { id: '10000', name: 'In Review' }, 'y el de siempre si no se traduce')
+  eq(fieldValue(catalogo, 'priority', 'Critical'), { id: '1', name: 'Crítica' }, 'la prioridad también viene traducida')
   eq(fieldValue(catalogo, 'status', 'No existe'), { id: '', name: 'No existe' }, 'lo que no está en el catálogo pasa sin id')
   eq(fieldCatalog({}), { issuetype: [], status: [], priority: [] }, 'sin catálogo, listas vacías y nada más')
 })
@@ -287,6 +291,9 @@ test('H14: la API falsa devuelve el nombre traducido con su id, y JQL sólo acep
   eq(rechazada.status, 400)
   eq(rechazada.body.errorMessages, ["El valor 'Tarea' no existe para el campo 'issuetype'."])
   eq(searchResponse(FIXTURE, { jql: 'status = "En progreso"', maxResults: 5 }).body.errorMessages, ["El valor 'En progreso' no existe para el campo 'status'."])
+  // Y la prioridad traducida igual: en el Jira real `priority = "Crítica"` es un
+  // 400 (revisión adversaria de H14: la fixture la aceptaba).
+  eq(searchResponse(FIXTURE, { jql: 'priority = "Crítica"', maxResults: 5 }).body.errorMessages, ["El valor 'Crítica' no existe para el campo 'priority'."])
   eq(searchResponse(FIXTURE, { jql: 'project = ENG AND status = Listo' }).status, 400, 'también sin comillas')
 
   // Por id, lo mismo que por el nombre de JQL, exactamente.
@@ -297,7 +304,19 @@ test('H14: la API falsa devuelve el nombre traducido con su id, y JQL sólo acep
     claves('project = ENG AND status = 3 ORDER BY key ASC', CON_CATALOGO),
     claves('project = ENG AND status = "In Progress" ORDER BY key ASC', CON_CATALOGO)
   )
-  eq(claves('priority = 1 ORDER BY key ASC', CON_CATALOGO), claves('priority = "Crítica" ORDER BY key ASC', CON_CATALOGO))
+  eq(claves('priority = 1 ORDER BY key ASC', CON_CATALOGO), claves('priority = "Critical" ORDER BY key ASC', CON_CATALOGO))
+  assert(claves('priority = 1 ORDER BY key ASC', CON_CATALOGO).length > 0, 'y hay incidencias críticas en la fixture')
+  // Y `ORDER BY priority` ordena por el nombre de JQL de la fixture, de la más
+  // alta a la más baja: con la lista de prioridades todavía en español ninguna
+  // casaba y el orden era el de llegada (mutación que sobrevivió en la revisión
+  // adversaria de H14).
+  const RANGO = { Critical: 3, High: 2, Medium: 1, Low: 0 }
+  const porPrioridad = runJql(FIXTURE.issues, 'project = ENG ORDER BY priority DESC', { user: 'marco' }).issues.map((i) => i.priority)
+  assert(new Set(porPrioridad).size >= 3, 'la fixture tiene al menos tres prioridades distintas en ENG')
+  for (let i = 1; i < porPrioridad.length; i++) {
+    assert(RANGO[porPrioridad[i - 1]] >= RANGO[porPrioridad[i]], `«${porPrioridad[i - 1]}» no puede ir detrás de «${porPrioridad[i]}»`)
+  }
+  eq(porPrioridad[0], 'Critical', 'la más alta primero')
   // Un valor que no existe en ninguna parte sigue dando lista vacía, como hasta
   // ahora: esta Jira de mentira no sabe qué valores existen «en general».
   eq(claves('project = ENG AND status = "Ni existe"', CON_CATALOGO), [])

@@ -125,10 +125,42 @@ test('H14 real: un enlace a una ruta propia de Jira del mismo sitio no es una p�
   ]) {
     eq(isOwnJiraRoute(propia, BASE), true, propia)
   }
-  // Y con ruta de contexto, lo mismo: la deduce `jiraContextPath`, no una lista
-  // nueva escrita aquí.
+  // Y con ruta de contexto, lo mismo: la deduce `jiraContextPath` de la PESTAÑA,
+  // no una lista nueva escrita aquí.
   eq(isOwnJiraRoute('https://jira.example.test/jira/browse/ENG-42', 'https://jira.example.test/jira/browse/ENG-7'), true)
   eq(isOwnJiraRoute('https://jira.example.test/jira/secure/Dashboard.jspa', 'https://jira.example.test/jira/browse/ENG-7'), true)
+  // Un enlace que no cuelga del contexto de la pestaña no es una ruta propia de
+  // ESTE Jira: en el mismo origen puede vivir otra aplicación.
+  eq(isOwnJiraRoute('https://jira.example.test/browse/ENG-42', 'https://jira.example.test/jira/browse/ENG-7'), false)
+  // Con un contexto de la misma longitud que el de la pestaña (`/wiki` frente a
+  // `/jira`): sin exigir que el enlace cuelgue del contexto, recortar cinco
+  // caracteres dejaba `/browse/ENG-42` y pasaba por ruta propia (mutación que
+  // sobrevivió en la revisión adversaria de H14).
+  eq(isOwnJiraRoute('https://jira.example.test/wiki/browse/ENG-42', 'https://jira.example.test/jira/browse/ENG-7'), false)
+  eq(isOwnJiraRoute('https://jira.example.test/jira/browse/ENG-42', 'https://jira.example.test/wiki/spaces/ENG/overview'), false, 'y al revés: desde una pestaña sin contexto de Jira, un /jira/browse/ no es una ruta propia de ésta')
+  // SEGURIDAD DE PRECISIÓN (revisión adversaria de H14): la ruta de contexto se
+  // lee de la pestaña y NUNCA del enlace. Leída del enlace, en un Confluence
+  // servido en la raíz un espacio llamado PROJECTS, ISSUES, REST, SECURE o BROWSE
+  // daba «contexto» `/display` o `/spaces` y lo que quedaba casaba con las
+  // rutas de Jira —que no distinguen mayúsculas—, así que esas páginas se caían
+  // antes del tope y no llegaban a sugerirse: una regresión frente a H13.
+  const CONFLUENCE = 'https://confluence.example.test/spaces/SIMPL/pages/1/Portada'
+  for (const pagina of [
+    '/display/PROJECTS/Guia+de+proyectos',
+    '/spaces/PROJECTS/pages/123/Guia',
+    '/display/ISSUES/Registro',
+    '/spaces/REST/pages/9/API+Rest',
+    '/display/SECURE/Politica',
+    '/display/BROWSE/Catalogo',
+    '/spaces/PLUGINS/overview',
+    'https://confluence.example.test/display/SIMPL/Title',
+  ]) {
+    eq(isOwnJiraRoute(pagina, CONFLUENCE), false, pagina)
+  }
+  // Lo que sí se cae en Confluence: lo que tampoco es una página.
+  for (const noPagina of ['/rest/api/content/1', '/plugins/servlet/mobile', 'https://confluence.example.test/browse/ENG-7']) {
+    eq(isOwnJiraRoute(noPagina, CONFLUENCE), true, noPagina)
+  }
   // Lo que sí puede ser una página se queda: las de Confluence en cualquiera de
   // sus formas, y lo que no es del sitio.
   for (const pagina of [

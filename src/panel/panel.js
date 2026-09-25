@@ -221,6 +221,13 @@ const state = {
   // al terminar el turno, porque mientras está en vuelo `mcpConnected` todavía
   // dice «false» y el aviso «Páginas base sin leer» saldría mintiendo.
   mcpCheck: null,
+  // Lo que la comprobación decidió y todavía no se ha podido ENSEÑAR: {host,
+  // status} o null (revisión adversaria de H14). Con la pestaña en el correo no
+  // hay pantalla de claves que abrir (`showSetupScreen` lee `state.site`), y con
+  // la pantalla de contexto delante el chat se va a vaciar (`restoreConversation`)
+  // y un aviso colgado ahí se perdería: se guarda y lo enseña `showMcpPending`
+  // cuando el panel vuelve al sitio o cuando el chat se repinta.
+  mcpPending: null,
   // Desde Jira, el contexto del Confluence enlazado: {host, contextMd, index,
   // wikiPrefix} o null. El prefijo es el observado al visitarlo, si se
   // visitó: hace falta para preguntarle a su API desde aquí.
@@ -579,6 +586,7 @@ async function refreshTab() {
     // y quien pregunte por él se lleva el lado prudente.
     state.mcpConnected = false
     state.mcpCheck = null
+    state.mcpPending = null
     // Y lo que alimenta las páginas base sugeridas, que también es de ESTE
     // host: el historial de análisis (lo recarga `bootForSite` con el paquete
     // del sitio nuevo), las referencias de su contexto y lo que la pestaña
@@ -652,6 +660,10 @@ async function refreshTab() {
   // a propósito: `bootForSite` fija la Skill guardada del sitio, y hacerlo
   // antes sería que la pisara justo la que el usuario acaba de pedir.
   await consumePendingIntent(site)
+  // Y lo que la comprobación del MCP decidió mientras la pestaña estaba fuera:
+  // ahora hay sitio, así que se puede enseñar. Detrás de la intención: si ésta
+  // dejó una pregunta en el cuadro, la pantalla no se abre sola y se avisa.
+  showMcpPending()
 }
 
 /** Arranque completo para un sitio: servidor, claves, contexto. */
@@ -666,6 +678,9 @@ async function bootForSite() {
   // Si había un arranque pendiente (el MCP cargó con la pestaña fuera de
   // Atlassian), éste lo cumple: no puede volver a dispararse.
   state.bootPending = ''
+  // Y un resultado del MCP sin enseñar es del arranque anterior: éste lanza su
+  // propia comprobación y lo que diga ésa es lo que vale.
+  state.mcpPending = null
 
   // Cuánto cuesta abrir el panel, fase por fase. Hasta H3 nadie lo veía: el
   // `GET /mcp` del paso 3 tarda entre 2,8 y 14,5 s la primera vez tras arrancar
@@ -795,13 +810,19 @@ async function bootForSite() {
   if (primeraVez) {
     const r = await comprobacion
     if (state.bootToken !== testigo) return
-    // La ÚNICA salida que espera al MCP, así que es la única con esa fase: la
-    // comprobación en segundo plano mide lo suyo con su propio reloj y lo
-    // registra aparte («MCP comprobado»).
+    // La ÚNICA salida que espera al MCP, así que es la única con esa fase. Aquí
+    // la fase cubre la comprobación ENTERA —las dos peticiones y, si el MCP se
+    // adopta, escribir los registros—, porque es lo que este arranque esperó;
+    // lo que tardaron sólo las peticiones lo dice «MCP comprobado», que la
+    // comprobación registra con su propio reloj.
     cron.mark('MCP')
     saved = r.saved
     if (faltanClaves(r)) {
-      showMcpSetup(r.status)
+      // Se apunta y se enseña por el mismo camino que el resultado tardío: en
+      // los catorce segundos la pestaña puede haberse ido al correo, y entonces
+      // no hay pantalla que abrir hasta que vuelva (revisión adversaria de H14).
+      state.mcpPending = { host: r.host, status: r.status }
+      showMcpPending()
       medir()
       return
     }
@@ -810,7 +831,7 @@ async function bootForSite() {
     // «ocupado» y el hueco del título de la pestaña con el motivo, hasta que
     // `onMcpResult` lo devuelva.
     setStatus('busy', COMPROBANDO_MCP)
-    mcpResultSoon(comprobacion, testigo)
+    mcpResultSoon(comprobacion, state.mcpCheck)
   }
 
   // 4. Desde Jira, el contexto del Confluence enlazado: es de OTRO host, así
@@ -1054,7 +1075,9 @@ async function checkMcp(client, testigo, previo) {
   if (status.connected) log.ok('MCP comprobado', linea)
   else log.warn('MCP comprobado', linea)
 
-  return { connected: !!status.connected, status, saved, enlaceNuevo }
+  // Con el host: quien lo enseñe tarde tiene que saber DE QUÉ sitio habla, y
+  // `state.site` puede ser null para entonces (la pestaña en el correo).
+  return { connected: !!status.connected, status, saved, enlaceNuevo, host }
 }
 
 /**
@@ -1063,9 +1086,9 @@ async function checkMcp(client, testigo, previo) {
  * Se lanza sin `await`, como `refreshProfileSoon` y `loadTodaySoon`: el chat ya
  * está puesto y un fallo aquí no puede tumbarlo.
  */
-function mcpResultSoon(comprobacion, testigo) {
+function mcpResultSoon(comprobacion, vigente) {
   comprobacion
-    .then((r) => onMcpResult(r, testigo))
+    .then((r) => onMcpResult(r, vigente))
     .catch((err) => log.warn('MCP comprobado', 'no se pudo terminar: ' + String(err?.message || err)))
 }
 
@@ -1081,8 +1104,15 @@ function mcpResultSoon(comprobacion, testigo) {
  * sería una pantalla que aparece sola minutos después, mientras se lee la
  * respuesta, y al llegar tendría que volver a preguntarse justo esto mismo.
  */
-async function onMcpResult(r, testigo) {
-  if (state.bootToken !== testigo) return
+async function onMcpResult(r, vigente) {
+  // Lo que manda aquí no es el testigo del arranque sino que ESTA comprobación
+  // siga siendo la del panel: `state.mcpCheck` lo pone cada arranque nuevo y lo
+  // vacía el cambio de host, que es justo cuando un resultado viejo no debe
+  // pintar nada. Con el testigo, «Omitir» y «Subir un contexto» —que lo cambian
+  // para apagar la pantalla de contexto sin rearrancar— dejaban huérfana la
+  // comprobación en vuelo: ni pantalla, ni aviso, y la cabecera clavada en
+  // «comprobando MCP…» (revisión adversaria de H14).
+  if (state.mcpCheck !== vigente) return
   // La cabecera devuelve el hueco al título de la pestaña. Sólo si ese texto
   // sigue siendo el nuestro: con un turno en vuelo ahí manda «pensando…», y
   // quien lo puso es quien lo quita.
@@ -1090,8 +1120,10 @@ async function onMcpResult(r, testigo) {
     setStatus(state.client?.connected ? 'ok' : 'bad', state.client?.connected ? 'conectado' : 'sin conexión')
   }
   if (faltanClaves(r)) {
-    if (puedeAbrirPantalla()) showMcpSetup(r.status)
-    else attachMcpNotice(r.status)
+    // Se apunta y se enseña si se puede YA; si no —la pestaña en el correo, o
+    // la pantalla de contexto delante—, lo enseña quien vuelva a poder.
+    state.mcpPending = { host: r.host, status: r.status }
+    showMcpPending()
   }
   // Y si la adopción ha traído un host enlazado que no estaba cuando se leyó el
   // contexto, se lee ahora: desde un Jira, el CONTEXT.md del Confluence enlazado
@@ -1103,8 +1135,34 @@ async function onMcpResult(r, testigo) {
     // sabía, y `loadLinkedContext` devuelve null con la pestaña fuera de
     // Atlassian (mira `state.site`), así que asignarlo a secas podría borrar el
     // contexto que el arranque sí había cargado.
-    if (state.bootToken === testigo && enlazado) state.linkedContext = enlazado
+    if (state.mcpCheck === vigente && enlazado) state.linkedContext = enlazado
   }
+}
+
+/**
+ * Enseña lo que la comprobación del MCP dejó pendiente, si ya se puede.
+ *
+ * Dos cosas lo dejan esperando (revisión adversaria de H14): que el panel no
+ * tenga el sitio delante —con la pestaña en el correo `state.site` es null y
+ * `showSetupScreen` reventaba con él— y que el chat esté a punto de vaciarse
+ * —la pantalla de contexto delante, o el velo de «Trabajando…»: los dos acaban
+ * en `restoreConversation`, que se lleva cualquier aviso colgado del chat—. Lo
+ * llaman `onMcpResult`, el final de `refreshTab` (al volver al sitio) y el
+ * final de `restoreConversation` (con el chat ya repintado). Lo que era de OTRO
+ * sitio se tira: `refreshTab` ya lo vacía al cambiar de host.
+ */
+function showMcpPending() {
+  const pendiente = state.mcpPending
+  if (!pendiente) return
+  if ((state.site?.host ?? state.lastHost) !== pendiente.host) {
+    state.mcpPending = null
+    return
+  }
+  if (!state.site) return
+  if (!$('screen-context').classList.contains('hidden') || !el.busy.classList.contains('hidden')) return
+  state.mcpPending = null
+  if (puedeAbrirPantalla()) showMcpSetup(pendiente.status)
+  else attachMcpNotice(pendiente.status)
 }
 
 /** ¿Hay que pedirle las claves a este sitio? El MCP no está y no se saltaron. */
@@ -1133,6 +1191,15 @@ function puedeAbrirPantalla() {
  * acabar diciendo cosas distintas.
  */
 function showMcpSetup(status) {
+  // Sin el sitio delante no hay pantalla que rellenar: `showSetupScreen` lee
+  // `state.site`, que con la pestaña en el correo es null, y reventaba con un
+  // TypeError que se tragaba `mcpResultSoon` (revisión adversaria de H14). Desde
+  // el botón del aviso se dice qué hacer; el resultado tardío ni llega aquí, se
+  // queda en `state.mcpPending` hasta que `refreshTab` vuelva al sitio.
+  if (!state.site) {
+    showNotice('Vuelve a una pestaña del sitio para cambiar sus claves.', true, { force: true })
+    return
+  }
   hideScreens()
   showSetupScreen()
   if (status.present) {
@@ -1162,7 +1229,12 @@ function attachMcpNotice(status) {
   btn.addEventListener('click', () => showMcpSetup(status))
   row.appendChild(btn)
   wrap.appendChild(row)
-  clearEmpty()
+  // SIN `clearEmpty()`, a diferencia de los demás avisos: éste llega solo,
+  // catorce segundos después de abrir el panel, y con el chat vacío se llevaba
+  // la bienvenida entera —las sugerencias, los chips y «Qué mirar hoy»— en
+  // cuanto hubiera algo escrito en el cuadro o una pantalla abierta encima
+  // (revisión adversaria de H14). Va debajo del estado vacío, y la primera
+  // pregunta se lo lleva a él como siempre y deja el aviso.
   el.chat.appendChild(wrap)
   announce(texto)
   scrollChat()
@@ -1758,6 +1830,10 @@ async function restoreConversation(testigo = state.bootToken, { all = false } = 
 
   if (!el.chat.children.length) showWelcome()
   state.restoring = false
+  // Con el chat ya repintado, lo que el MCP dejó pendiente mientras la pantalla
+  // de contexto (o el velo) lo tapaba: un aviso colgado antes de esto se habría
+  // ido con el `textContent = ''` de arriba.
+  showMcpPending()
   if (all) {
     // Se ha pedido ver lo ANTERIOR: irse al fondo devolvería al usuario justo a
     // donde ya estaba, con lo que acaba de traer fuera de la pantalla. La vista

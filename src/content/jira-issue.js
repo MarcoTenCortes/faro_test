@@ -224,10 +224,14 @@ const BROWSE_KEY = /\/browse\/([^/?#]+)/
 /** Lo que escribió un usuario: la descripción, los comentarios y la actividad. Un campo nunca sale de ahí. */
 const USER_CONTENT = '#description-val, .user-content-block, .action-body, .activity-comment, #issue_actions_container'
 
-/** Una cadena en una línea, sin espacios de sobra. */
+/**
+ * Una cadena en una línea, sin espacios de sobra. El NEL (U+0085) también abre
+ * línea y `\s` no lo cubre; y el panel vuelve a limpiar cada valor al
+ * normalizarlo (`valor` en issue-profile.js), que es la barrera que cuenta.
+ */
 function linea(s) {
   return String(s ?? '')
-    .replace(/\s+/g, ' ')
+    .replace(/[\s\u0085]+/g, ' ')
     .trim()
 }
 
@@ -269,8 +273,18 @@ const STATUS_BUTTON = '#opsbar-transitions_more'
  */
 const STATUS_CATEGORY_CLASS = /\b(?:opsbar-transitions__status-category|jira-issue-status-lozenge)[_-](new|indeterminate|done)\b/
 
-/** El nombre del estado dentro del `title` del botón, que es HTML. */
-const TOOLTIP_TITLE = /<span[^>]*\bclass\s*=\s*["'][^"']*\bjira-issue-status-tooltip-title\b[^"']*["'][^>]*>([\s\S]*?)<\/span>/i
+/**
+ * El nombre del estado dentro del `title` del botón, que es HTML.
+ *
+ * Los atributos de la etiqueta se leen con `[^<>]*` y no con `[^>]*`: con lo
+ * segundo, un atributo de dos mil `<span class="…"` sin cerrar tardaba 32 s en
+ * fallar (cada `<span` se tragaba el resto y retrocedía), y ese atributo lo
+ * escribe la página. Con `<` fuera, cada etiqueta acaba en la siguiente y el
+ * fallo es lineal. Y el atributo se acota antes (`TOOLTIP_MAX`): un tooltip es
+ * el nombre y su descripción, no un documento.
+ */
+const TOOLTIP_TITLE = /<span[^<>]*\bclass\s*=\s*["'][^"'<>]*\bjira-issue-status-tooltip-title\b[^"'<>]*["'][^<>]*>([\s\S]*?)<\/span>/i
+const TOOLTIP_MAX = 4000
 
 /**
  * Un elemento cuyo contenido NO es texto que nadie lea. Se va con su contenido
@@ -323,7 +337,7 @@ function sinEntidades(s) {
  * como cualquier otro valor leído de la pantalla.
  */
 export function statusFromTooltip(title) {
-  const m = TOOLTIP_TITLE.exec(String(title ?? ''))
+  const m = TOOLTIP_TITLE.exec(String(title ?? '').slice(0, TOOLTIP_MAX))
   return m ? linea(sinEntidades(m[1].replace(NO_ES_TEXTO, ' ').replace(/<[^>]*>/g, ' '))) : ''
 }
 

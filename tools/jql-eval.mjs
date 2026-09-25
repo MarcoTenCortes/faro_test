@@ -58,7 +58,13 @@ const CAMPOS_ORDEN = new Set(['updated', 'lastviewed', 'created', 'key', 'priori
 /** Funciones que existen en esta Jira de mentira. */
 const FUNCIONES = new Set(['currentuser', 'issuehistory', 'watchedissues', 'linkedissues'])
 
-const PRIORIDADES = ['Baja', 'Media', 'Alta', 'Crítica']
+/**
+ * El orden de `ORDER BY priority`, por el nombre de JQL: en la fixture las
+ * prioridades llevan su nombre en inglés y el traducido como `display`, como
+ * en el Jira real (`priority = "Crítica"` es un 400 allí; revisión adversaria
+ * de H14).
+ */
+const PRIORIDADES = ['Low', 'Medium', 'High', 'Critical']
 
 /** El error tal como lo devuelve Jira: una lista de mensajes en `errorMessages`. */
 function error(mensaje) {

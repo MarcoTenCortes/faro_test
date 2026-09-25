@@ -373,7 +373,9 @@ export function extractEntities(parts, site, { index = null, allowedHosts = [] }
 
   for (const m of blob.matchAll(PAGE_URL)) {
     const [, spaceKey, id, slug] = m
-    const title = slug ? decodeSlug(slug) : `Página ${id}`
+    // Un slug que no se deja decodificar no es un título (`decodeSlug` da ''):
+    // queda el marcador, que es la señal de «lee el título por su id».
+    const title = (slug && decodeSlug(slug)) || `Página ${id}`
     const prev = pages.get(id)
     // Un título de verdad gana a un marcador de posición.
     if (!prev || (prev.title.startsWith('Página ') && !title.startsWith('Página '))) {
@@ -508,8 +510,12 @@ function safeJson(v) {
 
 /**
  * El último segmento de la URL de una página, convertido en su título: los «+»
- * son espacios y lo codificado se decodifica (un «%» mal escrito no lanza,
- * devuelve el texto tal cual).
+ * son espacios y lo codificado se decodifica. Los «+» se cambian ANTES de
+ * decodificar: al revés, un «+» del propio título («C%2B%2B+Guide») salía como
+ * espacio y la página se llamaba «C Guide» (revisión adversaria de H14). Un
+ * «%» mal escrito no lanza: da '', que es «no hay título», y quien lo llama
+ * pone el marcador «Página N» —devolver el texto crudo era llamar a una página
+ * «%E0%A4%A»—.
  *
  * Se exporta desde H10 porque `source-suggest.js` lo necesita para lo mismo:
  * un enlace `/display/ESPACIO/Runbook+de+guardia` no lleva id, y la única
@@ -519,9 +525,9 @@ function safeJson(v) {
  */
 export function decodeSlug(slug) {
   try {
-    return decodeURIComponent(slug).replace(/\+/g, ' ').trim() || slug
+    return decodeURIComponent(String(slug ?? '').replace(/\+/g, ' ')).trim()
   } catch {
-    return slug.replace(/\+/g, ' ')
+    return ''
   }
 }
 

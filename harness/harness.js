@@ -315,7 +315,7 @@ const PAGES = {
               </div>
               <div id="linkingmodule" class="module toggle-wrap">
                 <div class="mod-header"><h3 class="toggle-header">Enlace a Incidencias</h3></div>
-                <div class="mod-content"><dl class="links-list"><dt>relates to</dt><dd><div class="link-content"><a href="/browse/ENG-8">ENG-8</a> Revisar permisos del exportador</div></dd></dl><dl class="links-list"><dt>Wiki Page</dt><dd class="remote-link"><div class="link-content"><a class="link-title" href="/display/ENG/Runbook+de+guardia">Runbook de guardia</a></div><div class="delete-link"><a href="/secure/DeleteRemoteIssueLink!default.jspa?remoteIssueLinkId=10500&amp;id=1007" title="Borrar este enlace"><span class="aui-icon">Borrar este enlace</span></a></div></dd></dl></div>
+                <div class="mod-content"><dl class="links-list"><dt>relates to</dt><dd><div class="link-content"><a href="/browse/ENG-8">ENG-8</a> Revisar permisos del exportador</div></dd></dl><dl class="links-list"><dt>mentioned in</dt><dd id="remote-10501" class="remote-link"><div class="link-content"><p><img alt="[Confluence] Page" src="data:image/gif;base64,R0lGODlhAQABAAAAACw="> <span title="Runbook de guardia"><a class="link-title" target="_blank" href="/wiki/pages/viewpage.action?pageId=301">Runbook de guardia</a></span></p></div><div class="delete-link" id="delete_remote-10501"><a id="delete-link_remote-10501" href="/secure/DeleteRemoteIssueLink!default.jspa?remoteIssueLinkId=10501&amp;id=1007" title="Borrar este enlace"><span class="aui-icon">Borrar este enlace</span></a></div></dd></dl><dl class="links-list"><dt>Wiki Page</dt><dd class="remote-link"><div class="link-content"><a class="link-title" href="/display/ENG/Runbook+de+guardia">Runbook de guardia</a></div><div class="delete-link"><a href="/secure/DeleteRemoteIssueLink!default.jspa?remoteIssueLinkId=10500&amp;id=1007" title="Borrar este enlace"><span class="aui-icon">Borrar este enlace</span></a></div></dd></dl></div>
               </div>
               <div id="activitymodule" class="module toggle-wrap">
                 <div class="mod-header"><h3 class="toggle-header">Actividad</h3></div>
@@ -3402,8 +3402,12 @@ const actions = {
     // La URL entera si es de fuera, y la ruta si es de aquí: así se lee.
     const corto53 = (l) => l.href.replace(location.origin, '') + ' ' + l.where
     const mapa53 = enlaces53.map(corto53).sort().join(' | ')
+    // El módulo de enlaces trae el enlace remoto con la forma del Jira real
+    // (`dt` «mentioned in» + `a.link-title` con `pageId` y el título de verdad)
+    // y, detrás, el `/display/` sin id de H10: dos enlaces a la misma página.
     const esperado53 = [
       '/display/ENG/Runbook+de+guardia enlaces',
+      '/wiki/pages/viewpage.action?pageId=301 enlaces',
       '/wiki/spaces/ENG/pages/100/Arquitectura comentario',
       '/wiki/spaces/ENG/pages/200/ADR-014 comentario',
       '/wiki/spaces/ENG/pages/200/ADR-014 descripcion',
@@ -3429,16 +3433,19 @@ const actions = {
     // `/rest/`, `/secure/`— y los enlaces de los COMENTARIOS, que van al final
     // del documento, no llegaban a leerse. Los de la incidencia se cuentan del
     // DOM, no de una lista escrita a mano.
+    // El tope es 4 porque delante de los comentarios van tres enlaces (uno en
+    // la descripción y dos en el módulo de enlaces, que son la misma página):
+    // lo que se comprueba es que los internos de Jira NO se lo comen.
     const propias53 = [...document.querySelectorAll('#issue-content a[href]')].filter((a) => isOwnJiraRoute(a.getAttribute('href'), location.href))
-    const tope53 = pageLinks({ limits: { max: 3 } })
+    const tope53 = pageLinks({ limits: { max: 4 } })
     ok(
       'jira: las rutas propias de Jira no se leen ni se comen el tope, asi que los comentarios entran',
       propias53.length >= 5 &&
         !enlaces53.some((l) => isOwnJiraRoute(l.href, location.href)) &&
-        tope53.length === 3 &&
+        tope53.length === 4 &&
         tope53.some((l) => l.where === 'comentario') &&
         !tope53.some((l) => isOwnJiraRoute(l.href, location.href)),
-      `${propias53.length} enlaces internos de Jira fuera · con tope 3: ${tope53.map((l) => l.where).join(' ')}`
+      `${propias53.length} enlaces internos de Jira fuera · con tope 4: ${tope53.map((l) => l.where).join(' ')}`
     )
 
     // 54. Y en una página de Confluence, sólo los del contenido: el árbol
@@ -3521,17 +3528,43 @@ const actions = {
     // del DOM, no de una lista escrita aquí.
     const pegados55 = pageLinks().filter((l) => /^https?:\/\//i.test(l.text))
     const soloPegado55 = confluenceLinksIn(pegados55, null, { site: sitio55, linkedHost: location.hostname, index: null })
-    const sinIndice55 = confluenceLinksIn(pageLinks(), remoto55, { site: sitio55, linkedHost: location.hostname, index: null })
+    // El marcador sólo queda cuando la 301 llega SÓLO por el remoto genérico: el
+    // enlace del DOM con `pageId` —el de la forma real— se aparta aquí a
+    // propósito, y se cuenta del DOM que existe.
+    const conId55 = pageLinks().filter((l) => /pageId=301\b/.test(l.href))
+    const soloRemoto55 = confluenceLinksIn(
+      pageLinks().filter((l) => !/pageId=301\b/.test(l.href)),
+      remoto55,
+      { site: sitio55, linkedHost: location.hostname, index: null }
+    )
     ok(
       'ni «Page» ni una URL pegada llaman a una pagina: queda el marcador, o el titulo que la ruta lleva dentro',
       pegados55.length === 1 &&
         soloPegado55.length === 1 &&
         soloPegado55[0].title === 'ADR-014' &&
-        sinIndice55.find((c) => c.id === '301')?.title === 'Página 301' &&
-        !sinIndice55.concat(candidatas55).some((c) => c.title === 'Page' || /^https?:\/\//i.test(c.title)),
-      `pegados ${pegados55.length} → «${soloPegado55.map((c) => c.title).join('» «')}» · sin índice: ${sinIndice55
+        conId55.length === 1 &&
+        soloRemoto55.find((c) => c.id === '301')?.title === 'Página 301' &&
+        !soloRemoto55.concat(candidatas55).some((c) => c.title === 'Page' || /^https?:\/\//i.test(c.title)),
+      `pegados ${pegados55.length} → «${soloPegado55.map((c) => c.title).join('» «')}» · sólo remoto: ${soloRemoto55
         .map((c) => `${c.id}:${c.title}`)
         .join(' ')}`
+    )
+    // Y el caso REAL de F1 (revisión adversaria de H14: el banco no lo ejercía):
+    // la misma página llega por el remoto de la API, que la titula «Page», y por
+    // el `a.link-title` del módulo de enlaces, que trae el título de verdad y el
+    // `pageId`. Sin índice, el título es el del DOM y la procedencia sigue siendo
+    // la mejor, «remoto». El título se lee del DOM, no de una cadena escrita aquí.
+    const sinIndice55 = confluenceLinksIn(pageLinks(), remoto55, { site: sitio55, linkedHost: location.hostname, index: null })
+    const tituloDom55 = conId55[0]?.text || ''
+    ok(
+      'F1 real: sin indice, la pagina que la API titula «Page» se llama como en el DOM y viene de «remoto»',
+      remoto55.ok &&
+        remoto55.links.some((l) => l.pageId === '301' && l.title === '') &&
+        tituloDom55.length > 3 &&
+        sinIndice55.find((c) => c.id === '301')?.title === tituloDom55 &&
+        sinIndice55.find((c) => c.id === '301')?.where === 'remoto' &&
+        sinIndice55.filter((c) => c.id === '301').length === 1,
+      `sin índice: ${sinIndice55.map((c) => `${c.id}:${c.title}:${c.where}`).join(' ')}`
     )
 
     // Dos análisis anteriores de la misma clase de trabajo y del mismo
