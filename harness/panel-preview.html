@@ -156,6 +156,13 @@
     <button class="rig" data-claves="recargando">Esperando a que recargue</button>
     <button class="rig" data-claves="arrancando">Arrancando el MCP</button>
     <button class="rig" data-claves="fallo" title="escrito, pero el MCP sigue en «failed»: el consejo de H15 con Reintentar">Falló · Reintentar</button>
+    <button class="rig" data-claves="quitadas" title="H19: tras «Quitar las claves», la entrada deshabilitada y sin claves">Tras quitarlas</button>
+  </div>
+  <div class="grp">
+    <div class="grp-title">Ajustes · Quitar las claves (H19)</div>
+    <button class="rig on" data-quitar="">Cerrado</button>
+    <button class="rig" data-quitar="abierto" title="la de Faro y su host enlazado, sin ajenas">Confirmación</button>
+    <button class="rig" data-quitar="ajenas" title="con la casilla de una que no es de Faro y una que no se puede quitar desde aquí">Con ajenas</button>
   </div>
   <div class="grp">
     <div class="grp-title">Barra inferior</div>
@@ -245,7 +252,7 @@ async function arrancar() {
   // plazo de arranque) y el consejo del MCP caído (`mcpFailureHint` sobre el
   // mensaje REAL de opencode). Lo demás son textos de ejemplo.
   const [
-    { buildMcpConfig, fullConfigSnippet, mcpFailureHint, mcpStatusFor },
+    { buildMcpConfig, fullConfigSnippet, mcpFailureHint, mcpStatusFor, scrubConfirmText },
     { renderMarkdown },
     { SKILLS },
     { pickLabel, buildTextPick },
@@ -569,7 +576,7 @@ async function arrancar() {
    */
   const HOY_VISTO = AHORA - 12 * HORA
 
-  const estado = { chat: 'confluence', pantalla: '', status: 'ok', pick: 'off', sources: 'off', ancho: 360, tema: 'dark', quinto: true, today: 'auto', primerUso: false, claves: '' }
+  const estado = { chat: 'confluence', pantalla: '', status: 'ok', pick: 'off', sources: 'off', ancho: 360, tema: 'dark', quinto: true, today: 'auto', primerUso: false, claves: '', quitar: '' }
   // Tres de las cinco conversaciones son de Jira («jira», «jira-busqueda» y el
   // vacío «empty-jira»): el producto se mira por el nombre, que es lo que decide
   // la cabecera, las etiquetas de las páginas base y si hay chips.
@@ -1115,10 +1122,38 @@ async function arrancar() {
       recargando: 'Esperando a que opencode recargue…',
       arrancando: 'Arrancando el MCP…',
       fallo: `Escrito en C:\\Users\\marco\\.config\\opencode, pero el MCP «${NOMBRE_MCP}» sigue en «failed».`,
+      // H19: la rama «disabled» de `showMcpSetup`, letra a letra (pinado).
+      quitadas: `El MCP «${NOMBRE_MCP}» está deshabilitado y sin claves en opencode (es lo que deja «Quitar las claves»): al guardar, Faro lo vuelve a escribir con las nuevas.`,
     }
     estado.claves = k in TEXTOS ? k : ''
     $('setup-status').textContent = TEXTOS[estado.claves]
     $('setup-mcp-hint').classList.toggle('hidden', estado.claves !== '' && estado.claves !== 'fallo')
+  }
+  /**
+   * La confirmación de «Quitar las claves de este sitio» en Ajustes (H19), con
+   * los textos de `scrubConfirmText` IMPORTADA de setup.js —los mismos que pinta
+   * el panel, por construcción— sobre nombres de mentira: el MCP de Faro con su
+   * host enlazado y, en «ajenas», una entrada que no es de Faro (con su casilla)
+   * y una remota que no se puede quitar desde aquí. '' la deja cerrada, que es
+   * como nace. Es una declaración `function` a propósito: una `const` usada
+   * antes de su línea mata el espejo entero (la lección de H17).
+   */
+  function pintarQuitar(k) {
+    const PLANES = {
+      abierto: { propias: [NOMBRE_MCP], ajenas: [], noQuitables: [], hostsEnlazados: [SITIOS.jira.host] },
+      ajenas: { propias: [NOMBRE_MCP], ajenas: ['docker-atlassian'], noQuitables: ['atlassian-remoto'], hostsEnlazados: [SITIOS.jira.host] },
+    }
+    estado.quitar = k in PLANES ? k : ''
+    const plan = PLANES[estado.quitar]
+    $('remove-keys-confirm').classList.toggle('hidden', !plan)
+    $('remove-keys-foreign').checked = false
+    if (!plan) return
+    const t = scrubConfirmText({ ...plan, carpeta: 'C:\\Users\\marco\\.config\\opencode' })
+    $('remove-keys-text').textContent = t.principal
+    $('remove-keys-foreign-field').classList.toggle('hidden', !plan.ajenas.length)
+    $('remove-keys-foreign-text').textContent = t.ajenas
+    $('remove-keys-unremovable').textContent = t.noQuitables
+    $('remove-keys-unremovable').classList.toggle('hidden', !t.noQuitables)
   }
   /**
    * El aviso de que el MCP no está conectado (H14, P5), tal como lo cuelga
@@ -2112,6 +2147,17 @@ async function arrancar() {
       programarCheck()
     })
   )
+  // H19: la confirmación de «Quitar las claves» vive en Ajustes, así que el
+  // mando abre esa pantalla.
+  lado.querySelectorAll('[data-quitar]').forEach((b) =>
+    b.addEventListener('click', () => {
+      marcar('quitar', b.dataset.quitar)
+      pintarQuitar(b.dataset.quitar)
+      marcar('screen', 'screen-settings')
+      mostrarPantalla('screen-settings')
+      programarCheck()
+    })
+  )
   lado.querySelectorAll('[data-status]').forEach((b) =>
     b.addEventListener('click', () => {
       estado.status = b.dataset.status
@@ -2269,6 +2315,13 @@ async function arrancar() {
     // mensaje de Copilot son mil caracteres sin acotar) y la lista entera.
     '.model-row',
     '#model-list',
+    // H19: la confirmación de «Quitar las claves» en Ajustes: su texto nombra
+    // entradas y una carpeta real (una ruta de Windows sin espacios, la misma
+    // trampa que el consentimiento de H18), la casilla de las ajenas y la fila
+    // de «Quitar» y «Cancelar».
+    '#remove-keys-confirm',
+    '#remove-keys-confirm .check',
+    '#remove-keys-confirm .row',
   ]
 
   function check() {
@@ -2465,6 +2518,14 @@ async function arrancar() {
       pintarClaves(k || '')
       marcar('screen', 'screen-setup')
       mostrarPantalla('screen-setup')
+      return pintarMedidas()
+    },
+    /** H19: '' | 'abierto' | 'ajenas', con Ajustes abierto y la confirmación de «Quitar las claves». */
+    setQuitar(k) {
+      marcar('quitar', k || '')
+      pintarQuitar(k || '')
+      marcar('screen', 'screen-settings')
+      mostrarPantalla('screen-settings')
       return pintarMedidas()
     },
     setScreen(id) {

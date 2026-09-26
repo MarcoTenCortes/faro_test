@@ -181,3 +181,64 @@ test('H18: npm run sandbox existe y queda FUERA de npm run check', () => {
   assert(!readFileSync(join(ROOT, 'test/run.js'), 'utf8').includes('config-sandbox'), 'test/run.js no lo ejecuta')
   assert(/if \(process\.argv\[1\] && resolve\(process\.argv\[1\]\) === fileURLToPath\(import\.meta\.url\)\) \{/.test(JS), 'importarlo no arranca nada')
 })
+
+test('H19: los casos 7 y 8 quitan y vuelven a crear con las funciones REALES del panel, en un solo PATCH', () => {
+  // Las funciones son las del panel (src/panel/setup.js), no una copia: lo que se prueba contra opencode es lo que se ejecuta.
+  const importa = JS.match(/import \{([^}]*)\} from '\.\.\/src\/panel\/setup\.js'/)
+  assert(importa, 'el sandbox importa de src/panel/setup.js')
+  const importadas = importa[1].split(',').map((s) => s.trim())
+  for (const f of ['scrubMcp', 'mcpScrubCandidates', 'scrubEffective', 'configureMcp', 'mcpForHost']) assert(importadas.includes(f), `importa ${f} de setup.js`)
+  pos("import { mcpNameForHost } from '../src/shared/config.js'")
+  assert(!/function (scrubMcp|mcpScrubCandidates|mcpScrubPatch|scrubEffective|configureMcp)\b/.test(JS), 'ninguna copia local de esas funciones')
+
+  // Caso 7: quitar con scrubMcp, sin montar a mano la entrada deshabilitada, y contando UN PATCH.
+  const siete = entre("const HOST7 = 'jira.ejemplo.invalid'", 'const HOST8 =')
+  assert(siete.includes('mcpScrubCandidates({ config: await client.config(), saved: { mcpName: NOMBRE }, host: HOST7 })'), 'las candidatas, con la función del panel y la configuración que opencode carga')
+  eq(cuenta(siete, 'scrubMcp(client, {'), 1, 'quitar con scrubMcp, una vez')
+  assert(siete.includes('scrubMcp(client, { candidatas: [...cands.propias, ...cands.ajenas] })'), 'la de Faro Y la ajena marcada, juntas')
+  assert(!/enabled:\s*false/.test(siete), 'el caso 7 no escribe a mano ningún enabled false: eso lo hace scrubMcp')
+  assert(!siete.includes('vacia: true'), 'ni la entrada vacía del caso 2')
+  assert(!siete.includes('writeFileSync('), 'ni toca el fichero a mano')
+  assert(siete.includes("logger.entries.slice(antes).filter((e) => e.message.startsWith('PATCH ')).length"), 'cuenta las peticiones PATCH del registro del cliente')
+  assert(pos('const antes = logger.entries.length', siete) < pos('scrubMcp(client, {', siete), 'el recuento empieza ANTES de quitar')
+  const cond7 = entre("'7 quitar con el módulo real", 'msPatch,', siete)
+  // La condición del apunta, línea a línea: cada exigencia es una línea ENTERA (no un trozo del detalle, que también las nombra).
+  const lineas7 = cond7.split('\n').map((l) => l.trim().replace(/ &&$/, '').replace(/,$/, ''))
+  for (const c of ['rehabilitar.ok', 'conectadaAntes >= 0', 'bienElegidas', 'r.ok', 'peticiones === 1', 'msDisabled >= 0', 'msEspacios >= 0', 'limpias', '!tokenEnEntradas', '!tokenEnFichero', 'efectiva.ok', 'adoptada === null', 'vuelta.ok', 'vuelta.name === NOMBRE', 'vuelta.reuse === true', 'msVuelta >= 0']) {
+    assert(lineas7.includes(c), 'el caso 7 exige ' + c)
+  }
+  assert(siete.includes("nombresDe(cands.ajenas).includes('faro-espacios')") && siete.includes("!todas.includes('pegado-a-mano')"), 'ajena por dominio; lo que no lleva el dominio, fuera')
+  assert(siete.includes('const efectiva = scrubEffective(await client.config().catch(() => null), r.names)'), 'lo que opencode carga es lo escrito')
+  assert(siete.includes('const adoptada = mcpForHost(await client.config().catch(() => null), HOST7)'), 'y no queda nada que adoptar: sin bucle')
+  const vuelta = entre('const vuelta = await configureMcp(client, {', '\n', siete)
+  assert(vuelta.includes('saved: { mcpName: NOMBRE }') && !vuelta.includes('allowCommand'), 'volver a guardar con configureMcp, SIN la puerta de prueba (el command se conserva por known)')
+
+  // Caso 8: lo único escrito a mano es la entrada deshabilitada con sus URL; lo demás, configureMcp.
+  const ocho = entre('const HOST8 =', 'const fallos =')
+  eq(cuenta(ocho, 'enabled: false'), 1, 'un solo enabled false, el de la entrada escrita a mano')
+  assert(
+    ocho.includes("cfg.mcp[NOMBRE8] = { type: 'local', command: ['node', JUGUETE], enabled: false, environment: buildMcpConfig({ jira: claves8, dataCenter: true }).environment }"),
+    'la entrada a mano: deshabilitada y CON sus URL (el environment de Faro)'
+  )
+  assert(pos('writeFileSync(fichero', ocho) < pos('client.reloadGlobalConfig()', ocho), 'se escribe y se recarga')
+  assert(ocho.includes('const NOMBRE8 = mcpNameForHost(HOST8)'), 'con el nombre de Faro para ese host')
+  assert(ocho.includes('const adoptada = mcpForHost(configAntes, HOST8)'), 'deshabilitada: no se adopta')
+  const guarda8 = entre('const r = await configureMcp(client, {', '\n', ocho)
+  assert(guarda8.includes('saved: null') && !guarda8.includes('allowCommand'), 'guardar las claves con configureMcp, sin nada guardado y sin la puerta de prueba')
+  // La condición del caso 8 va en una línea: cada exigencia, como trozo entre « && » de ESA línea.
+  const cond8 = entre("'8 deshabilitada a mano", '\n        ms,', ocho).split('\n').map((l) => l.trim()).find((l) => l.startsWith('recarga.ok'))
+  assert(cond8, 'la condición del caso 8 empieza por recarga.ok')
+  const trozos8 = cond8.replace(/,$/, '').split(' && ')
+  for (const c of ['recarga.ok', 'msDisabled >= 0', 'configAntes !== null', 'adoptada === null', 'r.ok', 'r.name === NOMBRE8', 'r.reuse === true', 'ms >= 0', 'enDisco']) {
+    assert(trozos8.includes(c), 'el caso 8 exige ' + c)
+  }
+  assert(ocho.includes('const enDisco = cfgDespues?.mcp?.[NOMBRE8]?.enabled === true'), 'y queda habilitada en disco')
+  assert(!ocho.includes('scrubMcp('), 'el caso 8 no quita nada')
+
+  // Los dos, detrás de la guarda de GET /path.
+  const guarda = pos('const aislado =')
+  assert(pos("const HOST7 = 'jira.ejemplo.invalid'") > guarda && pos('const HOST8 =') > guarda, 'los casos 7 y 8, detrás de la guarda')
+  assert(pos('const HOST7') < pos('const HOST8') && pos('const HOST8') < pos('const fallos ='), 'y antes del recuento final')
+  // Y la cabecera los cuenta.
+  assert(/\* {2}7\. \(H19\)/.test(CRUDO) && /\* {2}8\. \(H19\)/.test(CRUDO), 'la cabecera lista los casos 7 y 8')
+})

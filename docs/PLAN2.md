@@ -1273,6 +1273,40 @@ Reglas transversales, que salen de los dos juicios y valen para todos:
 - **Riesgo**: medio-alto. Deja un esqueleto deshabilitado (no hay borrado
   por API) y deshabilita el MCP para todos los clientes del usuario.
 
+- **Hecho el 2026-09-26** (rama `plan/h19-quitar-claves`): todo lo de «Qué».
+  En setup.js, puro salvo `scrubMcp`: `mcpScrubCandidates` (propias por
+  nombre —el `mcpName` guardado o el de Faro de este host o de un enlazado—,
+  ajenas por dominio, y aparte las que no se pueden deshabilitar, sin
+  `environment`), `mcpScrubPatch` (la entrada ENTERA con `enabled: false` y las
+  diez variables a `''`, su `command` byte a byte por la barrera de siempre),
+  `scrubEffective`, `unlinkRecords` (el patch exacto que deja el sitio sin
+  configurar, sin tocar `onboarded` ni nada más), `scrubMcp` (UN PATCH por
+  `updateMcpEntries` con `known`) y `scrubConfirmText` (los textos, que el
+  espejo importa); y `keysUnverified` exige ya `configured: true`. En el panel,
+  el botón en «Este sitio» con su confirmación en línea (`prepareRemoveKeys`
+  sólo lee; `removeKeys` relee y RECALCULA la lista, guarda común, la
+  invalidación de `saveKeys` más `pendingMcp`, un PATCH, relectura con
+  `scrubEffective` y sólo entonces los registros y `bootForSite()`), la rama
+  «disabled» de la pantalla de claves, y «Olvidar este sitio» remitiendo al
+  botón. En el sandbox, los casos 7 (quitar con las funciones reales en un
+  PATCH, disabled y sin el token en el fichero, y volver a guardar reutiliza el
+  esqueleto y conecta) y 8 (deshabilitada a mano con sus URL → guardar →
+  connected), **ejecutado de verdad tres veces: 9/9**. Un título («Claves
+  quitadas», en ok, warn e info); 1425 pruebas (+9); las 37 instantáneas
+  intactas; 41 + 40 mutaciones, todas cazadas. Desvíos: el caso 8 usa otro host
+  (tras el 7 la entrada de Faro vuelve a estar habilitada con el dominio y se
+  reutilizaría ella); el texto de las no quitables concuerda en plural; el plan
+  lleva además la carpeta y el recálculo compara también los hosts enlazados;
+  la casilla de las ajenas se lee al clic; el porqué de un fallo sale de
+  `porQueNoSeQuita` (la clasificación de `porQueNoSeEscribe` sin sus remedios de
+  pegar); y sin poder releer la configuración tras el PATCH se dice sólo eso,
+  sin tocar el almacén. Límites: `scrubEffective` sólo mira las diez variables
+  de Faro; el esqueleto sólo se reutiliza al volver a guardar desde el host
+  cuyo nombre de Faro lleva. Sin verificar: nada en la extensión cargada ni
+  medido en el espejo; en real con Marco, su `opencode.json` con la entrada
+  deshabilitada y sin tokens y la pantalla de claves otra vez. La bitácora, en
+  CLAUDE.md §12.5.
+
 ### H20 · Verificación en real del primer uso con un compañero
 
 - **Qué**: la sesión que motivó la petición, guiada: un compañero SIN uv y

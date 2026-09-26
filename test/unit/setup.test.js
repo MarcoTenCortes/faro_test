@@ -1070,3 +1070,267 @@ test('Revisión H18: adoptionRecords decide verified POR HOST, no uno para todos
   eq(adoptionRecords({ registros: null, sites, mcpName: FARO }), [])
   eq(adoptionRecords(), [])
 })
+
+// ---------------------------------------------------------------------------
+// H19 (docs/PLAN2.md §3.2 «Borrado», §8 decisión 3): «Quitar las claves de este
+// sitio». No hay borrado por la API de opencode: se reescribe la entrada ENTERA
+// con enabled false y las diez variables a '', en UN solo PATCH por la barrera.
+// ---------------------------------------------------------------------------
+import { mcpScrubCandidates, mcpScrubPatch, scrubMcp, scrubEffective, unlinkRecords, scrubConfirmText } from '../../src/panel/setup.js'
+import { MCP_ENTRY_KEYS } from '../../src/shared/mcp-config.js'
+
+const CONFIG_H19 = {
+  mcp: {
+    [FARO]: { type: 'local', command: ['uvx', 'mcp-atlassian@' + MCP_ATLASSIAN_VERSION], environment: buildMcpConfig(DC).environment, enabled: true, timeout: 60000 },
+    'docker-atlassian': { type: 'local', command: DOCKER, environment: { JIRA_URL: 'https://jira.x.eu', JIRA_PERSONAL_TOKEN: 'tok-docker' }, enabled: true },
+    'guardado-viejo': { type: 'local', command: ['uvx', 'mcp-atlassian'], environment: { JIRA_URL: 'https://jira.otro.eu', JIRA_PERSONAL_TOKEN: 'tok-viejo' }, enabled: false, timeout: 30000 },
+    'atlassian-remoto': { type: 'remote', url: 'https://mcp.x.eu', environment: { CONFLUENCE_URL: 'https://confluence.x.eu' } },
+    'solo-conf': { type: 'local', command: ['uvx', 'mcp-atlassian'], environment: { CONFLUENCE_URL: 'https://Confluence.X.eu/wiki', CONFLUENCE_PERSONAL_TOKEN: 'tok-conf' }, enabled: true },
+    [mcpNameForHost('confluence.x.eu')]: { type: 'local', command: ['uvx', 'mcp-atlassian'], environment: { CONFLUENCE_URL: 'https://confluence.x.eu' }, enabled: false },
+    'de-otro': { type: 'local', command: ['uvx', 'mcp-atlassian'], environment: { JIRA_URL: 'https://jira.otro.eu', JIRA_PERSONAL_TOKEN: 'tok-otro' }, enabled: true },
+  },
+}
+const SAVED_H19 = { configured: true, mcpName: 'guardado-viejo', product: 'jira', confluenceHost: 'confluence.x.eu', onboarded: true }
+const nombres = (lista) => lista.map((c) => c.name)
+
+test('H19: mcpScrubCandidates — propias por nombre, ajenas por dominio, el host enlazado también, y las que no se pueden quitar aparte', () => {
+  const r = mcpScrubCandidates({ config: CONFIG_H19, saved: SAVED_H19, host: 'JIRA.x.eu' })
+  eq(Object.keys(r), ['propias', 'ajenas', 'noQuitables'], 'claves exactas y en su orden')
+  // Propia: la del nombre guardado (aunque ya no lleve el dominio) y la del nombre de Faro de CUALQUIER host mirado (el enlazado también).
+  eq(nombres(r.propias), [FARO, 'guardado-viejo', mcpNameForHost('confluence.x.eu')], 'propias, en el orden de la configuración')
+  // Ajena: lleva uno de los hosts mirados y no es de Faro; «solo-conf» entra por el host ENLAZADO, con mayúsculas y /wiki.
+  eq(nombres(r.ajenas), ['docker-atlassian', 'solo-conf'])
+  // No se puede deshabilitar una remota: se lista para decirlo y no sale en las otras dos.
+  eq(nombres(r.noQuitables), ['atlassian-remoto'])
+  // Otro dominio, fuera.
+  assert(![...r.propias, ...r.ajenas, ...r.noQuitables].some((c) => c.name === 'de-otro'), 'una entrada de otro dominio no es candidata')
+  // Cada candidata con sus claves EXACTAS y SIN environment: los tokens no salen de aquí.
+  for (const c of [...r.propias, ...r.ajenas, ...r.noQuitables]) eq(Object.keys(c), ['name', 'enabled', 'command', 'type', 'timeout', 'jiraHost', 'confluenceHost'], 'claves exactas de ' + c.name)
+  const json = JSON.stringify(r)
+  for (const t of ['pat-jira', 'pat-conf', 'tok-docker', 'tok-viejo', 'tok-conf', 'environment']) assert(!json.includes(t), 'SEGURIDAD: «' + t + '» no sale en las candidatas')
+  eq(r.propias[0], { name: FARO, enabled: true, command: ['uvx', 'mcp-atlassian@' + MCP_ATLASSIAN_VERSION], type: 'local', timeout: 60000, jiraHost: 'jira.x.eu', confluenceHost: 'confluence.x.eu' })
+  eq(r.propias[1].enabled, false, 'una deshabilitada también es candidata: puede llevar tokens en disco')
+  // Sin el host enlazado guardado, «solo-conf» y la de Faro del enlazado no son candidatas.
+  const sinEnlace = mcpScrubCandidates({ config: CONFIG_H19, saved: { mcpName: 'guardado-viejo' }, host: 'jira.x.eu' })
+  eq([nombres(sinEnlace.propias), nombres(sinEnlace.ajenas), nombres(sinEnlace.noQuitables)], [[FARO, 'guardado-viejo'], ['docker-atlassian'], []])
+  // Sin nombre guardado, la del nombre viejo (que no lleva el dominio) tampoco.
+  eq(nombres(mcpScrubCandidates({ config: CONFIG_H19, saved: null, host: 'jira.x.eu' }).propias), [FARO])
+  // Un nombre guardado sin forma de nombre no cuenta.
+  eq(nombres(mcpScrubCandidates({ config: CONFIG_H19, saved: { mcpName: 'de otro' }, host: 'jira.x.eu' }).propias), [FARO])
+  // El prototipo: una entrada heredada no existe, y un «__proto__» propio (de un JSON) no es un nombre que se pueda escribir.
+  const heredada = { mcp: Object.create({ heredada: CONFIG_H19.mcp[FARO] }) }
+  eq(mcpScrubCandidates({ config: heredada, saved: { mcpName: 'heredada' }, host: 'jira.x.eu' }), { propias: [], ajenas: [], noQuitables: [] }, 'lo heredado, fuera')
+  const conProto = JSON.parse('{"mcp":{"__proto__":{"type":"local","command":["uvx","mcp-atlassian"],"environment":{"JIRA_URL":"https://jira.x.eu"},"enabled":true}}}')
+  const p = mcpScrubCandidates({ config: conProto, saved: null, host: 'jira.x.eu' })
+  eq([p.propias.length, p.ajenas.length, nombres(p.noQuitables)], [0, 0, ['__proto__']], 'un __proto__ propio no se manda: se lista')
+  // Basura: nunca lanza, todo vacío.
+  for (const config of [null, undefined, 'x', 7, [], {}, { mcp: null }, { mcp: [] }, { mcp: 'x' }]) {
+    eq(mcpScrubCandidates({ config, saved: SAVED_H19, host: 'jira.x.eu' }), { propias: [], ajenas: [], noQuitables: [] }, 'basura: ' + JSON.stringify(config))
+  }
+  eq(mcpScrubCandidates(), { propias: [], ajenas: [], noQuitables: [] })
+  eq(mcpScrubCandidates({ config: CONFIG_H19, saved: 'x', host: '' }), { propias: [], ajenas: [], noQuitables: [] }, 'sin hosts ni nombre, nada')
+  // Determinista, y sin tocar lo que recibe.
+  const antes = JSON.stringify(CONFIG_H19)
+  eq(mcpScrubCandidates({ config: CONFIG_H19, saved: SAVED_H19, host: 'jira.x.eu' }), mcpScrubCandidates({ config: CONFIG_H19, saved: SAVED_H19, host: 'jira.x.eu' }))
+  eq(JSON.stringify(CONFIG_H19), antes, 'no muta la configuración')
+})
+
+test('SEGURIDAD H19: mcpScrubPatch escribe la entrada ENTERA deshabilitada y sin secretos, nunca {enabled:false} a secas', () => {
+  const { propias, ajenas, noQuitables } = mcpScrubCandidates({ config: CONFIG_H19, saved: SAVED_H19, host: 'jira.x.eu' })
+  const vacias = Object.fromEntries(MCP_ENV_KEYS.map((k) => [k, '']))
+  for (const c of [...propias, ...ajenas]) {
+    const e = mcpScrubPatch(c)
+    assert(e, 'se puede deshabilitar ' + c.name)
+    eq(Object.keys(e).sort(), [...MCP_ENTRY_KEYS], 'la entrada ENTERA, con sus cinco claves: ' + c.name)
+    eq(e.environment, vacias, 'las diez variables, a vacío: ' + c.name)
+    eq(e.enabled, false, 'deshabilitada: ' + c.name)
+    eq(e.type, 'local')
+    eq(e.command, c.command, 'su command, byte a byte: ' + c.name)
+    eq(validMcpEntry(c.name, e, { knownCommand: c.command }), e, 'pasa la barrera tal cual: ' + c.name)
+    for (const t of ['pat-jira', 'pat-conf', 'tok-docker', 'tok-viejo', 'tok-conf', 'jira.x.eu']) assert(!JSON.stringify(e).includes(t), 'SEGURIDAD: sin «' + t + '»')
+    // Idempotente: deshabilitar lo ya deshabilitado da lo mismo.
+    eq(mcpScrubPatch({ name: c.name, enabled: false, command: e.command, type: 'local', timeout: e.timeout, jiraHost: '', confluenceHost: '' }), e, 'idempotente: ' + c.name)
+  }
+  eq(mcpScrubPatch(propias[0]).timeout, 60000)
+  eq(mcpScrubPatch(propias[1]).timeout, 30000, 'el plazo de la entrada se conserva')
+  eq(mcpScrubPatch(ajenas[0]).timeout, 60000, 'sin plazo, 60 000')
+  eq(mcpScrubPatch(ajenas[0]).command, DOCKER, 'el command de docker del usuario, conservado (knownCommand)')
+  for (const t of [999, 600001, 1.5, '60000', null]) eq(mcpScrubPatch({ ...propias[0], timeout: t }).timeout, 60000, 'un plazo fuera de rango, 60 000: ' + t)
+  for (const t of [1000, 600000]) eq(mcpScrubPatch({ ...propias[0], timeout: t }).timeout, t, 'los bordes valen')
+  // Lo que no se puede deshabilitar: null, sin lanzar.
+  eq(mcpScrubPatch(noQuitables[0]), null, 'una remota, no')
+  const salto = String.fromCharCode(10)
+  for (const raro of [
+    null, undefined, 'x', 7, [], {},
+    { ...propias[0], type: 'remote' },
+    { ...propias[0], type: '' },
+    { ...propias[0], command: null },
+    { ...propias[0], command: [] },
+    { ...propias[0], command: ['uvx', 'mcp' + salto + 'atlassian'] },
+    { ...propias[0], name: '__proto__' },
+    { ...propias[0], name: 'a b' },
+    { ...propias[0], name: 7 },
+  ]) {
+    eq(mcpScrubPatch(raro), null, 'basura: ' + JSON.stringify(raro))
+  }
+  // Y nunca otra cosa que enabled false y variables vacías, venga lo que venga en la candidata.
+  const trampa = mcpScrubPatch({ ...propias[0], enabled: true, environment: { JIRA_PERSONAL_TOKEN: 'pat-jira' } })
+  eq([trampa.enabled, trampa.environment], [false, vacias], 'lo que diga la candidata no entra en la entrada')
+})
+
+/** Un cliente de mentira con diario: SÓLO updateMcpEntries (si scrubMcp llamara a otra cosa, reventaría). */
+function clienteDeQuitar({ respuesta = { ok: true, status: 200, kind: '' } } = {}) {
+  const llamadas = []
+  return {
+    llamadas,
+    async updateMcpEntries(entradas, barrera) {
+      llamadas.push([JSON.parse(JSON.stringify(entradas)), JSON.parse(JSON.stringify(barrera))])
+      return respuesta
+    },
+  }
+}
+
+test('H19: scrubMcp manda UN PATCH con todas las candidatas, con known, y sin petición si alguna no vale', async () => {
+  const { propias, ajenas, noQuitables } = mcpScrubCandidates({ config: CONFIG_H19, saved: SAVED_H19, host: 'jira.x.eu' })
+  const candidatas = [propias[0], ajenas[0]]
+  const c = clienteDeQuitar()
+  const r = await scrubMcp(c, { candidatas })
+  eq(r, { ok: true, status: 200, kind: '', names: [FARO, 'docker-atlassian'] })
+  eq(Object.keys(r), ['ok', 'status', 'kind', 'names'], 'claves exactas y en su orden')
+  eq(c.llamadas.length, 1, 'UN solo PATCH para todas')
+  eq(c.llamadas[0][0], { [FARO]: mcpScrubPatch(propias[0]), 'docker-atlassian': mcpScrubPatch(ajenas[0]) }, 'las entradas enteras, deshabilitadas')
+  eq(c.llamadas[0][1], { known: { [FARO]: propias[0].command, 'docker-atlassian': DOCKER } }, 'con el command de cada una como conocido')
+  assert(!JSON.stringify(c.llamadas).includes('tok-docker') && !JSON.stringify(c.llamadas).includes('pat-jira'), 'SEGURIDAD: ningún token viaja al quitar')
+  // Una candidata que no se puede deshabilitar tira la petición entera: ni una llamada.
+  const mal = clienteDeQuitar()
+  eq(await scrubMcp(mal, { candidatas: [propias[0], noQuitables[0]] }), { ok: false, status: 0, kind: 'entrada', names: ['atlassian-remoto'] })
+  eq(mal.llamadas.length, 0, 'sin petición')
+  // Sin candidatas, tampoco.
+  const nada = clienteDeQuitar()
+  eq(await scrubMcp(nada, { candidatas: [] }), { ok: false, status: 0, kind: 'entrada', names: [] })
+  eq(await scrubMcp(nada), { ok: false, status: 0, kind: 'entrada', names: [] })
+  eq(await scrubMcp(nada, { candidatas: 'x' }), { ok: false, status: 0, kind: 'entrada', names: [] })
+  eq(nada.llamadas.length, 0)
+  // Lo que diga opencode, tal cual y sin cuerpo.
+  const roto = clienteDeQuitar({ respuesta: { ok: false, status: 500, kind: 'ConfigJsonError' } })
+  eq(await scrubMcp(roto, { candidatas }), { ok: false, status: 500, kind: 'ConfigJsonError', names: [FARO, 'docker-atlassian'] })
+  const mudo = clienteDeQuitar({ respuesta: null })
+  eq(await scrubMcp(mudo, { candidatas }), { ok: false, status: 0, kind: '', names: [FARO, 'docker-atlassian'] })
+  // En el código: sólo la puerta de las entradas; ni recargar, ni conectar.
+  const fuente = sinComentarios(readFileSync(join(import.meta.dirname, '..', '..', 'src/panel/setup.js'), 'utf8'))
+  const cuerpo = fuente.slice(fuente.indexOf('export async function scrubMcp('), fuente.indexOf('\n}\n', fuente.indexOf('export async function scrubMcp(')))
+  assert(cuerpo.length > 50, 'scrubMcp existe')
+  eq(cuerpo.split('client.updateMcpEntries(').length - 1, 1, 'una sola llamada a la puerta')
+  assert(!/reloadGlobalConfig|connectMcp|addMcp|client\.request\(/.test(cuerpo), 'ni recargar, ni conectar, ni un PATCH por otro lado')
+})
+
+test('H19: scrubEffective — pendiente lo que sigue habilitado o con alguna variable, no lo que ya no está', () => {
+  const vacias = Object.fromEntries(MCP_ENV_KEYS.map((k) => [k, '']))
+  const config = {
+    mcp: {
+      limpia: { type: 'local', command: ['uvx', 'mcp-atlassian'], environment: vacias, enabled: false },
+      habilitada: { type: 'local', command: ['uvx', 'mcp-atlassian'], environment: vacias, enabled: true },
+      sinEnabled: { type: 'local', command: ['uvx', 'mcp-atlassian'], environment: vacias },
+      conToken: { type: 'local', command: ['uvx', 'mcp-atlassian'], environment: { ...vacias, CONFLUENCE_PERSONAL_TOKEN: 'x' }, enabled: false },
+      conUrl: { type: 'local', command: ['uvx', 'mcp-atlassian'], environment: { ...vacias, JIRA_URL: 'https://jira.x.eu' }, enabled: false },
+      sinEnv: { type: 'local', command: ['uvx', 'mcp-atlassian'], enabled: false },
+    },
+  }
+  eq(scrubEffective(config, ['limpia', 'habilitada', 'sinEnabled', 'conToken', 'conUrl', 'sinEnv', 'yaNoEsta']), { ok: false, pendientes: ['habilitada', 'sinEnabled', 'conToken', 'conUrl'] })
+  eq(scrubEffective(config, ['limpia', 'sinEnv', 'yaNoEsta']), { ok: true, pendientes: [] }, 'lo que ya no está no tiene tokens cargados')
+  eq(Object.keys(scrubEffective(config, ['limpia'])), ['ok', 'pendientes'])
+  // Sin configuración legible, nada se da por quitado.
+  for (const ilegible of [null, undefined, 'x', [], 7]) eq(scrubEffective(ilegible, ['a', 'b']), { ok: false, pendientes: ['a', 'b'] }, 'ilegible: ' + JSON.stringify(ilegible))
+  eq(scrubEffective({}, ['a']), { ok: true, pendientes: [] }, 'sin mcp cargado, nada pendiente')
+  eq(scrubEffective(config, 'x'), { ok: true, pendientes: [] })
+  eq(scrubEffective(JSON.parse('{"mcp":{}}'), ['toString', 'constructor']), { ok: true, pendientes: [] }, 'el prototipo no es una entrada')
+})
+
+test('H19: unlinkRecords desmarca por nombre y por host, con el patch exacto, y no toca onboarded ni nada más', () => {
+  const sites = {
+    'jira.x.eu': { configured: true, mcpName: FARO, product: 'jira', cloud: false, verified: true, confluenceHost: 'confluence.x.eu', onboarded: true, indexedAt: 1758000000000, skill: 'analisis', todaySeenAt: 5 },
+    'confluence.x.eu': { configured: true, mcpName: FARO, product: 'confluence', cloud: false, jiraHost: 'jira.x.eu', onboarded: true },
+    'enlazado.x.eu': { configured: true, mcpName: 'otro-nombre', product: 'confluence', skippedKeys: true },
+    'ajeno.eu': { configured: true, mcpName: 'atlassian-ajeno-eu', product: 'jira', onboarded: true },
+    'vacio.eu': { configured: false, mcpName: '' },
+  }
+  const antes = JSON.stringify(sites)
+  const r = unlinkRecords({ sites, names: [FARO], hosts: ['ENLAZADO.x.eu'] })
+  const patch = { configured: false, mcpName: '', skippedKeys: false, jiraHost: '', confluenceHost: '' }
+  eq(r, [
+    { host: 'jira.x.eu', patch },
+    { host: 'confluence.x.eu', patch },
+    { host: 'enlazado.x.eu', patch },
+  ], 'por nombre los dos del MCP, y por host el enlazado (sin distinguir mayúsculas); el ajeno, intacto')
+  eq(Object.keys(r[0].patch), ['configured', 'mcpName', 'skippedKeys', 'jiraHost', 'confluenceHost'], 'claves exactas y en su orden')
+  for (const x of r) for (const k of ['onboarded', 'indexedAt', 'skill', 'todaySeenAt', 'verified', 'product']) assert(!(k in x.patch), 'no toca ' + k + ': no es «Olvidar este sitio»')
+  eq(JSON.stringify(sites), antes, 'no muta lo que recibe')
+  assert(r[0].patch !== r[1].patch, 'un patch por registro')
+  eq(unlinkRecords({ sites, names: [''], hosts: [] }), [], 'un nombre vacío no casa con un registro sin MCP')
+  eq(unlinkRecords({ sites, names: [], hosts: ['vacio.eu'] }).map((x) => x.host), ['vacio.eu'])
+  for (const raro of [null, undefined, 'x', [], 7]) eq(unlinkRecords({ sites: raro, names: [FARO], hosts: ['jira.x.eu'] }), [], 'sites sin forma: ' + JSON.stringify(raro))
+  eq(unlinkRecords(), [])
+  eq(unlinkRecords({ sites, names: 'x', hosts: 'y' }), [])
+})
+
+test('H19: scrubConfirmText dice qué se deshabilita, el host enlazado, que afecta a cualquier cliente, y lo que se queda', () => {
+  const carpeta = 'C:\\Users\\m\\.config\\opencode'
+  const t = scrubConfirmText({ propias: [FARO], ajenas: ['docker-atlassian'], noQuitables: ['atlassian-remoto'], hostsEnlazados: ['confluence.x.eu'], carpeta })
+  eq(Object.keys(t), ['principal', 'ajenas', 'noQuitables'])
+  eq(
+    t.principal,
+    `Se deshabilitarán en la configuración de opencode, sin claves: «${FARO}». También deja sin claves confluence.x.eu (enlazado). Afecta a cualquier cliente de este opencode, la TUI incluida: opencode reinicia sus conexiones y una respuesta a medias en otra ventana se corta. Queda una entrada deshabilitada y sin claves en ${carpeta} (no hay borrado por la API), que Faro reutiliza al volver a guardarlas. Después te volverá a pedir las claves.`
+  )
+  eq(t.ajenas, 'También «docker-atlassian», que no es de Faro. Si no lo marcas, el sitio la seguirá adoptando y volverá a quedar configurado.')
+  eq(t.noQuitables, '«atlassian-remoto» no se puede deshabilitar desde aquí (no es un MCP local de la forma que Faro escribe): quítala a mano.')
+  // Dos ajenas: en plural. Dos no quitables, también.
+  eq(scrubConfirmText({ propias: [FARO], ajenas: ['a1', 'a2'] }).ajenas, 'También «a1», «a2», que no son de Faro. Si no lo marcas, el sitio las seguirá adoptando y volverá a quedar configurado.')
+  eq(scrubConfirmText({ noQuitables: ['r1', 'r2'] }).noQuitables, '«r1», «r2» no se pueden deshabilitar desde aquí (no son MCP locales de la forma que Faro escribe): quítalas a mano.')
+  // Sin host enlazado ni carpeta.
+  const solo = scrubConfirmText({ propias: [FARO, 'guardado-viejo'] })
+  assert(solo.principal.includes(`sin claves: «${FARO}», «guardado-viejo». Afecta`), 'sin enlazado, no se nombra ninguno')
+  assert(solo.principal.includes('en la carpeta de configuración de opencode (no hay borrado'), 'sin carpeta, se dice cuál')
+  eq([solo.ajenas, solo.noQuitables], ['', ''])
+  eq(scrubConfirmText({ hostsEnlazados: ['a.eu', 'b.eu'], propias: [FARO] }).principal.includes('deja sin claves a.eu y b.eu (enlazado)'), true)
+  // Sólo ajenas: este sitio no tiene nada de Faro.
+  eq(scrubConfirmText({ ajenas: ['docker-atlassian'] }).principal, 'Este sitio no tiene ninguna entrada de Faro en opencode; sólo «docker-atlassian», que no es de Faro.')
+  // Nada: dicho.
+  eq(scrubConfirmText(), { principal: 'Este sitio no tiene claves en la configuración de opencode que quitar.', ajenas: '', noQuitables: '' })
+  eq(scrubConfirmText({ noQuitables: ['r'] }).principal, 'Este sitio no tiene claves en la configuración de opencode que quitar.')
+  // Nombres raros, omitidos; y todo en UNA línea sin invisibles.
+  const nel = String.fromCharCode(0x85)
+  const ls = String.fromCharCode(0x2028)
+  const rlo = String.fromCharCode(0x202e)
+  const zw = String.fromCharCode(0x200b)
+  const raro = scrubConfirmText({
+    propias: ['__proto__', 'a b', 'x' + ls + 'y', FARO],
+    ajenas: ['bien' + rlo, 'docker-atlassian'],
+    noQuitables: ['mal' + nel],
+    hostsEnlazados: ['conf' + zw + '.x.eu', 'con espacio.eu', 'confluence.x.eu'],
+    carpeta: 'C:\\x' + String.fromCharCode(10) + 'y' + nel + 'z' + rlo,
+  })
+  assert(raro.principal.includes(`sin claves: «${FARO}». También deja sin claves confluence.x.eu (enlazado).`), 'sólo los nombres y hosts con forma: ' + raro.principal)
+  eq(raro.ajenas, 'También «docker-atlassian», que no es de Faro. Si no lo marcas, el sitio la seguirá adoptando y volverá a quedar configurado.')
+  eq(raro.noQuitables, '', 'con todos los nombres raros, nada que decir')
+  for (const texto of Object.values(raro)) {
+    for (const ch of [String.fromCharCode(10), String.fromCharCode(13), nel, ls, String.fromCharCode(0x2029), rlo, zw]) assert(!texto.includes(ch), 'una línea y sin invisibles: ' + JSON.stringify(texto))
+  }
+  assert(raro.principal.includes('C:\\x y z (no hay'), 'la carpeta en una línea')
+  assert(scrubConfirmText({ propias: [FARO], carpeta: zw + rlo + ' ' }).principal.includes('en la carpeta de configuración de opencode (no hay'), 'una carpeta que sólo son invisibles es no tener carpeta')
+  // Candidatas enteras también valen (se lee su nombre).
+  eq(scrubConfirmText({ propias: [{ name: FARO }] }).principal, scrubConfirmText({ propias: [FARO] }).principal)
+})
+
+test('H19: keysUnverified sólo avisa en un sitio configurado', () => {
+  // EL CAMBIO: tras «Quitar las claves» el registro queda configured false, y su verified viejo no dice nada de unas claves que ya no existen.
+  eq(keysUnverified({ configured: true, verified: false }), true, 'configurado y sin comprobar: avisa')
+  eq(keysUnverified({ verified: false }), false, 'H19: sin configured true, no avisa (antes sí)')
+  eq(keysUnverified({ configured: false, verified: false }), false, 'H19: lo que deja «Quitar las claves», no avisa')
+  eq(keysUnverified({ configured: false, mcpName: '', skippedKeys: false, verified: false, onboarded: true }), false, 'el registro real tras quitar')
+  eq(keysUnverified({ configured: 'true', verified: false }), false, 'configured en texto no es configurado')
+  eq(keysUnverified({ configured: true, verified: true }), false)
+  eq(keysUnverified({ configured: true }), false, 'la migración de H18 sigue: sin verified, verificado')
+  // Y la adopción sigue decidiendo igual: un host que estaba configurado y sin comprobar no se da por probado.
+  const registros = siteRecords({ host: 'jira.x.eu', product: 'jira', mcpName: FARO })
+  eq(adoptionRecords({ registros, sites: { 'jira.x.eu': { configured: true, mcpName: FARO, verified: false } }, mcpName: FARO })[0].patch.verified, false)
+})

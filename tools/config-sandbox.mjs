@@ -36,7 +36,17 @@
  *  6. el directorio de trabajo del serve y el HOME aislado no llevan AGENTS.md
  *     ni CLAUDE.md, y `GET /config` no trae `instructions` (que opencode no meta
  *     «Instructions from:» con un turno de verdad queda para cuando haya
- *     permiso de gasto: aquí no se manda NINGÚN turno de modelo).
+ *     permiso de gasto: aquí no se manda NINGÚN turno de modelo);
+ *  7. (H19) quitar las claves con las funciones REALES del panel
+ *     (`mcpScrubCandidates` + `scrubMcp`): la de Faro y una ajena del mismo
+ *     dominio en UN solo PATCH, las dos «disabled», en disco con `enabled: false`
+ *     y las diez variables a '' y sin el token en el fichero; `scrubEffective` lo
+ *     da por bueno, `mcpForHost` ya no adopta nada (sin bucle), y volver a guardar
+ *     con `configureMcp` REUTILIZA el esqueleto y conecta sin la puerta de prueba;
+ *  8. (H19) una entrada deshabilitada A MANO con sus URL y su token (la forma que
+ *     deja alguien que la apaga en el fichero) no se adopta, y guardar las
+ *     claves con `configureMcp` la reutiliza por su nombre de Faro, la
+ *     habilita y conecta.
  *
  * La puerta de PRUEBA: el `command` del juguete (`['node', <ruta>]`) no está en
  * la lista blanca de `validMcpCommand`, así que se pasa `allowCommand` a
@@ -70,7 +80,8 @@ import { fileURLToPath } from 'node:url'
 import { OpencodeClient } from '../src/opencode/client.js'
 import { MCP_ENV_KEYS } from '../src/shared/mcp-config.js'
 import { Logger } from '../src/shared/log.js'
-import { buildMcpConfig, configFileCandidates } from '../src/panel/setup.js'
+import { buildMcpConfig, configFileCandidates, configureMcp, mcpForHost, mcpScrubCandidates, scrubEffective, scrubMcp } from '../src/panel/setup.js'
+import { mcpNameForHost } from '../src/shared/config.js'
 
 const AQUI = dirname(fileURLToPath(import.meta.url))
 const JUGUETE = join(AQUI, 'toy-mcp.mjs')
@@ -531,6 +542,96 @@ async function main() {
         encontrados.length === 0 && sinInstrucciones,
         Math.round(performance.now() - t),
         `ficheros=${encontrados.length} · instructions=${instrucciones === undefined ? '(ausente)' : Array.isArray(instrucciones) ? instrucciones.length + ' entradas' : typeof instrucciones} · (con un turno real: pendiente de permiso de gasto)`
+      )
+    }
+
+    // 7. (H19) Quitar con el módulo REAL: un solo PATCH, disabled y sin claves en disco; volver a guardar reutiliza el esqueleto.
+    {
+      const HOST7 = 'jira.ejemplo.invalid'
+      // (a) NOMBRE otra vez habilitado y con el token (el caso 2 lo dejó deshabilitado), como en el caso 1.
+      const rehabilitar = await client.updateMcpEntries({ [NOMBRE]: entrada(['node', JUGUETE]) }, { allowCommand })
+      const conectadaAntes = rehabilitar.ok ? await esperarEstado(client, NOMBRE, 'connected') : -1
+      // (b) Las candidatas, con la MISMA función que usa el panel: la de Faro por su nombre guardado,
+      // «faro-espacios» (caso 5) por el dominio y ajena, y «pegado-a-mano» (sin environment) fuera.
+      const cands = mcpScrubCandidates({ config: await client.config(), saved: { mcpName: NOMBRE }, host: HOST7 })
+      const nombresDe = (lista) => lista.map((c) => c.name)
+      const todas = [...nombresDe(cands.propias), ...nombresDe(cands.ajenas), ...nombresDe(cands.noQuitables)]
+      const bienElegidas = nombresDe(cands.propias).includes(NOMBRE) && nombresDe(cands.ajenas).includes('faro-espacios') && !todas.includes('pegado-a-mano')
+      // (c) UN solo PATCH para las dos, contado en el registro del cliente.
+      const antes = logger.entries.length
+      const t = performance.now()
+      const r = await scrubMcp(client, { candidatas: [...cands.propias, ...cands.ajenas] })
+      const msPatch = Math.round(performance.now() - t)
+      const peticiones = logger.entries.slice(antes).filter((e) => e.message.startsWith('PATCH ')).length
+      // (d) Las dos «disabled»; en disco, enabled false y las diez vacías en CADA una; el token, ni en esas
+      // entradas ni en el fichero entero (las dos que lo llevaban se limpian a la vez: por eso la ajena va marcada).
+      const msDisabled = r.ok ? await esperarEstado(client, NOMBRE, 'disabled') : -1
+      const msEspacios = r.ok ? await esperarEstado(client, 'faro-espacios', 'disabled') : -1
+      const fichero = ficheroConfig()
+      const texto = existsSync(fichero) ? readFileSync(fichero, 'utf8') : ''
+      const cfg = texto ? leerConfig(fichero) : null
+      const limpias = r.names.length === 2 && r.names.every((n) => cfg?.mcp?.[n]?.enabled === false && MCP_ENV_KEYS.every((k) => cfg.mcp[n].environment?.[k] === ''))
+      const tokenEnEntradas = r.names.some((n) => JSON.stringify(cfg?.mcp?.[n] ?? {}).includes(TOKEN_DE_MENTIRA))
+      const tokenEnFichero = !texto || texto.includes(TOKEN_DE_MENTIRA)
+      const efectiva = scrubEffective(await client.config().catch(() => null), r.names)
+      // (e) Sin bucle: ya no hay nada que adoptar para ese dominio.
+      const adoptada = mcpForHost(await client.config().catch(() => null), HOST7)
+      // (f) Volver a guardar las claves: configureMcp reutiliza el esqueleto por el nombre guardado y conserva
+      // el command del juguete por `known`, SIN la puerta de prueba.
+      const claves7 = { url: 'https://' + HOST7, token: TOKEN_DE_MENTIRA }
+      const t2 = performance.now()
+      const vuelta = await configureMcp(client, { host: HOST7, jira: claves7, dataCenter: true, saved: { mcpName: NOMBRE }, config: await client.config() })
+      const msVuelta = vuelta.ok ? await esperarEstado(client, NOMBRE, 'connected') : -1
+      const msVueltaTotal = Math.round(performance.now() - t2)
+      apunta(
+        '7 quitar con el módulo real: un solo PATCH, disabled y sin claves en disco; volver a guardar reutiliza el esqueleto',
+        rehabilitar.ok &&
+          conectadaAntes >= 0 &&
+          bienElegidas &&
+          r.ok &&
+          peticiones === 1 &&
+          msDisabled >= 0 &&
+          msEspacios >= 0 &&
+          limpias &&
+          !tokenEnEntradas &&
+          !tokenEnFichero &&
+          efectiva.ok &&
+          adoptada === null &&
+          vuelta.ok &&
+          vuelta.name === NOMBRE &&
+          vuelta.reuse === true &&
+          msVuelta >= 0,
+        msPatch,
+        `candidatas: propias=${nombresDe(cands.propias).join(',')} ajenas=${nombresDe(cands.ajenas).join(',')} · peticiones PATCH=${peticiones} · disabled a los ${msDisabled} ms (faro-espacios ${msEspacios} ms) · enabled false y las diez vacías en las dos=${limpias} · token en esas entradas=${tokenEnEntradas} · en el fichero=${tokenEnFichero} · scrubEffective ok=${efectiva.ok} · mcpForHost tras quitar=${adoptada ? adoptada.name : 'null'} · volver a guardar: ${vuelta.name} reuse=${vuelta.reuse} connected a los ${msVuelta} ms (${msVueltaTotal} ms en total)`
+      )
+    }
+
+    // 8. (H19) Deshabilitada A MANO con sus URL → no se adopta → guardar las claves la reutiliza y conecta.
+    // Otro host a propósito: tras el caso 7 la entrada de NOMBRE vuelve a estar habilitada con el dominio
+    // de los demás casos, y con ése mcpForHost la adoptaría y configureMcp la reutilizaría a ELLA.
+    {
+      const HOST8 = 'jira-caso8.ejemplo.invalid'
+      const NOMBRE8 = mcpNameForHost(HOST8)
+      const claves8 = { url: 'https://' + HOST8, token: TOKEN_DE_MENTIRA }
+      const fichero = ficheroConfig()
+      const cfg = leerConfig(fichero)
+      cfg.mcp = cfg.mcp || {}
+      cfg.mcp[NOMBRE8] = { type: 'local', command: ['node', JUGUETE], enabled: false, environment: buildMcpConfig({ jira: claves8, dataCenter: true }).environment }
+      writeFileSync(fichero, JSON.stringify(cfg, null, 4))
+      const recarga = await client.reloadGlobalConfig()
+      const msDisabled = recarga.ok ? await esperarEstado(client, NOMBRE8, 'disabled') : -1
+      const configAntes = await client.config().catch(() => null)
+      const adoptada = mcpForHost(configAntes, HOST8)
+      const t = performance.now()
+      const r = await configureMcp(client, { host: HOST8, jira: claves8, dataCenter: true, saved: null, config: configAntes })
+      const ms = r.ok ? await esperarEstado(client, NOMBRE8, 'connected') : -1
+      const cfgDespues = leerConfig(ficheroConfig())
+      const enDisco = cfgDespues?.mcp?.[NOMBRE8]?.enabled === true
+      apunta(
+        '8 deshabilitada a mano con sus URL: no se adopta, y guardar las claves la reutiliza y conecta',
+        recarga.ok && msDisabled >= 0 && configAntes !== null && adoptada === null && r.ok && r.name === NOMBRE8 && r.reuse === true && ms >= 0 && enDisco,
+        ms,
+        `disabled tras recargar a los ${msDisabled} ms · mcpForHost antes=${adoptada ? adoptada.name : 'null'} · configureMcp ${r.status} ${r.name} reuse=${r.reuse} en ${Math.round(performance.now() - t)} ms en total · en disco enabled=${cfgDespues?.mcp?.[NOMBRE8]?.enabled}`
       )
     }
 

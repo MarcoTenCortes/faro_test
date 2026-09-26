@@ -348,6 +348,43 @@ las guarda en el navegador: la extensión sólo recuerda el nombre del MCP, si
 sus claves se han comprobado y que ese host ya
 está configurado.
 
+### Quitar las claves de este sitio
+
+Para cambiarlas o dejar de usar un sitio, **Ajustes → Este sitio → Quitar las
+claves de este sitio**. Va en dos pasos, y el primero no escribe nada: Faro lee
+lo que tu opencode tiene de verdad y te lo enseña debajo del botón —qué entradas
+de Faro va a deshabilitar; si tu Jira y tu Confluence comparten MCP, que el otro
+host también se queda sin claves; que afecta a **cualquier cliente de ese
+opencode**, la TUI incluida (opencode reinicia sus conexiones y una respuesta a
+medias en otra ventana se corta); y en qué carpeta queda el rastro—. Si ese
+dominio tiene además una entrada que **no escribió Faro** (pegada a mano, con
+Docker), sale con su propia casilla, desmarcada: sin marcarla se queda como
+está, y el sitio la seguirá adoptando. Una que Faro no sabe deshabilitar (un MCP
+remoto, por ejemplo) se nombra para que la quites a mano.
+
+Al pulsar **Quitar**, Faro vuelve a leer la configuración (si ha cambiado desde
+que abriste la lista, te la enseña otra vez y no escribe nada) y, con el panel
+quieto, reescribe cada entrada **entera, deshabilitada y con sus diez variables
+vacías** en una sola escritura: opencode no deja borrar una entrada por su API, y
+un «deshabilitar» a secas dejaría los tokens en el fichero. Después comprueba que
+lo que opencode carga es eso y sólo entonces da el sitio por desconfigurado y te
+lleva a la pantalla de claves, que dice «El MCP «…» está deshabilitado y sin
+claves en opencode (es lo que deja «Quitar las claves»)…». En tu fichero queda
+esa entrada deshabilitada y sin claves: si vuelves a guardar las claves desde
+este mismo sitio, Faro la reutiliza.
+
+Si opencode no acepta la escritura, las claves siguen ahí y el panel te dice qué
+hacer a mano: en la carpeta de configuración, `"enabled": false` en esas
+entradas y sus variables vacías. Si la acepta pero lo que carga no es lo escrito,
+hay una configuración de proyecto delante (en la carpeta donde arrancaste
+`opencode serve`): arráncalo desde otra (`tools\arrancar-opencode.ps1` usa una
+propia) y vuelve a intentarlo; en los dos casos Faro no da el sitio por
+desconfigurado.
+
+Quitar las claves **no** es olvidar el sitio: el índice, el contexto, la memoria
+y el diario se quedan. Y «Olvidar este sitio» (§8) borra lo que Faro guarda en el
+navegador y **no toca la configuración de opencode**.
+
 ### Server / Data Center
 
 Además de los tokens personales, ten en cuenta que el wiki cuelga de la raíz
@@ -933,7 +970,8 @@ para ellos a propósito: cada sitio se borra desde sí mismo, que es donde ves q
 vas a perder.
 
 **Lo que NO está ahí**: las claves de Jira y de Confluence —ésas sólo están en
-la configuración de opencode, en tu máquina—, el texto de las páginas que Faro
+la configuración de opencode, en tu máquina, y se quitan de allí con **Quitar
+las claves de este sitio** (§3)—, el texto de las páginas que Faro
 lee y tus preguntas y respuestas, que viven en la sesión de opencode y se
 cierran con «Sesión nueva».
 
@@ -942,6 +980,12 @@ ese sitio como si Faro no lo hubiera visto nunca. No se puede deshacer, y la
 próxima vez volverá a preguntarte por el contexto. Para borrar sólo el diario,
 **Qué mirar hoy → Borrar mi actividad**; para sólo el historial de páginas base,
 **Olvidar el historial**, en la pantalla de páginas base.
+
+«Olvidar este sitio» **no toca la configuración de opencode**: tus claves de
+Atlassian viven allí y no en el navegador, así que el MCP sigue conectado y la
+próxima vez el sitio lo vuelve a adoptar. Para quitarlas de ahí está **Quitar
+las claves de este sitio**, más arriba en la misma pantalla (§3, «Quitar las
+claves de este sitio»).
 
 «Olvidar este sitio» **no toca el modelo elegido ni los veredictos de
 modelos**, que no son de ningún sitio. Para los veredictos está al lado
@@ -1111,13 +1155,18 @@ esa carpeta temporal, se va con un error sin tocar nada. No basta con
 configuración global, y una prueba que lo daba por hecho escribió una vez en el
 fichero de verdad.
 
-Con un MCP de juguete (`tools/toy-mcp.mjs`) comprueba siete casos e imprime cada
+Con un MCP de juguete (`tools/toy-mcp.mjs`) comprueba nueve casos e imprime cada
 uno con sus milisegundos: que lo que no pasa la barrera no se manda, que una
 entrada nueva conecta en menos de 2 s, que una entrada desactivada deja el
 fichero sin el token, que un bloque pegado a mano se carga con «Ya lo he pegado»
 sin reiniciar, que con el fichero roto no se escribe nada y el token no llega a
-ningún registro, que una ruta con espacios arranca, y que opencode no carga
-ningún AGENTS.md ni CLAUDE.md. Sale con 1 si alguno falla. Al acabar, pase lo
+ningún registro, que una ruta con espacios arranca, que opencode no carga
+ningún AGENTS.md ni CLAUDE.md, y dos de «Quitar las claves de este sitio» con
+las funciones de verdad del panel: que quitar la entrada de Faro y una que no es
+de Faro es UNA sola escritura, que las dos quedan deshabilitadas y sin el token
+en el fichero y que volver a guardar las claves reutiliza la entrada y conecta;
+y que una entrada deshabilitada a mano no se adopta y guardar las claves la
+reutiliza. Sale con 1 si alguno falla. Al acabar, pase lo
 que pase, mata opencode y sus hijos y borra la carpeta temporal (`--conservar`
 la deja, con los registros de opencode dentro; `--exe <ruta>` usa otro
 `opencode.exe`). Sólo Windows, fuera de `npm run check`, y no manda ningún turno
@@ -1287,6 +1336,19 @@ corto y un detalle. Todos los títulos, por dónde salen:
   botón **Comprobar las claves**; el detalle nombra los hosts que se quedan sin
   comprobar, porque se decide host a host (el que ya tenías comprobado con ese
   mismo MCP no vuelve a avisar); en verde, esa primera comprobación salió bien.
+  Desde que existe «Quitar las claves», sólo avisa en un sitio configurado.
+- «Claves quitadas» — pulsaste **Quitar las claves de este sitio** en Ajustes.
+  En verde, las entradas quedaron deshabilitadas y sin claves en opencode, lo que
+  opencode carga es eso y el sitio (y su enlazado) quedó sin configurar: el
+  detalle nombra las entradas, los milisegundos de la escritura y los hosts
+  desmarcados. En amarillo, no se quitó nada o el sitio no se dio por
+  desconfigurado: «sin quitar · configuración ilegible» (opencode no devolvió su
+  configuración), «sin quitar · <código> · <tipo>» (no aceptó la escritura),
+  «sin releer la configuración» (la aceptó pero no se pudo comprobar) o «la
+  configuración que opencode carga no es la escrita» (una configuración de
+  proyecto delante). En gris, «espera cancelada» si te fuiste a otro sitio a
+  mitad, o las entradas que no son de Faro que dejaste sin marcar y que el sitio
+  seguirá adoptando. Nunca lleva el contenido del fichero ni ninguna clave.
 - «MCP verificado» — los tokens se comprobaron, con una línea por producto
   («Jira: … · Confluence: …»).
 - «Sitio enlazado» — el otro host (Jira o Confluence) comparte el MCP de
@@ -1808,7 +1870,23 @@ marcha, así que Faro sólo escribe con el panel quieto: sin una respuesta
 llegando, sin un indexado, sin «Comprobar» probando un modelo y sin la
 comprobación de las claves a medias. Espera a que termine y vuelve a pulsar. Y
 si el botón está apagado sin nada en marcha, es que falta marcar la casilla del
-permiso, justo encima.
+permiso, justo encima. Lo mismo vale para **Quitar** en «Quitar las claves de
+este sitio»: también escribe en opencode, y además se apaga si no hay nada que
+quitar.
+
+**Quité las claves y el sitio vuelve a quedar configurado**
+Ese dominio tiene otra entrada que no escribió Faro (pegada a mano, con Docker) y
+la dejaste sin marcar: sigue habilitada con sus claves, y al arrancar Faro la
+vuelve a adoptar. Vuelve a **Quitar las claves de este sitio** y marca su
+casilla, o quítala tú del fichero. En el registro, «Claves quitadas» en gris la
+nombra.
+
+**«Quitar las claves»: «lo que carga no es lo escrito»**
+opencode aceptó la escritura, pero la entrada que carga sigue con claves: hay
+una configuración de proyecto (un `opencode.json` en la carpeta donde
+arrancaste `opencode serve`) delante de la global. Faro no da el sitio por
+desconfigurado. Arranca opencode desde otra carpeta —`tools\arrancar-opencode.ps1`
+usa una propia y vacía— y vuelve a intentarlo.
 
 **opencode no arranca: «is not valid JSON(C)… InvalidSymbol 1:1»**
 El `opencode.json` está guardado con BOM (tres bytes invisibles al principio).

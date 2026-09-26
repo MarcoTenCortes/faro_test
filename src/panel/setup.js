@@ -190,10 +190,15 @@ export function siteRecords({ host, product, mcpName, jiraHost = '', confluenceH
  * guardados antes de H18 no llevan `verified` y cuentan como verificados,
  * porque nadie tiene que ver «claves sin comprobar» por actualizar Faro. Pura.
  *
+ * Y desde H19, sólo en un sitio CONFIGURADO (`configured === true`): tras
+ * «Quitar las claves de este sitio» el registro queda `configured: false`, y su
+ * `verified` viejo no dice nada de unas claves que ya no existen; sin esto,
+ * «Ahora no» tras quitar las claves enseñaba «claves sin comprobar» de nada.
+ *
  * @param {object|null} saved el registro guardado del sitio (`sites[host]`)
  */
 export function keysUnverified(saved) {
-  return !!saved && typeof saved === 'object' && saved.verified === false
+  return !!saved && typeof saved === 'object' && saved.configured === true && saved.verified === false
 }
 
 /**
@@ -707,6 +712,288 @@ export function mcpFailureHint(status) {
     retry: true,
     copy: '',
   }
+}
+
+// ---------------------------------------------------------------------------
+// H19 · «Quitar las claves de este sitio» (docs/PLAN2.md §3.2 «Borrado», §8
+// decisión 3; docs/plan/anexo-2-A-mcp-automatico.md B1).
+//
+// Por qué existe: desde H18 Faro ESCRIBE las claves de Atlassian en la
+// configuración global de opencode, y lo que Faro escribe tiene que poder
+// quitarlo sin pedirle a nadie que abra un JSON a mano. Pero opencode 1.2.25 no
+// tiene borrado por la API (`{mcp:{nombre:null}}` es un 400 y `{mcp:{}}` fusiona
+// sin borrar, anexo 2-A), así que «quitar» es reescribir la entrada ENTERA con
+// `enabled: false` y las diez variables a '' —mcp-atlassian trata '' como
+// ausente—, en UN solo `PATCH /global/config` por la barrera de siempre
+// (`client.updateMcpEntries`). Queda en el fichero un esqueleto deshabilitado y
+// sin claves, que `chooseWriteTarget` reutiliza al volver a guardarlas y que
+// `mcpForHost` no adopta (salta las `enabled: false`: sin eso, el arranque
+// volvería a dar el sitio por configurado y a pedir claves en bucle).
+//
+// Lo que decide QUÉ se quita es puro y está aquí; lo que pregunta, confirma y
+// escribe es del panel (`prepareRemoveKeys`/`removeKeys`). Nunca se escribe
+// `{enabled: false}` a secas: con la fusión profunda del PATCH eso dejaría los
+// tokens en el fichero.
+// ---------------------------------------------------------------------------
+
+/**
+ * Una candidata a deshabilitar: la MISMA lectura que `resumenEntrada` +
+ * `hostsDe`, sin `environment` (los tokens van ahí en claro y no salen de aquí).
+ * Claves EXACTAS y en este orden: `name, enabled, command, type, timeout,
+ * jiraHost, confluenceHost`.
+ */
+function candidataDe(name, entry) {
+  return { ...resumenEntrada(name, entry), ...hostsDe(entry) }
+}
+
+/**
+ * Qué entradas de la configuración de opencode son de ESTE sitio y se pueden
+ * quitar (H19). Pura, determinista y nunca lanza.
+ *
+ * Se miran los hosts `host`, `saved.jiraHost` y `saved.confluenceHost` (en
+ * minúsculas, sin vacíos ni repetidos): en Data Center la entrada es COMPARTIDA
+ * por Jira y Confluence, y quitar las claves de uno deja sin claves al otro
+ * (el texto de confirmación lo dice). Candidata es TODA entrada propia de
+ * `config.mcp` (`Object.keys`: lo heredado no existe) que lleve alguno de esos
+ * hosts en `JIRA_URL` o `CONFLUENCE_URL` —habilitada o deshabilitada: una
+ * deshabilitada puede seguir llevando tokens en disco—, más la del
+ * `saved.mcpName` aunque ya no lleve el dominio (es la que el sitio tiene
+ * apuntada). Sin repetir y en el orden de la configuración.
+ *
+ * - `propias`: las de Faro, por su NOMBRE (el `mcpName` guardado, si tiene
+ *   forma de nombre, o el `mcpNameForHost` de alguno de los hosts mirados). Se
+ *   quitan siempre.
+ * - `ajenas`: el resto de candidatas (un bloque pegado a mano, uno con docker):
+ *   las escribió otro, y el panel sólo las quita con una casilla aparte. Si no
+ *   se quitan, `mcpForHost` las seguirá adoptando.
+ * - `noQuitables`: las que `mcpScrubPatch` no sabe deshabilitar (una remota, un
+ *   `command` que no es una lista de cadenas limpias, un nombre que no se puede
+ *   escribir): se LISTAN para decirlo y no salen en las otras dos, porque una
+ *   sola de ellas en el PATCH lo tiraría entero.
+ *
+ * @param {{config: object|null, saved: object|null, host: string}} input
+ * @returns {{propias: object[], ajenas: object[], noQuitables: object[]}}
+ */
+export function mcpScrubCandidates({ config = null, saved = null, host = '' } = {}) {
+  const out = { propias: [], ajenas: [], noQuitables: [] }
+  if (!plano(config) || !plano(config.mcp)) return out
+  const mcp = config.mcp
+  const guardado = plano(saved) ? saved : {}
+
+  const hosts = []
+  for (const h of [host, guardado.jiraHost, guardado.confluenceHost]) {
+    const x = typeof h === 'string' ? h.trim().toLowerCase() : ''
+    if (x && !hosts.includes(x)) hosts.push(x)
+  }
+  const nombreGuardado = validMcpName(guardado.mcpName) ? guardado.mcpName : ''
+  const deFaro = hosts.map((h) => mcpNameForHost(h))
+
+  for (const name of Object.keys(mcp)) {
+    const entry = mcp[name]
+    if (!plano(entry)) continue
+    const { jiraHost, confluenceHost } = hostsDe(entry)
+    const porDominio = (jiraHost !== '' && hosts.includes(jiraHost)) || (confluenceHost !== '' && hosts.includes(confluenceHost))
+    const porNombre = nombreGuardado !== '' && name === nombreGuardado
+    if (!porDominio && !porNombre) continue
+    const c = candidataDe(name, entry)
+    if (!mcpScrubPatch(c)) out.noQuitables.push(c)
+    else if (porNombre || deFaro.includes(name)) out.propias.push(c)
+    else out.ajenas.push(c)
+  }
+  return out
+}
+
+/** Las diez variables, todas vacías: lo que queda de las claves tras quitarlas. */
+function entornoVacio() {
+  return Object.fromEntries(MCP_ENV_KEYS.map((k) => [k, '']))
+}
+
+/**
+ * La entrada ENTERA que deja una candidata deshabilitada y sin secretos, ya
+ * pasada por la barrera (`validMcpEntry`), o null si no se puede (H19). Pura.
+ *
+ * `{ type: 'local', command, environment: <las diez a ''>, enabled: false,
+ * timeout }`: el `command` es el SUYO, byte a byte, aceptado como
+ * `knownCommand` igual que en `mcpWritePatch` (el de docker o una ruta propia
+ * se conserva: quitar las claves no es cambiarle el programa); el `timeout`, el
+ * suyo si es un entero entre 1000 y 600 000, y si no 60 000. Nada de lo que
+ * traiga la candidata entra en el `environment` ni en `enabled`: se construyen
+ * aquí. Una remota (`type` distinto de 'local'), un `command` que no es una
+ * lista de cadenas limpias, o un nombre que no se puede escribir → null, sin
+ * lanzar. Nunca `{enabled: false}` a secas: la fusión profunda del PATCH
+ * dejaría los tokens en el fichero.
+ *
+ * @param {object} candidata una de `mcpScrubCandidates`
+ */
+export function mcpScrubPatch(candidata) {
+  if (!plano(candidata) || typeof candidata.name !== 'string') return null
+  if (candidata.type !== 'local' || !Array.isArray(candidata.command)) return null
+  const t = candidata.timeout
+  const timeout = Number.isInteger(t) && t >= 1000 && t <= 600000 ? t : 60000
+  const command = [...candidata.command]
+  const entrada = { type: 'local', command, environment: entornoVacio(), enabled: false, timeout }
+  return validMcpEntry(candidata.name, entrada, { knownCommand: command })
+}
+
+/**
+ * ¿Lo que opencode CARGA tras el PATCH es lo escrito? (H19) Pendientes son los
+ * nombres cuya entrada en `config.mcp` sigue con `enabled !== false` o con
+ * alguna de las diez variables distinta de '': una configuración de proyecto
+ * delante (en la carpeta donde se arrancó `opencode serve`) taparía lo escrito
+ * y el MCP seguiría cargado con sus claves. Una entrada que ya NO está en la
+ * configuración cargada no es pendiente: no hay tokens cargados. Sin una
+ * configuración legible no se da nada por quitado. Pura.
+ *
+ * @param {object|null} config lo que devuelve `GET /config` después del PATCH
+ * @param {string[]} names los que se escribieron
+ * @returns {{ok: boolean, pendientes: string[]}}
+ */
+export function scrubEffective(config, names) {
+  const lista = Array.isArray(names) ? names.filter((n) => typeof n === 'string') : []
+  if (!plano(config)) return { ok: false, pendientes: [...lista] }
+  const mcp = plano(config.mcp) ? config.mcp : {}
+  const pendientes = lista.filter((name) => {
+    if (!Object.hasOwn(mcp, name) || !plano(mcp[name])) return false
+    const entry = mcp[name]
+    const env = plano(entry.environment) ? entry.environment : {}
+    const conClaves = MCP_ENV_KEYS.some((k) => Object.hasOwn(env, k) && env[k] !== '')
+    return entry.enabled !== false || conClaves
+  })
+  return { ok: pendientes.length === 0, pendientes }
+}
+
+/**
+ * Los registros del sitio que dejan de estar configurados al quitar las claves
+ * (H19): CADA registro de `sites` (en su orden) cuyo `mcpName` esté entre los
+ * quitados, o cuyo host esté en `hosts` (sin distinguir mayúsculas: el de la
+ * pestaña y sus enlazados). El `patch` es EXACTAMENTE `{configured: false,
+ * mcpName: '', skippedKeys: false, jiraHost: '', confluenceHost: ''}`: deja el
+ * sitio como antes de configurarlo, así que el arranque vuelve a la pantalla de
+ * claves por el camino normal. NO toca `onboarded`, `indexedAt`, la Skill, el
+ * contexto ni nada más: esto no es «Olvidar este sitio». No muta lo que recibe.
+ * Pura.
+ *
+ * @param {{sites: Record<string, object>|null, names: string[], hosts: string[]}} input
+ * @returns {Array<{host: string, patch: object}>}
+ */
+export function unlinkRecords({ sites = null, names = [], hosts = [] } = {}) {
+  if (!plano(sites)) return []
+  const nombres = new Set((Array.isArray(names) ? names : []).filter((n) => typeof n === 'string' && n !== ''))
+  const conHost = new Set(
+    (Array.isArray(hosts) ? hosts : [])
+      .filter((h) => typeof h === 'string' && h.trim() !== '')
+      .map((h) => h.trim().toLowerCase())
+  )
+  const out = []
+  for (const host of Object.keys(sites)) {
+    const r = sites[host]
+    const porNombre = plano(r) && typeof r.mcpName === 'string' && nombres.has(r.mcpName)
+    const porHost = conHost.has(host.toLowerCase())
+    if (!porNombre && !porHost) continue
+    out.push({ host, patch: { configured: false, mcpName: '', skippedKeys: false, jiraHost: '', confluenceHost: '' } })
+  }
+  return out
+}
+
+/**
+ * Quita las claves de las candidatas en UN solo `PATCH /global/config` (H19),
+ * por la puerta de siempre, `client.updateMcpEntries`, con el `command` de cada
+ * una como conocido (`known`): la barrera de mcp-config.js sólo acepta el
+ * `command` del usuario si es byte a byte el que `GET /config` trae para ese
+ * nombre. Una sola petición porque cada PATCH aborta TODOS los turnos en vuelo
+ * de ese opencode y rearranca TODOS sus MCP (§7): dos seguidos son dos cortes.
+ *
+ * Si una sola candidata no se puede deshabilitar, NO sale ninguna petición
+ * (`kind: 'entrada'`, con su nombre): quitar a medias dejaría el sitio medio
+ * configurado. Sin candidatas, tampoco. No recarga, no conecta y no espera:
+ * comprobar lo que opencode carga es del panel (`scrubEffective`). Devuelve
+ * `{ok, status, kind, names}`, claves EXACTAS: nada de la respuesta de opencode,
+ * que es la configuración global entera con los tokens de todos los MCP.
+ *
+ * @param {object} client el `OpencodeClient`
+ * @param {{candidatas: object[]}} opts
+ */
+export async function scrubMcp(client, { candidatas = [] } = {}) {
+  const lista = Array.isArray(candidatas) ? candidatas : []
+  if (!lista.length) return { ok: false, status: 0, kind: 'entrada', names: [] }
+  const entradas = {}
+  const known = {}
+  for (const c of lista) {
+    const e = mcpScrubPatch(c)
+    if (!e) return { ok: false, status: 0, kind: 'entrada', names: [typeof c?.name === 'string' ? c.name : ''] }
+    entradas[c.name] = e
+    known[c.name] = c.command
+  }
+  const r = await client.updateMcpEntries(entradas, { known })
+  return { ok: !!r?.ok, status: r?.status ?? 0, kind: r?.kind ?? '', names: Object.keys(entradas) }
+}
+
+/** Un host con forma de host (y puerto opcional): lo único que se imprime de un host enlazado. */
+const FORMA_DE_HOST = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:\d{1,5})?$/i
+
+/** Un nombre de la lista (o el `name` de una candidata), si tiene forma de nombre; si no, ''. */
+function nombreImprimible(x) {
+  const n = typeof x === 'string' ? x : plano(x) && typeof x.name === 'string' ? x.name : ''
+  return validMcpName(n) ? n : ''
+}
+
+/** Una línea, sin invisibles y sin espacios en los bordes. */
+function unaLineaLimpia(texto) {
+  return sinInvisibles(texto).replace(ESPACIOS_DEL_ERROR, ' ').trim()
+}
+
+/**
+ * Los textos de la confirmación de «Quitar las claves de este sitio» (H19):
+ * `{principal, ajenas, noQuitables}`, tres cadenas ('' cuando no hay nada que
+ * decir). Viven aquí y no en el panel para que el espejo del banco
+ * (harness/panel-preview.html) los IMPORTE: panel y espejo dicen lo mismo por
+ * construcción, no por copia.
+ *
+ * El texto principal dice qué se deshabilita, que el host enlazado se queda
+ * también sin claves (la entrada es compartida), que afecta a CUALQUIER cliente
+ * de ese opencode —la TUI incluida: el PATCH reinicia sus conexiones y corta una
+ * respuesta a medias— y que queda un esqueleto deshabilitado y sin claves en la
+ * carpeta (no hay borrado por la API), que Faro reutiliza al volver a
+ * guardarlas. Cada nombre pasa por `validMcpName` antes de imprimirse (uno raro
+ * se omite, igual que un host enlazado sin forma de host), y cada texto sale en
+ * UNA línea y sin invisibles. Acepta nombres o candidatas enteras. Pura.
+ *
+ * Desvío anotado del contrato: el de `noQuitables` concuerda en plural («no se
+ * pueden… quítalas») cuando son varias; con una es el texto del contrato letra
+ * a letra.
+ */
+export function scrubConfirmText({ propias = [], ajenas = [], noQuitables = [], hostsEnlazados = [], carpeta = '' } = {}) {
+  const limpios = (lista) => (Array.isArray(lista) ? lista.map(nombreImprimible).filter(Boolean) : [])
+  const p = limpios(propias)
+  const a = limpios(ajenas)
+  const n = limpios(noQuitables)
+  const hosts = (Array.isArray(hostsEnlazados) ? hostsEnlazados : []).filter((h) => typeof h === 'string' && FORMA_DE_HOST.test(h))
+  const dir = unaLineaLimpia(typeof carpeta === 'string' ? carpeta : '')
+  const cita = (lista) => lista.map((x) => `«${x}»`).join(', ')
+
+  let principal
+  if (p.length) {
+    principal =
+      `Se deshabilitarán en la configuración de opencode, sin claves: ${cita(p)}.` +
+      (hosts.length ? ` También deja sin claves ${hosts.join(' y ')} (enlazado).` : '') +
+      ' Afecta a cualquier cliente de este opencode, la TUI incluida: opencode reinicia sus conexiones y una respuesta a medias en otra ventana se corta.' +
+      ` Queda una entrada deshabilitada y sin claves en ${dir || 'la carpeta de configuración de opencode'} (no hay borrado por la API), que Faro reutiliza al volver a guardarlas. Después te volverá a pedir las claves.`
+  } else if (a.length) {
+    principal = `Este sitio no tiene ninguna entrada de Faro en opencode; sólo ${cita(a)}, que no es de Faro.`
+  } else {
+    principal = 'Este sitio no tiene claves en la configuración de opencode que quitar.'
+  }
+
+  const textoAjenas = a.length
+    ? `También ${cita(a)}, que no ${a.length === 1 ? 'es' : 'son'} de Faro. Si no lo marcas, el sitio ${a.length === 1 ? 'la' : 'las'} seguirá adoptando y volverá a quedar configurado.`
+    : ''
+  const textoNo = n.length
+    ? n.length === 1
+      ? `${cita(n)} no se puede deshabilitar desde aquí (no es un MCP local de la forma que Faro escribe): quítala a mano.`
+      : `${cita(n)} no se pueden deshabilitar desde aquí (no son MCP locales de la forma que Faro escribe): quítalas a mano.`
+    : ''
+
+  return { principal: unaLineaLimpia(principal), ajenas: unaLineaLimpia(textoAjenas), noQuitables: unaLineaLimpia(textoNo) }
 }
 
 /** Los nombres del fichero global de opencode, en el orden en que los busca. */

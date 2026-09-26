@@ -413,7 +413,21 @@
     <div class="row wrap">
       <button class="ghost" id="btn-reindex" type="button">Reconstruir el contexto</button>
       <button class="ghost" id="btn-edit-keys" type="button">Cambiar las claves</button>
+      <button class="ghost danger" id="btn-remove-keys" type="button">Quitar las claves de este sitio</button>
       <button class="ghost" id="btn-tree-debug" type="button">Diagnóstico del árbol</button>
+    </div>
+    <!-- H19: la confirmación en línea de «Quitar las claves de este sitio».
+         Nace oculta; la rellena el panel con lo que opencode tiene de verdad
+         (qué se deshabilita, el host enlazado, las entradas que no son de
+         Faro con su casilla y las que no se pueden quitar desde aquí). -->
+    <div class="field hidden" id="remove-keys-confirm">
+      <p class="fine" id="remove-keys-text"></p>
+      <label class="check hidden" id="remove-keys-foreign-field"><input type="checkbox" id="remove-keys-foreign"> <span id="remove-keys-foreign-text"></span></label>
+      <p class="fine hidden" id="remove-keys-unremovable"></p>
+      <div class="row wrap">
+        <button class="ghost danger needs-idle" id="btn-remove-keys-go" type="button">Quitar</button>
+        <button class="ghost" id="btn-remove-keys-cancel" type="button">Cancelar</button>
+      </div>
     </div>
     <p class="fine">El diagnóstico lee la barra lateral de esta pestaña y apunta en el Registro qué
       estructura ha encontrado. Es lo que hay que mirar cuando la navegación paso a paso no
@@ -435,7 +449,9 @@
       <button class="ghost small" id="btn-forget-model-checks" type="button">Olvidar los veredictos</button>
     </div>
     <p class="fine">Borra de golpe todo lo de la lista y deja este sitio como si Faro no lo hubiera
-      visto nunca. No se puede deshacer, y la próxima vez volverá a preguntarte por el contexto.</p>
+      visto nunca. No se puede deshacer, y la próxima vez volverá a preguntarte por el contexto.
+      No toca la configuración de opencode: para quitar las claves de ahí está «Quitar las claves
+      de este sitio», más arriba.</p>
     <p class="fine">El modelo elegido y los veredictos de modelos —qué modelos han contestado y
       cuáles no— son tuyos y no de un sitio: «Olvidar este sitio» no los toca. «Olvidar los
       veredictos» borra lo segundo y deja tu modelo como está.</p>

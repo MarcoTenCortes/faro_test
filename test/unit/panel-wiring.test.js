@@ -5645,7 +5645,7 @@ test('H18 revisión: los cuerpos que deciden en saveKeys, no sólo sus literales
   )
   const tarde = funcion('async function onMcpResult(r, vigente) {')
   assert(tarde.startsWith('async function onMcpResult(r, vigente) {\n  soltarComprobandoMcp()\n  if (state.mcpCheck !== vigente) return\n'), 'C6: onMcpResult suelta la cabecera ANTES de mirar si la comprobación sigue valiendo')
-  eq(LIMPIO.split('soltarComprobandoMcp()').length - 1, 4, 'C6: definida una vez y llamada en onMcpResult, saveKeys y «Ya lo he pegado»')
+  eq(LIMPIO.split('soltarComprobandoMcp()').length - 1, 5, 'C6: definida una vez y llamada en onMcpResult, saveKeys, «Ya lo he pegado» y, desde H19, removeKeys (invalida con las mismas líneas que saveKeys)')
 
   // (9) C7: los desenlaces TERMINALES se anuncian; los estados de paso, no.
   una(guardar, '\n  const decir = (texto) => {\n    status.textContent = texto\n    announce(texto)\n  }\n', 'C7: decir escribe y anuncia')
@@ -5683,4 +5683,214 @@ test('H18 revisión: los cuerpos que deciden en saveKeys, no sólo sus literales
     'C2: sin la configuración no se escribe, y se dice'
   )
   assert(porQue.indexOf("kind === 'config'") < porQue.indexOf("kind === 'red' || !status"), 'C2: antes del «no ha contestado», que también es status 0')
+})
+
+test('H19: «Quitar las claves de este sitio» — un solo PATCH por la barrera, los registros desmarcados sin tocar nada más, y vuelta a la pantalla de claves', () => {
+  // docs/PLAN2.md §3.2 (viñeta «Borrado») y §8 decisión 3: no hay borrado por la
+  // API, así que se reescribe la entrada ENTERA deshabilitada y sin claves (lo
+  // decide setup.js), en UN PATCH, con el panel quieto y lo pendiente del MCP
+  // invalidado; se relee lo que opencode carga ANTES de desmarcar los registros,
+  // y «Quitar» no es «Olvidar»: ni índice, ni contexto, ni memoria, ni diario.
+  // Todo sobre el fuente SIN comentarios y sin las líneas que éstos dejan vacías,
+  // con cuerpos y líneas ENTERAS (la lección de la revisión adversaria de H18).
+  const JS_SIN = sinComentarios(JS)
+  const sinVacias = (s) =>
+    s
+      .split('\n')
+      .filter((l) => l.trim())
+      .join('\n')
+  const LIMPIO = sinVacias(JS_SIN)
+  const corte = (src, desde, hasta) => {
+    const i = src.indexOf(desde)
+    assert(i >= 0, 'falta la marca de inicio del recorte: ' + desde)
+    const j = src.indexOf(hasta, i + desde.length)
+    assert(j > i, 'falta la marca de final del recorte (o va antes): ' + hasta)
+    return src.slice(i, j)
+  }
+  const funcion = (firma) => corte(LIMPIO, firma, '\n}\n') + '\n}'
+  const una = (src, linea, msg) => eq(src.split(linea).length - 1, 1, msg + ': «' + linea.trim() + '»')
+  const orden = (src, marcas, msg) => {
+    let desde = 0
+    for (const m of marcas) {
+      const p = src.indexOf(m, desde)
+      assert(p >= 0, msg + ': falta «' + m + '» (o va antes de la anterior)')
+      desde = p + m.length
+    }
+  }
+
+  // (1) panel.html: el botón en «Este sitio» y la confirmación en línea, que
+  // nace oculta, con su casilla de las ajenas también oculta y el «Quitar» con
+  // el gancho de «turno parado».
+  const ajustes = corte(HTML, 'id="screen-settings"', '<section class="screen hidden" id="screen-memory"')
+  for (const id of ['btn-remove-keys', 'remove-keys-confirm', 'remove-keys-text', 'remove-keys-foreign-field', 'remove-keys-foreign', 'remove-keys-foreign-text', 'remove-keys-unremovable', 'btn-remove-keys-go', 'btn-remove-keys-cancel']) {
+    assert(htmlIds.has(id), 'panel.html tiene #' + id)
+    assert(ajustes.includes(`id="${id}"`), '#' + id + ' vive dentro de Ajustes')
+  }
+  orden(
+    ajustes,
+    [
+      'id="btn-edit-keys"',
+      '<button class="ghost danger" id="btn-remove-keys" type="button">Quitar las claves de este sitio</button>',
+      '<div class="field hidden" id="remove-keys-confirm">',
+      '<p class="fine" id="remove-keys-text"></p>',
+      '<label class="check hidden" id="remove-keys-foreign-field"><input type="checkbox" id="remove-keys-foreign"> <span id="remove-keys-foreign-text"></span></label>',
+      '<p class="fine hidden" id="remove-keys-unremovable"></p>',
+      '<button class="ghost danger needs-idle" id="btn-remove-keys-go" type="button">Quitar</button>',
+      '<button class="ghost" id="btn-remove-keys-cancel" type="button">Cancelar</button>',
+      'El diagnóstico lee la barra lateral',
+    ],
+    'el botón junto a «Cambiar las claves» y la confirmación, oculta, debajo de esa fila'
+  )
+  const confirmacion = corte(ajustes, '<div class="field hidden" id="remove-keys-confirm">', 'El diagnóstico lee la barra lateral')
+  assert(!/href/.test(confirmacion), 'sin enlaces')
+  assert(
+    ajustes.replace(/\s+/g, ' ').includes('No toca la configuración de opencode: para quitar las claves de ahí está «Quitar las claves de este sitio», más arriba.'),
+    '«Olvidar este sitio» dice que no toca opencode y remite al botón'
+  )
+  assert(!CSS_LIMPIO.includes('remove-keys'), 'ninguna regla nueva en panel.css: reutiliza .field, .fine, .check y .row')
+
+  // (2) El import de setup.js: las cinco funciones, y la entrada deshabilitada
+  // NO la monta el panel (es de scrubMcp).
+  const importe = corte(JS_SIN, 'import {\n  configureMcp,\n  mcpStatusFor,', "} from './setup.js'")
+  for (const f of ['mcpScrubCandidates', 'scrubMcp', 'scrubEffective', 'unlinkRecords', 'scrubConfirmText', 'keysUnverified']) assert(new RegExp('\\b' + f + ',').test(importe), 'el panel importa ' + f + ' de setup.js')
+  assert(!/mcpScrubPatch/.test(JS_SIN), 'el panel no monta la entrada deshabilitada: eso es de scrubMcp')
+  una(LIMPIO, '\n  removeKeysPlan: null,\n', 'el plan que se confirma vive en el estado')
+  una(LIMPIO, '\nlet quitandoClaves = false\n', 'contra el doble clic, como escribiendoClaves')
+
+  // (3) Preparar: sólo LEE, con el cliente y el host capturados (§8.22).
+  const preparar = funcion('async function prepareRemoveKeys() {')
+  orden(preparar, ['const sitio = state.site', 'const host = sitio.host', 'const cliente = state.client', 'await '], 'prepareRemoveKeys captura antes del primer await')
+  una(preparar, '\n  if (state.client !== cliente || (state.site?.host ?? state.lastHost) !== host) return\n', 'SEGURIDAD §8.22: la lista es del sitio y del cliente con que se pidió')
+  una(preparar, 'mcpScrubCandidates({ config, saved, host })', 'la lista sale de setup.js')
+  una(preparar, "log.warn('Claves quitadas', 'sin quitar · configuración ilegible')", 'sin configuración legible no se ofrece nada')
+  una(preparar, "paintRemoveKeysConfirm(rutas?.config || '')", 'y se pinta con la carpeta real')
+  assert(!/scrubMcp\(|updateMcpEntries\(|reloadGlobalConfig\(|saveSite\(/.test(preparar), 'preparar no escribe nada, ni en opencode ni en el almacén')
+
+  // (4) Pintar y esconder la confirmación.
+  const pintar = funcion('function paintRemoveKeysConfirm(')
+  orden(
+    pintar,
+    [
+      'const t = scrubConfirmText({ ...plan, carpeta })',
+      "$('remove-keys-text').textContent = t.principal",
+      "$('remove-keys-foreign-field').classList.toggle('hidden', !plan.ajenas.length)",
+      "$('remove-keys-foreign').checked = false",
+      "$('remove-keys-foreign-text').textContent = t.ajenas",
+      "$('remove-keys-unremovable').textContent = t.noQuitables",
+      'paintRemoveKeysGo()',
+      "$('remove-keys-confirm').classList.remove('hidden')",
+      'announce(t.principal)',
+    ],
+    'la confirmación dice lo que setup.js escribe, con la casilla desmarcada, y se anuncia (A2)'
+  )
+  eq(
+    funcion('function paintRemoveKeysGo() {'),
+    "function paintRemoveKeysGo() {\n  const plan = state.removeKeysPlan\n  $('btn-remove-keys-go').disabled = quitandoClaves || state.streaming || !plan || (!plan.propias.length && !plan.ajenas.length)\n}",
+    '«Quitar» apagado con un turno, escribiendo o sin nada que quitar'
+  )
+  eq(
+    funcion('function hideRemoveKeysConfirm() {'),
+    "function hideRemoveKeysConfirm() {\n  state.removeKeysPlan = null\n  $('remove-keys-confirm').classList.add('hidden')\n  $('remove-keys-foreign').checked = false\n}",
+    'esconder la confirmación tira el plan y desmarca la casilla'
+  )
+
+  // (5) Quitar: el flujo entero.
+  const quitar = funcion('async function removeKeys() {')
+  una(quitar, '\n  if (!plan || quitandoClaves) return\n', 'sin plan, o con otro quitando, nada')
+  una(quitar, '\n  if (!state.site?.host || state.site.host !== plan.host) {\n', 'SEGURIDAD: un plan de otro sitio no se ejecuta aquí')
+  orden(quitar, ['const sitio = state.site', 'const host = sitio.host', 'const cliente = state.client', "const conAjenas = $('remove-keys-foreign').checked", 'quitandoClaves = true', 'await '], 'removeKeys captura lo que decide antes del primer await')
+  una(quitar, '\n    if (state.client !== cliente || (state.site?.host ?? state.lastHost) !== host) return\n', 'SEGURIDAD §8.22: tras las lecturas, el mismo cliente y el mismo sitio')
+  una(quitar, 'mcpScrubCandidates({ config, saved, host })', 'el plan se RECALCULA con lo que opencode tiene ahora')
+  una(
+    quitar,
+    '\n    if (!mismosNombres(propias, plan.propias) || !mismosNombres(ajenas, plan.ajenas) || !mismosNombres(hostsEnlazados, plan.hostsEnlazados)) {\n',
+    'si la configuración cambió desde que se abrió la lista, no se escribe'
+  )
+  orden(
+    quitar,
+    ['if (!mismosNombres(propias,', 'paintRemoveKeysConfirm(plan.carpeta)', "decir('La configuración de opencode ha cambiado desde que abriste esta lista: revísala y vuelve a pulsar «Quitar».')", 'return', 'const candidatas = [...propias, ...(conAjenas ? ajenas : [])]'],
+    'repinta, lo dice y vuelve sin escribir; las ajenas sólo con la casilla marcada'
+  )
+  una(quitar, '\n    const ocupado = reconfiguring()\n    if (ocupado) {\n      decir(ocupado)\n      return\n    }\n', 'SEGURIDAD §8.24: la guarda común, justo antes de escribir')
+  una(
+    quitar,
+    '\n    state.mcpCheck = null\n    soltarComprobandoMcp()\n    state.mcpPending = null\n    state.mcpWait?.abort()\n    state.mcpConnected = false\n    state.pendingMcp = null\n',
+    'lo pendiente del MCP de este panel deja de valer, con las mismas líneas que saveKeys'
+  )
+  eq(quitar.split('scrubMcp(').length - 1, 1, 'UN solo PATCH')
+  una(quitar, 'const r = await scrubMcp(cliente, { candidatas })', 'por scrubMcp, con el cliente capturado')
+  for (const prohibida of ['updateMcpEntries(', 'reloadGlobalConfig(', 'connectMcp(', 'addMcp(', 'porQueNoSeEscribe(']) assert(!quitar.includes(prohibida), 'removeKeys no usa ' + prohibida)
+  for (const olvido of ['forgetEverythingFor(', 'clearActivity(', 'clearTodayCache(', 'onboarded', 'saveIndex(', 'saveContextMd(', 'memory.']) assert(!quitar.includes(olvido), '«Quitar» no es «Olvidar»: nada de ' + olvido)
+  orden(
+    quitar,
+    [
+      'const ocupado = reconfiguring()',
+      'state.mcpCheck = null',
+      'const r = await scrubMcp(cliente, { candidatas })',
+      'if (!r.ok) {',
+      'porQueNoSeQuita({ status: r.status, kind: r.kind })',
+      'const despues = await cliente.config().catch(() => null)',
+      'const ef = scrubEffective(despues, r.names)',
+      'if (!ef.ok) {',
+      'const registros = unlinkRecords({ sites: await getSites(), names: r.names, hosts: [host, ...plan.hostsEnlazados] })',
+      'for (const { host: h, patch } of registros) await saveSite(h, patch)',
+      "log.ok('Claves quitadas'",
+      'hideRemoveKeysConfirm()',
+      "announce('Claves quitadas de opencode. Faro te las volverá a pedir.')",
+      'hideScreens()',
+    ],
+    'guarda, PATCH, relectura y SÓLO entonces los registros; después, fuera de Ajustes'
+  )
+  eq(quitar.split('saveSite(').length - 1, 1, 'los registros se escriben en un solo sitio, detrás de la relectura')
+  assert(quitar.endsWith('\n  await bootForSite()\n}'), 'y al final se rearranca, que llega a la pantalla de claves por el camino normal')
+  for (const nivel of ["log.ok('Claves quitadas'", "log.warn('Claves quitadas'", "log.info('Claves quitadas'"]) assert(quitar.includes(nivel), 'el registro dice ' + nivel)
+  assert(!/environment/.test(quitar) && !/log\.\w+\([^)]*\b(config|despues)\b/.test(quitar), 'SEGURIDAD: ni un environment ni una configuración en el registro')
+  const porQueQuita = funcion('function porQueNoSeQuita(')
+  assert(!porQueQuita.includes('Ya lo he pegado') && !porQueQuita.includes('pega el bloque'), 'el porqué de un borrado no manda pegar nada')
+  for (const k of ["kind === 'ConfigJsonError'", "kind === 'ConfigInvalidError'", "kind === 'entrada'", "kind === 'config'", "kind === 'red' || !status"]) assert(porQueQuita.includes(k), 'porQueNoSeQuita distingue ' + k)
+
+  // (6) La pantalla de claves tras quitar: la entrada deshabilitada tiene su
+  // frase, DELANTE de la de siempre, que sigue escrita una sola vez.
+  const abre = corte(JS_SIN, 'function showMcpSetup(', 'let setupHintPintado')
+  orden(abre, ["if (status.present && status.status === 'disabled') {", '} else if (status.present) {', 'está registrado pero en'], 'la rama «disabled» va antes del texto de siempre')
+  eq(JS_SIN.split('está registrado pero en').length - 1, 1, 'la frase del MCP caído sigue en un solo sitio')
+  const DESHABILITADO = '» está deshabilitado y sin claves en opencode (es lo que deja «Quitar las claves»): al guardar, Faro lo vuelve a escribir con las nuevas.`'
+  una(JS_SIN, '`El MCP «${status.name}' + DESHABILITADO, 'la frase de la entrada deshabilitada, escrita una vez')
+
+  // (7) setStreaming, Ajustes y el cambio de sitio.
+  const streaming = corte(JS_SIN, 'function setStreaming(on) {', '\n}')
+  orden(
+    streaming,
+    ["for (const b of $('screen-setup').querySelectorAll('.' + NEEDS_IDLE)) b.disabled = on", 'paintSetupSave()', "for (const b of $('screen-settings').querySelectorAll('.' + NEEDS_IDLE)) b.disabled = on", 'paintRemoveKeysGo()'],
+    'setStreaming apaga «Quitar» con un turno y lo repinta al acabar'
+  )
+  assert(corte(JS_SIN, 'async function showSettingsScreen(', "showScreen('screen-settings')").includes('hideRemoveKeysConfirm()'), 'la lista de otra vez no se queda al abrir Ajustes')
+  const cambio = corte(corte(JS_SIN, 'async function refreshTab(', 'async function bootForSite('), '  if (changedHost) {\n', '\n  state.site = site\n')
+  assert(cambio.includes('hideRemoveKeysConfirm()'), 'ni al cambiar de sitio: la lista era del otro')
+  for (const l of [
+    "$('btn-remove-keys').addEventListener('click', () => prepareRemoveKeys().catch(console.error))",
+    "$('btn-remove-keys-go').addEventListener('click', () => removeKeys().catch(console.error))",
+    "$('btn-remove-keys-cancel').addEventListener('click', hideRemoveKeysConfirm)",
+  ]) {
+    una(JS_SIN, l, 'el manejador')
+  }
+  assert(!/\.verified\b/.test(JS_SIN), 'el panel sigue sin mirar verified a mano: lo dice keysUnverified')
+
+  // (8) El espejo: el grupo con su mando, los textos de setup.js IMPORTADOS, las
+  // cajas medidas a lo ancho, y el estado «quitadas» de la pantalla de claves
+  // con la MISMA frase que el panel.
+  const espejo = readFileSync(join(ROOT, 'harness/panel-preview.html'), 'utf8')
+  for (const k of ['', 'abierto', 'ajenas']) assert(espejo.includes(`data-quitar="${k}"`), 'el espejo tiene el estado ' + (k || 'cerrado'))
+  assert(/setQuitar\(k\) \{/.test(espejo), 'el mando para ponerlo desde fuera')
+  assert(/\bfunction pintarQuitar\(k\) \{/.test(espejo), 'pintarQuitar es una declaración function: una const en TDZ mata el espejo (la lección de H17)')
+  orden(
+    espejo,
+    ['const [\n    { buildMcpConfig, fullConfigSnippet, mcpFailureHint, mcpStatusFor, scrubConfirmText },', '] = await Promise.all([\n    import(\'/src/panel/setup.js\'),'],
+    'el espejo importa scrubConfirmText de setup.js (el primer módulo): no copia los textos'
+  )
+  assert(corte(espejo, 'function pintarQuitar(k) {', '\n  }\n').includes('scrubConfirmText({'), 'y los pinta con ella')
+  const cajas = corte(espejo, 'const CAJAS = [', 'function check()')
+  for (const caja of ["'#remove-keys-confirm'", "'#remove-keys-confirm .check'", "'#remove-keys-confirm .row'"]) assert(cajas.includes(caja), 'check() mide ' + caja + ' a lo ancho')
+  assert(espejo.includes('data-claves="quitadas"'), 'el estado «quitadas» de la pantalla de claves')
+  assert(corte(espejo, 'function pintarClaves(k) {', '\n  }\n').includes('quitadas: `El MCP «${NOMBRE_MCP}' + DESHABILITADO), 'con la MISMA frase que el panel')
 })

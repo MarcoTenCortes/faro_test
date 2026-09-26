@@ -245,6 +245,21 @@ se reutiliza y se conserva su comando. «Cambiar las claves», en Ajustes, vuelv
 a pedir el permiso cada vez, porque escribir corta lo que otras ventanas tengan
 a medias.
 
+Y se **quitan** desde el mismo sitio: **Ajustes → Quitar las claves de este
+sitio**. Antes de tocar nada te enseña, con lo que tu opencode tiene de verdad,
+qué va a deshabilitar —las entradas de Faro de ese sitio, y si tu Jira y tu
+Confluence comparten MCP, que el otro también se queda sin claves—, que afecta a
+cualquier cliente de ese opencode (la TUI incluida: se cortan las respuestas a
+medias) y dónde queda el rastro; una entrada que no escribió Faro (pegada a mano,
+con Docker) sólo se quita si marcas su casilla. Al pulsar **Quitar**, opencode no
+permite borrar una entrada por su API, así que Faro la reescribe **entera,
+deshabilitada y con las variables vacías** —sin un solo token— en una única
+escritura, comprueba que lo que opencode carga es eso y sólo entonces da el
+sitio por desconfigurado y te vuelve a pedir las claves. En el fichero queda una
+entrada deshabilitada y sin claves, que Faro reutiliza si las vuelves a
+guardar. **«Olvidar este sitio»**, en cambio, borra lo que Faro guarda en el
+navegador y no toca la configuración de opencode.
+
 Sólo si opencode no acepta la escritura —su fichero tiene un error de sintaxis,
 o una clave que no conoce— Faro te dice por qué y te deja el bloque de siempre
 para pegar a mano, con un botón **Ya lo he pegado** que hace que opencode lo
@@ -603,7 +618,8 @@ Diecinueve decisiones que sostienen el diseño:
    H16 la lista acaba con dos líneas que son **tuyas y no del sitio** —el
    **modelo elegido** y cuántos **veredictos de modelos** hay apuntados— con su
    propio botón, **Olvidar los veredictos**, porque «Olvidar este sitio» no los
-   toca.
+   toca. Tampoco toca la configuración de opencode, donde viven tus claves:
+   para eso está **Quitar las claves de este sitio**, en la misma sección.
 
 18. **Los nombres que Jira te enseña están traducidos; una búsqueda va por id.**
    Si tu Jira está en español, la API y la pantalla dicen «Tarea», «Historia»,
@@ -677,7 +693,7 @@ cuáles no), que desde H16 son tuyos y no de un sitio.
 ## Comprobaciones
 
 ```bash
-npm run check              # sintaxis + orden + manifest + 1416 pruebas unitarias + docs
+npm run check              # sintaxis + orden + manifest + 1425 pruebas unitarias + docs
 npm run check:docs         # sólo el paso docs: número de pruebas, títulos del registro, mensajes y ficheros del mapa
 npm run test:integration   # contra un opencode real que arranca la propia prueba
 npm run harness            # banco de pruebas visual en http://127.0.0.1:5175
@@ -1048,6 +1064,11 @@ escritura corta los turnos en curso de ese opencode. La respuesta de opencode
 —que es su configuración entera, con las claves de todos tus MCP— **se lee y se
 tira**: no llega al registro, ni a un error, ni a la pantalla. Y Faro **no
 guarda las claves** en ningún sitio suyo: van del campo al opencode local.
+Quitarlas («Quitar las claves de este sitio») pasa por la misma puerta y la
+misma barrera: la entrada **entera**, deshabilitada y con sus diez variables
+vacías —nunca un «deshabilitar» a secas, que dejaría los tokens en el
+fichero—, con su comando conservado tal cual, todas en una sola escritura; y
+las entradas que no escribió Faro, sólo si marcas su casilla.
 
 **Y el modelo no puede tocar tu máquina.** El agente por defecto de opencode
 trae herramientas de shell y de ficheros, y las usa: comprobado, ejecutaba
