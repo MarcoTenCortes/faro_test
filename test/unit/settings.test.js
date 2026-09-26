@@ -15,6 +15,7 @@ import {
   STORAGE_KEYS,
   INDEX_LIMITS,
   PROFILE_LIMITS,
+  MCP_ATLASSIAN_VERSION,
   SAFE_PERMISSIONS as DESDE_CONFIG,
 } from '../../src/shared/config.js'
 import { SAFE_PERMISSIONS } from '../../src/shared/permissions.js'
@@ -223,4 +224,11 @@ test('H6: el peso de la sesión se guarda por host, como la sesión misma', () =
     STORAGE_KEYS.sessionWeight('a.b') !== STORAGE_KEYS.session('a.b'),
     'pero no es la misma clave: el id de la sesión no se pisa con un número'
   )
+})
+
+test('H15: la versión fijada de mcp-atlassian es una cadena de tres números', () => {
+  // Acaba en «uvx mcp-atlassian@<versión>» y en «uv tool install mcp-atlassian==<versión>»:
+  // cualquier otra cosa (un «latest», un espacio, un «>=») cambiaría qué se ejecuta.
+  eq(typeof MCP_ATLASSIAN_VERSION, 'string')
+  assert(/^\d+\.\d+\.\d+$/.test(MCP_ATLASSIAN_VERSION), 'tres números separados por puntos: ' + MCP_ATLASSIAN_VERSION)
 })

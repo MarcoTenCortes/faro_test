@@ -11,8 +11,11 @@ import {
   mcpForHost,
   chosenMcpName,
   PRODUCTS,
+  mcpFailureHint,
 } from '../../src/panel/setup.js'
-import { mcpNameForHost } from '../../src/shared/config.js'
+import { mcpNameForHost, MCP_ATLASSIAN_VERSION } from '../../src/shared/config.js'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 
 const CLOUD = 'https://acme.atlassian.net'
 
@@ -33,7 +36,9 @@ test('mcp: configuración de Cloud con correo y API token, uno por producto', ()
     confluence: { url: CLOUD, email: 'yo@acme.com', token: 'tok-conf' },
   })
   eq(c.type, 'local')
-  eq(c.command, ['uvx', 'mcp-atlassian'])
+  // H15: la versión va fijada también en lo que Faro escribe (docs/PLAN2.md
+  // §8.4), la misma que instala tools/instalar.ps1.
+  eq(c.command, ['uvx', 'mcp-atlassian@' + MCP_ATLASSIAN_VERSION])
   eq(c.environment.JIRA_URL, 'https://acme.atlassian.net')
   eq(c.environment.JIRA_USERNAME, 'yo@acme.com')
   eq(c.environment.JIRA_API_TOKEN, 'tok-jira')
@@ -463,4 +468,91 @@ test('waitForMcpReady: con mcpName se mira ese bloque, no el nombre derivado del
   const r = await waitForMcpReady(client, host, { timeoutMs: 50, intervalMs: 5, mcpName: 'mi-atlassian' })
   eq(r.connected, true)
   eq(r.name, 'mi-atlassian')
+})
+
+// ---------------------------------------------------------------------------
+// H15 (docs/PLAN2.md §3.1): el bloque que Faro escribe y el consejo cuando el
+// MCP de Atlassian no arranca.
+// ---------------------------------------------------------------------------
+
+const SETUP_FUENTE = readFileSync(join(import.meta.dirname, '..', '..', 'src', 'panel', 'setup.js'), 'utf8')
+  .replace(/\/\*[\s\S]*?\*\//g, '')
+  .replace(/^[ \t]*\/\/.*$/gm, '')
+
+test('H15: el bloque del MCP lleva la versión fijada, todas las herramientas y un minuto para arrancar', () => {
+  const c = buildMcpConfig({ jira: { url: 'https://jira.simplprogramme.eu', token: 'pat' }, dataCenter: true })
+  eq(c.command, ['uvx', 'mcp-atlassian@' + MCP_ATLASSIAN_VERSION], 'uvx con la versión que el equipo lleva')
+  assert(/^\d+\.\d+\.\d+$/.test(MCP_ATLASSIAN_VERSION), 'la versión es una versión de verdad: ' + MCP_ATLASSIAN_VERSION)
+  // La versión sale de la constante, no de un literal repetido: si un día se
+  // sube en config.js y aquí se queda la vieja, el script y el bloque dirían
+  // cosas distintas.
+  assert(SETUP_FUENTE.includes("'mcp-atlassian@' + MCP_ATLASSIAN_VERSION"), 'el command se monta con la constante')
+  assert(!SETUP_FUENTE.includes(MCP_ATLASSIAN_VERSION), 'y la versión no está escrita a mano en setup.js')
+  // mcp-atlassian 0.23.1 avisa de que su valor por defecto pasará a seis
+  // grupos de herramientas; «all» es el que conserva todas (utils/toolsets.py).
+  eq(c.environment.TOOLSETS, 'all', 'todas las herramientas, también cuando cambie el valor por defecto')
+  eq(c.environment.READ_ONLY_MODE, 'true', 'y sigue en sólo lectura')
+  // El plazo es de ARRANQUE: 8-12 s en caliente, más la primera vez.
+  eq(c.timeout, 60000, 'un minuto para arrancar')
+  eq(Object.keys(c).sort(), ['command', 'enabled', 'environment', 'timeout', 'type'], 'y nada más en el bloque')
+})
+
+test('H15: el consejo del MCP caído, con los DOS mensajes reales de opencode 1.2.25', () => {
+  const fallo = (error) => mcpStatusFor({ x: { status: 'failed', error } }, 'h', 'x')
+  // Medido (anexo-2-B): sin uvx en el PATH, el proceso se cierra al empezar.
+  const sinArranque = mcpFailureHint(fallo('MCP error -32000: Connection closed'))
+  eq(Object.keys(sinArranque).sort(), ['copy', 'kind', 'retry', 'text'], 'claves exactas')
+  eq(sinArranque.kind, 'sin-arranque')
+  eq(sinArranque.retry, true)
+  eq(sinArranque.copy, 'powershell -ExecutionPolicy Bypass -File tools\\instalar.ps1', 'el comando para copiar')
+  assert(/Casi siempre es que no encuentra uvx/.test(sinArranque.text), 'dice lo más probable, sin afirmarlo: Faro no ve el stderr')
+  assert(/terminal NUEVA/.test(sinArranque.text) && /no se reconoce/.test(sinArranque.text), 'y manda a mirar la terminal de opencode')
+  // Medido: el plazo de arranque vencido (con el timeout de antes, 30 s).
+  const lento = mcpFailureHint(fallo('Operation timed out after 30000ms'))
+  eq(Object.keys(lento).sort(), ['copy', 'kind', 'retry', 'text'])
+  eq(lento.kind, 'lento')
+  eq(lento.retry, true)
+  eq(lento.copy, '')
+  assert(/más de 30 s/.test(lento.text), 'dice los segundos del plazo que venció: ' + lento.text)
+  assert(/107 paquetes/.test(lento.text) && /Reintentar/.test(lento.text), 'y qué hacer')
+  eq(mcpFailureHint(fallo('Operation timed out after 60000 ms')).text.includes('más de 60 s'), true, 'con espacio antes de «ms» también')
+  // Cualquier otro fallo: el error de opencode, tal cual pero en una línea.
+  const otro = mcpFailureHint(fallo('spawn EACCES'))
+  eq(otro.kind, 'otro')
+  eq(otro.retry, true)
+  eq(otro.copy, '')
+  assert(otro.text.includes('spawn EACCES'), 'el error de opencode va dentro')
+  const mudo = mcpFailureHint(mcpStatusFor({ x: { status: 'failed' } }, 'h', 'x'))
+  eq(mudo.kind, 'otro')
+  assert(/sin más detalle/.test(mudo.text) && /terminal/.test(mudo.text), 'sin error, un texto que manda a la terminal')
+  eq(mcpFailureHint(fallo({ message: 'objeto' })).text, mudo.text, 'un error que no es cadena cuenta como ninguno')
+})
+
+test('H15: sólo un MCP en «failed» trae consejo; lo demás es null y nada lanza', () => {
+  eq(mcpFailureHint(mcpStatusFor({ x: { status: 'connected' } }, 'h', 'x')), null, 'conectado')
+  eq(mcpFailureHint(mcpStatusFor({}, 'h', 'x')), null, 'ausente')
+  eq(mcpFailureHint(mcpStatusFor({ x: { status: 'disabled' } }, 'h', 'x')), null, 'deshabilitado')
+  eq(mcpFailureHint(mcpStatusFor({ x: 'failed' }, 'h', 'x'))?.kind, 'otro', 'el estado como cadena también vale')
+  for (const basura of [null, undefined, '', 'failed', 7, [], {}, { status: 'failed', present: false }, { raw: { error: 'Connection closed' } }]) {
+    eq(mcpFailureHint(basura), null, 'basura: ' + JSON.stringify(basura))
+  }
+})
+
+test('SEGURIDAD H15: el error de opencode sale en UNA línea, sin invisibles y con tope', () => {
+  const NEL = String.fromCharCode(0x85)
+  const LS = String.fromCharCode(0x2028)
+  const PS = String.fromCharCode(0x2029)
+  const RLO = String.fromCharCode(0x202e)
+  const ZWSP = String.fromCharCode(0x200b)
+  const ESC = String.fromCharCode(0x1b)
+  const error = 'primera\nsegunda\r\ntercera' + NEL + 'cuarta' + LS + 'quinta' + PS + 'sexta ' + RLO + 'al revés' + ZWSP + ESC + ' ' + 'x'.repeat(5000)
+  const h = mcpFailureHint(mcpStatusFor({ x: { status: 'failed', error } }, 'h', 'x'))
+  eq(h.kind, 'otro')
+  const prohibidos = new RegExp('[\\r\\n\\u0085\\u2028\\u2029\\u200b-\\u200f\\u202a-\\u202e\\u2066-\\u2069\\u0000-\\u001f\\u007f\\ufeff]')
+  assert(!prohibidos.test(h.text), 'ni un salto ni un invisible en el consejo')
+  assert(h.text.includes('primera segunda tercera cuarta quinta sexta al revés'), 'los saltos pasan a ser espacios: ' + h.text.slice(0, 120))
+  // El error se acota a 200 caracteres antes de entrar en la frase.
+  const cita = /«(.*)»/.exec(h.text)?.[1] || ''
+  assert(cita.startsWith('primera') && cita.length <= 200, 'el error va citado y acotado a 200: ' + cita.length)
+  assert(h.text.length < 400, 'y el consejo entero no crece con el error: ' + h.text.length)
 })

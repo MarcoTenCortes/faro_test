@@ -18,7 +18,8 @@
  * toca, o pedirlas dos veces.
  */
 
-import { mcpNameForHost } from '../shared/config.js'
+import { mcpNameForHost, MCP_ATLASSIAN_VERSION } from '../shared/config.js'
+import { sinInvisibles } from '../atlassian/site.js'
 
 /** Los dos productos, en el orden en que se enseñan y se comprueban. */
 export const PRODUCTS = ['jira', 'confluence']
@@ -43,13 +44,29 @@ export function buildMcpConfig({ jira = null, confluence = null, dataCenter = fa
   // Sólo lectura: Faro no necesita escribir en Jira ni en Confluence, y no
   // habilitar la escritura es la forma más simple de que no pueda.
   environment.READ_ONLY_MODE = 'true'
+  // Todas las herramientas, dicho a propósito. mcp-atlassian 0.23.1 avisa al
+  // arrancar de que en una versión futura su valor por defecto pasará a seis
+  // grupos («core toolsets»), y eso quitaría herramientas que Faro usa sin que
+  // nada fallara: el modelo, simplemente, dejaría de tenerlas. «all» es el valor
+  // que su propio aviso recomienda para conservar el comportamiento de hoy
+  // (leído en utils/toolsets.py de 0.23.1, H15, 2026-09-26).
+  environment.TOOLSETS = 'all'
 
   return {
     type: 'local',
-    command: ['uvx', 'mcp-atlassian'],
+    // La versión fijada, la misma que instala tools/instalar.ps1 (docs/PLAN2.md
+    // §8.4): uvx no actualiza solo, y sin fijarla cada compañero se quedaba con
+    // la del día de su primer arranque. Se sube a mano, en UN sitio.
+    command: ['uvx', 'mcp-atlassian@' + MCP_ATLASSIAN_VERSION],
     environment,
     enabled: true,
-    timeout: 30000,
+    // Es el plazo de ARRANQUE (opencode lo usa para `client.connect`, no para
+    // cada llamada): medido en H15, 8-12 s con la caché de uv caliente y 7-10 s
+    // en frío con una red rápida; la primera vez uvx descarga unos 107 paquetes
+    // (y Python si no lo hay), y detrás de un proxy corporativo tarda más. Con
+    // 30 s el primer arranque de un compañero vencía. Pasado el plazo el proceso
+    // sigue vivo (opencode no lo mata): lo que se pierde es la conexión.
+    timeout: 60000,
   }
 }
 
@@ -280,6 +297,83 @@ export async function configureMcp(client, { host, jira, confluence, dataCenter 
   // Margen corto: si el registro en caliente funcionase, se notaría enseguida.
   const status = await waitForMcpReady(client, host, { timeoutMs: 8000, intervalMs: 1000 })
   return { name, config, status, ready: status.connected }
+}
+
+/**
+ * Lo que abre línea o separa, para dejar el error de opencode en UNA línea:
+ * `\s` de JavaScript cubre el salto, el retorno, U+2028 y U+2029, pero NO el NEL
+ * (U+0085), que va nombrado aparte y CON ESCAPE, como `ESPACIOS` en site.js y
+ * `SALTOS` en prompts.js.
+ */
+const ESPACIOS_DEL_ERROR = new RegExp('[\\s\\u0085]+', 'g')
+
+/** Cuánto del error de opencode entra en el consejo. */
+const ERROR_MAX = 200
+
+/** El comando que se ofrece para copiar cuando el MCP no llega ni a arrancar. */
+const INSTALAR = 'powershell -ExecutionPolicy Bypass -File tools\\instalar.ps1'
+
+/**
+ * Qué decirle a quien tiene el MCP de Atlassian en «failed», o null.
+ *
+ * Pasó de verdad (H15, docs/PLAN2.md §3.1): un compañero se quedó quince
+ * minutos mirando «El MCP está en «failed»…» en el paso manual sin ninguna pista
+ * de por qué. opencode 1.2.25 guarda el motivo en el `error` de `GET /mcp`, y los
+ * dos que se ven de verdad están medidos (anexo-2-B): «MCP error -32000:
+ * Connection closed» —el proceso se cerró nada más empezar, que en Windows es
+ * casi siempre que no encuentra `uvx`— y «Operation timed out after 30000ms» —el
+ * plazo de ARRANQUE venció, típico de la primera vez, en la que uvx descarga
+ * unos 107 paquetes—. Faro NO puede leer el stderr de opencode, así que el texto
+ * dice «casi siempre» y manda a mirar la terminal en vez de afirmar la causa.
+ *
+ * Recibe lo que devuelve `mcpStatusFor`. Sólo un «failed» trae consejo:
+ * conectado, ausente, deshabilitado o cualquier cosa que no tenga esa forma →
+ * null, sin lanzar. El error de opencode entra en el texto en UNA línea, sin
+ * invisibles (el mismo `sinInvisibles` de site.js: una sola lista de caracteres
+ * prohibidos) y acotado a `ERROR_MAX`, porque es texto de un proceso ajeno que
+ * se pinta en la pantalla de claves y en el chat. Pura, con pruebas.
+ *
+ * @param {{present?: boolean, status?: string|null, raw?: object|string}} status
+ * @returns {{kind: 'sin-arranque'|'lento'|'otro', text: string, retry: boolean, copy: string}|null}
+ */
+export function mcpFailureHint(status) {
+  if (!status || typeof status !== 'object' || !status.present || status.status !== 'failed') return null
+  const bruto = typeof status.raw?.error === 'string' ? status.raw.error : ''
+  const error = sinInvisibles(bruto).replace(ESPACIOS_DEL_ERROR, ' ').trim().slice(0, ERROR_MAX).trim()
+
+  if (/Connection closed/i.test(error)) {
+    return {
+      kind: 'sin-arranque',
+      text:
+        'opencode no ha podido arrancar el MCP de Atlassian: el proceso se cerró nada más empezar. ' +
+        'Casi siempre es que no encuentra uvx. Ejecuta tools\\instalar.ps1 desde la carpeta de Faro (o instala uv) ' +
+        'y reinicia opencode desde una terminal NUEVA; en la ventana de opencode verás «"uvx" no se reconoce…» si es eso.',
+      retry: true,
+      copy: INSTALAR,
+    }
+  }
+
+  const plazo = /timed out after (\d+)\s*ms/i.exec(error)
+  if (plazo) {
+    const segundos = Math.round(Number(plazo[1]) / 1000)
+    return {
+      kind: 'lento',
+      text:
+        `Ha tardado más de ${segundos} s en arrancar. La primera vez uvx descarga unos 107 paquetes ` +
+        '(y Python si no lo tienes) y siguen bajando en segundo plano: pulsa Reintentar en unos segundos.',
+      retry: true,
+      copy: '',
+    }
+  }
+
+  return {
+    kind: 'otro',
+    text: error
+      ? `opencode dice que el MCP ha fallado: «${error}». Mira su terminal para ver el detalle.`
+      : 'opencode dice que el MCP ha fallado, sin más detalle: mira su terminal.',
+    retry: true,
+    copy: '',
+  }
 }
 
 /** Ruta del fichero de configuración global de opencode. */

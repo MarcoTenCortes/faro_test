@@ -3996,3 +3996,104 @@ test('H14 P5: el chat no espera al MCP, y lo que la comprobación decide llega d
     assert(piezaMcp.includes(trozo) && JS.includes(trozo), 'el espejo y el panel dicen lo mismo: se han separado en «' + trozo + '»')
   }
 })
+
+test('H15: el MCP caído dice por qué y se puede reintentar sin reiniciar opencode', () => {
+  // Pasó de verdad (docs/PLAN2.md §3.1): un compañero se quedó quince minutos
+  // mirando «El MCP está en «failed»…» sin ninguna pista. El motivo lo dice
+  // `mcpFailureHint` (setup.js, con sus pruebas); aquí, que llega a verse en los
+  // tres sitios en los que se ve un MCP caído, y que «Reintentar» respeta §8.22.
+  const JS_SIN = sinComentarios(JS)
+
+  // (1) La pantalla de claves: el consejo DETRÁS de la frase de siempre, que
+  // sigue escrita una sola vez.
+  const claves = JS_SIN.slice(JS_SIN.indexOf('function showMcpSetup('), JS_SIN.indexOf('function attachMcpNotice('))
+  assert(claves.length > 400, 'el trozo de la pantalla de claves existe')
+  assert(/const consejo = mcpFailureHint\(status\)/.test(claves), 'la pantalla de claves pregunta a mcpFailureHint')
+  // Recortado a `showMcpSetup` SOLA: el nombre de la función que pinta aparece
+  // también en su propia declaración, justo debajo.
+  const abreClaves = claves.slice(0, claves.indexOf('function paintSetupMcpHint('))
+  const frase = abreClaves.indexOf('está registrado pero en')
+  assert(frase > 0 && abreClaves.indexOf('paintSetupMcpHint(status)') > frase, 'el consejo va detrás de la frase del MCP caído')
+  assert(/caja\.classList\.toggle\('hidden', !consejo\)/.test(claves), 'sin consejo, la caja se esconde')
+  eq(JS_SIN.split('está registrado pero en').length - 1, 1, 'la frase del MCP caído sigue en un solo sitio')
+  const pantalla = JS_SIN.slice(JS_SIN.indexOf('function showSetupScreen('), JS_SIN.indexOf('function paintSetupProducts('))
+  assert(/\$\('setup-mcp-hint'\)\.classList\.add\('hidden'\)/.test(pantalla), 'abierta desde Ajustes, la pantalla no arrastra el consejo de otra vez')
+
+  // (2) La espera del paso manual: el consejo en cada vuelta, una vez por error.
+  const manual = JS_SIN.slice(JS_SIN.indexOf('async function showManualStep('), JS_SIN.indexOf('async function finishSetup('))
+  assert(/const consejo = mcpFailureHint\(s\)/.test(manual), 'la espera pregunta a mcpFailureHint')
+  assert(/pintarConsejo\(s\)/.test(manual.slice(manual.indexOf('onTick:'))), 'en cada vuelta de la espera')
+  assert(/if \(consejo\.text === errorPintado\) return/.test(manual), 'y no se recrea mientras el error sea el mismo')
+  assert(/cajaConsejo\.classList\.add\('hidden'\)/.test(manual), 'y se esconde en cuanto deja de estar en «failed»')
+  assert(/retryMcp\(s\.name, \{ boton, host: site\.host, manual: true, repintar: pintarConsejo \}\)/.test(manual), 'reintenta con el host de la espera y avisando de que es el paso manual')
+  assert(!/bootForSite\(/.test(manual), 'desde el paso manual nunca se rearranca: la espera sigue sola')
+
+  // (3) El aviso del chat: el motivo y «Reintentar» junto a «Cambiar las claves».
+  const aviso = JS_SIN.slice(JS_SIN.indexOf('function attachMcpNotice('), JS_SIN.indexOf('function currentMcpCheck('))
+  assert(/const consejo = mcpFailureHint\(status\)/.test(aviso), 'el aviso pregunta a mcpFailureHint')
+  assert(/copiar: false,\s*\n\s*fila: row,/.test(aviso), 'en la misma fila que «Cambiar las claves», sin el comando')
+  assert(aviso.indexOf('wrap.appendChild(nodo)') < aviso.indexOf('wrap.appendChild(row)'), 'el motivo va debajo del aviso y encima de los botones')
+
+  // La pieza, UNA para los tres: texto, comando para copiar y «Reintentar»,
+  // sin un solo enlace (S5).
+  const pieza = JS_SIN.slice(JS_SIN.indexOf('function mcpHintNode('), JS_SIN.indexOf('async function retryMcp('))
+  assert(pieza.length > 300, 'la pieza del consejo existe')
+  assert(/texto\.className = 'fine'/.test(pieza) && /cmd\.className = 'cmd'/.test(pieza), 'reutiliza .fine y .cmd, sin clases nuevas')
+  assert(/copyToClipboard\(consejo\.copy, copia\)/.test(pieza), 'el comando se copia como el resto de comandos del panel')
+  assert(/reintentar\.textContent = 'Reintentar'/.test(pieza), 'y lleva «Reintentar»')
+  assert(!/href/.test(pieza) && !/innerHTML/.test(pieza), 'sin enlaces ni innerHTML: la ayuda es texto y un comando')
+  for (const trozo of [claves, manual, aviso]) assert(!/href/.test(trozo), 'ningún cableado del consejo lleva un enlace')
+
+  // «Reintentar»: el host ANTES del primer await, el botón apagado mientras.
+  const reintento = JS_SIN.slice(JS_SIN.indexOf('async function retryMcp('), JS_SIN.indexOf('async function loadLinkedContext('))
+  assert(reintento.length > 600, 'el manejador de reintento existe')
+  const conectar = reintento.indexOf('await client.connectMcp(name)')
+  assert(conectar > 0, 'reintenta con connectMcp')
+  const captura = reintento.indexOf('const host = hostDado || (state.site?.host ?? state.lastHost)')
+  assert(captura > 0 && captura < conectar, 'el host se captura ANTES de esperar (§8.22)')
+  const apaga = reintento.indexOf('boton.disabled = true')
+  assert(apaga > 0 && apaga < conectar, 'el botón se apaga antes de esperar: no hay doble clic')
+  assert(reintento.indexOf('boton.disabled = false') > conectar, 'y vuelve después')
+  assert(reintento.indexOf('await client.listMcp()') > conectar && /mcpStatusFor\(list, host, name\)/.test(reintento), 'el resultado se lee DESPUÉS en GET /mcp: connectMcp dice que sí aunque falle')
+  assert(/log\.ok\('MCP reintentado'/.test(reintento) && /log\.warn\('MCP reintentado'/.test(reintento), 'se registra lo que pasó, bien o mal')
+  assert(!/log\.\w+\([^)]*(config|environment)/.test(reintento), 'y nunca un cuerpo de configuración')
+  const guarda = reintento.indexOf('if ((state.site?.host ?? state.lastHost) !== host || state.client !== client) return status')
+  assert(guarda > conectar && guarda < reintento.indexOf('boton.disabled = false'), 'con el panel en otro sitio sólo se registra, no se pinta nada')
+  assert(reintento.indexOf('if (manual) return status') < reintento.indexOf('await bootForSite()'), 'desde el paso manual no se rearranca')
+  assert(/if \(!state\.streaming\) \{\s*\n\s*await bootForSite\(\)/.test(reintento), 'sin turno en vuelo, el arranque normal adopta el MCP')
+  assert(
+    /state\.mcpConnected = true\s*\n\s*state\.mcpCheck = Promise\.resolve\(true\)\s*\n\s*state\.mcpPending = null/.test(reintento),
+    'con un turno en vuelo, conectado para la pregunta siguiente'
+  )
+
+  // El HTML: las dos cajas, escondidas y vacías, cada una en su mitad.
+  for (const id of ['setup-mcp-hint', 'setup-manual-hint']) {
+    assert(htmlIds.has(id), 'falta #' + id)
+    assert(HTML.includes(`<div class="hidden" id="${id}"></div>`), `#${id} nace vacío y escondido`)
+  }
+  const main = HTML.slice(HTML.indexOf('id="setup-main"'), HTML.indexOf('id="setup-manual"'))
+  assert(main.indexOf('id="setup-status"') < main.indexOf('id="setup-mcp-hint"'), 'la caja va debajo de la frase de la pantalla de claves')
+  const paso = HTML.slice(HTML.indexOf('id="setup-manual"'), HTML.indexOf('id="btn-setup-later"'))
+  assert(paso.indexOf('id="setup-waiting"') < paso.indexOf('id="setup-manual-hint"'), 'y la del paso manual, debajo de la espera')
+  // La pantalla de conexión: qué mirar si opencode arranca y muere al momento.
+  const conexion = HTML.slice(HTML.indexOf('id="screen-connect"'), HTML.indexOf('id="screen-setup"'))
+  assert(/InvalidSymbol/.test(conexion) && /BOM/.test(conexion), 'el opencode.json con BOM')
+  assert(/InvalidEscapeCharacter/.test(conexion), 'y las barras sin escapar dentro del JSON')
+  assert(!/href/.test(conexion), 'sin enlaces')
+
+  // El bloque que se pega a mano.
+  const SETUP = sinComentarios(readFileSync(join(ROOT, 'src/panel/setup.js'), 'utf8'))
+  assert(/timeout: 60000/.test(SETUP) && !/timeout: 30000/.test(SETUP), 'un minuto para arrancar')
+  assert(/environment\.TOOLSETS = 'all'/.test(SETUP), 'y todas las herramientas')
+
+  // El espejo pinta el bloque y el consejo con el código de verdad.
+  const espejo = readFileSync(join(ROOT, 'harness/panel-preview.html'), 'utf8')
+  assert(espejo.includes("import('/src/panel/setup.js')"), 'el espejo importa setup.js')
+  assert(/fullConfigSnippet\(\s*NOMBRE_MCP,\s*buildMcpConfig\(/.test(espejo), 'el bloque lo monta buildMcpConfig, no una copia')
+  assert(!/timeout: 30000/.test(espejo) && !/command: \['uvx'/.test(espejo), 'ni un plazo ni un command copiados a mano')
+  assert(/mcpFailureHint\(MCP_CAIDO\)/.test(espejo) && espejo.includes("'MCP error -32000: Connection closed'"), 'el consejo sale del mensaje real')
+  for (const caja of ["'#setup-mcp-hint'", "'#setup-manual-hint'"]) {
+    assert(espejo.slice(espejo.indexOf('const CAJAS = ['), espejo.indexOf('function check()')).includes(caja), 'check() mide ' + caja + ' a lo ancho')
+  }
+  assert(espejo.includes('Revisa ese bloque y reinicia opencode') && JS.includes('Revisa ese bloque y reinicia opencode'), 'el espejo y el panel dicen lo mismo del MCP caído')
+})

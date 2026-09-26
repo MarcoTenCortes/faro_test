@@ -130,6 +130,9 @@
     </div>
     <p class="fine">La bandera <code>--cors</code> lleva el identificador de esta extensión: sin ella, Chrome bloquea las respuestas.
       Y <code>--print-logs</code> hace que la terminal muestre cada llamada y cada error del servidor.</p>
+    <p class="fine">Si opencode arranca y se cierra al momento, mira el error de la terminal:
+      «is not valid JSON(C)… InvalidSymbol 1:1» es un <code>opencode.json</code> guardado con BOM (guárdalo como UTF-8 sin BOM),
+      e «InvalidEscapeCharacter» es un <code>{env:…}</code> o una ruta de Windows con barras sin escapar dentro del JSON.</p>
     <div class="field">
       <label for="server-url">Dirección del servidor</label>
       <input id="server-url" type="text" spellcheck="false" placeholder="http://127.0.0.1:4096">
@@ -208,6 +211,8 @@
       <span class="grow"></span>
     </div>
     <p class="fine" id="setup-status"></p>
+    <!-- H15: por qué suele caerse el MCP, el comando para arreglarlo y «Reintentar». Lo rellena showMcpSetup. -->
+    <div class="hidden" id="setup-mcp-hint"></div>
   </div>
 
   <div class="screen-inner hidden" id="setup-manual">
@@ -245,6 +250,8 @@
       <span class="spinner" aria-hidden="true"></span>
       <span id="setup-waiting-text">Esperando a que opencode cargue el MCP…</span>
     </div>
+    <!-- H15: el mismo consejo, mientras la espera vea el MCP en «failed». Lo rellena showManualStep. -->
+    <div class="hidden" id="setup-manual-hint"></div>
 
     <div class="row">
       <button class="ghost" id="btn-setup-later" type="button">Seguir sin esto</button>

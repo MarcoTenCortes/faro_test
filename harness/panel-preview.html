@@ -224,8 +224,12 @@ async function arrancar() {
   // título y su URL los escribe `jqlPlan`/`jqlLink`, no este fichero); y de
   // H12, la nota de lo que viaja precargado, que la escribe `preloadNote` con
   // los mismos resultados que la tarjeta enseña, para que el espejo y el panel
-  // no puedan decir números distintos. Lo demás son textos de ejemplo.
+  // no puedan decir números distintos. De H15, el bloque de `opencode.json` del
+  // paso manual (lo monta `buildMcpConfig`, con la versión fijada, TOOLSETS y el
+  // plazo de arranque) y el consejo del MCP caído (`mcpFailureHint` sobre el
+  // mensaje REAL de opencode). Lo demás son textos de ejemplo.
   const [
+    { buildMcpConfig, fullConfigSnippet, mcpFailureHint, mcpStatusFor },
     { renderMarkdown },
     { SKILLS },
     { pickLabel, buildTextPick },
@@ -242,6 +246,7 @@ async function arrancar() {
     { preloadNote },
     { clockTime },
   ] = await Promise.all([
+    import('/src/panel/setup.js'),
     import('/src/panel/markdown.js'),
     import('/src/panel/skills.js'),
     import('/src/content/pick-payload.js'),
@@ -1604,28 +1609,47 @@ async function arrancar() {
   $('set-hl-spotlight').checked = true
   $('set-url').value = 'http://127.0.0.1:4096'
   $('setup-config-path').textContent = 'C:\\Users\\marco\\.config\\opencode\\opencode.json'
-  $('setup-snippet').textContent = JSON.stringify(
-    {
-      $schema: 'https://opencode.ai/config.json',
-      mcp: {
-        'atlassian-confluence-simplprogramme-eu': {
-          type: 'local',
-          command: ['uvx', 'mcp-atlassian'],
-          environment: {
-            JIRA_URL: 'https://jira.simplprogramme.eu',
-            JIRA_PERSONAL_TOKEN: 'tu-token-personal-de-jira',
-            CONFLUENCE_URL: 'https://confluence.simplprogramme.eu',
-            CONFLUENCE_PERSONAL_TOKEN: 'tu-token-personal-de-confluence',
-            READ_ONLY_MODE: 'true',
-          },
-          enabled: true,
-          timeout: 30000,
-        },
-      },
-    },
-    null,
-    2
+  // El bloque lo escribe `buildMcpConfig` de verdad, con tokens de mentira: si
+  // el panel cambia de versión, de plazo o de variables, el espejo lo enseña
+  // igual, sin una copia que se quede atrás (hasta H15 era una copia a mano, y
+  // se quedó con el plazo de antes).
+  const NOMBRE_MCP = 'atlassian-confluence-simplprogramme-eu'
+  $('setup-snippet').textContent = fullConfigSnippet(
+    NOMBRE_MCP,
+    buildMcpConfig({
+      jira: { url: 'https://jira.simplprogramme.eu', token: 'tu-token-personal-de-jira' },
+      confluence: { url: 'https://confluence.simplprogramme.eu', token: 'tu-token-personal-de-confluence' },
+      dataCenter: true,
+    })
   )
+  // H15: el MCP en «failed» con el mensaje REAL de opencode 1.2.25 cuando no
+  // encuentra uvx, y el consejo que `mcpFailureHint` saca de él, en las dos
+  // mitades de la pantalla de claves: es el que lleva el comando para copiar,
+  // o sea el más ancho, y el que hay que medir a 320 px. La pieza imita a
+  // `mcpHintNode` de panel.js (p.fine + .cmd + «Reintentar»), que no se puede
+  // importar desde aquí.
+  const MCP_CAIDO = mcpStatusFor({ [NOMBRE_MCP]: { status: 'failed', error: 'MCP error -32000: Connection closed' } }, 'confluence.simplprogramme.eu', NOMBRE_MCP)
+  function consejoMcp() {
+    const consejo = mcpFailureHint(MCP_CAIDO)
+    const nodo = doc.createElement('div')
+    nodo.appendChild(mk('p', 'fine', consejo.text))
+    if (consejo.copy) {
+      const cmd = mk('div', 'cmd')
+      cmd.append(mk('code', null, consejo.copy), mk('button', 'ghost small', 'Copiar'))
+      nodo.appendChild(cmd)
+    }
+    const fila = mk('div', 'nav-actions')
+    fila.appendChild(mk('button', 'ghost small', 'Reintentar'))
+    nodo.appendChild(fila)
+    return nodo
+  }
+  $('setup-status').textContent =
+    `El MCP «${NOMBRE_MCP}» está registrado pero en «failed». Revisa ese bloque y reinicia opencode, o quítalo si sobra.`
+  for (const id of ['setup-mcp-hint', 'setup-manual-hint']) {
+    $(id).replaceChildren(consejoMcp())
+    $(id).classList.remove('hidden')
+  }
+  $('setup-waiting-text').textContent = 'El MCP está en «failed»…'
   $('busy-title').textContent = 'Levantando el mapa'
   $('busy-text').textContent = 'Recorriendo el espacio ENG…'
 
@@ -1944,6 +1968,13 @@ async function arrancar() {
     // pueden partirse en dos líneas a propósito (panel.css no les pone
     // `nowrap`), así que lo que esto caza es que no se salga a lo ancho.
     '.privacy li',
+    // H15: el consejo del MCP caído en las dos mitades de la pantalla de claves,
+    // con el comando para copiar (su `code` desplaza a lo ancho dentro de su
+    // caja; lo que esto caza es que la caja entera se salga).
+    '#setup-mcp-hint',
+    '#setup-mcp-hint .cmd',
+    '#setup-manual-hint',
+    '#setup-manual-hint .cmd',
   ]
 
   function check() {

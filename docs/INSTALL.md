@@ -1,5 +1,92 @@
 # Instalación paso a paso
 
+## 0. Antes de nada: uv
+
+El MCP de Atlassian (`mcp-atlassian`) es un programa de Python, y opencode lo
+arranca con `uvx`, el lanzador de **uv** (el gestor de paquetes de Python de
+Astral): `uvx` descarga el paquete la primera vez, lo guarda en su caché y lo
+ejecuta, sin que tengas que instalar Python a mano. Sin `uvx`, opencode no
+puede arrancar el MCP y el panel lo ve en «failed»: es lo que dejó a un
+compañero quince minutos mirando la pantalla de claves.
+
+En Windows, desde la carpeta de Faro:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\instalar.ps1
+```
+
+El `-ExecutionPolicy Bypass` hace falta porque un zip descargado lleva la «marca
+de la web» y la política de ejecución por defecto no deja correr un `.ps1` con
+ella; sólo vale para esta ejecución, no cambia nada del sistema.
+
+Qué hace, en orden (y es idempotente: puedes repetirlo cuando quieras):
+
+1. Relee el PATH del registro (usuario y máquina), por si algo se instaló en
+   otra terminal, y busca `uvx`: primero en el PATH, después en
+   `%USERPROFILE%\.local\bin\uvx.exe`. Si no está, instala uv con el instalador
+   oficial de Astral (`irm https://astral.sh/uv/install.ps1 | iex`) y, si ése
+   falla, con `winget install --id astral-sh.uv`. Sin permisos de
+   administrador.
+2. `uv tool install mcp-atlassian==0.23.1`: la versión **fijada**, la misma que
+   Faro escribe en el bloque del MCP (`uvx mcp-atlassian@0.23.1`), para que todo
+   el equipo lleve la misma. Si falla por certificados (una red corporativa con
+   inspección TLS), reintenta con `--native-tls`, y si sigue fallando te dice
+   qué fijar: `UV_NATIVE_TLS=1` (o `SSL_CERT_FILE`) y `HTTPS_PROXY`.
+3. Comprueba que arranca: `mcp-atlassian --version` y
+   `uvx mcp-atlassian@0.23.1 --version`, cada uno con sus segundos.
+4. Mira Node y `opencode --version` (1.2 o más). Si falta opencode y tienes
+   Node 18 o más, te pregunta si ejecuta `npm i -g opencode-ai`; **nunca
+   instala Node**.
+5. Mira si ya hay un opencode escuchando en `127.0.0.1:4096`. Si lo hay, te
+   avisa en **rojo**: ciérralo y arráncalo desde una terminal NUEVA, porque el
+   opencode que está abierto no ve `uvx` (el MCP hereda el PATH con el que
+   arrancó opencode, y el de una terminal abierta antes de instalar uv no lo
+   lleva).
+6. Un resumen con las rutas, las versiones y el comando para arrancar.
+
+Qué **no** hace: no escribe la configuración de opencode (`opencode.json`: el
+BOM que pone PowerShell 5.1 la dejaría sin arrancar), no toca tokens ni la
+contraseña del servidor y no cambia variables del sistema. Si algo falla sale
+con 1 y una línea clara; si falta algo, «Falta: …».
+
+Con `-SoloComprobar` no instala ni pregunta nada: dice qué hay y qué falta
+(`uvx` va sin red, así que si el paquete no está en la caché lo dice en vez de
+descargarlo) y sale con 1 si falta algo. Que mcp-atlassian no esté instalado
+con `uv tool` es sólo un aviso, no una falta: `uvx mcp-atlassian@<versión>`
+arranca igual desde la caché, sólo más despacio. Con `-Si` acepta la pregunta
+de opencode sin esperar.
+
+Después de instalar uv, **cierra la terminal y abre una nueva** antes de
+arrancar opencode: la que tenías abierta tiene el PATH de antes.
+
+### Arrancar opencode con el script
+
+La forma recomendada de arrancar el servidor es:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\arrancar-opencode.ps1
+```
+
+Relee el PATH del registro (así un uv recién instalado se ve aunque la terminal
+sea vieja), te pide la contraseña del servidor si no está en
+`OPENCODE_SERVER_PASSWORD` —sin enseñarla al escribir, sólo para ese proceso:
+no se guarda en ningún sitio, y vacía no arranca— y lanza el comando de la
+sección 1 con el `--cors` de esta extensión. Además arranca en una carpeta
+propia y vacía (`%LOCALAPPDATA%\Faro\opencode-cwd`) con
+`OPENCODE_DISABLE_PROJECT_CONFIG=1` y `OPENCODE_DISABLE_CLAUDE_CODE_PROMPT=1`:
+opencode busca `AGENTS.md`, `CLAUDE.md` o `CONTEXT.md` subiendo desde la carpeta
+en la que arranca y los mete como «Instructions from:» en cada sesión (texto que
+llega al modelo y cuesta tokens en cada turno), y carga el `opencode.json` de
+proyecto de esa carpeta, que podría tapar el bloque del MCP.
+
+`-Port 4097` cambia el puerto; `-SoloMostrar` imprime la carpeta, las variables
+y el comando sin lanzar nada ni pedir la contraseña. Si el puerto ya está
+ocupado sale con 1: no pisa un opencode que ya esté corriendo.
+
+**macOS o Linux**: no hay script. Instala uv con
+`curl -LsSf https://astral.sh/uv/install.sh | sh`, abre una terminal nueva,
+`uv tool install mcp-atlassian==0.23.1` y arranca opencode a mano (sección 1).
+
 ## 1. opencode
 
 Ya lo tienes (`opencode --version` → 1.2.25). Sólo hace falta arrancarlo en
@@ -20,6 +107,9 @@ cambia y hay que actualizar el comando de arranque. `npm run check` avisa si el
 identificador del manifest y el del código dejan de coincidir.
 
 ### Arrancar
+
+En Windows, lo más cómodo es `tools\arrancar-opencode.ps1` (sección 0): hace
+esto mismo y además relee el PATH y arranca en una carpeta propia. A mano:
 
 **PowerShell:**
 
@@ -99,10 +189,13 @@ enlazado», con el host y su tamaño.
 
 ### Por qué hay un paso manual
 
-opencode 1.2.25 **sólo carga los servidores MCP al arrancar**. Su endpoint para
-registrarlos en caliente responde `200` pero no hace nada: ni escribe
-configuración, ni expone herramientas, ni aparece luego en `GET /mcp`.
-Comprobado contra un servidor real.
+opencode 1.2.25 **sólo carga los servidores MCP de su configuración al arrancar**
+(o al recargarla). Su endpoint para registrarlos en caliente (`POST /mcp`) sí
+arranca el proceso, pero **sólo en memoria**: no se escribe en ningún fichero,
+`GET /mcp` no lo ve (sólo recorre los de la configuración) y muere en cuanto
+opencode recarga o se reinicia. Comprobado contra un servidor real aislado. Por
+eso hoy el bloque se pega a mano; un hito posterior del plan lo escribirá Faro
+por la API de configuración.
 
 Así que Faro te enseña exactamente qué pegar y dónde:
 
@@ -116,18 +209,30 @@ C:\Users\marco\.config\opencode\opencode.json
   "mcp": {
     "atlassian-confluence-simplprogramme-eu": {
       "type": "local",
-      "command": ["uvx", "mcp-atlassian"],
+      "command": [
+        "uvx",
+        "mcp-atlassian@0.23.1"
+      ],
       "environment": {
         "CONFLUENCE_URL": "https://confluence.simplprogramme.eu",
         "CONFLUENCE_PERSONAL_TOKEN": "...",
-        "READ_ONLY_MODE": "true"
+        "READ_ONLY_MODE": "true",
+        "TOOLSETS": "all"
       },
       "enabled": true,
-      "timeout": 30000
+      "timeout": 60000
     }
   }
 }
 ```
+
+Tres cosas del bloque que no son de adorno: la versión va **fijada**
+(`mcp-atlassian@0.23.1`, la misma que instala `tools\instalar.ps1`: `uvx` no
+actualiza solo, y sin fijarla cada uno se quedaba con la del día de su primer
+arranque); `TOOLSETS: "all"` conserva todas las herramientas, porque
+mcp-atlassian avisa de que en una versión futura su valor por defecto pasará a
+seis grupos y Faro perdería herramientas sin que nada fallara; y `timeout` es el
+plazo de **arranque**, un minuto.
 
 Si el fichero ya existe, el panel tiene un botón para copiar **sólo el bloque
 `mcp`** y que lo fusiones tú.
@@ -135,9 +240,14 @@ Si el fichero ya existe, el panel tiene un botón para copiar **sólo el bloque
 Después **reinicia opencode**. Faro está mirando: en cuanto ve el MCP conectado,
 comprueba el token y sigue solo. No tienes que volver a pulsar nada.
 
-La primera vez, `uvx` descarga `mcp-atlassian` (unos 107 paquetes) y el proceso
-tarda **unos diez segundos** en arrancar y exponer sus herramientas. Es normal
-que el panel espere un poco.
+La primera vez, `uvx` descarga `mcp-atlassian` (unos 107 paquetes, y Python si
+no lo tienes) y el proceso tarda en arrancar: con la caché ya caliente son de 8 a
+12 segundos, y detrás de un proxy corporativo más. Es normal que el panel espere
+un poco. El plazo del bloque es de 60 s; si se pasa, el MCP queda en «failed ·
+Operation timed out» y el panel ofrece **Reintentar** (la descarga sigue en
+segundo plano, así que el segundo intento suele entrar). Si ejecutaste antes
+`tools\instalar.ps1`, los paquetes ya están en la caché de uv y el primer
+arranque se ahorra la descarga.
 
 Las claves acaban en la configuración de opencode, en disco, protegidas por los
 permisos del sistema de ficheros. La extensión sólo recuerda que ese host ya
@@ -905,6 +1015,15 @@ corto y un detalle. Todos los títulos, por dónde salen:
   configuración y Faro lo adopta (con qué productos sirve).
 - «MCP sin conectar» — el MCP que lleva este dominio existe pero no está
   conectado: se arregla o se quita del `opencode.json`.
+- «MCP reintentado» — pulsaste **Reintentar** en el consejo de un MCP en
+  «failed» (en la pantalla de claves, en la espera del paso manual o en el
+  aviso del chat) y Faro le pidió a opencode que volviera a arrancarlo sin
+  reiniciarse. El detalle es el nombre del MCP y cómo quedó —«conectado», «en
+  «failed»» o «no está en opencode»— con los milisegundos desde el clic (suelen
+  ser unos 12 s: opencode no contesta hasta haberlo intentado). Sale en verde si
+  conectó y en amarillo si no, y se apunta aunque entretanto te hayas ido a otro
+  sitio (entonces sólo se apunta: no se pinta nada). Nunca lleva la
+  configuración, que tiene las claves.
 - «MCP comprobado» — cuánto ha tardado saber si el MCP de este sitio está
   conectado (`GET /mcp` y `GET /config`) y cómo ha quedado: su nombre y
   «conectado», «registrado pero en «failed»» o «no está en opencode». Desde
@@ -1331,7 +1450,62 @@ El MCP no conectó. Comprueba, en este orden:
 2. Que **reiniciaste** opencode después de pegarlo.
 3. `curl -u opencode:TU_CONTRASENA http://127.0.0.1:4096/mcp` debe responder
    `{"atlassian-...":{"status":"connected"}}`.
-4. Que `uvx` está en el PATH del proceso que arrancó opencode.
+4. Que `uvx` está en el PATH del proceso que arrancó opencode: si el panel dice
+   que el MCP está en «failed», mira las entradas de justo debajo.
+
+**El MCP está en «failed · Connection closed»**
+El proceso del MCP se cerró nada más empezar (opencode lo marca en unos 40 ms).
+En Windows es casi siempre que opencode no encuentra `uvx`: en la terminal de
+opencode (con `--print-logs`) verás «"uvx" no se reconoce como un comando…».
+Ejecuta `powershell -ExecutionPolicy Bypass -File tools\instalar.ps1` y
+**arranca opencode desde una terminal NUEVA** (o con
+`tools\arrancar-opencode.ps1`): el MCP hereda el PATH con el que arrancó
+opencode, así que un uv instalado después no lo ve el opencode que ya estaba
+abierto. **Reintentar** del panel vuelve a arrancar el MCP sin reiniciar
+opencode, pero sólo sirve si `uvx` ya estaba en el PATH de ese opencode; si
+acabas de instalar uv, reiniciarlo es lo que lo arregla. Faro no puede leer la
+terminal de opencode: por eso el panel dice «casi siempre» y te manda a mirarla.
+
+**El MCP está en «failed · Operation timed out after N ms»**
+Venció el plazo de arranque del bloque (60 s). Suele ser la primera vez, con
+`uvx` descargando unos 107 paquetes (y Python) o detrás de un proxy lento. El
+proceso no muere: sigue descargando en segundo plano. Espera unos segundos y
+pulsa **Reintentar**. Tras un plazo vencido puede quedar un `mcp-atlassian` de
+más vivo hasta que cierres opencode; es inofensivo.
+
+**opencode no arranca: «is not valid JSON(C)… InvalidSymbol 1:1»**
+El `opencode.json` está guardado con BOM (tres bytes invisibles al principio).
+Guárdalo como UTF-8 **sin** BOM. Ojo: `Set-Content -Encoding utf8` y
+`Out-File -Encoding utf8` de PowerShell 5.1 lo ponen siempre; en el Bloc de
+notas, «Guardar como» → codificación «UTF-8» (no «UTF-8 con BOM»).
+
+**opencode no arranca: «InvalidEscapeCharacter»**
+Dentro de una cadena JSON la barra invertida es un escape: una ruta de Windows
+como `C:\Users\…` tiene que ir con las barras dobladas (`C:\\Users\\…`) o con
+barras normales (`C:/Users/…`). Lo mismo si metiste un `{env:…}` con una ruta
+dentro.
+
+**Quiero usar Docker en vez de uv**
+Se puede, y Faro no lo escribe: el bloque se pega a mano, con las variables por
+**nombre** (`-e VAR` sin valor toma la del `environment` del bloque, así que el
+token no aparece en la línea de órdenes):
+
+```json
+"command": [
+  "docker", "run", "-i", "--rm",
+  "-e", "JIRA_URL", "-e", "JIRA_PERSONAL_TOKEN",
+  "-e", "CONFLUENCE_URL", "-e", "CONFLUENCE_PERSONAL_TOKEN",
+  "-e", "READ_ONLY_MODE", "-e", "TOOLSETS",
+  "ghcr.io/sooperset/mcp-atlassian:ETIQUETA"
+]
+```
+
+con el `environment` de siempre. Cambia `ETIQUETA` por la de una versión
+concreta publicada en `ghcr.io/sooperset/mcp-atlassian`, **no** `latest`: la
+imagen `latest` probada decía «version 0.0.0», y sin fijarla cada uno llevaría
+una distinta. Con la imagen ya descargada conectó en unos 8 s. Exige Docker
+Desktop encendido. Y **no** uses `npx mcp-atlassian`: en npm ese nombre es de
+otro autor y no es el mismo paquete; ejecutaría código ajeno con tus tokens.
 
 **«El modelo no tenía ninguna herramienta del MCP disponible»**
 Es lo que sale cuando se pregunta antes de que el MCP haya terminado de

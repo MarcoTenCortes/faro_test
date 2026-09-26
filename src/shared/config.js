@@ -5,6 +5,18 @@ export const CORS_ORIGIN = `chrome-extension://${EXTENSION_ID}`
 
 export const DEFAULT_SERVER = 'http://127.0.0.1:4096'
 
+/**
+ * La versión de mcp-atlassian que Faro escribe en el `command` del MCP
+ * (`uvx mcp-atlassian@<versión>`) y la que `tools/instalar.ps1` instala con
+ * `uv tool install mcp-atlassian==<versión>`: UNA constante para las dos, y
+ * `instalar.test.js` pina que el script lleve la misma (docs/PLAN2.md §8.4).
+ * Es la probada: con la caché caliente `uvx mcp-atlassian@0.23.1 --version`
+ * contesta en 1,3 s (H15, 2026-09-26). Se sube a mano, a cambio de que todo el
+ * equipo lleve la misma: uvx no actualiza solo, y sin fijarla cada compañero
+ * se quedaba con la del día de su primer arranque.
+ */
+export const MCP_ATLASSIAN_VERSION = '0.23.1'
+
 /** Nombre del servidor MCP en opencode para un host dado. */
 export function mcpNameForHost(host) {
   return 'atlassian-' + String(host).replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-|-$/g, '').toLowerCase()

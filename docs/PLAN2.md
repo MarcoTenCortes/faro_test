@@ -990,6 +990,19 @@ Reglas transversales, que salen de los dos juicios y valen para todos:
   ruta completa → connected (el `reconectar.mjs` del anexo B).
 - **Riesgo**: bajo. Política de ejecución de PowerShell con un zip marcado
   (documentado `-ExecutionPolicy Bypass`) y un proxy corporativo sin medir.
+- **Hecho el 2026-09-26** (rama `plan/h15-uv`): los dos scripts de Windows
+  (UTF-8 con BOM, PowerShell 5.1), `MCP_ATLASSIAN_VERSION` en config.js
+  cruzada con la del instalador, `mcpFailureHint` y «Reintentar» (`retryMcp`)
+  en la pantalla de claves, la espera del paso manual y el aviso del chat, la
+  pista de la pantalla de conexión, el espejo con `setup.js` de verdad e
+  INSTALL/README; 1334 pruebas (+17). Desvíos: la versión fijada va también
+  en el `command` (`uvx mcp-atlassian@0.23.1`), porque manda la decisión 4 de
+  §8 y la sintaxis se verificó antes; `TOOLSETS: 'all'`, leído en el fuente
+  de 0.23.1; al conectar, desde el paso manual no se hace nada (su espera
+  sigue sola), y desde la pantalla de claves o el chat se rearranca el panel
+  sin turno en vuelo o se da por conectado con uno; reintento de certificados
+  sólo con `--native-tls` (el uv 0.9.7 no acepta `--system-certs`); y sin
+  `.sh` (decisión 12 de §8). La bitácora, en CLAUDE.md §12.5.
 
 ### H16 · Modelos I: veredictos, clasificación de fallos y los agujeros del primer uso
 
@@ -1515,9 +1528,11 @@ a partirse si en su revisión adversaria salen más de ~15 hallazgos.
   `github-copilot/gpt-5.6-luna` → ok en una request.
 - **Supuestos que sólo se cierran allí**: que un rechazo de Copilot no cuenta
   como request; que la configuración de PROYECTO tapa a la global (por eso se
-  relee `GET /config`); que `uvx mcp-atlassian@0.23.1` arranca con esa
-  sintaxis (lo medido fue `uv tool install ==`); el valor exacto de
-  `TOOLSETS` que significa «todas»; que `variant` abarata la sonda.
+  relee `GET /config`); ~~que `uvx mcp-atlassian@0.23.1` arranca con esa
+  sintaxis (lo medido fue `uv tool install ==`)~~ **VERIFICADO en H15**
+  (2026-09-26: arranca, 1,3 s con la caché caliente); ~~el valor exacto de
+  `TOOLSETS` que significa «todas»~~ **VERIFICADO en H15** (`all`, leído en
+  `utils/toolsets.py` de 0.23.1); que `variant` abarata la sonda.
 - **En el Jira y el Confluence reales, con el método blob de H14 (sólo
   GET)**: la CSP `img-src` para el cursor en `data:`; SIMPL y DCPIAS leídos
   por la API, fundidos, `subIndex`, `treeTitles` y `treeSteps` entre

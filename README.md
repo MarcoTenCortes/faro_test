@@ -139,12 +139,28 @@ la respuesta**.
 |---|---|---|
 | `opencode` ≥ 1.2 | Es el motor. La extensión no habla con ninguna nube. | 1.2.25 |
 | Chrome ≥ 130 | `chrome.sidePanel` y la CSS Custom Highlight API existen desde la 116, pero la protección que hace que los módulos de la extensión sólo se sirvan a la página por una URL distinta en cada sesión (`use_dynamic_url`) sólo ACTÚA desde la 130: con 116-129 Chrome ignora esa clave y cualquier web puede comprobar si tienes Faro instalado. Chrome 130 es de octubre de 2024, así que el mínimo es 130 y esa protección no es opcional. | Chrome 153 |
-| `uvx` (o Docker) | Para ejecutar `mcp-atlassian`. | uvx en Windows |
+| uv/`uvx` (lo instala `tools\instalar.ps1`) o Docker | Para ejecutar `mcp-atlassian`, en la versión fijada 0.23.1. | uvx en Windows |
 | Un API token por producto | Para leer Jira y Confluence. En Cloud el mismo vale para los dos; en Data Center es un token personal por instalación. | |
 
 ---
 
 ## Instalación
+
+### 0. Deja uv y el MCP de Atlassian instalados
+
+En Windows, desde esta carpeta:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\instalar.ps1
+```
+
+Instala uv si no está (el instalador oficial de Astral; winget de respaldo),
+deja `mcp-atlassian` en su versión fijada, comprueba que arranca, mira Node y
+opencode, y te avisa si ya hay un opencode abierto que no verá `uvx`. No
+escribe la configuración de opencode ni toca tokens ni contraseña;
+`-SoloComprobar` sólo dice qué falta. El `Bypass` es porque un zip descargado
+lleva la marca de la web. Después, **abre una terminal nueva**: la de antes
+tiene el PATH viejo. Detalles en [`docs/INSTALL.md`](docs/INSTALL.md) §0.
 
 ### 1. Carga la extensión
 
@@ -160,6 +176,16 @@ ickohiffpicdfeameogbihbcanbjibmk
 ```
 
 ### 2. Arranca opencode con CORS y contraseña
+
+En Windows, lo recomendado:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\arrancar-opencode.ps1
+```
+
+Relee el PATH, te pide la contraseña (no la guarda en ningún sitio) y arranca
+opencode en una carpeta propia, sin leer los `AGENTS.md`/`CLAUDE.md` ni el
+`opencode.json` de proyecto de donde lo lances, con el comando de abajo. A mano:
 
 ```bash
 opencode serve --port 4096 --cors chrome-extension://ickohiffpicdfeameogbihbcanbjibmk --print-logs --log-level INFO
@@ -199,10 +225,15 @@ nada.
 
 Después te enseñará un bloque de configuración para pegar en el `opencode.json`
 de tu opencode, y te pedirá reiniciarlo. **Esto es una vez por sitio** (o por
-pareja de sitios), y es inevitable: opencode 1.2.25 sólo carga los servidores
-MCP al arrancar, y su endpoint para registrarlos en caliente responde `200` sin
-hacer nada. Faro se queda vigilando y, en cuanto detecta el MCP conectado,
-comprueba los dos tokens y sigue solo.
+pareja de sitios), y hoy no se puede evitar: opencode 1.2.25 sólo carga los
+servidores MCP de su configuración al arrancar, y su endpoint para registrarlos
+en caliente (`POST /mcp`) arranca el proceso sólo en memoria: no se guarda en
+ningún fichero, `GET /mcp` no lo ve y muere en la siguiente recarga. Faro se
+queda vigilando y, en cuanto detecta el MCP conectado, comprueba los dos tokens
+y sigue solo. Si el MCP se queda en «failed», el panel dice por qué suele pasar
+(casi siempre, que opencode no encuentra `uvx`), te da el comando para
+arreglarlo y un botón **Reintentar** que lo vuelve a arrancar sin reiniciar
+opencode.
 
 Luego te ofrecerá construir el contexto, traer el tuyo, o empezar sin él.
 
@@ -604,7 +635,7 @@ actividad** (30 días), las **páginas base elegidas** con su alcance, las
 ## Comprobaciones
 
 ```bash
-npm run check              # sintaxis + orden + manifest + 1317 pruebas unitarias + docs
+npm run check              # sintaxis + orden + manifest + 1334 pruebas unitarias + docs
 npm run check:docs         # sólo el paso docs: número de pruebas, títulos del registro, mensajes y ficheros del mapa
 npm run test:integration   # contra un opencode real que arranca la propia prueba
 npm run harness            # banco de pruebas visual en http://127.0.0.1:5175
@@ -1114,7 +1145,7 @@ src/
                             guardar (Ajustes) (puro)
     links.js                qué enlaces del chat se abren: el sitio, su Confluence enlazado, id.atlassian.com (puro)
     skills.js               General · Búsqueda · Resumen · Análisis; Búsqueda habla distinto en Jira (JQL) y en Confluence (árbol) (puro)
-    setup.js                claves por producto → bloque MCP; hosts enlazados (puro salvo las llamadas a opencode)
+    setup.js                claves por producto → bloque MCP (versión fijada, todas las herramientas, un minuto para arrancar); hosts enlazados; y por qué un MCP está en «failed» y qué hacer (puro salvo las llamadas a opencode)
     sources.js              páginas base del análisis: forma, alcance, autocompletado desde el índice, URL pegada, vigilancia del alcance (puro)
     suggestions.js          las tres sugerencias del chat vacío, por producto y por Skill (puro)
     today.js                qué mirar hoy: a quién se pregunta, qué puntúa cada señal y el porqué de cada fila (puro)
@@ -1164,5 +1195,7 @@ tools/                      generación de iconos, clave del manifest, servidor 
   bench.mjs                 el metro: tamaño del system por escenario y tiempos de los módulos puros (npm run bench)
   contrast-report.mjs       la tabla de contraste del panel y del overlay, por tema, con las parejas de test/contrast-pairs.js (npm run contrast); un token que no exista es un fallo, no un hueco
   prompt-snapshots.mjs      comprobar o regenerar (--update) las instantáneas de los prompts (npm run snapshots)
+  instalar.ps1              Windows: deja uv y mcp-atlassian en la versión fijada, mira Node y opencode, y avisa si hay un opencode abierto que no verá uvx (-SoloComprobar, -Si); nunca toca la configuración de opencode ni la contraseña
+  arrancar-opencode.ps1     Windows: arranca opencode con el PATH releído, en una carpeta propia y pidiendo la contraseña sin guardarla (-Port, -SoloMostrar)
 AGENTS.md                   puntero a CLAUDE.md, que es el mapa del proyecto para una sesión nueva
 ```

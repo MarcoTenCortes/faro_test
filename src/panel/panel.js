@@ -61,6 +61,7 @@ import {
   siteRecords,
   mcpForHost,
   chosenMcpName,
+  mcpFailureHint,
   PRODUCTS,
 } from './setup.js'
 import { buildContext, harvestIndex, harvestFromSearch, indexFromSpacePages, countWithParent } from './indexer.js'
@@ -1205,6 +1206,36 @@ function showMcpSetup(status) {
   if (status.present) {
     $('setup-status').textContent = `El MCP «${status.name}» está registrado pero en «${status.status}». Revisa ese bloque y reinicia opencode, o quítalo si sobra.`
   }
+  paintSetupMcpHint(status)
+}
+
+/**
+ * El consejo del MCP caído en la pantalla de claves, DETRÁS de la frase de
+ * arriba (que sigue escrita una sola vez): por qué suele pasar, el comando para
+ * arreglarlo y «Reintentar» (H15, docs/PLAN2.md §3.1). Sin consejo —conectado,
+ * ausente, o un estado que no es «failed»— la caja se vacía y se esconde.
+ */
+function paintSetupMcpHint(status) {
+  const caja = $('setup-mcp-hint')
+  caja.textContent = ''
+  const consejo = mcpFailureHint(status)
+  caja.classList.toggle('hidden', !consejo)
+  if (!consejo) return
+  caja.appendChild(
+    mcpHintNode(consejo, {
+      onRetry: (boton) =>
+        retryMcp(status.name, {
+          boton,
+          repintar: paintSetupMcpHint,
+          // Conectado con un turno en vuelo: la pantalla se cierra y se dice en
+          // el chat; sin turno, `retryMcp` rearranca el panel y ya no hace falta.
+          avisar: () => {
+            hideScreens()
+            showNotice(MCP_RECUPERADO, false, { force: true })
+          },
+        }),
+    })
+  )
 }
 
 /**
@@ -1228,6 +1259,30 @@ function attachMcpNotice(status) {
   btn.textContent = 'Cambiar las claves'
   btn.addEventListener('click', () => showMcpSetup(status))
   row.appendChild(btn)
+  // H15: si el MCP está en «failed», por qué y «Reintentar» al lado de «Cambiar
+  // las claves». Sin el comando para copiar: en el chat va el motivo, y el
+  // comando lo enseña la pantalla de claves, a un clic, sin alargar un aviso que
+  // llega solo y se queda debajo de la conversación.
+  const consejo = mcpFailureHint(status)
+  if (consejo) {
+    const nodo = mcpHintNode(consejo, {
+      copiar: false,
+      fila: row,
+      onRetry: (boton) =>
+        retryMcp(status.name, {
+          boton,
+          repintar: (s) => {
+            const nuevo = mcpFailureHint(s)
+            if (nuevo) nodo.querySelector('p').textContent = nuevo.text
+          },
+          avisar: () => {
+            wrap.replaceChildren(noticeNode(MCP_RECUPERADO, false))
+            announce(MCP_RECUPERADO)
+          },
+        }),
+    })
+    wrap.appendChild(nodo)
+  }
   wrap.appendChild(row)
   // SIN `clearEmpty()`, a diferencia de los demás avisos: éste llega solo,
   // catorce segundos después de abrir el panel, y con el chat vacío se llevaba
@@ -1251,6 +1306,116 @@ function attachMcpNotice(status) {
  */
 function currentMcpCheck() {
   return state.mcpCheck || Promise.resolve(state.mcpConnected)
+}
+
+/** Lo que se dice cuando «Reintentar» conecta el MCP con un turno en vuelo. */
+const MCP_RECUPERADO = 'MCP conectado: la próxima pregunta ya podrá leer Jira y Confluence.'
+
+/**
+ * El consejo de un MCP caído, pintado (H15, docs/PLAN2.md §3.1).
+ *
+ * UNA sola pieza para los tres sitios que lo enseñan —la pantalla de claves, la
+ * espera del paso manual y el aviso del chat—, para que no acaben diciendo cosas
+ * distintas. Recibe lo que devuelve `mcpFailureHint` (el texto ya viene en una
+ * línea, sin invisibles y acotado). Todo con `createElement` y `textContent`, y
+ * sin ningún enlace (S5): la ayuda es texto y un comando para copiar, que es lo
+ * único que Faro puede darle a quien tiene que arreglarlo en su terminal.
+ *
+ * @param {{text: string, copy: string, retry: boolean}} consejo
+ * @param {{onRetry?: (boton: HTMLButtonElement) => void, copiar?: boolean, fila?: HTMLElement|null}} opts
+ *        `fila`: la `.nav-actions` en la que va «Reintentar» si ya hay una (la
+ *        del aviso del chat, junto a «Cambiar las claves»); sin ella, la suya.
+ */
+function mcpHintNode(consejo, { onRetry = null, copiar = true, fila = null } = {}) {
+  const nodo = document.createElement('div')
+  const texto = document.createElement('p')
+  texto.className = 'fine'
+  texto.textContent = consejo.text
+  nodo.appendChild(texto)
+  if (copiar && consejo.copy) {
+    const cmd = document.createElement('div')
+    cmd.className = 'cmd'
+    const code = document.createElement('code')
+    code.textContent = consejo.copy
+    const copia = document.createElement('button')
+    copia.className = 'ghost small'
+    copia.type = 'button'
+    copia.textContent = 'Copiar'
+    copia.addEventListener('click', () => copyToClipboard(consejo.copy, copia))
+    cmd.append(code, copia)
+    nodo.appendChild(cmd)
+  }
+  if (consejo.retry && onRetry) {
+    const reintentar = document.createElement('button')
+    reintentar.className = 'ghost small'
+    reintentar.type = 'button'
+    reintentar.textContent = 'Reintentar'
+    reintentar.addEventListener('click', () => onRetry(reintentar))
+    let destino = fila
+    if (!destino) {
+      destino = document.createElement('div')
+      destino.className = 'nav-actions'
+      nodo.appendChild(destino)
+    }
+    destino.appendChild(reintentar)
+  }
+  return nodo
+}
+
+/**
+ * «Reintentar»: vuelve a arrancar el MCP sin reiniciar opencode (H15).
+ *
+ * `POST /mcp/{name}/connect` arranca otra vez un MCP en «failed»; en opencode
+ * 1.2.25 BLOQUEA unos 12 s y devuelve `true` aunque falle, así que el resultado
+ * se lee DESPUÉS en `GET /mcp` (anexo-2-B). Mientras, el botón queda desactivado
+ * —que es también lo que impide el doble clic— y dice que está en ello.
+ *
+ * El host se captura ANTES del primer await (§8.22): en esos doce segundos la
+ * pestaña puede irse a otro sitio, y entonces sólo se registra y no se toca ni
+ * el estado ni la pantalla. Qué pasa al conectar: desde el paso manual, NADA
+ * —su espera (`waitForMcpReady`) lo ve en la vuelta siguiente y sigue sola con
+ * `finishSetup`—; desde la pantalla de claves o el chat, sin turno en vuelo se
+ * rearranca el panel (lo que hace «Guardar y volver» al cambiar el servidor: el
+ * arranque reconoce y adopta el MCP), y con un turno en vuelo se da por
+ * conectado para la pregunta siguiente y se dice (`avisar`). Si no conectó, se
+ * vuelve a pintar el consejo con el error de ahora (`repintar`).
+ *
+ * Del MCP se registran el nombre, el estado y los ms; nunca un cuerpo de la
+ * configuración, que lleva las claves en claro (§7).
+ */
+async function retryMcp(name, { boton, host: hostDado = '', manual = false, repintar = null, avisar = null } = {}) {
+  const host = hostDado || (state.site?.host ?? state.lastHost)
+  const client = state.client
+  if (!name || !host || !client || !boton || boton.disabled) return null
+  const texto = boton.textContent
+  boton.disabled = true
+  boton.textContent = 'Reintentando…'
+  const t0 = performance.now()
+  await client.connectMcp(name).catch(() => {})
+  const list = await client.listMcp().catch(() => ({}))
+  const status = mcpStatusFor(list, host, name)
+  const ms = Math.round(performance.now() - t0)
+  const como = status.connected ? 'conectado' : status.present ? `en «${status.status}»` : 'no está en opencode'
+  if (status.connected) log.ok('MCP reintentado', `${name}: ${como} · ${ms} ms`)
+  else log.warn('MCP reintentado', `${name}: ${como} · ${ms} ms`)
+
+  if ((state.site?.host ?? state.lastHost) !== host || state.client !== client) return status
+  boton.disabled = false
+  boton.textContent = texto
+  if (!status.connected) {
+    repintar?.(status)
+    return status
+  }
+  if (manual) return status
+  if (!state.streaming) {
+    await bootForSite()
+    return status
+  }
+  state.mcpConnected = true
+  state.mcpCheck = Promise.resolve(true)
+  state.mcpPending = null
+  avisar?.()
+  return status
 }
 
 /**
@@ -5793,6 +5958,10 @@ function showSetupScreen() {
   paintSetupProducts()
 
   $('setup-status').textContent = ''
+  // El consejo del MCP caído es de quien lo pinta (`showMcpSetup`): abierta
+  // desde Ajustes, la pantalla no arrastra el de una vez anterior.
+  $('setup-mcp-hint').textContent = ''
+  $('setup-mcp-hint').classList.add('hidden')
   $('setup-manual').classList.add('hidden')
   $('setup-main').classList.remove('hidden')
   showScreen('screen-setup')
@@ -6896,6 +7065,35 @@ async function showManualStep(result) {
   // El host con el que se pidieron las claves, no el de la pestaña de ahora:
   // ya ha habido un await (paths) y la espera dura hasta 15 min.
   const site = state.pendingMcp?.site || state.site
+
+  // H15: con el MCP en «failed», por qué y «Reintentar», debajo de la espera.
+  // Es la pantalla en la que un compañero se quedó quince minutos mirando «está
+  // en failed» sin ninguna pista (docs/PLAN2.md §3.1). La espera pregunta cada
+  // 1,5 s: el consejo se pinta UNA vez por error distinto —recrearlo en cada
+  // vuelta se llevaría el botón a mitad de un clic— y se esconde en cuanto deja
+  // de estar en «failed». «Reintentar» desde aquí nunca rearranca el panel: la
+  // propia espera lo ve conectado en su vuelta siguiente y sigue sola.
+  const cajaConsejo = $('setup-manual-hint')
+  let errorPintado = null
+  const pintarConsejo = (s) => {
+    const consejo = mcpFailureHint(s)
+    if (!consejo) {
+      errorPintado = null
+      cajaConsejo.textContent = ''
+      cajaConsejo.classList.add('hidden')
+      return
+    }
+    if (consejo.text === errorPintado) return
+    errorPintado = consejo.text
+    cajaConsejo.replaceChildren(
+      mcpHintNode(consejo, {
+        onRetry: (boton) => retryMcp(s.name, { boton, host: site.host, manual: true, repintar: pintarConsejo }),
+      })
+    )
+    cajaConsejo.classList.remove('hidden')
+  }
+  pintarConsejo(null)
+
   const status = await waitForMcpReady(state.client, site.host, {
     timeoutMs: 15 * 60 * 1000,
     signal: controller.signal,
@@ -6904,8 +7102,10 @@ async function showManualStep(result) {
         s.present && s.status
           ? `El MCP está en «${s.status}»…`
           : `Esperando a que opencode cargue el MCP… (${Math.round(left / 1000)} s)`
+      pintarConsejo(s)
     },
   })
+  if (status.connected) pintarConsejo(null)
   if (state.mcpWait === controller) state.mcpWait = null
 
   if (controller.signal.aborted) return
