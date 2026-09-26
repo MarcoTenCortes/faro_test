@@ -365,8 +365,11 @@ function falloVigente(checks, model, now) {
  *
  * La entrada de `at` más reciente gana (en empate, la nueva: es lo último que se
  * ha visto). Acepta el objeto guardado entero —y devuelve otro igual con el mapa
- * nuevo— o sólo el mapa. El tope y la caducidad los aplica `normalizeModelChecks`
- * al guardar.
+ * nuevo— o sólo el mapa. El tope lo aplica `normalizeModelChecks` al guardar; la
+ * caducidad la decide `modelVerdict` al leer, y lo caducado se queda hasta que lo
+ * echen los `MODEL_LIMITS.maxEntries` más recientes o el usuario pulse «Olvidar
+ * los veredictos». (Hasta la revisión adversaria de H16 este comentario decía que
+ * la caducidad también la aplicaba `normalizeModelChecks`, que no mira ningún TTL.)
  */
 export function recordVerdicts(checks, verdicts) {
   const entero = checks && typeof checks === 'object' && checks.checks && typeof checks.checks === 'object'
@@ -443,6 +446,46 @@ export function recommendModel(models, { configModel = null, defaults = {}, chec
     if (sano(hit)) return hit
   }
   return null
+}
+
+/**
+ * A qué modelo ofrecer «Reintentar con X» tras un fallo (revisión adversaria de
+ * H16). Pura.
+ *
+ * Existe por el bucle del compañero de Marco: el panel elegía la alternativa a
+ * CIEGAS con `pickAlternativeModel` (el default de otro proveedor) y DESPUÉS
+ * exigía que tuviera veredicto `ok`. Con los dos defaults rechazados y
+ * `github-copilot/gpt-5.6-luna` contestando de verdad, la alternativa ciega era
+ * un default sin veredicto y el botón no salía NUNCA. Aquí se elige al revés:
+ * sólo entre lo que YA se sabe que contesta.
+ *
+ * Devuelve el modelo de la lista con el veredicto `ok` VIGENTE más reciente,
+ * distinto del que falló (`failedKey`, 'prov/model' o `{providerID, modelID}`),
+ * prefiriendo uno de OTRO proveedor si lo hay (si falló por credenciales, otro
+ * modelo del mismo proveedor fallará igual); con `otherProvider: true`, sólo de
+ * otro proveedor. Sin `checks`, o sin ningún `ok` vigente, null: sin veredictos
+ * no hay con qué atreverse, y proponer a ciegas era justo el bucle.
+ */
+export function pickRetryModel(models, failedKey, { checks = null, now = Date.now(), otherProvider = false } = {}) {
+  if (!checks) return null
+  const fallo = claveValida(failedKey)
+  const provFallo = fallo ? fallo.slice(0, fallo.indexOf('/')) : ''
+  let otro = null
+  let mismo = null
+  for (const m of Array.isArray(models) ? models : []) {
+    const k = m && typeof m === 'object' ? claveValida(m) : ''
+    if (!k || k === fallo) continue
+    const v = modelVerdict(checks, m, now)
+    if (!v?.ok) continue
+    if (m.providerID !== provFallo) {
+      if (!otro || v.at > otro.at) otro = { m, at: v.at }
+    } else if (!mismo || v.at > mismo.at) {
+      mismo = { m, at: v.at }
+    }
+  }
+  if (otro) return otro.m
+  if (otherProvider) return null
+  return mismo ? mismo.m : null
 }
 
 /**

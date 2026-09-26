@@ -1129,6 +1129,9 @@ corto y un detalle. Todos los títulos, por dónde salen:
   contraseña**) o al abrir una sesión nueva a mitad de respuesta. Antes se
   quedaba 90 s «pensando…» hasta que el vigilante lo abortaba. Si el panel
   vuelve al sitio, la respuesta que llegó a opencode sigue en esa sesión.
+  También sale con «la comprobación de las claves se canceló al cambiar de
+  sitio»: cambiaste de sitio mientras Faro comprobaba las claves de otro; esa
+  comprobación se abandona sin apuntar nada del modelo ni tocar el sitio nuevo.
 - «Respuesta recibida» — el turno terminó: caracteres de la respuesta,
   herramientas que llamó y cuántos KB de texto devolvieron, incluidas las trazas
   de las que fallaron (eso es lo que la conversación arrastra al turno
@@ -1154,8 +1157,14 @@ corto y un detalle. Todos los títulos, por dónde salen:
   motivo es *plan* (no está en tu plan), *credenciales* (`opencode auth login`),
   *mudo* (no contestó), *transitorio* (429 o 5xx) u *otro*. También sale con
   «proveedor/modelo: no está en la lista» si el modelo que tenías elegido ya no
-  está entre los que tu opencode tiene conectados, y entonces se preselecciona
-  otro. En un turno sólo sale si el error es del proveedor: uno de la
+  está entre los que tu opencode tiene conectados, o con «proveedor/modelo: fallo
+  apuntado (<motivo>) · se preselecciona otro esta vez» si tiene un fallo
+  reciente: lo dice el arranque del panel, se preselecciona otro esta vez y un
+  aviso en el chat te dice cuál y que puedes elegir otro en el desplegable. Y con
+  «todos los modelos de la lista tienen un fallo apuntado · se usa
+  proveedor/modelo» si no queda ninguno sin marcar: se usa el predeterminado y
+  el aviso te propone elegir uno o pulsar «Olvidar los veredictos» en Ajustes.
+  Un turno que termina sin ninguna palabra también se apunta, como *mudo*. En un turno sólo sale si el error es del proveedor: uno de la
   conversación, como un contexto desbordado, no dice nada del modelo.
 - «Veredictos de modelos olvidados» — pulsaste **Olvidar los veredictos** en
   Ajustes: Faro olvida qué modelos contestan y cuáles no; «el modelo elegido se

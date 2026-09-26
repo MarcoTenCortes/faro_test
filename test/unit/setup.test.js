@@ -603,3 +603,44 @@ test('H16: si el modelo se calla, verifyCredentials devuelve stalled, y un fallo
   eq(claves.reason, 'credenciales')
   eq('rawError' in claves, false, 'lo del modelo sólo viaja cuando falló el modelo')
 })
+
+// Revisión adversaria de H16: si a mitad de la comprobación el panel cambia de
+// sitio, `bootForSite` → `buildClient` desconecta el cliente, el turno se queda
+// sin eventos y `runTurn` devolvía `stalled` a los 60 s, que se traducía a
+// reason 'modelo' → un veredicto «mudo» FALSO de un día a un modelo que
+// funciona. Con la señal, el turno vuelve `aborted` y eso es «cancelado», no
+// del modelo (y cierra lo anotado desde H2: verifyCredentials no miraba
+// `turn.aborted`, y con un cliente cerrado caía en «sin herramientas»).
+test('H16 revisión: una comprobación cancelada es «cancelado», nunca un fallo del modelo, y la señal llega al turno', async () => {
+  const abortador = new AbortController()
+  let opciones = null
+  const cliente = {
+    runTurn: async (_id, _peticion, opts) => {
+      opciones = opts
+      return { ok: false, aborted: true, parts: [], text: '', tools: [] }
+    },
+  }
+  const r = await verifyCredentials(cliente, { sessionID: 's', model: null, host: 'h', product: 'jira', signal: abortador.signal })
+  eq(r, { ok: false, reason: 'cancelado', detail: 'la comprobación se canceló antes de terminar' })
+  assert(opciones && opciones.signal === abortador.signal, 'la señal de quien llama llega a runTurn')
+  eq([opciones.stallMs, opciones.maxMs], [60000, 180000], 'y los plazos de siempre')
+  // Aunque venga además `stalled` (el vigilante abortó y la señal también), manda cancelar.
+  const ambos = await verifyCredentials(clienteQueDevuelve({ ok: false, aborted: true, stalled: true, parts: [] }), {
+    sessionID: 's',
+    model: null,
+    host: 'h',
+    product: 'confluence',
+  })
+  eq(ambos.reason, 'cancelado', 'cancelado manda sobre colgado: no es culpa del modelo')
+  // El cliente cerrado de H2 (`closed: true`) tampoco es «sin herramientas».
+  const cerrado = await verifyCredentials(clienteQueDevuelve({ ok: false, aborted: true, closed: true, parts: [], text: '', tools: [] }), {
+    sessionID: 's',
+    model: null,
+    host: 'h',
+    product: 'jira',
+  })
+  eq(cerrado.reason, 'cancelado')
+  // Sin señal, `signal` viaja como undefined: runTurn sigue como siempre.
+  await verifyCredentials(cliente, { sessionID: 's', model: null, host: 'h', product: 'jira' })
+  eq('signal' in opciones && opciones.signal === undefined, true)
+})

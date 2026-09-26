@@ -407,7 +407,7 @@ export function fullConfigSnippet(name, config) {
  * saber ningún proyecto. La de perfil de usuario pide un identificador que
  * aquí no se conoce.
  */
-export async function verifyCredentials(client, { sessionID, model, host, product }) {
+export async function verifyCredentials(client, { sessionID, model, host, product, signal = undefined }) {
   const jira = product === 'jira'
   const tool = jira ? 'jira_search' : 'confluence_search'
   const ask = jira
@@ -424,8 +424,20 @@ export async function verifyCredentials(client, { sessionID, model, host, produc
       model,
       system: `Estás comprobando las credenciales de ${LABEL[product] || 'Atlassian'} del sitio ${host}. Usa la herramienta ${tool} si existe. No inventes nada.`,
     },
-    { stallMs: 60000, maxMs: 180000 }
+    { stallMs: 60000, maxMs: 180000, signal }
   )
+
+  // Cancelada no es del modelo (revisión adversaria de H16): si a mitad de la
+  // comprobación el panel cambia de sitio, `buildClient` desconecta el cliente
+  // y el turno se quedaba sin eventos hasta que el vigilante daba `stalled` a
+  // los 60 s, que se apuntaba como un veredicto «mudo» FALSO de un día a un
+  // modelo que funciona. Quien llama pasa su `signal` y el turno vuelve
+  // `aborted`. Va ANTES de mirar `stalled`: si el vigilante y la señal
+  // coinciden, manda cancelar. Cierra además lo anotado desde H2: con un
+  // cliente cerrado (`closed: true`) esto caía en «sin herramientas».
+  if (turn.aborted) {
+    return { ok: false, reason: 'cancelado', detail: 'la comprobación se canceló antes de terminar' }
+  }
 
   // Un fallo del MODELO no dice nada de las claves (H16, docs/PLAN2.md §3.3):
   // el turno no llegó a usar el MCP. Se devuelve con el error crudo del

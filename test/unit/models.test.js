@@ -369,6 +369,15 @@ test('H16: resolveModel — manda el de la persona, el del sitio se migra una ve
   eq(resolveModel(REALES, { settingsModel: { providerID: 'openai', modelID: 'ya-no-existe' }, now: AHORA }), nada)
   eq(resolveModel(REALES, { settingsModel: 'openai/gpt-5.4', checks: marcados('openai/gpt-5.4'), now: AHORA }), nada, 'con veredicto de fallo vigente, tampoco')
   eq(resolveModel([], { settingsModel: luna }), nada, 'sin lista no hay con qué comparar')
+  // Revisión adversaria de H16: `sano(delSitio)` es la ÚNICA barrera que impide
+  // MIGRAR a settings.model un modelo del sitio que ya falló (el gpt-5.4 del
+  // compañero, guardado en `saved.model` desde antes de H16).
+  eq(resolveModel(REALES, { settingsModel: null, savedModel: 'openai/gpt-5.4', checks: marcados('openai/gpt-5.4'), now: AHORA }), nada, 'el del sitio con fallo vigente no se migra')
+  eq(
+    resolveModel(REALES, { settingsModel: 'github-copilot/claude-sonnet-4.6', savedModel: 'openai/gpt-5.4', checks: marcados('openai/gpt-5.4', 'github-copilot/claude-sonnet-4.6'), now: AHORA }),
+    nada,
+    'los dos rotos: pregunta'
+  )
 })
 
 test('H16: EL BUCLE ROTO — «Reintentar con X» ya no alterna entre gpt-5.4 y claude-sonnet-4.6', () => {
@@ -439,4 +448,55 @@ test('H16: usableModels marca lo retirado y lo que no tiene herramientas, sin bo
   eq(JSON.stringify(lista), copia, 'copias: la lista no se toca')
   eq(usableModels(REALES).length, 43, 'los 43 de Marco son utilizables: opencode no marca lo que el plan no permite')
   eq(usableModels(null), [])
+})
+
+test('H16 revisión: los bordes de la clasificación que ninguna prueba fijaba', () => {
+  // Un 404 «model not found» es un modelo que no existe para ti: «plan».
+  eq(classifyModelFailure({ name: 'APIError', data: { message: 'model not found', statusCode: 404 } }), 'plan', 'el 404 también es «plan»')
+  // El 403 del free tier con el turno COLGADO es «mudo», y entonces NO marca al
+  // proveedor entero: el veredicto de proveedor exige que el motivo sea «plan».
+  const colgado = verdictsForFailure({ model: 'opencode/big-pickle', rawError: FREE_TIER, stalled: true, models: REALES, now: AHORA })
+  eq(colgado.map((v) => [v.key, v.reason]), [['opencode/big-pickle', 'mudo']], 'sólo el que falló, y «mudo»')
+  // Un id de modelo con un trozo vacío no es una clave.
+  for (const trozoVacio of ['a/b//c', 'openai/gpt-5.4/', { providerID: 'openai', modelID: 'meta//x' }]) {
+    eq(verdictsForFailure({ model: trozoVacio, rawError: OPENAI, models: REALES, now: AHORA }), [], JSON.stringify(trozoVacio))
+  }
+})
+
+// Revisión adversaria de H16: «Reintentar con X» elegía la alternativa a
+// ciegas (pickAlternativeModel) y DESPUÉS exigía que tuviera veredicto ok; con
+// los dos defaults rechazados y gpt-5.6-luna funcionando —el caso del
+// compañero— la alternativa ciega era un default sin veredicto y no salía NUNCA
+// el botón. pickRetryModel elige directamente entre lo que YA se sabe que contesta.
+import { pickRetryModel } from '../../src/shared/models.js'
+
+test('H16 revisión: pickRetryModel propone lo que ya contestó, nunca el que falló', () => {
+  const ok = (at) => ({ ok: true, reason: 'ok', message: '', at })
+  const checks = {
+    ...marcados('openai/gpt-5.4', 'github-copilot/claude-sonnet-4.6'),
+    'github-copilot/gpt-5-mini': ok(AHORA - 9000),
+    'github-copilot/gpt-5.6-luna': ok(AHORA - 1000),
+    'openai/gpt-5.2': ok(AHORA - 5000),
+  }
+  const opt = { checks, now: AHORA }
+  // El caso del compañero: falla gpt-5.4 y sale luna, el ok más reciente (y de otro proveedor).
+  eq(CLAVE(pickRetryModel(REALES, 'openai/gpt-5.4', opt)), 'github-copilot/gpt-5.6-luna')
+  // Otro proveedor se prefiere aunque haya un ok más reciente del mismo.
+  eq(CLAVE(pickRetryModel(REALES, { providerID: 'github-copilot', modelID: 'claude-sonnet-4.6' }, opt)), 'openai/gpt-5.2', 'otro proveedor antes que uno más reciente del mismo')
+  // Sin otro proveedor con ok, uno del mismo; con otherProvider: true, nada.
+  const soloCopilot = { 'github-copilot/gpt-5-mini': ok(AHORA - 9000), 'github-copilot/gpt-5.6-luna': ok(AHORA - 1000) }
+  eq(CLAVE(pickRetryModel(REALES, 'github-copilot/claude-sonnet-4.6', { checks: soloCopilot, now: AHORA })), 'github-copilot/gpt-5.6-luna')
+  eq(pickRetryModel(REALES, 'github-copilot/claude-sonnet-4.6', { checks: soloCopilot, now: AHORA, otherProvider: true }), null, 'otherProvider exige otro proveedor')
+  // El que falló, nunca: aunque sea el único ok.
+  eq(pickRetryModel(REALES, 'github-copilot/gpt-5.6-luna', { checks: { 'github-copilot/gpt-5.6-luna': ok(AHORA) }, now: AHORA }), null, 'nunca el que falló')
+  // Sin ningún ok, sin checks, o con el ok caducado: nada.
+  eq(pickRetryModel(REALES, 'openai/gpt-5.4', { checks: marcados('openai/gpt-5.4', 'github-copilot/claude-sonnet-4.6'), now: AHORA }), null, 'sin ok no hay a qué reintentar: un veredicto de fallo no es un «sí»')
+  eq(pickRetryModel(REALES, 'openai/gpt-5.4'), null, 'sin veredictos no hay con qué atreverse')
+  eq(pickRetryModel(REALES, 'openai/gpt-5.4', { checks: {}, now: AHORA }), null)
+  const caducado = { 'github-copilot/gpt-5.6-luna': ok(AHORA - MODEL_LIMITS.ttlMs.ok - 1) }
+  eq(pickRetryModel(REALES, 'openai/gpt-5.4', { checks: caducado, now: AHORA }), null, 'un ok caducado ya no vale')
+  // Lo que devuelve es el objeto de la lista; y un ok de algo que no está en la lista no cuenta.
+  assert(REALES.includes(pickRetryModel(REALES, 'openai/gpt-5.4', opt)), 'el objeto de la lista')
+  eq(pickRetryModel(REALES, 'openai/gpt-5.4', { checks: { 'otro/que-no-esta': ok(AHORA) }, now: AHORA }), null)
+  for (const basura of [null, undefined, 'x', [null, 7, {}]]) eq(pickRetryModel(basura, 'openai/gpt-5.4', opt), null, JSON.stringify(basura))
 })

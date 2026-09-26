@@ -14,7 +14,7 @@ import { OpencodeClient, OpencodeError } from '../opencode/client.js'
 import { suggestsAnotherModel, sortMessages, dropOrphans, toolOutputSize } from '../opencode/turn.js'
 import {
   pickDefaultModel,
-  pickAlternativeModel,
+  pickRetryModel,
   pickPlannerModel,
   modelKey,
   parseModelKey,
@@ -328,6 +328,10 @@ const state = {
   tabTitle: '',
   turns: [],
   indexingAbort: null,
+  // La comprobación de las claves en vuelo (`finishSetup`): son uno o dos
+  // turnos, y `buildClient` la cancela al cambiar de sitio (revisión adversaria
+  // de H16).
+  setupAbort: null,
   // Lo que cancela el botón del velo «Trabajando…», si hay algo que cancelar:
   // sin esto, el Cancelar de «Guardando lo aprendido» no cancelaba nada.
   busyAbort: null,
@@ -458,6 +462,15 @@ function buildClient() {
     state.indexingAbort.abort()
     hideBusy()
     log.warn('Indexado cancelado', 'has cambiado de sitio a mitad del indexado')
+  }
+  // Y la comprobación de las claves, que son uno o dos turnos de modelo: con el
+  // cliente cerrado su turno acababa «colgado», `finishSetup` apuntaba un
+  // «mudo» falso de un día y cerraba las pantallas del sitio NUEVO (revisión
+  // adversaria de H16). Con la señal abortada, `verifyCredentials` vuelve con
+  // `reason 'cancelado'` y `finishSetup` se va sin tocar nada.
+  if (state.setupAbort) {
+    state.setupAbort.abort()
+    state.setupAbort = null
   }
   state.client?.disconnect()
   const client = new OpencodeClient({
@@ -796,6 +809,9 @@ async function bootForSite() {
   // Se pregunta por la LISTA, no por el error: así una respuesta rara (o un
   // rechazo sin motivo) acaba en el aviso y no en un TypeError que se llevaría
   // el arranque entero, que es justo lo que el try/catch de antes evitaba.
+  // Lo que haya que decir del modelo de esta vez (su modelo apartado, o todos
+  // marcados) se pinta tras restaurar la conversación, que vacía el chat.
+  let avisoModelo = ''
   if (Array.isArray(modelos?.models)) {
     state.models = modelos.models
     state.defaults = modelos.defaults
@@ -824,6 +840,29 @@ async function bootForSite() {
       now: ahora,
     })
     let elegido = resuelto.model
+    // El modelo de la PERSONA se aparta esta vez —ya no está en la lista de
+    // opencode, o tiene un fallo apuntado que todavía vale—, y eso se DICE
+    // (§8.14): hasta la revisión adversaria de H16 se preseleccionaba otro en
+    // silencio, y el turno salía con un modelo que nadie había elegido sin que
+    // el Registro ni el chat lo contaran. El motivo se decide aquí y el aviso
+    // se pinta tras restaurar la conversación, que vacía el chat. H17 convierte
+    // este aviso en la pantalla «Elige el modelo» con «Elegir otro modelo».
+    let apartado = null
+    if (state.settings.model && resuelto.source !== 'settings') {
+      const suyo = modelKey(state.settings.model)
+      const veredicto = modelVerdict(checks, state.settings.model, ahora)
+      const enLaLista = modelos.models.some((m) => modelKey(m) === suyo)
+      apartado =
+        enLaLista && veredicto && !veredicto.ok
+          ? { nombre: nombreModelo(state.settings.model), motivo: `tiene un fallo reciente (${motivoModelo(veredicto.reason)})` }
+          : { nombre: suyo, motivo: 'ya no está en la lista de tu opencode' }
+      log.warn(
+        'Modelo no disponible',
+        enLaLista && veredicto && !veredicto.ok
+          ? `${suyo}: fallo apuntado (${veredicto.reason}) · se preselecciona otro esta vez`
+          : `${suyo}: no está en la lista`
+      )
+    }
     // La migración se escribe UNA vez, y sólo cuando la persona todavía no tiene
     // modelo propio: `resolveModel` también cae en el del sitio cuando el de la
     // persona tiene un fallo apuntado, y escribirlo ahí sería cambiarle la
@@ -832,11 +871,23 @@ async function bootForSite() {
     // pantalla). Desde aquí manda `settings.model`; `saved.model` se deja como
     // está —borrarlo sería otra escritura por sitio para nada— y ya nadie lo
     // escribe.
+    // Y se decide con los ajustes RELEÍDOS, no con los de `init()`: con dos
+    // ventanas abiertas, la segunda pisaba el `settings.model` que la primera
+    // acababa de migrar o elegir (revisión adversaria de H16). Si ya hay uno
+    // guardado, manda ése, resuelto con la misma regla.
     if (resuelto.migrate && elegido && !state.settings.model) {
       const model = { providerID: elegido.providerID, modelID: elegido.modelID }
-      await saveSettings({ model })
+      const guardados = await getSettings()
       if (state.bootToken !== testigo) return
-      state.settings = { ...state.settings, model }
+      if (!guardados.model) {
+        state.settings = await saveSettings({ model })
+      } else {
+        state.settings = guardados
+        elegido =
+          resolveModel(modelos.models, { settingsModel: guardados.model, savedModel: saved?.model, checks, now: ahora }).model ||
+          elegido
+      }
+      if (state.bootToken !== testigo) return
     }
     if (!elegido) {
       // Sin modelo resuelto H16 todavía no tiene pantalla que enseñar: se
@@ -848,7 +899,31 @@ async function bootForSite() {
         recommendModel(modelos.models, { configModel: null, defaults: modelos.defaults, checks, now: ahora }) ||
         pickDefaultModel(modelos.models, modelos.defaults, { checks, now: ahora })
     }
+    // Con TODOS los de la lista marcados —pasó con sólo el proveedor `opencode`,
+    // cuyo 403 del nivel gratuito marca sus siete modelos una semana— los dos
+    // respaldos de arriba dan null, el desplegable enseñaba su primera opción y
+    // el turno se mandaba con otra cosa (el default de opencode, o el de antes).
+    // No hay nada mejor que elegir: el predeterminado SIN veredictos, para que
+    // el desplegable y `state.model` digan lo mismo, y se dice (revisión
+    // adversaria de H16).
+    let todosMarcados = false
+    if (!elegido) {
+      elegido = pickDefaultModel(modelos.models, modelos.defaults)
+      if (elegido) {
+        todosMarcados = true
+        log.warn('Modelo no disponible', `todos los modelos de la lista tienen un fallo apuntado · se usa ${modelKey(elegido)}`)
+      }
+    }
     fillModels(modelos.models, elegido)
+    if (todosMarcados) {
+      avisoModelo =
+        `Todos los modelos de tu lista tienen un fallo reciente; esta vez Faro usa «${nombreModelo(state.model)}». ` +
+        'Elige uno en el desplegable, o pulsa «Olvidar los veredictos» en Ajustes para volver a probarlos.'
+    } else if (apartado && state.model) {
+      avisoModelo =
+        `Tu modelo, «${apartado.nombre}», ${apartado.motivo}; esta vez Faro usa «${nombreModelo(state.model)}»: ` +
+        'elige otro en el desplegable si no te vale.'
+    }
   } else {
     showNotice('No he podido leer la lista de modelos: ' + (modelos?.error?.message || modelos?.error || 'respuesta vacía'), true)
   }
@@ -956,6 +1031,9 @@ async function bootForSite() {
   if (state.bootToken !== testigo) return
   cron.mark('restaurar')
   medir()
+  // Aquí y no en el paso 3: `restoreConversation` vacía el chat y se llevaba
+  // cualquier aviso anterior. Con el testigo ya comprobado justo arriba.
+  if (avisoModelo) showNotice(avisoModelo, true)
 
   // Sin ruido: si falta el permiso, se avisa cuando de verdad hace falta
   // (al ofrecer navegación), no nada más abrir el panel.
@@ -1876,14 +1954,22 @@ function fillModels(models, selected) {
   // Un modelo que NO está en la lista no se asigna (H16). Antes se escribía en
   // `state.model` aunque el `<select>` no pudiera enseñarlo: el desplegable
   // decía uno y el turno se mandaba con otro que opencode ya no tiene, y el
-  // fallo que volvía no explicaba nada. Se registra y se cae al respaldo, que
-  // salta lo que ya se sabe que no contesta.
+  // fallo que volvía no explicaba nada. Se cae al respaldo, que salta lo que ya
+  // se sabe que no contesta. Es una DEFENSA y no registra nada: el único que
+  // llama es `bootForSite`, que sólo pasa modelos de la lista, y el «no está en
+  // la lista» del modelo de la persona lo dice él, con su aviso (revisión
+  // adversaria de H16: el registro de aquí era inalcanzable).
   const enLista = selected ? models.find((m) => modelKey(m) === modelKey(selected)) : null
-  if (selected && !enLista) log.warn('Modelo no disponible', `${modelKey(selected)}: no está en la lista`)
   const elegido = enLista || pickDefaultModel(models, state.defaults, { checks: state.modelChecks, now: ahora })
   if (elegido) {
     el.model.value = modelKey(elegido)
     state.model = { providerID: elegido.providerID, modelID: elegido.modelID }
+  } else {
+    // Sin nada que elegir (la lista vacía), el desplegable NO enseña una opción
+    // que nadie eligió y el turno no se manda con el modelo de antes: los dos
+    // dicen lo mismo, nada (revisión adversaria de H16).
+    el.model.selectedIndex = -1
+    state.model = null
   }
 }
 
@@ -2840,7 +2926,8 @@ async function send() {
       cuerpo.appendChild(errorNode(
         aviso,
         { ...tracker, rawError: { name: 'APIError', data: { message: 'stalled' } } },
-        text
+        text,
+        { stalled: true }
       ))
       if (mismoSitio) announce(aviso)
       return
@@ -2876,6 +2963,15 @@ async function send() {
     const { prose, anchors } = splitAnchorsBlock(turn.text)
     const answer = prose.trim()
     if (!answer) {
+      // Un turno que acaba «bien» sin una palabra es un modelo MUDO (docs/PLAN2.md
+      // §3.3: «stalled o sin texto»), y hasta la revisión adversaria de H16 esta
+      // rama no lo apuntaba, así que la preselección y «Reintentar con…» podían
+      // volver a caer en él. Sólo si de verdad no hubo nada: una respuesta que
+      // trae sólo el bloque de anclas —o sólo herramientas, que no son texto—
+      // sí contestó, y marcarla «no contesta» un día sería mentir.
+      if (!turn.text?.trim() && !anchors && !turn.tools?.length) {
+        await noteModelFailure({ model: turn.model || peticion.model, stalled: true })
+      }
       cuerpo.textContent = ''
       cuerpo.appendChild(noticeNode('El modelo no devolvió texto.', true))
       if (mismoSitio) announce('El modelo no devolvió texto.')
@@ -3315,28 +3411,32 @@ function noticeNode(text, bad) {
  * credenciales del proveedor —una sesión OAuth caducada, por ejemplo— hay una
  * acción concreta que lo desatasca: cambiar de proveedor y reintentar.
  */
-function errorNode(message, tracker, question) {
+function errorNode(message, tracker, question, { stalled = false } = {}) {
   const wrap = document.createElement('div')
   wrap.appendChild(noticeNode(message, true))
 
   if (!suggestsAnotherModel(tracker?.rawError)) return wrap
 
-  // Saltando lo que ya se sabe que falla (H16): sin veredictos, el de otro
-  // proveedor era a ciegas, y con dos predeterminados rechazados por el plan el
-  // botón alternaba entre ellos para siempre (`gpt-5.4 ⇄ claude-sonnet-4.6`, el
-  // bucle del compañero, verificado con los ids reales en el anexo C).
+  // Sólo se OFRECE lo que se sabe que contesta: el modelo con un veredicto ok
+  // vigente más reciente, distinto del que acaba de fallar (H16). Sin
+  // veredictos, el de otro proveedor era a ciegas, y con dos predeterminados
+  // rechazados por el plan el botón alternaba entre ellos para siempre
+  // (`gpt-5.4 ⇄ claude-sonnet-4.6`, el bucle del compañero, verificado con los
+  // ids reales en el anexo C). Hasta la revisión adversaria de H16 se elegía a
+  // ciegas con `pickAlternativeModel` y DESPUÉS se exigía el ok, así que con
+  // otro modelo que sí contestaba no salía ningún botón: ahora se elige ya
+  // entre los que tienen ok (`pickRetryModel`). Con las credenciales del
+  // proveedor caducadas hay que cambiar de PROVEEDOR —cualquier modelo suyo
+  // fallará igual—; en los demás casos basta otro modelo. Sin ninguno así,
+  // ningún botón: H17 pone aquí «Elegir otro modelo», que abre la pantalla con
+  // el que falló marcado y su motivo.
   const ahora = Date.now()
-  const alt = pickAlternativeModel(state.models, state.defaults, tracker?.model?.providerID || state.model?.providerID, {
+  const alt = pickRetryModel(state.models, modelKey(tracker?.model || state.model), {
     checks: state.modelChecks,
     now: ahora,
+    otherProvider: classifyModelFailure(tracker?.rawError, { stalled }) === 'credenciales',
   })
   if (!alt) return wrap
-  // Y sólo se OFRECE si se sabe que contesta: un veredicto ok vigente. Un botón
-  // que promete «reintentar» con un modelo del que no se sabe nada es otra vuelta
-  // del mismo bucle, con un clic de por medio. Sin ninguno así, ningún botón:
-  // H17 pone aquí «Elegir otro modelo», que abre la pantalla con el que falló
-  // marcado y su motivo.
-  if (!modelVerdict(state.modelChecks, modelKey(alt), ahora)?.ok) return wrap
 
   const row = document.createElement('div')
   row.className = 'nav-actions'
@@ -7515,20 +7615,38 @@ async function finishSetup() {
   // El modelo con el que se comprueba, capturado al empezar (§8.22): son uno o
   // dos turnos, y el desplegable del redactor se puede tocar mientras tanto.
   const modelo = state.model
+  // Y el CLIENTE, por lo mismo (§8.22): cambiar de sitio a mitad reconstruye el
+  // cliente (`buildClient`) y cancela esta comprobación con `state.setupAbort`.
+  // Sin capturarlo, lo que volvía de un turno cortado se leía como un modelo
+  // «mudo», se apuntaba un día y se cerraban las pantallas del sitio NUEVO con
+  // el aviso colgado en su chat (revisión adversaria de H16).
+  const cliente = state.client
+  const abortador = new AbortController()
+  state.setupAbort = abortador
+  const cancelada = () => state.client !== cliente || abortador.signal.aborted
 
   let session = null
   try {
-    session = await state.client.createSession({ title: 'Faro · comprobación' })
+    session = await cliente.createSession({ title: 'Faro · comprobación' })
     const detalles = []
     for (const product of PRODUCTS.filter((p) => products?.[p])) {
       const etiqueta = product === 'jira' ? 'Jira' : 'Confluence'
       say(`Comprobando las claves de ${etiqueta}…`)
-      const check = await verifyCredentials(state.client, {
+      const check = await verifyCredentials(cliente, {
         sessionID: session.id,
         model: modelo,
         host: site.host,
+        signal: abortador.signal,
         product,
       })
+
+      // Lo que vuelve con el cliente ya cambiado no dice nada ni del modelo ni
+      // de las claves: se registra y se va, sin apuntar ningún veredicto, sin
+      // cerrar pantallas y sin tocar el estado, que ya es de otro sitio.
+      if (state.client !== cliente || check.reason === 'cancelado') {
+        log.info('Turno cancelado', 'la comprobación de las claves se canceló al cambiar de sitio')
+        return
+      }
 
       if (!check.ok && check.reason === 'modelo') {
         // El MODELO no contestó, así que ningún token se ha llegado a probar
@@ -7583,9 +7701,16 @@ async function finishSetup() {
     if (state.site?.host === site.host) setTimeout(() => bootForSite(), 800)
     else if (!state.site && state.lastHost === site.host) state.bootPending = site.host
   } catch (err) {
+    // Lo mismo si lo que revienta es un turno cortado por el cambio de sitio:
+    // el texto iría a la pantalla de claves, que ya puede ser la del otro.
+    if (cancelada()) {
+      log.info('Turno cancelado', 'la comprobación de las claves se canceló al cambiar de sitio')
+      return
+    }
     say('No he podido comprobarlo: ' + (err?.message || err))
   } finally {
-    if (session) state.client.deleteSession(session.id).catch(() => {})
+    if (session) cliente.deleteSession(session.id).catch(() => {})
+    if (state.setupAbort === abortador) state.setupAbort = null
   }
 }
 

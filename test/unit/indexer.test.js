@@ -774,3 +774,26 @@ test('H16: el indexado que se calla lo dice (stalled), y los errores de la salid
   const e2 = await errorDe(client)
   assert(e2 === delCliente, 'el mismo error, no uno nuevo')
 })
+
+// Revisión adversaria de H16: la fase 1 que «acaba bien» sin decir nada es un
+// modelo MUDO (PLAN2 §3.3: «stalled o sin texto»). Antes salía un Error sin
+// `model` ni `stalled`, el `catch` de generateContext no lo contaba como fallo
+// del modelo, escribía `onboarded: true` y el sitio quedaba configurado sin
+// contexto: el agujero que H16 venía a cerrar.
+import { classifyModelFailure } from '../../src/shared/models.js'
+
+test('H16 revisión: una fase 1 que acaba bien pero sin texto es un modelo mudo, con su modelo', async () => {
+  const CRUDO = { name: 'UnknownError', data: { message: 'nada' } }
+  for (const turno of [
+    { ok: true, text: '   ' },
+    { ok: true, text: '' },
+    { ok: true, text: '\n\t \n', rawError: CRUDO, model: { providerID: 'github-copilot', modelID: 'gpt-5.6-luna' } },
+  ]) {
+    const err = await errorDe(clienteQueFalla(turno))
+    assert(err instanceof Error && /ningún documento de contexto/.test(err.message), String(err))
+    eq(err.stalled, true, 'sin texto es «mudo»: stalled')
+    eq(err.model, turno.model || { providerID: 'openai', modelID: 'gpt-5.4' }, 'con qué modelo: el del turno, o el que se pidió')
+    eq(err.rawError, turno.rawError || null, 'y el error crudo, o null (nunca undefined)')
+  }
+  eq(classifyModelFailure(null, { stalled: true }), 'mudo', 'que es como lo clasifica quien lo recoge')
+})

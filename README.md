@@ -651,7 +651,7 @@ cuáles no), que desde H16 son tuyos y no de un sitio.
 ## Comprobaciones
 
 ```bash
-npm run check              # sintaxis + orden + manifest + 1368 pruebas unitarias + docs
+npm run check              # sintaxis + orden + manifest + 1372 pruebas unitarias + docs
 npm run check:docs         # sólo el paso docs: número de pruebas, títulos del registro, mensajes y ficheros del mapa
 npm run test:integration   # contra un opencode real que arranca la propia prueba
 npm run harness            # banco de pruebas visual en http://127.0.0.1:5175
@@ -1112,7 +1112,10 @@ apunta con caducidad (7 días lo del plan, una hora lo de las credenciales…) y
 ese modelo sale «· no disponible» en el desplegable y no se vuelve a proponer;
 los que faltan en la lista de Copilot y todos los `opencode/*` tras un 403 de
 free tier caen de golpe. «Reintentar con X» sólo aparece si X ya ha contestado
-bien: se acabó el ir y venir entre dos modelos que tu plan rechaza. Un modelo
+bien: se acabó el ir y venir entre dos modelos que tu plan rechaza. Si el
+modelo que elegiste ya no está en tu opencode o acaba de fallar, el panel te lo
+dice al abrirse y te dice con cuál va esta vez, en vez de cambiarlo en silencio;
+y si fallan todos, usa el predeterminado y te lo avisa. Un modelo
 que falla al comprobar las claves **no se cuenta como un fallo de las claves**
 («Volver a comprobar» repite sólo la comprobación con otro modelo), y un
 indexado que falla por el modelo no da el sitio por configurado. Todo eso se ve

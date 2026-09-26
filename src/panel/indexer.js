@@ -100,8 +100,20 @@ export async function buildContext(
     if (explore.aborted) throw new DOMException('Cancelado', 'AbortError')
     if (explore.error) throw conModelo(new Error(explore.error), { rawError: explore.rawError || null })
 
+    // Un turno que «acaba bien» sin decir nada es un modelo MUDO (PLAN2 §3.3:
+    // «stalled o sin texto»), no un fallo del sitio. Hasta la revisión adversaria
+    // de H16 este Error salía sin `model` ni `stalled`, el `catch` de
+    // `generateContext` no lo contaba como fallo del modelo, escribía
+    // `onboarded: true` y el sitio quedaba configurado SIN contexto: justo el
+    // agujero que H16 venía a cerrar. `classifyModelFailure` traduce `stalled` a
+    // «mudo».
     const contextMd = explore.text.trim()
-    if (!contextMd) throw new Error('El indexador no devolvió ningún documento de contexto.')
+    if (!contextMd) {
+      throw conModelo(new Error('El indexador no devolvió ningún documento de contexto.'), {
+        stalled: true,
+        rawError: explore.rawError || null,
+      })
+    }
 
     // Con el árbol leído de la API no hay nada que preguntarle al modelo sobre
     // la estructura: lo que devolvió la lista es exacto y ya trae el padre de
