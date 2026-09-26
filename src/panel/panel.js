@@ -3760,17 +3760,28 @@ function modelWhy(m, veredicto, ahora) {
 
 /**
  * Qué modelo está marcado en la pantalla: lo que el usuario ha tocado; si no, el
- * que se pidió marcar al abrirla (el que falló, el de ahora); si no, la
- * preselección de `recommendModel` —el último que contestó, el de la
- * configuración de opencode, un predeterminado sin fallo—, y si no, el primero
- * DISPONIBLE (utilizable y sin fallo vigente). Con todos marcados, nada: la
- * pantalla no elige por nadie un modelo que se sabe que falla.
+ * que se pidió marcar al abrirla (el de ahora, desde Ajustes) SÓLO si se puede
+ * usar; si no, la preselección de `recommendModel` —el último que contestó, el
+ * de la configuración de opencode, un predeterminado sin fallo—, y si no, el
+ * primero DISPONIBLE (utilizable y sin fallo vigente). Con todos marcados, nada:
+ * la pantalla no elige por nadie un modelo que se sabe que falla.
+ *
+ * Revisión adversaria de H17 (R1), un DESVÍO razonado de docs/PLAN2.md §3.3,
+ * que dice «abre la pantalla con el fallido marcado»: en los modos 'error',
+ * 'setup' e 'indexado' lo que se pide marcar es el modelo que ACABA de fallar, y
+ * marcarlo dejaba «Usar este modelo» apuntando a repetir el fallo —con la flecha
+ * oculta en dos de ellos, la acción por defecto era la única salida—. Así que un
+ * `marcado` con un fallo VIGENTE, o retirado o sin herramientas, no es la
+ * preselección: queda a la vista, desplegado en «No disponibles» con su motivo
+ * (`paintModelList`), y se sigue pudiendo elegir tocándolo, que es lo único que
+ * manda sobre todo lo demás.
  */
 function modelScreenChoice(ahora = Date.now()) {
   const s = state.modelScreen
   const enLista = (key) => (key && state.models.some((m) => modelKey(m) === key) ? key : '')
   if (enLista(s?.elegido)) return s.elegido
-  if (enLista(s?.marcado)) return s.marcado
+  const marcado = enLista(s?.marcado) ? usableModels(state.models).find((m) => modelKey(m) === s.marcado) : null
+  if (marcado && marcado.usable && !modelFailing(marcado, ahora)) return s.marcado
   const rec = recommendModel(state.models, {
     configModel: state.configModel || null,
     defaults: state.defaults,
@@ -3829,6 +3840,11 @@ async function showModelScreen({ modo = 'ajustes', motivo = '', marcado = null, 
   $('btn-model-close').hidden = !cerrable
   paintModelList('')
   showScreen('screen-model')
+  // El motivo se DICE (A2, revisión adversaria de H17, C3): `showScreen` sólo
+  // enfoca el título y `#model-reason` es un párrafo sin `aria-live`, así que un
+  // lector de pantalla abría la pantalla sin saber por qué. Hasta H16 ese mismo
+  // motivo salía con `showNotice` o `attachSetupModelNotice`, que lo anunciaban.
+  if (state.modelScreen.motivo) announce(state.modelScreen.motivo)
 
   if (state.configModel !== undefined || !state.client) return
   const cliente = state.client
@@ -3900,9 +3916,13 @@ function paintModelList(filtro = '') {
   const cuantos = [...noDisponibles.values()].reduce((n, filas) => n + filas.length, 0)
   $('model-unavailable-summary').textContent = `No disponibles (${cuantos})`
   detalles.classList.toggle('hidden', !cuantos)
-  // Si lo marcado está plegado (el modelo que acaba de fallar, casi siempre), se
-  // despliega: un radio marcado que no se ve es una elección que nadie ve.
-  if (plegada.querySelector('input:checked')) detalles.open = true
+  // Se despliega si lo marcado está plegado —un radio marcado que no se ve es
+  // una elección que nadie ve— y también si está ahí el modelo que se pidió
+  // marcar al abrir aunque NO sea el radio marcado (revisión adversaria de H17,
+  // R1): es el que acaba de fallar, `modelScreenChoice` ya no lo preselecciona, y
+  // tiene que quedar A LA VISTA con su motivo, no escondido bajo un «(N)».
+  const pedido = state.modelScreen?.marcado || ''
+  if ([...plegada.querySelectorAll('input')].some((r) => r.checked || (pedido && r.value === pedido))) detalles.open = true
   if (!disponibles.size && !cuantos) {
     const nada = document.createElement('p')
     nada.className = 'fine'
@@ -4052,9 +4072,15 @@ async function runModelProbe() {
   } finally {
     if (state.modelProbeAbort === abortador) state.modelProbeAbort = null
   }
-  const vigente = state.modelScreen === s && !$('screen-model').classList.contains('hidden')
+  // Se repinta la pantalla que esté ABIERTA, sea la misma de antes o no
+  // (revisión adversaria de H17, C5): cerrarla con la flecha y volver a abrirla
+  // durante la sonda crea otro `state.modelScreen`, que se pintaba con los dos
+  // botones desactivados —la sonda seguía en vuelo— y, al acabar, nadie los
+  // encendía. Cerrar NO cancela la sonda a propósito: es una petición ya
+  // pagada y su veredicto es global, vale para la pantalla que se abra después.
+  const abierta = !$('screen-model').classList.contains('hidden')
   if (abortador.signal.aborted || state.client !== cliente || state.settings.serverUrl !== ctx.server || !r) {
-    if (vigente) {
+    if (abierta) {
       paintModelButtons()
       setModelStatus(r ? 'Comprobación cancelada.' : 'No he podido hacer la comprobación.')
     }
@@ -4067,7 +4093,7 @@ async function runModelProbe() {
   if (!r.ok && r.rawError?.name === 'OpencodeError') {
     const detalle = mensajeCorto(r.rawError.message)
     log.warn('Modelo comprobado', `${key} · sin comprobar · ${detalle}`)
-    if (state.modelScreen === s && !$('screen-model').classList.contains('hidden')) {
+    if (!$('screen-model').classList.contains('hidden')) {
       paintModelButtons()
       setModelStatus('No he podido hacer la comprobación: ' + detalle)
     }
@@ -4094,7 +4120,7 @@ async function runModelProbe() {
     log.warn('Modelo comprobado', `${key} · ${motivo}` + (fallo?.message ? ' · ' + fallo.message.slice(0, 120) : ''))
     texto = `«${m.name}» no ha contestado: ${motivoModelo(motivo)}.`
   }
-  if (state.modelScreen === s && !$('screen-model').classList.contains('hidden')) {
+  if (!$('screen-model').classList.contains('hidden')) {
     paintModelList($('model-filter').value)
     setModelStatus(texto)
   }
@@ -4112,11 +4138,19 @@ function attachModelNotice(motivo, { marcado = null, modo = 'ajustes', keepConte
   wrap.appendChild(noticeNode(motivo, true))
   const row = document.createElement('div')
   row.className = 'nav-actions'
+  // `NEEDS_IDLE`, como «Elegir otro modelo» de `errorNode` (revisión adversaria
+  // de H17, C6): este aviso sale justo cuando la pantalla taparía algo —un turno
+  // en vuelo, casi siempre—, y abrirla durante ese turno en el modo 'indexado'
+  // o 'setup' dejaba una pantalla sin flecha encima de una respuesta a medias.
   const btn = document.createElement('button')
-  btn.className = 'ghost small'
+  btn.className = 'ghost small ' + NEEDS_IDLE
   btn.type = 'button'
   btn.textContent = 'Elegir otro modelo'
-  btn.addEventListener('click', () => showModelScreen({ modo, motivo, marcado, keepContext, pregunta }).catch(console.error))
+  btn.disabled = state.streaming
+  btn.addEventListener('click', () => {
+    if (state.streaming) return
+    showModelScreen({ modo, motivo, marcado, keepContext, pregunta }).catch(console.error)
+  })
   row.appendChild(btn)
   wrap.appendChild(row)
   el.chat.appendChild(wrap)
@@ -8633,15 +8667,21 @@ async function generateContext({ keepContext = false } = {}) {
     if (sigueAqui() && state.site) {
       await restoreConversation()
       if (sigueAqui() && state.site) {
-        showNotice(aviso, true)
-        if (porModelo) attachReindexButton({ keepContext })
         // H17, paso 5 de la máquina del primer uso: por modelo se vuelve a «Elige
         // el modelo», y al elegir se repite el indexado con el mismo
-        // `keepContext`. Detrás del aviso y del botón, que se quedan: si la
-        // pantalla taparía algo, el aviso lleva su «Elegir otro modelo».
-        if (porModelo) {
-          if (puedeAbrirPantalla()) showModelScreen({ modo: 'indexado', motivo: motivoPantalla, marcado: modelo, keepContext }).catch(console.error)
-          else attachModelNotice(aviso, { modo: 'indexado', marcado: modelo, keepContext })
+        // `keepContext`, detrás del aviso y del botón, que se quedan. Si la
+        // pantalla taparía algo, el aviso lo pinta `attachModelNotice` UNA vez,
+        // con su «Elegir otro modelo» y «Generar el contexto otra vez» debajo:
+        // hasta la revisión adversaria de H17 (C6) salían dos avisos rojos
+        // idénticos, `showNotice` y el suyo, y el lector de pantalla oía dos.
+        const pantalla = porModelo && puedeAbrirPantalla()
+        if (!porModelo || pantalla) {
+          showNotice(aviso, true)
+          if (porModelo) attachReindexButton({ keepContext })
+          if (pantalla) showModelScreen({ modo: 'indexado', motivo: motivoPantalla, marcado: modelo, keepContext }).catch(console.error)
+        } else {
+          attachModelNotice(aviso, { modo: 'indexado', marcado: modelo, keepContext })
+          attachReindexButton({ keepContext })
         }
       }
     }

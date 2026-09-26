@@ -652,7 +652,11 @@ Junto al selector de modelo, abajo, hay otras dos cosas:
   tu plan: …», «no contesta», «credenciales caducadas: opencode auth login»,
   «falló hace 10 min: …». Los que tienen un fallo reciente —y los que opencode
   va a retirar o no tienen herramientas— van plegados bajo **«No disponibles
-  (N)»**, pero se pueden elegir igual: es información, no un candado. Arriba
+  (N)»**, pero se pueden elegir igual: es información, no un candado. Cuando
+  la pantalla sale por un fallo, el modelo que acaba de fallar se ve ahí, con
+  su motivo, pero **no sale marcado**: la marca va al que Faro recomienda (el
+  último que contestó bien, el de tu configuración o un predeterminado que no
+  haya fallado), para que «Usar este modelo» no repita el fallo. Arriba
   hay un **filtro** que busca por nombre, id o proveedor.
 
   **«Usar este modelo» es gratis**: lo guarda como tuyo y sigue —la primera vez
@@ -695,8 +699,8 @@ Junto al selector de modelo, abajo, hay otras dos cosas:
 
   **En el primer uso** (la comprobación de las claves) un modelo que no contesta
   **no se cuenta como un fallo de tus claves**: el sitio se queda sin
-  configurar y vuelves a «Elige el modelo» con el que falló marcado y el
-  motivo arriba («… No se ha llegado a comprobar ningún token: elige otro y se
+  configurar y vuelves a «Elige el modelo» con el que falló a la vista (no
+  marcado) y el motivo arriba («… No se ha llegado a comprobar ningún token: elige otro y se
   repetirá la comprobación.»). Al elegir se repite sólo la comprobación, sin
   volver a escribir nada en opencode. Si en ese momento la pantalla taparía
   algo, en su lugar sale en el chat el aviso con «Volver a comprobar», que hace
@@ -1749,7 +1753,8 @@ panel están en el apartado **«Qué guarda Faro de mí»** de esta guía.
 
 **«El modelo no aceptó la petición» o el turno se queda pensando**
 Es el modelo, no Faro. El propio mensaje trae **Elegir otro modelo**, que abre
-la pantalla con el que falló marcado y, al elegir, deja tu pregunta escrita en
+la pantalla con el que falló a la vista (con su motivo, pero sin marcar: la
+marca va al que Faro recomienda) y, al elegir, deja tu pregunta escrita en
 el cuadro para que la mandes tú; y además un botón para reintentar con otro
 **si hay otro que ya haya contestado bien** (si no, ese no sale, para no
 mandarte a ciegas a otro que también falle). Ver la tabla de modelos del README

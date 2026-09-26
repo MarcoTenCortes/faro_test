@@ -605,7 +605,10 @@ guarda Faro de mí».
   primer turno de Búsqueda; sin sonda. Juntar la verificación de los dos
   productos en UN turno queda como decisión (§8).
 - **Caminos de error fuera del primer uso**: `errorNode` ofrece «Elegir otro
-  modelo» (abre la pantalla con el fallido marcado y su motivo; al elegir se
+  modelo» (abre la pantalla con el fallido a la vista y su motivo, y la
+  preselección en la recomendación —revisión adversaria de H17: con el fallido
+  marcado, «Usar este modelo» repetía el fallo, y en los modos sin flecha era
+  la única salida; se puede seguir eligiendo tocándolo—; al elegir se
   reescribe la pregunta en el cuadro SIN mandarla, §8.20) y conserva
   «Reintentar con X» sólo si X tiene veredicto ok vigente. Registro: «Modelo
   elegido», «Modelo comprobado» (ok con ms, o warn con motivo), «Modelo no
@@ -1141,7 +1144,9 @@ Reglas transversales, que salen de los dos juicios y valen para todos:
   medirlo destapó un TDZ del propio espejo —dos `const` usadas antes de
   inicializarse tumbaban `arrancar()`— arreglado en el mismo commit. Sin
   verificar: nada en la extensión, ninguna sonda real. La bitácora, en
-  CLAUDE.md §12.5.
+  CLAUDE.md §12.5. Revisión adversaria aplicada el 2026-09-26: 6 confirmados
+  y R1 como desvío (el modelo que acaba de fallar queda a la vista pero no
+  es la preselección); 1378 pruebas; el detalle en CLAUDE.md §12.5.
 
 ### H18 · MCP automático: alta por PATCH /global/config, ruta absoluta de uvx y respaldo manual
 

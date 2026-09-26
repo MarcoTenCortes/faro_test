@@ -658,7 +658,7 @@ cuáles no), que desde H16 son tuyos y no de un sitio.
 ## Comprobaciones
 
 ```bash
-npm run check              # sintaxis + orden + manifest + 1377 pruebas unitarias + docs
+npm run check              # sintaxis + orden + manifest + 1378 pruebas unitarias + docs
 npm run check:docs         # sólo el paso docs: número de pruebas, títulos del registro, mensajes y ficheros del mapa
 npm run test:integration   # contra un opencode real que arranca la propia prueba
 npm run harness            # banco de pruebas visual en http://127.0.0.1:5175
@@ -1117,7 +1117,9 @@ no haya fallado, sin guardarlo.
 opencode tiene conectados, agrupados por proveedor, con «predeterminado de
 opencode», «el de tu configuración» y lo que Faro sabe de cada uno («funciona ·
 hace 2 h», «no disponible con tu plan: …»); los que fallaron hace poco van
-plegados en «No disponibles (N)», pero se pueden elegir. Tiene un filtro por
+plegados en «No disponibles (N)», pero se pueden elegir; tras un fallo, el que
+acaba de fallar se ve ahí con su motivo pero no sale marcado, para que «Usar
+este modelo» no lo repita. Tiene un filtro por
 nombre. Sale sola la primera vez (antes de las claves), cuando tu modelo acaba
 de fallar o ya no está, con **Elegir otro modelo** bajo cualquier error de un
 turno (tu pregunta queda escrita en el cuadro, sin mandar), y desde **Ajustes →

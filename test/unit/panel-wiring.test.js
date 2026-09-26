@@ -4741,16 +4741,21 @@ test('H17: el modelo se elige en su pantalla antes de las claves, y todo fallo p
   assert(!/pendingMcp/.test(rama), 'sin tocar lo pendiente del MCP')
 
   // (6) El indexado que falla por el modelo, también, detrás del aviso de H16.
+  // Desde la revisión adversaria de H17 (C6), con la pantalla el aviso de H16 y
+  // su botón; sin ella, el aviso con «Elegir otro modelo» UNA vez y el botón.
   const indexar = corte(JS_SIN, 'async function generateContext(', 'function attachReindexButton(')
   const captura = indexar.slice(indexar.indexOf('} catch (err) {'))
   orden(
     captura,
     [
+      'const pantalla = porModelo && puedeAbrirPantalla()',
+      'if (!porModelo || pantalla) {',
       'showNotice(aviso, true)',
       'if (porModelo) attachReindexButton({ keepContext })',
-      'if (porModelo) {',
-      "if (puedeAbrirPantalla()) showModelScreen({ modo: 'indexado', motivo: motivoPantalla, marcado: modelo, keepContext })",
-      "else attachModelNotice(aviso, { modo: 'indexado', marcado: modelo, keepContext })",
+      "if (pantalla) showModelScreen({ modo: 'indexado', motivo: motivoPantalla, marcado: modelo, keepContext })",
+      '} else {',
+      "attachModelNotice(aviso, { modo: 'indexado', marcado: modelo, keepContext })",
+      'attachReindexButton({ keepContext })',
     ],
     'por el modelo, la pantalla con el mismo keepContext, o su aviso'
   )
@@ -4823,7 +4828,11 @@ test('H17: el modelo se elige en su pantalla antes de las claves, y todo fallo p
   }
   assert(/const msg = mensajeCorto\(veredicto\.message\)/.test(porque), 'con el mensaje del proveedor acotado')
   const eleccion = corte(JS_SIN, 'function modelScreenChoice(', 'async function showModelScreen(')
-  orden(eleccion, ['s?.elegido', 's?.marcado', 'recommendModel(state.models, {', 'configModel: state.configModel || null,', 'm.usable && !modelFailing(m, ahora)'], 'la preselección: lo tocado, lo marcado, la recomendada y el primero disponible')
+  orden(
+    eleccion,
+    ['s?.elegido', 's?.marcado', 'if (marcado && marcado.usable && !modelFailing(marcado, ahora)) return s.marcado', 'recommendModel(state.models, {', 'configModel: state.configModel || null,', 'm.usable && !modelFailing(m, ahora)'],
+    'la preselección: lo tocado, lo marcado si se puede usar, la recomendada y el primero disponible'
+  )
 
   // (12) El modelo de la configuración de opencode: UN campo, validado, lo pone
   // `checkMcp` con el cliente comprobado, lo pide la pantalla si llega antes, y
@@ -4878,4 +4887,200 @@ test('H17: el modelo se elige en su pantalla antes de las claves, y todo fallo p
   assert(/const CAJAS = \[[\s\S]*'\.model-row',[\s\S]*'#model-list',[\s\S]*\]/.test(espejo), 'las filas y la lista se miden a lo ancho')
   assert(/ultimoRecorrido/.test(espejo) && /'screen-connect', 'screen-model', 'screen-setup', 'screen-context'/.test(espejo), 'el recorrido encadenado del primer uso')
   assert(espejo.includes("'funciona · '") && espejo.includes("'no disponible con tu plan'") && JS.includes("'no disponible con tu plan'"), 'los mismos textos que el panel')
+})
+
+test('H17 revisión: los cuerpos que deciden, no sólo el orden de las cadenas', () => {
+  // Revisión adversaria de H17 (C4): la prueba de arriba pinaba presencia y orden
+  // de cadenas, y 21 de 24 mutaciones de lo que de verdad decide la pantalla
+  // pasaban en verde —la guarda de la sonda, la de la pantalla vigente, lo
+  // aceptado a sabiendas, el filtro, el radio, el anuncio—. Aquí cada corte va
+  // por su firma hasta su cierre, con sus marcas comprobadas (un indexOf ausente
+  // es un pin vacuo: la lección de H15), y se añade lo que los demás hallazgos
+  // de esa revisión cambiaron (R1, C3, C5, C6).
+  const JS_SIN = sinComentarios(JS)
+  const corte = (src, desde, hasta) => {
+    const i = src.indexOf(desde)
+    assert(i >= 0, 'falta la marca de inicio del recorte: ' + desde)
+    const j = src.indexOf(hasta, i + desde.length)
+    assert(j > i, 'falta la marca de final del recorte (o va antes): ' + hasta)
+    return src.slice(i, j)
+  }
+  const orden = (src, marcas, msg) => {
+    let desde = 0
+    for (let k = 0; k < marcas.length; k++) {
+      const p = src.indexOf(marcas[k], desde)
+      assert(p >= 0, msg + `: falta «${marcas[k]}»` + (k ? ` detrás de «${marcas[k - 1]}»` : ''))
+      desde = p + marcas[k].length
+    }
+  }
+
+  // R1: lo que el usuario toca manda; lo que se pidió marcar (el que acaba de
+  // fallar) sólo es la preselección si se puede usar y no tiene un fallo
+  // vigente; si no, la recomendada (que con otro modelo con veredicto ok es ÉSE)
+  // y después el primero disponible.
+  const eleccion = corte(JS_SIN, 'function modelScreenChoice(', '\n}')
+  orden(
+    eleccion,
+    [
+      'if (enLista(s?.elegido)) return s.elegido\n',
+      'const marcado = enLista(s?.marcado) ? usableModels(state.models).find((m) => modelKey(m) === s.marcado) : null',
+      'if (marcado && marcado.usable && !modelFailing(marcado, ahora)) return s.marcado',
+      'const rec = recommendModel(state.models, {',
+      'checks: state.modelChecks,',
+      'if (rec) return modelKey(rec)',
+      "const libre = usableModels(state.models).find((m) => m.usable && !modelFailing(m, ahora))",
+      "return libre ? modelKey(libre) : ''",
+    ],
+    'lo tocado, lo pedido si vale, la recomendada con los veredictos y el primero disponible'
+  )
+  eq(eleccion.split('return s.marcado').length - 1, 1, 'SEGURIDAD: lo pedido sólo vuelve por la guarda del fallo vigente y la usabilidad')
+  // Y el que falló queda a la vista: «No disponibles» se despliega también con
+  // él dentro aunque no sea el radio marcado.
+  const pintar = corte(JS_SIN, 'function paintModelList(', '\nfunction modelRow(')
+  orden(
+    pintar,
+    [
+      "const pedido = state.modelScreen?.marcado || ''",
+      "if ([...plegada.querySelectorAll('input')].some((r) => r.checked || (pedido && r.value === pedido))) detalles.open = true",
+    ],
+    'lo marcado y lo que acaba de fallar, desplegados'
+  )
+  // El filtro, entero: nombre, id y proveedor, sin distinguir mayúsculas.
+  assert(pintar.includes("const f = String(filtro || '').trim().toLowerCase()"), 'el filtro se compara en minúsculas')
+  assert(
+    pintar.includes('if (f && !`${m.name} ${m.modelID} ${m.providerID} ${m.providerName}`.toLowerCase().includes(f)) continue'),
+    'el filtro deja fuera lo que no casa por nombre, id ni proveedor'
+  )
+
+  // C3: el motivo se anuncia al abrir, y lo que pasa en la pantalla también.
+  const abrir = corte(JS_SIN, 'async function showModelScreen(', 'function paintModelList(')
+  orden(abrir, ["showScreen('screen-model')", 'if (state.modelScreen.motivo) announce(state.modelScreen.motivo)', 'if (state.configModel !== undefined || !state.client) return'], 'el motivo se dice al abrir (A2)')
+  assert(
+    abrir.includes('if (state.client !== cliente || state.bootToken !== testigo || (state.site?.host ?? state.lastHost) !== host) return'),
+    'la configuración tardía no pinta sobre otro sitio (§8.22)'
+  )
+  const estado = corte(JS_SIN, 'function setModelStatus(', '\n}')
+  orden(estado, ["$('model-status').textContent = texto", 'if (anunciar && texto) announce(texto)'], 'lo que pasa se escribe y se dice')
+
+  // Los botones: sin nada marcado o con una sonda en vuelo, apagados.
+  const botones = corte(JS_SIN, 'function paintModelButtons(', '\n}')
+  orden(
+    botones,
+    ['const hay = !!modelScreenChoice()', 'const probando = !!state.modelProbeAbort', "$('btn-model-use').disabled = !hay || probando", "$('btn-model-check').disabled = !hay || probando"],
+    '«Usar» y «Comprobar» sólo con algo marcado y sin sonda'
+  )
+
+  // useModel: la guarda de la pantalla vigente, la de un turno en vuelo antes de
+  // repetir otro turno, y lo aceptado a sabiendas.
+  const usar = corte(JS_SIN, 'async function useModel(', 'async function runModelProbe(')
+  orden(
+    usar,
+    [
+      "if (!s || $('screen-model').classList.contains('hidden')) return",
+      "if ((s.modo === 'setup' || s.modo === 'indexado') && state.streaming) {",
+      "setModelStatus('Espera a que termine la respuesta: lo siguiente es otro turno del modelo.')",
+      'return',
+      'state.settings = await saveSettings({ model })',
+      'if (state.modelScreen !== s) return',
+      'state.modelScreen = null',
+      "state.modelAceptado = modelFailing(m) ? key : ''",
+      'fillModels(state.models, model)',
+    ],
+    'la pantalla vigente, sin repetir turnos con otro en vuelo, y lo aceptado apuntado'
+  )
+  const arranque = corte(JS_SIN, 'async function bootForSite(', 'function currentProfile(')
+  orden(arranque, ['const aceptado =', "if (aceptado && resuelto.source !== 'settings') elegido = aceptado", 'if (primeraVez && sinModelo) {'], 'el arranque no vuelve a apartar lo aceptado')
+
+  // runModelProbe: sin doble clic, suelta su abortador y (C5) repinta la
+  // pantalla que esté ABIERTA, no sólo la misma de antes.
+  const sondear = corte(JS_SIN, 'async function runModelProbe(', 'function attachModelNotice(')
+  orden(sondear, ['const s = state.modelScreen', 'if (!s || state.modelProbeAbort) return', 'state.modelProbeAbort = abortador'], 'una sonda cada vez')
+  orden(sondear, ['r = await cliente.probeModel(', '} finally {', 'if (state.modelProbeAbort === abortador) state.modelProbeAbort = null'], 'la sonda suelta su abortador pase lo que pase')
+  assert(!sondear.includes('state.modelScreen === s'), 'C5: la sonda no exige la MISMA pantalla para encender los botones')
+  orden(
+    sondear,
+    [
+      "const abierta = !$('screen-model').classList.contains('hidden')",
+      'if (abierta) {',
+      'paintModelButtons()',
+      "if (!$('screen-model').classList.contains('hidden')) {",
+      'paintModelButtons()',
+      "if (!$('screen-model').classList.contains('hidden')) {",
+      "paintModelList($('model-filter').value)",
+      'setModelStatus(texto)',
+    ],
+    'los tres repintados van a la pantalla abierta'
+  )
+
+  // SEGURIDAD §8.13 (X9/X10): de la configuración de opencode sólo sale su
+  // `model`, validado y reconstruido; la configuración entera lleva las claves de
+  // los MCP en claro y no se asigna a nada del estado.
+  eq(
+    corte(JS_SIN, 'function configModelOf(config) {', '\n}'),
+    "function configModelOf(config) {\n  const clave = typeof config?.model === 'string' ? config.model.trim() : ''\n  if (!clave || clave.length > 240 || /\\s/.test(clave)) return null\n  return parseModelKey(clave)",
+    'SEGURIDAD: configModelOf lee config.model como cadena, lo valida y lo reconstruye, y nada más'
+  )
+  assert(!/state\.\w+ = config\b/.test(JS_SIN), 'SEGURIDAD: ninguna asignación de la configuración a secas al estado')
+  assert(!/state\.\w+ = (?:await )?\w+(?:\?\.|\.)config\(/.test(JS_SIN), 'SEGURIDAD: ni lo que devuelve GET /config, directamente')
+  const asignaciones = [...JS_SIN.matchAll(/state\.configModel = ([^\n]+)/g)].map((m) => m[1].trim())
+  assert(asignaciones.length >= 3, 'las asignaciones de configModel existen: ' + asignaciones.length)
+  for (const a of asignaciones) assert(a === 'configModelOf(config)' || a === 'undefined', 'SEGURIDAD: configModel sólo por configModelOf: ' + a)
+
+  // attachModelNotice (C6 y X11): cuelga del chat y se anuncia, y su botón es
+  // un turno parado como «Elegir otro modelo» de errorNode.
+  const aviso = corte(JS_SIN, 'function attachModelNotice(', 'function paintSettingsModelInfo(')
+  orden(
+    aviso,
+    [
+      "btn.className = 'ghost small ' + NEEDS_IDLE",
+      "btn.textContent = 'Elegir otro modelo'",
+      'btn.disabled = state.streaming',
+      "btn.addEventListener('click', () => {",
+      'if (state.streaming) return',
+      'showModelScreen({ modo, motivo, marcado, keepContext, pregunta })',
+      'wrap.appendChild(row)',
+      'el.chat.appendChild(wrap)',
+      'announce(motivo)',
+    ],
+    'el aviso: su botón con NEEDS_IDLE, colgado del chat y anunciado'
+  )
+  assert(/el\.chat\.appendChild\(wrap\)\s*announce\(motivo\)/.test(aviso), 'el aviso se cuelga del chat y justo después se dice')
+
+  // C6: en el catch del indexado ninguna rama pinta showNotice Y el aviso con su
+  // botón a la vez (dos avisos rojos idénticos, dos anuncios).
+  const indexar = corte(JS_SIN, 'async function generateContext(', 'function attachReindexButton(')
+  const captura = indexar.slice(indexar.indexOf('} catch (err) {'))
+  const conPantalla = corte(captura, 'if (!porModelo || pantalla) {', '} else {')
+  assert(conPantalla.includes('showNotice(aviso, true)') && !conPantalla.includes('attachModelNotice('), 'con pantalla (o sin modelo): el aviso de siempre y ningún otro')
+  const sinPantalla = corte(captura, '} else {\n          attachModelNotice(aviso', '\n        }')
+  assert(!sinPantalla.includes('showNotice('), 'C6: sin pantalla, el aviso lo pinta attachModelNotice UNA vez')
+  orden(sinPantalla, ["attachModelNotice(aviso, { modo: 'indexado', marcado: modelo, keepContext })", 'attachReindexButton({ keepContext })'], 'el aviso y debajo «Generar el contexto otra vez»')
+  eq(captura.split('attachModelNotice(').length - 1, 1, 'el aviso del modelo sale en un solo sitio del catch')
+
+  // errorNode (X14): «Elegir otro modelo» no abre la pantalla con un turno en vuelo.
+  const error = corte(JS_SIN, 'function errorNode(', 'const MOTIVO_MODELO')
+  assert(/elegir\.addEventListener\('click', \(\) => \{\s*if \(state\.streaming\) return\s*showModelScreen\(\{/.test(error), '«Elegir otro modelo» se guarda de un turno en vuelo')
+
+  // mensajeCorto (X12): 120 de tope, con su elipsis.
+  orden(corte(JS_SIN, 'function mensajeCorto(', '\n}'), ['function mensajeCorto(texto, max = 120) {', "return t.length > max ? t.slice(0, max - 1) + '…' : t"], 'el mensaje del proveedor acotado a 120')
+
+  // Los oyentes de la pantalla (X16, X17, X18, X20).
+  const eventos = corte(JS_SIN, 'function wireEvents', 'async function saveKeys')
+  assert(eventos.includes("$('btn-model-use').addEventListener('click', () => useModel().catch(console.error))"), '«Usar este modelo» elige')
+  assert(eventos.includes("$('btn-model-check').addEventListener('click', () => runModelProbe().catch(console.error))"), '«Comprobar» sondea')
+  assert(eventos.includes("$('btn-model-retry').addEventListener('click', () => bootForSite().catch(console.error))"), '«Reintentar» del modo vacío rearranca')
+  assert(/\$\('btn-model-close'\)\.addEventListener\('click', \(\) => \{\s*state\.modelScreen = null\s*hideScreens\(\)/.test(eventos), 'la flecha suelta la pantalla antes de cerrarla')
+  assert(eventos.includes("$('model-filter').addEventListener('input', () => paintModelList($('model-filter').value))"), 'el filtro repinta')
+  const radio = corte(eventos, "for (const lista of [$('model-list'), $('model-unavailable-list')]) {", 'paintModelButtons()')
+  orden(radio, ["lista.addEventListener('change', (ev) => {", "if (ev.target?.name !== 'model-choice' || !state.modelScreen) return", 'state.modelScreen.elegido = ev.target.value'], 'lo que se toca es lo que se usa')
+  assert(eventos.includes("$('btn-change-model').addEventListener('click', () => showModelScreen({ modo: 'ajustes', marcado: state.model }).catch(console.error))"), 'Ajustes abre la pantalla en su modo, con la flecha')
+
+  // El primer uso sigue decidido por la primera vez Y la falta de modelo (X19).
+  assert(arranque.includes('    if (primeraVez && sinModelo) {\n'), 'sólo la primera vez y sin modelo')
+
+  // Lo que se ve (X21, X22): la segunda línea parte, y el filtro tiene etiqueta.
+  const porQue = CSS_LIMPIO.slice(CSS_LIMPIO.indexOf('.model-why {'))
+  assert(CSS_LIMPIO.includes('.model-why {') && /^\.model-why \{[^}]*overflow-wrap: anywhere;[^}]*\}/.test(porQue), '.model-why parte las palabras largas')
+  assert(!/^\.model-why \{[^}]*white-space: nowrap/.test(porQue), 'y no se queda en una línea')
+  assert(HTML.includes('<label for="model-filter">Buscar un modelo</label>'), 'el filtro tiene su etiqueta')
 })
