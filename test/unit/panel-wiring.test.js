@@ -5722,7 +5722,7 @@ test('H19: «Quitar las claves de este sitio» — un solo PATCH por la barrera,
   // nace oculta, con su casilla de las ajenas también oculta y el «Quitar» con
   // el gancho de «turno parado».
   const ajustes = corte(HTML, 'id="screen-settings"', '<section class="screen hidden" id="screen-memory"')
-  for (const id of ['btn-remove-keys', 'remove-keys-confirm', 'remove-keys-text', 'remove-keys-foreign-field', 'remove-keys-foreign', 'remove-keys-foreign-text', 'remove-keys-unremovable', 'btn-remove-keys-go', 'btn-remove-keys-cancel']) {
+  for (const id of ['btn-remove-keys', 'remove-keys-confirm', 'remove-keys-text', 'remove-keys-foreign-field', 'remove-keys-foreign', 'remove-keys-foreign-text', 'remove-keys-unremovable', 'remove-keys-leftovers', 'btn-remove-keys-go', 'btn-remove-keys-cancel']) {
     assert(htmlIds.has(id), 'panel.html tiene #' + id)
     assert(ajustes.includes(`id="${id}"`), '#' + id + ' vive dentro de Ajustes')
   }
@@ -5735,6 +5735,8 @@ test('H19: «Quitar las claves de este sitio» — un solo PATCH por la barrera,
       '<p class="fine" id="remove-keys-text"></p>',
       '<label class="check hidden" id="remove-keys-foreign-field"><input type="checkbox" id="remove-keys-foreign"> <span id="remove-keys-foreign-text"></span></label>',
       '<p class="fine hidden" id="remove-keys-unremovable"></p>',
+      // Revisión adversaria de H19 (D3): lo que Faro no sabe vaciar, nacido oculto.
+      '<p class="fine hidden" id="remove-keys-leftovers"></p>',
       '<button class="ghost danger needs-idle" id="btn-remove-keys-go" type="button">Quitar</button>',
       '<button class="ghost" id="btn-remove-keys-cancel" type="button">Cancelar</button>',
       'El diagnóstico lee la barra lateral',
@@ -5760,7 +5762,14 @@ test('H19: «Quitar las claves de este sitio» — un solo PATCH por la barrera,
   // (3) Preparar: sólo LEE, con el cliente y el host capturados (§8.22).
   const preparar = funcion('async function prepareRemoveKeys() {')
   orden(preparar, ['const sitio = state.site', 'const host = sitio.host', 'const cliente = state.client', 'await '], 'prepareRemoveKeys captura antes del primer await')
-  una(preparar, '\n  if (state.client !== cliente || (state.site?.host ?? state.lastHost) !== host) return\n', 'SEGURIDAD §8.22: la lista es del sitio y del cliente con que se pidió')
+  // Cambiado con verdad en la revisión adversaria de H19 (D7): la guarda de
+  // §8.22 tras las lecturas es ahora la del testigo, que además mira que nadie
+  // esté quitando y que Ajustes siga abierto.
+  una(
+    preparar,
+    "\n  if (state.removeKeysPrep !== testigo || quitandoClaves || state.client !== cliente || (state.site?.host ?? state.lastHost) !== host || $('screen-settings').classList.contains('hidden')) {\n",
+    'SEGURIDAD §8.22: la lista es del sitio y del cliente con que se pidió, y de ESTA preparación'
+  )
   una(preparar, 'mcpScrubCandidates({ config, saved, host })', 'la lista sale de setup.js')
   una(preparar, "log.warn('Claves quitadas', 'sin quitar · configuración ilegible')", 'sin configuración legible no se ofrece nada')
   una(preparar, "paintRemoveKeysConfirm(rutas?.config || '')", 'y se pinta con la carpeta real')
@@ -5783,15 +5792,17 @@ test('H19: «Quitar las claves de este sitio» — un solo PATCH por la barrera,
     ],
     'la confirmación dice lo que setup.js escribe, con la casilla desmarcada, y se anuncia (A2)'
   )
+  // Cambiados con verdad en la revisión adversaria de H19: «nada que quitar»
+  // mira la casilla con sólo ajenas (D5), y esconder suelta el testigo (D7).
   eq(
     funcion('function paintRemoveKeysGo() {'),
-    "function paintRemoveKeysGo() {\n  const plan = state.removeKeysPlan\n  $('btn-remove-keys-go').disabled = quitandoClaves || state.streaming || !plan || (!plan.propias.length && !plan.ajenas.length)\n}",
-    '«Quitar» apagado con un turno, escribiendo o sin nada que quitar'
+    "function paintRemoveKeysGo() {\n  const plan = state.removeKeysPlan\n  $('btn-remove-keys-go').disabled = quitandoClaves || state.streaming || !plan || (!plan.propias.length && !(plan.ajenas.length && $('remove-keys-foreign').checked))\n}",
+    '«Quitar» apagado con un turno, escribiendo o sin nada que quitar (y con sólo ajenas, sin su casilla)'
   )
   eq(
     funcion('function hideRemoveKeysConfirm() {'),
-    "function hideRemoveKeysConfirm() {\n  state.removeKeysPlan = null\n  $('remove-keys-confirm').classList.add('hidden')\n  $('remove-keys-foreign').checked = false\n}",
-    'esconder la confirmación tira el plan y desmarca la casilla'
+    "function hideRemoveKeysConfirm() {\n  state.removeKeysPlan = null\n  state.removeKeysPrep = null\n  $('remove-keys-confirm').classList.add('hidden')\n  $('remove-keys-foreign').checked = false\n}",
+    'esconder la confirmación tira el plan, suelta el testigo de la preparación y desmarca la casilla'
   )
 
   // (5) Quitar: el flujo entero.
@@ -5812,10 +5823,19 @@ test('H19: «Quitar las claves de este sitio» — un solo PATCH por la barrera,
     'repinta, lo dice y vuelve sin escribir; las ajenas sólo con la casilla marcada'
   )
   una(quitar, '\n    const ocupado = reconfiguring()\n    if (ocupado) {\n      decir(ocupado)\n      return\n    }\n', 'SEGURIDAD §8.24: la guarda común, justo antes de escribir')
+  // Cambiado con verdad en la revisión adversaria de H19 (D6): un PATCH
+  // rechazado no toca nada en opencode, así que delante del PATCH sólo caduca la
+  // espera de unas claves a medio guardar; lo demás se invalida DETRÁS de un
+  // PATCH aceptado (la prueba «H19 revisión» lo pina por posición).
   una(
     quitar,
-    '\n    state.mcpCheck = null\n    soltarComprobandoMcp()\n    state.mcpPending = null\n    state.mcpWait?.abort()\n    state.mcpConnected = false\n    state.pendingMcp = null\n',
-    'lo pendiente del MCP de este panel deja de valer, con las mismas líneas que saveKeys'
+    "\n    state.mcpWait?.abort()\n    state.pendingMcp = null\n    $('settings-status').textContent = 'Quitando las claves de opencode…'\n",
+    'delante del PATCH, sólo la espera de unas claves a medio guardar'
+  )
+  una(
+    quitar,
+    '\n    state.mcpCheck = null\n    soltarComprobandoMcp()\n    state.mcpPending = null\n    state.mcpConnected = false\n',
+    'detrás de un PATCH aceptado, lo pendiente del MCP de este panel deja de valer, con las mismas líneas que saveKeys'
   )
   eq(quitar.split('scrubMcp(').length - 1, 1, 'UN solo PATCH')
   una(quitar, 'const r = await scrubMcp(cliente, { candidatas })', 'por scrubMcp, con el cliente capturado')
@@ -5825,14 +5845,18 @@ test('H19: «Quitar las claves de este sitio» — un solo PATCH por la barrera,
     quitar,
     [
       'const ocupado = reconfiguring()',
-      'state.mcpCheck = null',
+      'state.mcpWait?.abort()',
       'const r = await scrubMcp(cliente, { candidatas })',
       'if (!r.ok) {',
       'porQueNoSeQuita({ status: r.status, kind: r.kind })',
+      'state.mcpCheck = null',
       'const despues = await cliente.config().catch(() => null)',
       'const ef = scrubEffective(despues, r.names)',
       'if (!ef.ok) {',
-      'const registros = unlinkRecords({ sites: await getSites(), names: r.names, hosts: [host, ...plan.hostsEnlazados] })',
+      // Cambiado con verdad en la revisión adversaria de H19 (D9): el host de la
+      // pestaña va aparte, y los enlazados sólo se desmarcan si su registro
+      // apunta a lo quitado (o a nada); la firma es la nueva de setup.js.
+      'const registros = unlinkRecords({ sites: await getSites(), names: r.names, host, linked: plan.hostsEnlazados })',
       'for (const { host: h, patch } of registros) await saveSite(h, patch)',
       "log.ok('Claves quitadas'",
       'hideRemoveKeysConfirm()',
@@ -5855,7 +5879,10 @@ test('H19: «Quitar las claves de este sitio» — un solo PATCH por la barrera,
   orden(abre, ["if (status.present && status.status === 'disabled') {", '} else if (status.present) {', 'está registrado pero en'], 'la rama «disabled» va antes del texto de siempre')
   eq(JS_SIN.split('está registrado pero en').length - 1, 1, 'la frase del MCP caído sigue en un solo sitio')
   const DESHABILITADO = '» está deshabilitado y sin claves en opencode (es lo que deja «Quitar las claves»): al guardar, Faro lo vuelve a escribir con las nuevas.`'
-  una(JS_SIN, '`El MCP «${status.name}' + DESHABILITADO, 'la frase de la entrada deshabilitada, escrita una vez')
+  // Desde la revisión adversaria de H19 (D8) vive en `fraseMcpDeshabilitado`,
+  // que comparten la pantalla de claves y el aviso del chat.
+  una(JS_SIN, '`El MCP «${name}' + DESHABILITADO, 'la frase de la entrada deshabilitada, escrita una vez')
+  una(abre, "    $('setup-status').textContent = fraseMcpDeshabilitado(status.name)\n", 'la pantalla de claves la dice por la función compartida')
 
   // (7) setStreaming, Ajustes y el cambio de sitio.
   const streaming = corte(JS_SIN, 'function setStreaming(on) {', '\n}')
@@ -5880,7 +5907,7 @@ test('H19: «Quitar las claves de este sitio» — un solo PATCH por la barrera,
   // cajas medidas a lo ancho, y el estado «quitadas» de la pantalla de claves
   // con la MISMA frase que el panel.
   const espejo = readFileSync(join(ROOT, 'harness/panel-preview.html'), 'utf8')
-  for (const k of ['', 'abierto', 'ajenas']) assert(espejo.includes(`data-quitar="${k}"`), 'el espejo tiene el estado ' + (k || 'cerrado'))
+  for (const k of ['', 'abierto', 'ajenas', 'restos']) assert(espejo.includes(`data-quitar="${k}"`), 'el espejo tiene el estado ' + (k || 'cerrado'))
   assert(/setQuitar\(k\) \{/.test(espejo), 'el mando para ponerlo desde fuera')
   assert(/\bfunction pintarQuitar\(k\) \{/.test(espejo), 'pintarQuitar es una declaración function: una const en TDZ mata el espejo (la lección de H17)')
   orden(
@@ -5893,4 +5920,346 @@ test('H19: «Quitar las claves de este sitio» — un solo PATCH por la barrera,
   for (const caja of ["'#remove-keys-confirm'", "'#remove-keys-confirm .check'", "'#remove-keys-confirm .row'"]) assert(cajas.includes(caja), 'check() mide ' + caja + ' a lo ancho')
   assert(espejo.includes('data-claves="quitadas"'), 'el estado «quitadas» de la pantalla de claves')
   assert(corte(espejo, 'function pintarClaves(k) {', '\n  }\n').includes('quitadas: `El MCP «${NOMBRE_MCP}' + DESHABILITADO), 'con la MISMA frase que el panel')
+})
+
+test('H19 revisión: los cuerpos que deciden en removeKeys, no sólo sus literales', () => {
+  // La prueba «H19» pinaba presencia y orden de cadenas (la lección de la
+  // revisión de H18 aplicada a medias), y treinta de las treinta y cuatro
+  // mutaciones del cazador B pasaban en verde: `mismosNombres` devolviendo
+  // siempre true, `conAjenas || true`, las guardas de §8.22 tras el PATCH y tras
+  // la relectura cambiadas por `if (false)`, `ef.ok = true`, un `decir` cambiado
+  // por `void`, un `log.*` borrado… Aquí se pinan los CUERPOS con igualdad y las
+  // líneas ENTERAS con su salto, sobre el fuente sin comentarios y sin las
+  // líneas que éstos dejan vacías. Y lo que añade la revisión (D3-D10).
+  const JS_SIN = sinComentarios(JS)
+  const sinVacias = (s) =>
+    s
+      .split('\n')
+      .filter((l) => l.trim())
+      .join('\n')
+  const LIMPIO = sinVacias(JS_SIN)
+  const corte = (src, desde, hasta) => {
+    const i = src.indexOf(desde)
+    assert(i >= 0, 'falta la marca de inicio del recorte: ' + desde)
+    const j = src.indexOf(hasta, i + desde.length)
+    assert(j > i, 'falta la marca de final del recorte (o va antes): ' + hasta)
+    return src.slice(i, j)
+  }
+  const funcion = (firma) => corte(LIMPIO, firma, '\n}\n') + '\n}'
+  const una = (src, linea, msg) => eq(src.split(linea).length - 1, 1, msg + ': «' + linea.trim() + '»')
+  const lineas = (...ls) => ls.join('\n')
+
+  // (1) Las funciones pequeñas que deciden, ENTERAS.
+  eq(
+    funcion('function mismosNombres('),
+    lineas(
+      'function mismosNombres(a, b) {',
+      "  const nombres = (lista) => [...new Set((Array.isArray(lista) ? lista : []).map((x) => (typeof x === 'string' ? x : x?.name)))].sort()",
+      '  return JSON.stringify(nombres(a)) === JSON.stringify(nombres(b))',
+      '}'
+    ),
+    'B3: el recálculo compara los dos conjuntos de nombres, y nada más'
+  )
+  eq(
+    funcion('function enlazadosDe('),
+    lineas(
+      'function enlazadosDe(saved, host) {',
+      '  const out = []',
+      '  for (const h of [saved?.jiraHost, saved?.confluenceHost]) {',
+      "    if (typeof h === 'string' && h && h !== host && !out.includes(h)) out.push(h)",
+      '  }',
+      '  return out',
+      '}'
+    ),
+    'B9: los enlazados del registro, sin este host, sin vacíos ni repetidos'
+  )
+  eq(
+    funcion('function hostsEnlazadosDe('),
+    lineas(
+      'function hostsEnlazadosDe({ saved, host, propias, ajenas, sites }) {',
+      '  const nombres = [...propias, ...ajenas].map((c) => c.name)',
+      '  const hosts = enlazadosDe(saved, host)',
+      '  for (const c of propias) {',
+      '    for (const h of [c.jiraHost, c.confluenceHost]) {',
+      "      if (typeof h === 'string' && h && h !== host && !hosts.includes(h)) hosts.push(h)",
+      '    }',
+      '  }',
+      "  const registros = sites && typeof sites === 'object' ? sites : {}",
+      '  return hosts.filter((h) => {',
+      "    const apuntado = Object.hasOwn(registros, h) && typeof registros[h]?.mcpName === 'string' ? registros[h].mcpName : ''",
+      "    return apuntado === '' || nombres.includes(apuntado)",
+      '  })',
+      '}'
+    ),
+    'D9: los hosts de las propias también, y sólo los enlazados que apuntan a lo que se quita (o a nada)'
+  )
+  eq(
+    funcion('function planQuitar('),
+    lineas(
+      'function planQuitar({ host, propias, ajenas, noQuitables, hostsEnlazados, carpeta }) {',
+      '  return {',
+      '    host,',
+      '    propias: propias.map((c) => c.name),',
+      '    ajenas: ajenas.map((c) => c.name),',
+      '    noQuitables: noQuitables.map((c) => c.name),',
+      '    hostsEnlazados,',
+      '    carpeta,',
+      '    ajenasApagadas: ajenas.filter((c) => c.enabled === false).map((c) => c.name),',
+      '    conRestos: [...propias, ...ajenas].filter((c) => c.restos === true).map((c) => c.name),',
+      '  }',
+      '}'
+    ),
+    'SEGURIDAD: el plan son NOMBRES y hosts; D10 las ajenas apagadas y D3 las que guardan restos'
+  )
+  eq(funcion('function configPlana('), lineas('function configPlana(config) {', "  return !!config && typeof config === 'object' && !Array.isArray(config)", '}'), 'B4: sin una configuración plana no se decide nada')
+  eq(
+    funcion('function paintRemoveKeysConfirm('),
+    lineas(
+      'function paintRemoveKeysConfirm(carpeta) {',
+      '  const plan = state.removeKeysPlan',
+      '  if (!plan) return',
+      '  const t = scrubConfirmText({ ...plan, carpeta })',
+      "  $('remove-keys-text').textContent = t.principal",
+      "  $('remove-keys-foreign-field').classList.toggle('hidden', !plan.ajenas.length)",
+      "  $('remove-keys-foreign').checked = false",
+      "  $('remove-keys-foreign-text').textContent = t.ajenas",
+      "  $('remove-keys-unremovable').textContent = t.noQuitables",
+      "  $('remove-keys-unremovable').classList.toggle('hidden', !t.noQuitables)",
+      "  $('remove-keys-leftovers').textContent = t.restos",
+      "  $('remove-keys-leftovers').classList.toggle('hidden', !t.restos)",
+      '  paintRemoveKeysGo()',
+      "  $('remove-keys-confirm').classList.remove('hidden')",
+      '  announce(t.principal)',
+      "  const foco = state.streaming || (!plan.propias.length && !plan.ajenas.length) ? 'btn-remove-keys-cancel' : plan.propias.length ? 'btn-remove-keys-go' : 'remove-keys-foreign'",
+      '  $(foco).focus()',
+      '}'
+    ),
+    'B9/D3/D5: los cuatro textos, las cajas vacías escondidas, la casilla desmarcada, el anuncio y el foco a lo que decide'
+  )
+  eq(
+    funcion('function relanzarComprobacionMcp('),
+    lineas(
+      'function relanzarComprobacionMcp(cliente, saved) {',
+      '  if (!state.site?.host) return',
+      '  const c = checkMcp(cliente, state.bootToken, saved)',
+      '  state.mcpCheck = c.then((x) => !!x.connected, () => false)',
+      "  if (!state.streaming) setStatus('busy', COMPROBANDO_MCP)",
+      '  mcpResultSoon(c, state.mcpCheck)',
+      '}'
+    ),
+    'D6: se vuelve a comprobar el MCP como en el arranque, con el cliente capturado y sin sitio no'
+  )
+  eq(
+    funcion('function fraseMcpDeshabilitado('),
+    lineas(
+      'function fraseMcpDeshabilitado(name) {',
+      '  return `El MCP «${name}» está deshabilitado y sin claves en opencode (es lo que deja «Quitar las claves»): al guardar, Faro lo vuelve a escribir con las nuevas.`',
+      '}'
+    ),
+    'D8: la frase de la entrada deshabilitada, en UN sitio'
+  )
+
+  // (2) La preparación: el testigo (D7) y cada salida con su frase.
+  const preparar = funcion('async function prepareRemoveKeys() {')
+  una(LIMPIO, '\n  removeKeysPrep: null,\n', 'D7: el testigo de la preparación vive en el estado')
+  una(preparar, '\n  if (state.removeKeysPrep) return\n  if (!state.site?.host) {\n', 'D7: un clic con una preparación en vuelo (o la confirmación abierta) no vuelve a leer')
+  una(preparar, "\n    decir('Abre una página de Jira o Confluence del sitio cuyas claves quieres quitar.')\n    return\n", 'sin sitio, se dice')
+  una(preparar, '\n  if (quitandoClaves) return\n', 'B3: con otro quitando, nada')
+  una(preparar, "\n  if (!cliente) {\n    decir('Faro no está conectado a opencode: arráncalo y vuelve a intentarlo.')\n    return\n  }\n", 'B4: sin cliente, se dice y no se lee')
+  una(preparar, '\n  const testigo = {}\n  state.removeKeysPrep = testigo\n  const saved = await getSite(host).catch(() => null)\n  const sites = await getSites().catch(() => null)\n', 'D7/B20: el testigo antes del primer await, el registro guardado y los de todos los sitios')
+  una(
+    preparar,
+    "\n  if (state.removeKeysPrep !== testigo || quitandoClaves || state.client !== cliente || (state.site?.host ?? state.lastHost) !== host || $('screen-settings').classList.contains('hidden')) {\n    if (state.removeKeysPrep === testigo) state.removeKeysPrep = null\n    return\n  }\n",
+    'D7: al volver sólo pinta la preparación vigente, sin nadie quitando, del mismo cliente y sitio y con Ajustes abierto'
+  )
+  una(preparar, "\n  if (!configPlana(config)) {\n    state.removeKeysPrep = null\n    decir(SIN_CONFIG_QUITAR)\n    log.warn('Claves quitadas', 'sin quitar · configuración ilegible')\n    return\n  }\n", 'sin configuración legible, se dice, se registra y se suelta el testigo')
+  una(preparar, '\n  const hostsEnlazados = hostsEnlazadosDe({ saved, host, propias, ajenas, sites })\n', 'B5/D9: los hosts enlazados, por la MISMA función que el recálculo')
+  una(preparar, "\n  state.removeKeysPlan = planQuitar({ host, propias, ajenas, noQuitables, hostsEnlazados, carpeta: rutas?.config || '' })\n", 'el plan, por planQuitar')
+  una(preparar, "\n  $('settings-status').textContent = ''\n  paintRemoveKeysConfirm(rutas?.config || '')\n}", 'B33: se vacía el estado viejo y se pinta')
+  eq(preparar.split('state.removeKeysPrep = null').length - 1, 2, 'D7: sólo la guarda y la configuración ilegible sueltan el testigo; la que pinta lo deja puesto')
+
+  // (3) Quitar: lo que se decide antes del primer await y el doble clic.
+  const quitar = funcion('async function removeKeys() {')
+  una(quitar, "\n    decir('He perdido de vista el sitio. Abre una página de Jira o Confluence y vuelve a intentarlo.')\n    return\n", 'B24: un plan de otro sitio, se dice')
+  una(quitar, "\n  const conAjenas = $('remove-keys-foreign').checked\n", 'B8: la casilla, leída al clic y tal cual')
+  una(quitar, '\n  quitandoClaves = true\n  paintRemoveKeysGo()\n  let hecho = false\n', 'B17: la barrera del doble clic sube antes del primer await')
+  una(
+    quitar,
+    '\n    hideScreens()\n    hecho = true\n  } finally {\n    quitandoClaves = false\n    paintRemoveKeysGo()\n  }\n  if (!hecho) return\n  await bootForSite()\n}',
+    'B9/B10/B26: sólo tras quitar de verdad se cierra Ajustes y se rearranca; el finally suelta la barrera siempre'
+  )
+  una(quitar, '\n    const saved = await getSite(host).catch(() => null)\n    const sites = await getSites().catch(() => null)\n', 'B21: el recálculo lee el registro guardado y los de todos los sitios')
+  una(quitar, "\n    if (!configPlana(config)) {\n      decir(SIN_CONFIG_QUITAR)\n      log.warn('Claves quitadas', 'sin quitar · configuración ilegible')\n      return\n    }\n", 'sin configuración legible, no se escribe')
+  una(quitar, '\n    const hostsEnlazados = hostsEnlazadosDe({ saved, host, propias, ajenas, sites })\n', 'D9: el recálculo usa la MISMA función que la preparación')
+  una(quitar, '\n      state.removeKeysPlan = planQuitar({ host, propias, ajenas, noQuitables, hostsEnlazados, carpeta: plan.carpeta })\n', 'el plan recalculado, por planQuitar')
+
+  // (4) Cada salida terminal, con su frase (§8.14): nada se calla.
+  una(
+    quitar,
+    "\n    if (!candidatas.length && ajenas.length) {\n      decir(`Marca la casilla para quitar ${ajenas.map((c) => `«${c.name}»`).join(', ')}: no hay ninguna entrada de Faro que quitar.`)\n      return\n    }\n",
+    'D5: con sólo ajenas sin marcar, se dice qué falta'
+  )
+  una(quitar, "\n    if (!candidatas.length) {\n      decir('No hay nada que quitar.')\n      return\n    }\n", 'B11: sin nada, se dice')
+  una(quitar, '\n    const ocupado = reconfiguring()\n    if (ocupado) {\n      decir(ocupado)\n      return\n    }\n', 'la guarda común, dicha')
+  eq(
+    [...quitar.matchAll(/\$\('settings-status'\)\.textContent = ([^\n]+)/g)].map((m) => m[1]),
+    ['texto', "'Quitando las claves de opencode…'"],
+    'A secas sólo el estado de paso (y la línea de dentro de decir): cada desenlace terminal se anuncia'
+  )
+
+  // (5) D6: delante del PATCH, sólo lo que caduca pase lo que pase; lo demás,
+  // DETRÁS de un PATCH aceptado. Nada de lo invalidable antes de escribir.
+  una(
+    quitar,
+    "\n      decir(ocupado)\n      return\n    }\n    state.mcpWait?.abort()\n    state.pendingMcp = null\n    $('settings-status').textContent = 'Quitando las claves de opencode…'\n",
+    'D6: detrás de la guarda común, la espera y las claves pendientes; nada más'
+  )
+  const antesDelPatch = quitar.slice(0, quitar.indexOf('await scrubMcp('))
+  for (const l of ['state.mcpConnected', 'state.mcpCheck', 'soltarComprobandoMcp()', 'state.mcpPending']) assert(!antesDelPatch.includes(l), 'D6/B34: ' + l + ' no se toca antes del PATCH')
+  una(
+    quitar,
+    lineas(
+      '',
+      '    if (!r.ok) {',
+      "      log.warn('Claves quitadas', `sin quitar · ${r.status || 0} · ${r.kind || 'sin tipo'}`)",
+      '      decir(',
+      '        `opencode no ha aceptado la escritura: ${porQueNoSeQuita({ status: r.status, kind: r.kind })}. Las claves siguen ahí. ` +',
+      "          `Para quitarlas a mano, en ${plan.carpeta || 'la carpeta de configuración de opencode'} pon \"enabled\": false en ${candidatas.map((c) => `«${c.name}»`).join(', ')} y vacía sus variables.`",
+      '      )',
+      '      return',
+      '    }',
+      '    state.mcpCheck = null',
+      '    soltarComprobandoMcp()',
+      '    state.mcpPending = null',
+      '    state.mcpConnected = false',
+      '    const despues = await cliente.config().catch(() => null)',
+      ''
+    ),
+    'B18/B19/D6: el rechazo se registra y se DICE sin tocar el MCP; aceptado, se invalida lo del MCP y se relee'
+  )
+
+  // (6) Las dos guardas de §8.22, enteras y cada una detrás de su línea.
+  const GUARDA = "    if (state.client !== cliente || (state.site?.host ?? state.lastHost) !== host) {\n      log.info('Claves quitadas', `${nombres} · espera cancelada`)\n      return\n    }\n"
+  eq(quitar.split(GUARDA).length - 1, 2, 'B13/B14/B25: las dos guardas tras un await, con su registro')
+  una(quitar, '\n    const msPatch = Math.round(performance.now() - t0)\n' + GUARDA, 'B13: la guarda justo tras el PATCH')
+  una(quitar, '\n    const despues = await cliente.config().catch(() => null)\n' + GUARDA, 'B14: la guarda justo tras la relectura')
+
+  // (7) La relectura: las dos salidas que NO desconfiguran vuelven a comprobar el MCP (D6).
+  una(
+    quitar,
+    lineas(
+      '',
+      '    if (!configPlana(despues)) {',
+      "      log.warn('Claves quitadas', `${r.names.join(', ')} · sin releer la configuración`)",
+      "      decir('opencode ha aceptado la escritura, pero no he podido releer su configuración para comprobarla: Faro no da el sitio por desconfigurado. Vuelve a pulsar «Quitar».')",
+      '      relanzarComprobacionMcp(cliente, saved)',
+      '      return',
+      '    }',
+      ''
+    ),
+    'B12/D6: sin releer, se dice lo que se sabe y se vuelve a comprobar el MCP'
+  )
+  una(quitar, '\n    const ef = scrubEffective(despues, r.names)\n    if (!ef.ok) {\n', 'B16: lo que carga opencode decide')
+  una(
+    quitar,
+    lineas(
+      '',
+      "      log.warn('Claves quitadas', `${r.names.join(', ')} · la configuración que opencode carga no es la escrita: ${ef.pendientes.join(', ')}`)",
+      '      decir(',
+      "        `opencode ha aceptado la escritura, pero lo que carga no es lo escrito (${ef.pendientes.join(', ')} sigue con claves): hay una configuración de proyecto delante. ` +",
+      "          'Faro no da el sitio por desconfigurado; arranca opencode desde otra carpeta (tools\\\\arrancar-opencode.ps1 usa una propia) y vuelve a intentarlo.'",
+      '      )',
+      '      relanzarComprobacionMcp(cliente, saved)',
+      '      return',
+      '    }',
+      ''
+    ),
+    'D6: con una configuración de proyecto delante, se dice y se vuelve a comprobar el MCP'
+  )
+  eq(quitar.split('relanzarComprobacionMcp(cliente, saved)').length - 1, 2, 'D6: se vuelve a comprobar en esas dos salidas y en ninguna más')
+  const trasEf = corte(quitar, 'const ef = scrubEffective(despues, r.names)', 'saveSite(')
+  assert(!/\bef(\.\w+)?\s*=[^=]/.test(trasEf.slice('const ef = '.length)), 'B16: nadie reasigna ef entre la relectura y los registros')
+
+  // (8) Los registros y cada registro de «Claves quitadas» en SU rama.
+  una(quitar, '\n    const registros = unlinkRecords({ sites: await getSites(), names: r.names, host, linked: plan.hostsEnlazados })\n    for (const { host: h, patch } of registros) await saveSite(h, patch)\n', 'D9: la pestaña aparte, y los enlazados que se confirmaron')
+  una(
+    quitar,
+    "\n    log.ok('Claves quitadas', `${r.names.join(', ')} · deshabilitadas sin claves · PATCH ${msPatch} ms · registros: ${registros.map((x) => x.host).join(', ') || 'ninguno'}`)\n",
+    'el éxito, con lo quitado, los ms y los registros'
+  )
+  una(
+    quitar,
+    lineas(
+      '',
+      '    const conRestos = candidatas.filter((c) => c.restos === true).map((c) => c.name)',
+      '    if (conRestos.length) {',
+      "      log.warn('Claves quitadas', `${conRestos.join(', ')} · guarda${conRestos.length === 1 ? '' : 'n'} datos que Faro no sabe vaciar (variables de más o argumentos del comando)`)",
+      '    }',
+      ''
+    ),
+    'D3: lo que Faro no sabe vaciar, de las que DE VERDAD se mandaron, y sólo sus nombres'
+  )
+  una(
+    quitar,
+    lineas(
+      '',
+      '    const sinMarcar = conAjenas ? [] : ajenas',
+      '    const vivasSinMarcar = sinMarcar.filter((c) => c.enabled !== false).map((c) => c.name)',
+      '    const apagadasSinMarcar = sinMarcar.filter((c) => c.enabled === false).map((c) => c.name)',
+      '    if (vivasSinMarcar.length) {',
+      '      const varias = vivasSinMarcar.length > 1',
+      "      log.info('Claves quitadas', `${vivasSinMarcar.join(', ')} se queda${varias ? 'n' : ''} habilitada${varias ? 's' : ''}: el sitio la${varias ? 's' : ''} seguirá adoptando`)",
+      '    }',
+      '    if (apagadasSinMarcar.length) {',
+      '      const varias = apagadasSinMarcar.length > 1',
+      "      log.info('Claves quitadas', `${apagadasSinMarcar.join(', ')} sigue${varias ? 'n' : ''} deshabilitada${varias ? 's' : ''} con claves en disco`)",
+      '    }',
+      ''
+    ),
+    'B23/D10: las ajenas sin marcar, las habilitadas «seguirá adoptando» y las apagadas «con claves en disco»'
+  )
+  eq(quitar.split("log.warn('Claves quitadas'").length - 1, 5, 'y ningún log.warn más: ilegible, rechazo, sin releer, proyecto delante y restos')
+  eq(quitar.split("log.info('Claves quitadas'").length - 1, 4, 'ni ningún log.info más: las dos esperas canceladas y las dos clases de ajenas sin marcar')
+
+  // (9) D5: la casilla repinta «Quitar».
+  una(JS_SIN, "\n  $('remove-keys-foreign').addEventListener('change', paintRemoveKeysGo)\n", 'D5: la casilla repinta «Quitar» al cambiar')
+
+  // (10) D8: el aviso del chat, con la frase compartida y sin «no está conectado».
+  const aviso = funcion('function attachMcpNotice(status) {')
+  una(
+    aviso,
+    lineas(
+      '',
+      '  const texto =',
+      "    status.present && status.status === 'disabled'",
+      "      ? fraseMcpDeshabilitado(status.name) + ' Pulsa «Cambiar las claves» para volver a ponerlas.'",
+      ''
+    ),
+    'D8: la entrada deshabilitada dice lo mismo que la pantalla de claves, y a qué botón ir'
+  )
+  eq(JS_SIN.split('fraseMcpDeshabilitado(').length - 1, 3, 'D8: la frase, definida una vez y dicha en la pantalla de claves y en el aviso')
+  const rama = corte(aviso, "? fraseMcpDeshabilitado(status.name)", '\n      :')
+  assert(!rama.includes('no está conectado') && !rama.includes('revisarlo'), 'D8: la rama «disabled» no dice «no está conectado» ni «revísalo»')
+
+  // (11) El espejo: el mando entero, lo que pinta, y la frase copiada letra a letra.
+  const espejo = readFileSync(join(ROOT, 'harness/panel-preview.html'), 'utf8')
+  eq(
+    corte(espejo, '    setQuitar(k) {', '\n    },'),
+    lineas('    setQuitar(k) {', "      marcar('quitar', k || '')", "      pintarQuitar(k || '')", "      marcar('screen', 'screen-settings')", "      mostrarPantalla('screen-settings')", '      return pintarMedidas()'),
+    'B28: el mando pinta la confirmación y abre Ajustes'
+  )
+  const pintarEspejo = corte(espejo, 'function pintarQuitar(k) {', '\n  }\n') + '\n'
+  for (const l of [
+    "      abierto: { propias: [NOMBRE_MCP], ajenas: [], noQuitables: [], hostsEnlazados: [SITIOS.jira.host], ajenasApagadas: [], conRestos: [] },",
+    "      restos: { propias: [NOMBRE_MCP], ajenas: ['apagada-a-mano'], noQuitables: [], hostsEnlazados: [SITIOS.jira.host], ajenasApagadas: ['apagada-a-mano'], conRestos: [NOMBRE_MCP] },",
+    "    $('remove-keys-unremovable').classList.toggle('hidden', !t.noQuitables)",
+    "    $('remove-keys-leftovers').textContent = t.restos",
+    "    $('remove-keys-leftovers').classList.toggle('hidden', !t.restos)",
+  ]) {
+    una(pintarEspejo, '\n' + l + '\n', 'B29/B30/D3: el espejo')
+  }
+  assert(corte(espejo, 'const CAJAS = [', 'function check()').includes("'#remove-keys-leftovers'"), 'D3: check() mide a lo ancho lo que Faro no sabe vaciar')
+  const delPanel = corte(JS_SIN, 'return `El MCP «${name}', '`')
+  const delEspejo = corte(corte(espejo, 'function pintarClaves(k) {', '\n  }\n'), 'quitadas: `El MCP «${NOMBRE_MCP}', '`')
+  eq(delEspejo.slice('quitadas: `El MCP «${NOMBRE_MCP}'.length), delPanel.slice('return `El MCP «${name}'.length), 'D8: el espejo copia la frase de fraseMcpDeshabilitado letra a letra')
 })

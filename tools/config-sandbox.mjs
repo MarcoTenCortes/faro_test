@@ -38,11 +38,16 @@
  *     «Instructions from:» con un turno de verdad queda para cuando haya
  *     permiso de gasto: aquí no se manda NINGÚN turno de modelo);
  *  7. (H19) quitar las claves con las funciones REALES del panel
- *     (`mcpScrubCandidates` + `scrubMcp`): la de Faro y una ajena del mismo
- *     dominio en UN solo PATCH, las dos «disabled», en disco con `enabled: false`
- *     y las diez variables a '' y sin el token en el fichero; `scrubEffective` lo
- *     da por bueno, `mcpForHost` ya no adopta nada (sin bucle), y volver a guardar
- *     con `configureMcp` REUTILIZA el esqueleto y conecta sin la puerta de prueba;
+ *     (`mcpScrubCandidates` + `scrubMcp`): el juguete y otra entrada del mismo
+ *     dominio en UN solo PATCH —las dos AJENAS y marcadas: desde la revisión
+ *     adversaria de H19 el nombre guardado no basta para ser «de Faro», hace
+ *     falta su `command`, y el del juguete es `node`—, sin datos de más
+ *     (`restos` false), las dos «disabled», en disco con `enabled: false` y las
+ *     diez variables a '' y sin el token en el fichero; `scrubEffective` lo da
+ *     por bueno, `mcpForHost` ya no adopta nada (sin bucle), y volver a guardar
+ *     con `configureMcp` y el registro que DE VERDAD deja el panel (el que
+ *     devuelve `unlinkRecords`, que conserva `mcpName`) REUTILIZA el esqueleto y
+ *     conecta sin la puerta de prueba;
  *  8. (H19) una entrada deshabilitada A MANO con sus URL y su token (la forma que
  *     deja alguien que la apaga en el fichero) no se adopta, y guardar las
  *     claves con `configureMcp` la reutiliza por su nombre de Faro, la
@@ -80,7 +85,7 @@ import { fileURLToPath } from 'node:url'
 import { OpencodeClient } from '../src/opencode/client.js'
 import { MCP_ENV_KEYS } from '../src/shared/mcp-config.js'
 import { Logger } from '../src/shared/log.js'
-import { buildMcpConfig, configFileCandidates, configureMcp, mcpForHost, mcpScrubCandidates, scrubEffective, scrubMcp } from '../src/panel/setup.js'
+import { buildMcpConfig, configFileCandidates, configureMcp, mcpForHost, mcpScrubCandidates, scrubEffective, scrubMcp, unlinkRecords } from '../src/panel/setup.js'
 import { mcpNameForHost } from '../src/shared/config.js'
 
 const AQUI = dirname(fileURLToPath(import.meta.url))
@@ -551,12 +556,20 @@ async function main() {
       // (a) NOMBRE otra vez habilitado y con el token (el caso 2 lo dejó deshabilitado), como en el caso 1.
       const rehabilitar = await client.updateMcpEntries({ [NOMBRE]: entrada(['node', JUGUETE]) }, { allowCommand })
       const conectadaAntes = rehabilitar.ok ? await esperarEstado(client, NOMBRE, 'connected') : -1
-      // (b) Las candidatas, con la MISMA función que usa el panel: la de Faro por su nombre guardado,
-      // «faro-espacios» (caso 5) por el dominio y ajena, y «pegado-a-mano» (sin environment) fuera.
+      // (b) Las candidatas, con la MISMA función que usa el panel. Desde la revisión adversaria de H19 el
+      // nombre guardado no basta para ser «de Faro»: hace falta además su command, y el del juguete es
+      // `node`, así que NOMBRE es AJENA aunque sea el nombre guardado (como una docker adoptada en H18);
+      // «faro-espacios» (caso 5), ajena por el dominio; «pegado-a-mano» (sin environment), fuera. Ninguna
+      // guarda datos que Faro no sepa vaciar (`restos`). Las dos ajenas van MARCADAS, como con la casilla.
       const cands = mcpScrubCandidates({ config: await client.config(), saved: { mcpName: NOMBRE }, host: HOST7 })
       const nombresDe = (lista) => lista.map((c) => c.name)
       const todas = [...nombresDe(cands.propias), ...nombresDe(cands.ajenas), ...nombresDe(cands.noQuitables)]
-      const bienElegidas = nombresDe(cands.propias).includes(NOMBRE) && nombresDe(cands.ajenas).includes('faro-espacios') && !todas.includes('pegado-a-mano')
+      const bienElegidas =
+        nombresDe(cands.ajenas).includes(NOMBRE) &&
+        !nombresDe(cands.propias).includes(NOMBRE) &&
+        nombresDe(cands.ajenas).includes('faro-espacios') &&
+        !todas.includes('pegado-a-mano') &&
+        [...cands.propias, ...cands.ajenas].every((c) => c.restos === false)
       // (c) UN solo PATCH para las dos, contado en el registro del cliente.
       const antes = logger.entries.length
       const t = performance.now()
@@ -576,11 +589,15 @@ async function main() {
       const efectiva = scrubEffective(await client.config().catch(() => null), r.names)
       // (e) Sin bucle: ya no hay nada que adoptar para ese dominio.
       const adoptada = mcpForHost(await client.config().catch(() => null), HOST7)
-      // (f) Volver a guardar las claves: configureMcp reutiliza el esqueleto por el nombre guardado y conserva
+      // (f) Volver a guardar las claves con el registro que DE VERDAD deja el panel: el que devuelve
+      // unlinkRecords con los nombres quitados (revisión adversaria de H19: conserva mcpName, y es ese nombre
+      // lo que hace que configureMcp reutilice el esqueleto, que ya no lleva ningún dominio), conservando
       // el command del juguete por `known`, SIN la puerta de prueba.
+      const registro7 = { host: HOST7, configured: true, mcpName: NOMBRE }
+      const desmarcados = unlinkRecords({ sites: { [HOST7]: registro7 }, names: r.names, host: HOST7, linked: [] })
       const claves7 = { url: 'https://' + HOST7, token: TOKEN_DE_MENTIRA }
       const t2 = performance.now()
-      const vuelta = await configureMcp(client, { host: HOST7, jira: claves7, dataCenter: true, saved: { mcpName: NOMBRE }, config: await client.config() })
+      const vuelta = await configureMcp(client, { host: HOST7, jira: claves7, dataCenter: true, saved: { ...registro7, ...desmarcados[0].patch }, config: await client.config() })
       const msVuelta = vuelta.ok ? await esperarEstado(client, NOMBRE, 'connected') : -1
       const msVueltaTotal = Math.round(performance.now() - t2)
       apunta(
@@ -597,12 +614,13 @@ async function main() {
           !tokenEnFichero &&
           efectiva.ok &&
           adoptada === null &&
+          desmarcados.length === 1 &&
           vuelta.ok &&
           vuelta.name === NOMBRE &&
           vuelta.reuse === true &&
           msVuelta >= 0,
         msPatch,
-        `candidatas: propias=${nombresDe(cands.propias).join(',')} ajenas=${nombresDe(cands.ajenas).join(',')} · peticiones PATCH=${peticiones} · disabled a los ${msDisabled} ms (faro-espacios ${msEspacios} ms) · enabled false y las diez vacías en las dos=${limpias} · token en esas entradas=${tokenEnEntradas} · en el fichero=${tokenEnFichero} · scrubEffective ok=${efectiva.ok} · mcpForHost tras quitar=${adoptada ? adoptada.name : 'null'} · volver a guardar: ${vuelta.name} reuse=${vuelta.reuse} connected a los ${msVuelta} ms (${msVueltaTotal} ms en total)`
+        `candidatas: propias=${nombresDe(cands.propias).join(',') || '(ninguna)'} ajenas=${nombresDe(cands.ajenas).join(',')} (las dos ajenas: el juguete no lleva el command de Faro; marcadas) · restos=${[...cands.propias, ...cands.ajenas].some((c) => c.restos)} · peticiones PATCH=${peticiones} · disabled a los ${msDisabled} ms (faro-espacios ${msEspacios} ms) · enabled false y las diez vacías en las dos=${limpias} · token en esas entradas=${tokenEnEntradas} · en el fichero=${tokenEnFichero} · scrubEffective ok=${efectiva.ok} · mcpForHost tras quitar=${adoptada ? adoptada.name : 'null'} · registro desmarcado con mcpName=${desmarcados[0] ? ('mcpName' in desmarcados[0].patch ? '(borrado)' : 'conservado') : '(sin registro)'} · volver a guardar: ${vuelta.name} reuse=${vuelta.reuse} connected a los ${msVuelta} ms (${msVueltaTotal} ms en total)`
       )
     }
 

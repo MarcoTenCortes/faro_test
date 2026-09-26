@@ -187,9 +187,9 @@ test('H19: los casos 7 y 8 quitan y vuelven a crear con las funciones REALES del
   const importa = JS.match(/import \{([^}]*)\} from '\.\.\/src\/panel\/setup\.js'/)
   assert(importa, 'el sandbox importa de src/panel/setup.js')
   const importadas = importa[1].split(',').map((s) => s.trim())
-  for (const f of ['scrubMcp', 'mcpScrubCandidates', 'scrubEffective', 'configureMcp', 'mcpForHost']) assert(importadas.includes(f), `importa ${f} de setup.js`)
+  for (const f of ['scrubMcp', 'mcpScrubCandidates', 'scrubEffective', 'configureMcp', 'mcpForHost', 'unlinkRecords']) assert(importadas.includes(f), `importa ${f} de setup.js`)
   pos("import { mcpNameForHost } from '../src/shared/config.js'")
-  assert(!/function (scrubMcp|mcpScrubCandidates|mcpScrubPatch|scrubEffective|configureMcp)\b/.test(JS), 'ninguna copia local de esas funciones')
+  assert(!/function (scrubMcp|mcpScrubCandidates|mcpScrubPatch|scrubEffective|configureMcp|unlinkRecords)\b/.test(JS), 'ninguna copia local de esas funciones')
 
   // Caso 7: quitar con scrubMcp, sin montar a mano la entrada deshabilitada, y contando UN PATCH.
   const siete = entre("const HOST7 = 'jira.ejemplo.invalid'", 'const HOST8 =')
@@ -204,14 +204,29 @@ test('H19: los casos 7 y 8 quitan y vuelven a crear con las funciones REALES del
   const cond7 = entre("'7 quitar con el módulo real", 'msPatch,', siete)
   // La condición del apunta, línea a línea: cada exigencia es una línea ENTERA (no un trozo del detalle, que también las nombra).
   const lineas7 = cond7.split('\n').map((l) => l.trim().replace(/ &&$/, '').replace(/,$/, ''))
-  for (const c of ['rehabilitar.ok', 'conectadaAntes >= 0', 'bienElegidas', 'r.ok', 'peticiones === 1', 'msDisabled >= 0', 'msEspacios >= 0', 'limpias', '!tokenEnEntradas', '!tokenEnFichero', 'efectiva.ok', 'adoptada === null', 'vuelta.ok', 'vuelta.name === NOMBRE', 'vuelta.reuse === true', 'msVuelta >= 0']) {
+  for (const c of ['rehabilitar.ok', 'conectadaAntes >= 0', 'bienElegidas', 'r.ok', 'peticiones === 1', 'msDisabled >= 0', 'msEspacios >= 0', 'limpias', '!tokenEnEntradas', '!tokenEnFichero', 'efectiva.ok', 'adoptada === null', 'desmarcados.length === 1', 'vuelta.ok', 'vuelta.name === NOMBRE', 'vuelta.reuse === true', 'msVuelta >= 0']) {
     assert(lineas7.includes(c), 'el caso 7 exige ' + c)
   }
   assert(siete.includes("nombresDe(cands.ajenas).includes('faro-espacios')") && siete.includes("!todas.includes('pegado-a-mano')"), 'ajena por dominio; lo que no lleva el dominio, fuera')
   assert(siete.includes('const efectiva = scrubEffective(await client.config().catch(() => null), r.names)'), 'lo que opencode carga es lo escrito')
   assert(siete.includes('const adoptada = mcpForHost(await client.config().catch(() => null), HOST7)'), 'y no queda nada que adoptar: sin bucle')
+  // Revisión de H19 (D2): el juguete lleva el nombre guardado pero su command es node, no el de Faro: es AJENA, y va marcada.
+  assert(siete.includes('nombresDe(cands.ajenas).includes(NOMBRE)') && siete.includes('!nombresDe(cands.propias).includes(NOMBRE)'), 'D2: el juguete, ajena aunque lleve el nombre guardado')
+  assert(siete.includes('[...cands.propias, ...cands.ajenas].every((c) => c.restos === false)'), 'D3: ni el juguete ni faro-espacios guardan datos que Faro no sepa vaciar')
+  // Revisión de H19 (D1/D12): volver a guardar con el registro que DE VERDAD deja el panel —el que devuelve
+  // unlinkRecords, con mcpName conservado—, no con uno escrito a mano que el panel nunca produce.
+  assert(siete.includes('const registro7 = { host: HOST7, configured: true, mcpName: NOMBRE }'), 'el registro del sitio antes de quitar')
+  assert(
+    siete.includes('const desmarcados = unlinkRecords({ sites: { [HOST7]: registro7 }, names: r.names, host: HOST7, linked: [] })'),
+    'desmarcado con la función del panel y los nombres QUITADOS'
+  )
+  assert(pos('const r = await scrubMcp(', siete) < pos('const desmarcados = unlinkRecords(', siete), 'desmarcar, después de quitar')
   const vuelta = entre('const vuelta = await configureMcp(client, {', '\n', siete)
-  assert(vuelta.includes('saved: { mcpName: NOMBRE }') && !vuelta.includes('allowCommand'), 'volver a guardar con configureMcp, SIN la puerta de prueba (el command se conserva por known)')
+  assert(
+    vuelta.includes('saved: { ...registro7, ...desmarcados[0].patch }') && !vuelta.includes('allowCommand'),
+    'volver a guardar con el registro desmarcado y configureMcp, SIN la puerta de prueba (el command se conserva por known)'
+  )
+  assert(!siete.includes('saved: { mcpName: NOMBRE }, config'), 'y no con un registro inventado')
 
   // Caso 8: lo único escrito a mano es la entrada deshabilitada con sus URL; lo demás, configureMcp.
   const ocho = entre('const HOST8 =', 'const fallos =')

@@ -163,6 +163,7 @@
     <button class="rig on" data-quitar="">Cerrado</button>
     <button class="rig" data-quitar="abierto" title="la de Faro y su host enlazado, sin ajenas">Confirmación</button>
     <button class="rig" data-quitar="ajenas" title="con la casilla de una que no es de Faro y una que no se puede quitar desde aquí">Con ajenas</button>
+    <button class="rig" data-quitar="restos" title="revisión adversaria de H19: una propia que guarda datos que Faro no sabe vaciar y una ajena ya deshabilitada con claves en disco">Con restos</button>
   </div>
   <div class="grp">
     <div class="grp-title">Barra inferior</div>
@@ -1134,14 +1135,18 @@ async function arrancar() {
    * los textos de `scrubConfirmText` IMPORTADA de setup.js —los mismos que pinta
    * el panel, por construcción— sobre nombres de mentira: el MCP de Faro con su
    * host enlazado y, en «ajenas», una entrada que no es de Faro (con su casilla)
-   * y una remota que no se puede quitar desde aquí. '' la deja cerrada, que es
-   * como nace. Es una declaración `function` a propósito: una `const` usada
-   * antes de su línea mata el espejo entero (la lección de H17).
+   * y una remota que no se puede quitar desde aquí; y en «restos» (revisión
+   * adversaria de H19), la de Faro guardando datos que Faro no sabe vaciar y una
+   * ajena ya deshabilitada con claves en disco, que es el cuarto texto
+   * (`#remove-keys-leftovers`) y la frase de las ajenas apagadas. '' la deja
+   * cerrada, que es como nace. Es una declaración `function` a propósito: una
+   * `const` usada antes de su línea mata el espejo entero (la lección de H17).
    */
   function pintarQuitar(k) {
     const PLANES = {
-      abierto: { propias: [NOMBRE_MCP], ajenas: [], noQuitables: [], hostsEnlazados: [SITIOS.jira.host] },
-      ajenas: { propias: [NOMBRE_MCP], ajenas: ['docker-atlassian'], noQuitables: ['atlassian-remoto'], hostsEnlazados: [SITIOS.jira.host] },
+      abierto: { propias: [NOMBRE_MCP], ajenas: [], noQuitables: [], hostsEnlazados: [SITIOS.jira.host], ajenasApagadas: [], conRestos: [] },
+      ajenas: { propias: [NOMBRE_MCP], ajenas: ['docker-atlassian'], noQuitables: ['atlassian-remoto'], hostsEnlazados: [SITIOS.jira.host], ajenasApagadas: [], conRestos: [] },
+      restos: { propias: [NOMBRE_MCP], ajenas: ['apagada-a-mano'], noQuitables: [], hostsEnlazados: [SITIOS.jira.host], ajenasApagadas: ['apagada-a-mano'], conRestos: [NOMBRE_MCP] },
     }
     estado.quitar = k in PLANES ? k : ''
     const plan = PLANES[estado.quitar]
@@ -1154,6 +1159,8 @@ async function arrancar() {
     $('remove-keys-foreign-text').textContent = t.ajenas
     $('remove-keys-unremovable').textContent = t.noQuitables
     $('remove-keys-unremovable').classList.toggle('hidden', !t.noQuitables)
+    $('remove-keys-leftovers').textContent = t.restos
+    $('remove-keys-leftovers').classList.toggle('hidden', !t.restos)
   }
   /**
    * El aviso de que el MCP no está conectado (H14, P5), tal como lo cuelga
@@ -2322,6 +2329,9 @@ async function arrancar() {
     '#remove-keys-confirm',
     '#remove-keys-confirm .check',
     '#remove-keys-confirm .row',
+    // Revisión adversaria de H19: el cuarto texto, lo que Faro no sabe vaciar,
+    // que nombra entradas y la misma carpeta real.
+    '#remove-keys-leftovers',
   ]
 
   function check() {
@@ -2520,7 +2530,7 @@ async function arrancar() {
       mostrarPantalla('screen-setup')
       return pintarMedidas()
     },
-    /** H19: '' | 'abierto' | 'ajenas', con Ajustes abierto y la confirmación de «Quitar las claves». */
+    /** H19: '' | 'abierto' | 'ajenas' | 'restos' (revisión adversaria), con Ajustes abierto y la confirmación de «Quitar las claves». */
     setQuitar(k) {
       marcar('quitar', k || '')
       pintarQuitar(k || '')

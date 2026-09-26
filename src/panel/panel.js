@@ -390,10 +390,15 @@ const state = {
   setupConfirmar: false,
   // «Quitar las claves de este sitio» (H19): lo que la confirmación enseña y
   // el usuario va a confirmar —{host, propias, ajenas, noQuitables,
-  // hostsEnlazados, carpeta}, todo NOMBRES y hosts, nunca una entrada con su
-  // environment— o null. Es de ESTA vez: Ajustes lo tira al abrirse y el cambio
-  // de sitio también, porque la lista era de lo que opencode tenía entonces.
+  // hostsEnlazados, carpeta, ajenasApagadas, conRestos} (`planQuitar`), todo
+  // NOMBRES y hosts, nunca una entrada con su environment— o null. Es de ESTA
+  // vez: Ajustes lo tira al abrirse y el cambio de sitio también, porque la
+  // lista era de lo que opencode tenía entonces.
   removeKeysPlan: null,
+  // El testigo de `prepareRemoveKeys` (revisión adversaria de H19): {} mientras
+  // lee y mientras su confirmación está abierta, o null. Una lectura cuyo
+  // testigo ya no es éste no pinta nada; lo suelta `hideRemoveKeysConfirm`.
+  removeKeysPrep: null,
   // El aviso «claves sin comprobar» colgado del chat, para no colgarlo dos veces
   // y quitarlo en cuanto la primera verificación las dé por buenas (H18).
   avisoSinComprobar: null,
@@ -1540,6 +1545,19 @@ function puedeAbrirPantalla() {
 }
 
 /**
+ * Lo que se dice de una entrada deshabilitada y sin claves, que es lo que deja
+ * «Quitar las claves» (H19). En UN sitio (revisión adversaria de H19): la dicen
+ * la pantalla de claves (`showMcpSetup`) y, cuando esa pantalla taparía algo, el
+ * aviso del chat (`attachMcpNotice`), que hasta entonces decía «no está
+ * conectado (disabled)… Puedes revisarlo» de algo que el usuario acababa de
+ * quitar a propósito. El espejo del banco copia esta frase letra a letra
+ * (pinado).
+ */
+function fraseMcpDeshabilitado(name) {
+  return `El MCP «${name}» está deshabilitado y sin claves en opencode (es lo que deja «Quitar las claves»): al guardar, Faro lo vuelve a escribir con las nuevas.`
+}
+
+/**
  * La pantalla de claves con el motivo: el MISMO texto desde el arranque que
  * desde la comprobación tardía, escrito en un solo sitio para que no puedan
  * acabar diciendo cosas distintas.
@@ -1560,9 +1578,10 @@ function showMcpSetup(status) {
   // caída, está apagada a propósito y sin claves, y guardar las nuevas la
   // reutiliza (`chooseWriteTarget`, porque es el esqueleto de Faro). Decir
   // «revisa ese bloque y reinicia opencode» ahí mandaría a arreglar algo que no
-  // está roto. El espejo del banco copia esta frase letra a letra (pinado).
+  // está roto. La frase vive en `fraseMcpDeshabilitado`, que comparte con el
+  // aviso del chat.
   if (status.present && status.status === 'disabled') {
-    $('setup-status').textContent = `El MCP «${status.name}» está deshabilitado y sin claves en opencode (es lo que deja «Quitar las claves»): al guardar, Faro lo vuelve a escribir con las nuevas.`
+    $('setup-status').textContent = fraseMcpDeshabilitado(status.name)
   } else if (status.present) {
     $('setup-status').textContent = `El MCP «${status.name}» está registrado pero en «${status.status}». Revisa ese bloque y reinicia opencode, o quítalo si sobra.`
   }
@@ -1629,11 +1648,18 @@ function paintSetupMcpHint(status, { host = '', espera = null } = {}) {
  * robarle el foco a nadie. El botón NO lleva `NEEDS_IDLE`: no necesita el turno
  * parado —abrir las claves a mitad de una respuesta es cosa del usuario, y la
  * respuesta sigue llegando debajo—, lo que no puede es abrirse sola.
+ *
+ * Una entrada deshabilitada (lo que deja «Quitar las claves») no está caída: el
+ * aviso dice lo mismo que la pantalla de claves (`fraseMcpDeshabilitado`) y a
+ * qué botón ir, sin «no está conectado» ni «revísalo» (revisión adversaria de
+ * H19: tras quitarlas con algo escrito en el cuadro salía el genérico).
  */
 function attachMcpNotice(status) {
   const texto =
-    `He comprobado el MCP de Atlassian de este sitio y no está conectado${status.present ? ` (${status.status})` : ''}: ` +
-    'el modelo no podrá leer Jira ni Confluence. Puedes revisarlo cuando termines.'
+    status.present && status.status === 'disabled'
+      ? fraseMcpDeshabilitado(status.name) + ' Pulsa «Cambiar las claves» para volver a ponerlas.'
+      : `He comprobado el MCP de Atlassian de este sitio y no está conectado${status.present ? ` (${status.status})` : ''}: ` +
+        'el modelo no podrá leer Jira ni Confluence. Puedes revisarlo cuando termines.'
   const wrap = document.createElement('div')
   wrap.appendChild(noticeNode(texto, true))
   const row = document.createElement('div')
@@ -1691,6 +1717,30 @@ function attachMcpNotice(status) {
  */
 function currentMcpCheck() {
   return state.mcpCheck || Promise.resolve(state.mcpConnected)
+}
+
+/**
+ * Vuelve a comprobar el MCP de este sitio sin rearrancar el panel, como hace el
+ * arranque en su paso 5 (revisión adversaria de H19). La llama `removeKeys` en
+ * las dos salidas en las que el PATCH SÍ se aplicó —opencode rearrancó todos sus
+ * MCP— pero el sitio no se da por desconfigurado (no se pudo releer la
+ * configuración, o una de proyecto delante sigue cargando el MCP con claves): sin
+ * esto el panel se quedaba con `mcpConnected` en false y sin comprobación, y el
+ * siguiente Análisis con páginas base avisaba de «sin MCP» con el MCP conectado.
+ *
+ * Con el cliente CAPTURADO por quien llama (§8.22) y el testigo del arranque
+ * vigente. Sin el sitio delante no hace nada: `checkMcp` lee `state.site.host`, y
+ * con la pestaña en el correo reventaría; ahí el estado se queda como lo dejó la
+ * invalidación hasta el siguiente arranque. La cabecera dice «comprobando MCP…»
+ * salvo con un turno en vuelo, donde manda «pensando…» (quien lo pone lo quita:
+ * `soltarComprobandoMcp`).
+ */
+function relanzarComprobacionMcp(cliente, saved) {
+  if (!state.site?.host) return
+  const c = checkMcp(cliente, state.bootToken, saved)
+  state.mcpCheck = c.then((x) => !!x.connected, () => false)
+  if (!state.streaming) setStatus('busy', COMPROBANDO_MCP)
+  mcpResultSoon(c, state.mcpCheck)
 }
 
 /** Lo que se dice cuando «Reintentar» conecta el MCP con un turno en vuelo. */
@@ -8072,6 +8122,9 @@ function wireEvents() {
   $('btn-remove-keys').addEventListener('click', () => prepareRemoveKeys().catch(console.error))
   $('btn-remove-keys-go').addEventListener('click', () => removeKeys().catch(console.error))
   $('btn-remove-keys-cancel').addEventListener('click', hideRemoveKeysConfirm)
+  // La casilla de las entradas ajenas decide si «Quitar» tiene algo que quitar
+  // cuando no hay ninguna de Faro (revisión adversaria de H19).
+  $('remove-keys-foreign').addEventListener('change', paintRemoveKeysGo)
   // Desde Ajustes, con la flecha a la vista: aquí se viene a mirar y quizá a
   // cambiar, y volver sin elegir deja el modelo como estaba.
   $('btn-change-model').addEventListener('click', () => showModelScreen({ modo: 'ajustes', marcado: state.model }).catch(console.error))
@@ -8673,17 +8726,29 @@ function porQueNoSeEscribe({ status = 0, kind = '' } = {}) {
  *
  * CON LAS MISMAS BARRERAS QUE `saveKeys` (§8.22 y §8.24): sitio, host y cliente
  * capturados antes del primer await; la guarda común `reconfiguring()` justo
- * antes de escribir; lo pendiente del MCP invalidado con las mismas líneas; la
- * relectura de lo que opencode CARGA antes de tocar el almacén (una
- * configuración de proyecto delante taparía la escrita, y dar el sitio por
- * desconfigurado con el MCP todavía cargado lo haría volver a adoptarse); y
- * nunca un cuerpo de configuración en el registro, en un anuncio ni en pantalla.
+ * antes de escribir; la relectura de lo que opencode CARGA antes de tocar el
+ * almacén (una configuración de proyecto delante taparía la escrita, y dar el
+ * sitio por desconfigurado con el MCP todavía cargado lo haría volver a
+ * adoptarse); y nunca un cuerpo de configuración en el registro, en un anuncio
+ * ni en pantalla.
+ *
+ * LO PENDIENTE DEL MCP, SÓLO CUANDO DE VERDAD CAMBIA (revisión adversaria de
+ * H19): un PATCH rechazado no toca nada en opencode —el MCP sigue conectado—, y
+ * dar el MCP por desconectado ahí dejaba el siguiente Análisis con páginas base
+ * avisando de «sin MCP» hasta el próximo arranque. Así que delante del PATCH
+ * sólo se corta la espera de unas claves a medio guardar; lo demás se invalida
+ * DETRÁS de un PATCH aceptado (que rearranca todos los MCP de ese opencode), y
+ * donde el PATCH se aplicó pero el sitio no se da por desconfigurado (sin
+ * releer, o con una configuración de proyecto delante) se vuelve a comprobar el
+ * MCP con `relanzarComprobacionMcp`, en vez de dejarlo en «no conectado».
  *
  * NO ES «OLVIDAR ESTE SITIO»: sólo se desmarcan los registros del MCP
- * (`unlinkRecords`: configured, mcpName, skippedKeys y los enlaces). El índice,
- * el contexto, la memoria, el diario y lo demás del sitio se quedan: quitar las
- * claves es para cambiarlas o dejar de usar ese sitio un tiempo, no para que
- * Faro lo olvide.
+ * (`unlinkRecords`: configured, skippedKeys y los enlaces; `mcpName` se CONSERVA
+ * desde la revisión adversaria de H19, para que volver a guardar reutilice el
+ * esqueleto desde cualquier host del MCP y la pantalla de claves diga que está
+ * deshabilitado). El índice, el contexto, la memoria, el diario y lo demás del
+ * sitio se quedan: quitar las claves es para cambiarlas o dejar de usar ese
+ * sitio un tiempo, no para que Faro lo olvide.
  */
 
 /** Mientras `removeKeys` escribe: un segundo clic no escribe dos veces (H19). */
@@ -8709,6 +8774,56 @@ function enlazadosDe(saved, host) {
     if (typeof h === 'string' && h && h !== host && !out.includes(h)) out.push(h)
   }
   return out
+}
+
+/**
+ * Los hosts enlazados que se quedan de verdad sin claves al quitar las de este
+ * sitio (revisión adversaria de H19): los que el registro de ESTE sitio tiene
+ * enlazados (`enlazadosDe`) más los que llevan las entradas PROPIAS que se van
+ * a deshabilitar en `JIRA_URL`/`CONFLUENCE_URL` —una entrada con los dos
+ * productos deja sin claves también al tercero que no estaba apuntado aquí—,
+ * sin este host, sin vacíos ni repetidos. Y de esa unión, sólo los hosts cuyo
+ * registro guardado no apunta a ningún MCP (`mcpName` '') o apunta a una de las
+ * candidatas: un enlazado con SU propio MCP no pierde nada, y desmarcarlo hacía
+ * que su siguiente arranque adoptara ese MCP como «sin comprobar» con unas
+ * claves que sí estaban comprobadas. `prepareRemoveKeys` y `removeKeys` lo
+ * calculan con esta MISMA función, así que el texto que se confirma, el
+ * recálculo y los registros que se desmarcan dicen lo mismo.
+ */
+function hostsEnlazadosDe({ saved, host, propias, ajenas, sites }) {
+  const nombres = [...propias, ...ajenas].map((c) => c.name)
+  const hosts = enlazadosDe(saved, host)
+  for (const c of propias) {
+    for (const h of [c.jiraHost, c.confluenceHost]) {
+      if (typeof h === 'string' && h && h !== host && !hosts.includes(h)) hosts.push(h)
+    }
+  }
+  const registros = sites && typeof sites === 'object' ? sites : {}
+  return hosts.filter((h) => {
+    const apuntado = Object.hasOwn(registros, h) && typeof registros[h]?.mcpName === 'string' ? registros[h].mcpName : ''
+    return apuntado === '' || nombres.includes(apuntado)
+  })
+}
+
+/**
+ * El plan que la confirmación enseña, montado en UN sitio para preparar y para
+ * el recálculo de `removeKeys`: todo NOMBRES y hosts, nunca una entrada con su
+ * environment. De la revisión adversaria de H19, además: `ajenasApagadas` (las
+ * ajenas ya deshabilitadas: guardan claves en disco pero `mcpForHost` no las
+ * adopta, y el texto lo dice así) y `conRestos` (las que guardan datos que Faro
+ * no sabe vaciar: `restos` es un booleano de setup.js, nunca qué guardan).
+ */
+function planQuitar({ host, propias, ajenas, noQuitables, hostsEnlazados, carpeta }) {
+  return {
+    host,
+    propias: propias.map((c) => c.name),
+    ajenas: ajenas.map((c) => c.name),
+    noQuitables: noQuitables.map((c) => c.name),
+    hostsEnlazados,
+    carpeta,
+    ajenasApagadas: ajenas.filter((c) => c.enabled === false).map((c) => c.name),
+    conRestos: [...propias, ...ajenas].filter((c) => c.restos === true).map((c) => c.name),
+  }
 }
 
 /** ¿Dos listas de nombres (o de candidatas) son el mismo conjunto? */
@@ -8737,15 +8852,25 @@ function porQueNoSeQuita({ status = 0, kind = '' } = {}) {
 /**
  * El botón «Quitar»: apagado con un turno en vuelo (lleva `NEEDS_IDLE` y
  * `setStreaming` lo repinta por aquí), mientras se quita, y sin nada que quitar.
+ * «Nada que quitar» mira la casilla (revisión adversaria de H19): con sólo
+ * entradas ajenas, sin marcarla no hay nada, y el botón activo contestaba «No
+ * hay nada que quitar.» justo después de una confirmación que las nombraba. La
+ * casilla lo repinta al cambiar (su oyente `change`, en `wireEvents`).
  */
 function paintRemoveKeysGo() {
   const plan = state.removeKeysPlan
-  $('btn-remove-keys-go').disabled = quitandoClaves || state.streaming || !plan || (!plan.propias.length && !plan.ajenas.length)
+  $('btn-remove-keys-go').disabled = quitandoClaves || state.streaming || !plan || (!plan.propias.length && !(plan.ajenas.length && $('remove-keys-foreign').checked))
 }
 
-/** Esconde la confirmación y tira su plan: la próxima vez se vuelve a leer. */
+/**
+ * Esconde la confirmación y tira su plan: la próxima vez se vuelve a leer. Y
+ * suelta el testigo de `prepareRemoveKeys`, así que una lectura todavía en
+ * vuelo ya no pinta nada al volver (revisión adversaria de H19): la llaman
+ * «Cancelar», abrir Ajustes y el cambio de sitio.
+ */
 function hideRemoveKeysConfirm() {
   state.removeKeysPlan = null
+  state.removeKeysPrep = null
   $('remove-keys-confirm').classList.add('hidden')
   $('remove-keys-foreign').checked = false
 }
@@ -8755,8 +8880,12 @@ function hideRemoveKeysConfirm() {
  * (setup.js: el espejo del banco los importa, así que dicen lo mismo por
  * construcción). La casilla de las ajenas nace desmarcada: deshabilitar una
  * entrada que no es de Faro tiene que ser una decisión, no un defecto. Aparece
- * bajo el botón sin que el foco se mueva solo, así que se anuncia (A2) y el foco
- * va a «Quitar» si hay algo que quitar y, si no, a «Cancelar».
+ * bajo el botón sin que el foco se mueva solo, así que se anuncia (A2), y el
+ * foco va a lo que hay que decidir: a «Quitar» si hay algo de Faro que quitar;
+ * sin propias pero con ajenas, a su casilla (sin marcarla, «Quitar» nace
+ * apagado); y si no hay nada, o con un turno en vuelo, a «Cancelar». Desde la
+ * revisión adversaria de H19 pinta además el cuarto texto, lo que Faro no sabe
+ * vaciar (`#remove-keys-leftovers`).
  */
 function paintRemoveKeysConfirm(carpeta) {
   const plan = state.removeKeysPlan
@@ -8768,11 +8897,13 @@ function paintRemoveKeysConfirm(carpeta) {
   $('remove-keys-foreign-text').textContent = t.ajenas
   $('remove-keys-unremovable').textContent = t.noQuitables
   $('remove-keys-unremovable').classList.toggle('hidden', !t.noQuitables)
+  $('remove-keys-leftovers').textContent = t.restos
+  $('remove-keys-leftovers').classList.toggle('hidden', !t.restos)
   paintRemoveKeysGo()
   $('remove-keys-confirm').classList.remove('hidden')
   announce(t.principal)
-  const hayAlgo = !state.streaming && (plan.propias.length > 0 || plan.ajenas.length > 0)
-  ;(hayAlgo ? $('btn-remove-keys-go') : $('btn-remove-keys-cancel')).focus()
+  const foco = state.streaming || (!plan.propias.length && !plan.ajenas.length) ? 'btn-remove-keys-cancel' : plan.propias.length ? 'btn-remove-keys-go' : 'remove-keys-foreign'
+  $(foco).focus()
 }
 
 /**
@@ -8780,12 +8911,22 @@ function paintRemoveKeysConfirm(carpeta) {
  * tiene para este sitio y lo enseña. No escribe nada, ni en opencode ni en el
  * almacén. Sitio, host y cliente capturados antes del primer await (§8.22): la
  * lista es de ESE sitio y de ESE servidor.
+ *
+ * Con un testigo por llamada (`state.removeKeysPrep`, revisión adversaria de
+ * H19): sin él, «Cancelar» o cerrar Ajustes mientras volvían las lecturas no
+ * servían de nada —la confirmación reaparecía y se anunciaba, también en el
+ * chat con Ajustes cerrado—, y dos clics la anunciaban dos veces. Un clic con
+ * una preparación en vuelo, o con la confirmación ya abierta, no hace nada; al
+ * volver, sólo pinta si el testigo sigue siendo el suyo, nadie está quitando, el
+ * cliente y el sitio son los mismos y Ajustes sigue abierto. La salida que pinta
+ * deja el testigo puesto hasta `hideRemoveKeysConfirm`; las demás lo sueltan.
  */
 async function prepareRemoveKeys() {
   const decir = (texto) => {
     $('settings-status').textContent = texto
     announce(texto)
   }
+  if (state.removeKeysPrep) return
   if (!state.site?.host) {
     decir('Abre una página de Jira o Confluence del sitio cuyas claves quieres quitar.')
     return
@@ -8798,26 +8939,29 @@ async function prepareRemoveKeys() {
     decir('Faro no está conectado a opencode: arráncalo y vuelve a intentarlo.')
     return
   }
+  const testigo = {}
+  state.removeKeysPrep = testigo
   const saved = await getSite(host).catch(() => null)
+  // Los registros de todos los sitios, UNA vez: deciden qué hosts enlazados se
+  // quedan de verdad sin claves (`hostsEnlazadosDe`).
+  const sites = await getSites().catch(() => null)
   // La carpeta, para decir DÓNDE queda el esqueleto; y la configuración, con los
   // tokens de todos los MCP en claro: de ella sólo salen nombres y hosts.
   const rutas = await cliente.paths().catch(() => null)
   const config = await cliente.config().catch(() => null)
-  if (state.client !== cliente || (state.site?.host ?? state.lastHost) !== host) return
+  if (state.removeKeysPrep !== testigo || quitandoClaves || state.client !== cliente || (state.site?.host ?? state.lastHost) !== host || $('screen-settings').classList.contains('hidden')) {
+    if (state.removeKeysPrep === testigo) state.removeKeysPrep = null
+    return
+  }
   if (!configPlana(config)) {
+    state.removeKeysPrep = null
     decir(SIN_CONFIG_QUITAR)
     log.warn('Claves quitadas', 'sin quitar · configuración ilegible')
     return
   }
   const { propias, ajenas, noQuitables } = mcpScrubCandidates({ config, saved, host })
-  state.removeKeysPlan = {
-    host,
-    propias: propias.map((c) => c.name),
-    ajenas: ajenas.map((c) => c.name),
-    noQuitables: noQuitables.map((c) => c.name),
-    hostsEnlazados: enlazadosDe(saved, host),
-    carpeta: rutas?.config || '',
-  }
+  const hostsEnlazados = hostsEnlazadosDe({ saved, host, propias, ajenas, sites })
+  state.removeKeysPlan = planQuitar({ host, propias, ajenas, noQuitables, hostsEnlazados, carpeta: rutas?.config || '' })
   $('settings-status').textContent = ''
   paintRemoveKeysConfirm(rutas?.config || '')
 }
@@ -8827,8 +8971,10 @@ async function prepareRemoveKeys() {
  * escribe UN PATCH con el panel quieto, relee lo que opencode carga y sólo
  * entonces desmarca los registros del sitio y rearranca el panel, que llega a
  * la pantalla de claves por el camino normal (configured y skippedKeys a
- * false: `primeraVez`). Los desenlaces terminales se escriben y se anuncian
- * (`decir`, A2); el estado de paso («Quitando…») va a secas.
+ * false: `primeraVez`) o, si esa pantalla taparía algo —algo escrito en el
+ * cuadro—, a su aviso en el chat con «Cambiar las claves». Los desenlaces
+ * terminales se escriben y se anuncian (`decir`, A2); el estado de paso
+ * («Quitando…») va a secas.
  */
 async function removeKeys() {
   const decir = (texto) => {
@@ -8853,6 +8999,7 @@ async function removeKeys() {
   let hecho = false
   try {
     const saved = await getSite(host).catch(() => null)
+    const sites = await getSites().catch(() => null)
     const config = await cliente.config().catch(() => null)
     if (state.client !== cliente || (state.site?.host ?? state.lastHost) !== host) return
     if (!configPlana(config)) {
@@ -8865,21 +9012,21 @@ async function removeKeys() {
     // editado a mano). Si ya no es la que se confirmó —tampoco el host enlazado,
     // que el texto nombraba—, se repinta y no se escribe nada.
     const { propias, ajenas, noQuitables } = mcpScrubCandidates({ config, saved, host })
-    const hostsEnlazados = enlazadosDe(saved, host)
+    const hostsEnlazados = hostsEnlazadosDe({ saved, host, propias, ajenas, sites })
     if (!mismosNombres(propias, plan.propias) || !mismosNombres(ajenas, plan.ajenas) || !mismosNombres(hostsEnlazados, plan.hostsEnlazados)) {
-      state.removeKeysPlan = {
-        host,
-        propias: propias.map((c) => c.name),
-        ajenas: ajenas.map((c) => c.name),
-        noQuitables: noQuitables.map((c) => c.name),
-        hostsEnlazados,
-        carpeta: plan.carpeta,
-      }
+      state.removeKeysPlan = planQuitar({ host, propias, ajenas, noQuitables, hostsEnlazados, carpeta: plan.carpeta })
       paintRemoveKeysConfirm(plan.carpeta)
       decir('La configuración de opencode ha cambiado desde que abriste esta lista: revísala y vuelve a pulsar «Quitar».')
       return
     }
     const candidatas = [...propias, ...(conAjenas ? ajenas : [])]
+    // Una red: con sólo ajenas y la casilla sin marcar «Quitar» nace apagado
+    // (`paintRemoveKeysGo`), pero si el clic llega justo en el cambio se dice
+    // qué falta en vez de un «nada que quitar» que contradice la confirmación.
+    if (!candidatas.length && ajenas.length) {
+      decir(`Marca la casilla para quitar ${ajenas.map((c) => `«${c.name}»`).join(', ')}: no hay ninguna entrada de Faro que quitar.`)
+      return
+    }
     if (!candidatas.length) {
       decir('No hay nada que quitar.')
       return
@@ -8891,13 +9038,12 @@ async function removeKeys() {
       decir(ocupado)
       return
     }
-    // Lo que el MCP de este panel tenía en marcha deja de valer, con las MISMAS
-    // líneas que `saveKeys`; y además la espera de unas claves a medio guardar.
-    state.mcpCheck = null
-    soltarComprobandoMcp()
-    state.mcpPending = null
+    // Delante del PATCH, sólo lo que caduca pase lo que pase: la espera de unas
+    // claves a medio guardar, y las claves pendientes de verificar. Lo demás del
+    // MCP de este panel (su comprobación, «conectado») sigue siendo verdad si
+    // opencode rechaza la escritura, así que se invalida DETRÁS de un PATCH
+    // aceptado (revisión adversaria de H19).
     state.mcpWait?.abort()
-    state.mcpConnected = false
     state.pendingMcp = null
     $('settings-status').textContent = 'Quitando las claves de opencode…'
     const nombres = candidatas.map((c) => c.name).join(', ')
@@ -8916,6 +9062,13 @@ async function removeKeys() {
       )
       return
     }
+    // Aceptado: opencode ha rearrancado todos sus MCP (§7), y lo que el MCP de
+    // este panel tenía en marcha deja de valer, con las MISMAS líneas que
+    // `saveKeys` (la cabecera se suelta si decía «comprobando MCP…»).
+    state.mcpCheck = null
+    soltarComprobandoMcp()
+    state.mcpPending = null
+    state.mcpConnected = false
     // La relectura, ANTES de tocar el almacén: lo que opencode CARGA tiene que
     // ser lo escrito. Sin esto, con una configuración de proyecto delante el
     // sitio quedaría desmarcado con el MCP todavía cargado y con claves, y el
@@ -8928,9 +9081,12 @@ async function removeKeys() {
     if (!configPlana(despues)) {
       // Desvío razonado del contrato: `scrubEffective` sin configuración da
       // todo por pendiente, y decir «hay una configuración de proyecto delante»
-      // sería inventar la causa. Se dice lo que se sabe.
+      // sería inventar la causa. Se dice lo que se sabe. La confirmación sigue
+      // abierta, así que el remedio es su «Quitar». Y el MCP se vuelve a
+      // comprobar: el PATCH se aplicó y no se sabe cómo ha quedado.
       log.warn('Claves quitadas', `${r.names.join(', ')} · sin releer la configuración`)
-      decir('opencode ha aceptado la escritura, pero no he podido releer su configuración para comprobarla: Faro no da el sitio por desconfigurado. Vuelve a pulsar «Quitar las claves de este sitio».')
+      decir('opencode ha aceptado la escritura, pero no he podido releer su configuración para comprobarla: Faro no da el sitio por desconfigurado. Vuelve a pulsar «Quitar».')
+      relanzarComprobacionMcp(cliente, saved)
       return
     }
     const ef = scrubEffective(despues, r.names)
@@ -8940,18 +9096,37 @@ async function removeKeys() {
         `opencode ha aceptado la escritura, pero lo que carga no es lo escrito (${ef.pendientes.join(', ')} sigue con claves): hay una configuración de proyecto delante. ` +
           'Faro no da el sitio por desconfigurado; arranca opencode desde otra carpeta (tools\\arrancar-opencode.ps1 usa una propia) y vuelve a intentarlo.'
       )
+      // El MCP sigue cargado con sus claves: se vuelve a comprobar en vez de
+      // dejar el panel diciendo que no está conectado.
+      relanzarComprobacionMcp(cliente, saved)
       return
     }
-    // Sólo ahora, los registros: los del MCP quitado y los de este host y su
-    // enlazado, con el patch exacto de `unlinkRecords` (nada de índice,
-    // contexto, memoria ni diario: esto no es «Olvidar este sitio»).
-    const registros = unlinkRecords({ sites: await getSites(), names: r.names, hosts: [host, ...plan.hostsEnlazados] })
+    // Sólo ahora, los registros: el de este host siempre, los de sus enlazados
+    // que apuntan a lo quitado (o a nada) y los demás del MCP quitado, con el
+    // patch exacto de `unlinkRecords` (nada de índice, contexto, memoria ni
+    // diario: esto no es «Olvidar este sitio»; y `mcpName` se conserva).
+    const registros = unlinkRecords({ sites: await getSites(), names: r.names, host, linked: plan.hostsEnlazados })
     for (const { host: h, patch } of registros) await saveSite(h, patch)
     log.ok('Claves quitadas', `${r.names.join(', ')} · deshabilitadas sin claves · PATCH ${msPatch} ms · registros: ${registros.map((x) => x.host).join(', ') || 'ninguno'}`)
-    const ajenasSinMarcar = conAjenas ? [] : ajenas.map((c) => c.name)
-    if (ajenasSinMarcar.length) {
-      const varias = ajenasSinMarcar.length > 1
-      log.info('Claves quitadas', `${ajenasSinMarcar.join(', ')} se queda${varias ? 'n' : ''} habilitada${varias ? 's' : ''}: el sitio la${varias ? 's' : ''} seguirá adoptando`)
+    // Lo que la fusión profunda del PATCH deja en disco (variables de más o
+    // argumentos del comando): la confirmación ya lo decía, y el registro lo
+    // apunta de las que de verdad se mandaron. Sólo NOMBRES: qué guardan, no.
+    const conRestos = candidatas.filter((c) => c.restos === true).map((c) => c.name)
+    if (conRestos.length) {
+      log.warn('Claves quitadas', `${conRestos.join(', ')} · guarda${conRestos.length === 1 ? '' : 'n'} datos que Faro no sabe vaciar (variables de más o argumentos del comando)`)
+    }
+    // Las ajenas sin marcar: las habilitadas se seguirán adoptando; las ya
+    // deshabilitadas no (`mcpForHost` las salta), pero guardan claves en disco.
+    const sinMarcar = conAjenas ? [] : ajenas
+    const vivasSinMarcar = sinMarcar.filter((c) => c.enabled !== false).map((c) => c.name)
+    const apagadasSinMarcar = sinMarcar.filter((c) => c.enabled === false).map((c) => c.name)
+    if (vivasSinMarcar.length) {
+      const varias = vivasSinMarcar.length > 1
+      log.info('Claves quitadas', `${vivasSinMarcar.join(', ')} se queda${varias ? 'n' : ''} habilitada${varias ? 's' : ''}: el sitio la${varias ? 's' : ''} seguirá adoptando`)
+    }
+    if (apagadasSinMarcar.length) {
+      const varias = apagadasSinMarcar.length > 1
+      log.info('Claves quitadas', `${apagadasSinMarcar.join(', ')} sigue${varias ? 'n' : ''} deshabilitada${varias ? 's' : ''} con claves en disco`)
     }
     hideRemoveKeysConfirm()
     announce('Claves quitadas de opencode. Faro te las volverá a pedir.')
@@ -8962,9 +9137,10 @@ async function removeKeys() {
     paintRemoveKeysGo()
   }
   if (!hecho) return
-  // El rearranque llega a la pantalla de claves por el camino normal:
-  // `primeraVez` (configured y skippedKeys a false), y sin bucle porque
-  // `mcpForHost` salta la entrada deshabilitada.
+  // El rearranque llega a la pantalla de claves por el camino normal (o a su
+  // aviso en el chat, con la frase de la entrada deshabilitada, si la pantalla
+  // taparía algo): `primeraVez` (configured y skippedKeys a false), y sin bucle
+  // porque `mcpForHost` salta la entrada deshabilitada.
   await bootForSite()
 }
 

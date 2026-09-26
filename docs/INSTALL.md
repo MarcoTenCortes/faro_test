@@ -353,14 +353,22 @@ está configurado.
 Para cambiarlas o dejar de usar un sitio, **Ajustes → Este sitio → Quitar las
 claves de este sitio**. Va en dos pasos, y el primero no escribe nada: Faro lee
 lo que tu opencode tiene de verdad y te lo enseña debajo del botón —qué entradas
-de Faro va a deshabilitar; si tu Jira y tu Confluence comparten MCP, que el otro
-host también se queda sin claves; que afecta a **cualquier cliente de ese
-opencode**, la TUI incluida (opencode reinicia sus conexiones y una respuesta a
-medias en otra ventana se corta); y en qué carpeta queda el rastro—. Si ese
-dominio tiene además una entrada que **no escribió Faro** (pegada a mano, con
-Docker), sale con su propia casilla, desmarcada: sin marcarla se queda como
-está, y el sitio la seguirá adoptando. Una que Faro no sabe deshabilitar (un MCP
-remoto, por ejemplo) se nombra para que la quites a mano.
+de Faro va a deshabilitar; qué otro host (tu Jira o tu Confluence, si comparten
+MCP) se queda también sin claves porque usa esa misma entrada; que afecta a
+**cualquier cliente de ese opencode**, la TUI incluida (opencode reinicia sus
+conexiones y una respuesta a medias en otra ventana se corta); y en qué carpeta
+queda el rastro—. «De Faro» es por su comando (el `uvx` que escribe Faro), no
+por su nombre: una entrada que **no escribió Faro** (pegada a mano, con Docker)
+sale con su propia casilla, desmarcada, aunque Faro ya la estuviera usando. Sin
+marcarla se queda como está: si está habilitada, el sitio la seguirá adoptando;
+si ya estaba deshabilitada, no se adopta, pero guarda sus claves en disco y
+marcarla las vacía. Si sólo hay entradas de ésas, **Quitar** no se enciende
+hasta que marques la casilla. Una que Faro no sabe deshabilitar (un MCP remoto,
+o una con un nombre que Faro no puede escribir, como uno con espacios) se nombra
+o se cuenta para que la quites a mano. Y si alguna guarda algo que Faro no sabe
+vaciar —una variable que añadiste tú, como `JIRA_SSL_VERIFY`, o lo que lleve el
+comando de una entrada con Docker—, te lo dice aparte: eso se queda en el
+fichero y lo quitas a mano.
 
 Al pulsar **Quitar**, Faro vuelve a leer la configuración (si ha cambiado desde
 que abriste la lista, te la enseña otra vez y no escribe nada) y, con el panel
@@ -368,10 +376,12 @@ quieto, reescribe cada entrada **entera, deshabilitada y con sus diez variables
 vacías** en una sola escritura: opencode no deja borrar una entrada por su API, y
 un «deshabilitar» a secas dejaría los tokens en el fichero. Después comprueba que
 lo que opencode carga es eso y sólo entonces da el sitio por desconfigurado y te
-lleva a la pantalla de claves, que dice «El MCP «…» está deshabilitado y sin
-claves en opencode (es lo que deja «Quitar las claves»)…». En tu fichero queda
-esa entrada deshabilitada y sin claves: si vuelves a guardar las claves desde
-este mismo sitio, Faro la reutiliza.
+lleva a la pantalla de claves —o, si tenías algo escrito en el cuadro, a un
+aviso en el chat con **Cambiar las claves**—, que dice «El MCP «…» está
+deshabilitado y sin claves en opencode (es lo que deja «Quitar las claves»)…».
+En tu fichero queda esa entrada deshabilitada y sin claves: si vuelves a guardar
+las claves —desde este sitio o desde el que comparte su MCP—, Faro la
+reutiliza, con su comando.
 
 Si opencode no acepta la escritura, las claves siguen ahí y el panel te dice qué
 hacer a mano: en la carpeta de configuración, `"enabled": false` en esas
@@ -1162,9 +1172,11 @@ fichero sin el token, que un bloque pegado a mano se carga con «Ya lo he pegado
 sin reiniciar, que con el fichero roto no se escribe nada y el token no llega a
 ningún registro, que una ruta con espacios arranca, que opencode no carga
 ningún AGENTS.md ni CLAUDE.md, y dos de «Quitar las claves de este sitio» con
-las funciones de verdad del panel: que quitar la entrada de Faro y una que no es
-de Faro es UNA sola escritura, que las dos quedan deshabilitadas y sin el token
-en el fichero y que volver a guardar las claves reutiliza la entrada y conecta;
+las funciones de verdad del panel: que quitar dos entradas que no son de Faro
+—una de ellas bajo el nombre que el sitio tiene apuntado, porque «de Faro» es
+por su comando— es UNA sola escritura, que las dos quedan deshabilitadas y sin
+el token en el fichero y que volver a guardar las claves, con el registro que
+deja el panel, reutiliza la entrada y conecta;
 y que una entrada deshabilitada a mano no se adopta y guardar las claves la
 reutiliza. Sale con 1 si alguno falla. Al acabar, pase lo
 que pase, mata opencode y sus hijos y borra la carpeta temporal (`--conservar`
@@ -1346,9 +1358,12 @@ corto y un detalle. Todos los títulos, por dónde salen:
   configuración), «sin quitar · <código> · <tipo>» (no aceptó la escritura),
   «sin releer la configuración» (la aceptó pero no se pudo comprobar) o «la
   configuración que opencode carga no es la escrita» (una configuración de
-  proyecto delante). En gris, «espera cancelada» si te fuiste a otro sitio a
-  mitad, o las entradas que no son de Faro que dejaste sin marcar y que el sitio
-  seguirá adoptando. Nunca lleva el contenido del fichero ni ninguna clave.
+  proyecto delante); y, tras un quitar que sí salió, las entradas que guardan
+  datos que Faro no sabe vaciar (variables de más o argumentos del comando), que
+  tienes que quitar a mano. En gris, «espera cancelada» si te fuiste a otro sitio
+  a mitad, las entradas que no son de Faro que dejaste sin marcar y que el sitio
+  seguirá adoptando, o las que ya estaban deshabilitadas y siguen con claves en
+  disco. Nunca lleva el contenido del fichero ni ninguna clave.
 - «MCP verificado» — los tokens se comprobaron, con una línea por producto
   («Jira: … · Confluence: …»).
 - «Sitio enlazado» — el otro host (Jira o Confluence) comparte el MCP de
@@ -1872,7 +1887,7 @@ comprobación de las claves a medias. Espera a que termine y vuelve a pulsar. Y
 si el botón está apagado sin nada en marcha, es que falta marcar la casilla del
 permiso, justo encima. Lo mismo vale para **Quitar** en «Quitar las claves de
 este sitio»: también escribe en opencode, y además se apaga si no hay nada que
-quitar.
+quitar —con sólo entradas que no son de Faro, hasta que marques su casilla—.
 
 **Quité las claves y el sitio vuelve a quedar configurado**
 Ese dominio tiene otra entrada que no escribió Faro (pegada a mano, con Docker) y
@@ -1880,6 +1895,11 @@ la dejaste sin marcar: sigue habilitada con sus claves, y al arrancar Faro la
 vuelve a adoptar. Vuelve a **Quitar las claves de este sitio** y marca su
 casilla, o quítala tú del fichero. En el registro, «Claves quitadas» en gris la
 nombra.
+
+**Quité las claves y sale un aviso en el chat en vez de la pantalla de claves**
+Tenías algo escrito en el cuadro, y Faro no abre una pantalla encima de lo que
+estás escribiendo: el aviso dice lo mismo que la pantalla («El MCP «…» está
+deshabilitado y sin claves…») y su botón **Cambiar las claves** te lleva a ella.
 
 **«Quitar las claves»: «lo que carga no es lo escrito»**
 opencode aceptó la escritura, pero la entrada que carga sigue con claves: hay

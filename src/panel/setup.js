@@ -374,6 +374,25 @@ function commandEstandar(command) {
 }
 
 /**
+ * ¿Es éste un `command` que escribe Faro? (revisión adversaria de H19) Los dos
+ * de `commandEstandar` y, además, la ruta absoluta de uvx que el reintento de
+ * H18 puede dejar escrita, con uno de esos dos paquetes. No se copia ninguna
+ * regla: es EXACTAMENTE la lista blanca de la barrera, `validMcpCommand` SIN
+ * `known` (dos piezas; el paquete `mcp-atlassian` con o sin la versión fijada;
+ * `uvx` o una ruta absoluta de `uvx.exe` que ella da por buena), que es la que
+ * decide qué `command` puede escribir Faro por su cuenta. Sin `known` a
+ * propósito: con él, cualquier `command` que ya estuviera escrito pasaría, y
+ * es justo lo que hay que distinguir. Es lo que separa, al QUITAR las claves,
+ * la entrada de Faro de una que el sitio adoptó en H18 (docker, una ruta
+ * propia) aunque se llame como el `mcpName` guardado. `commandEstandar` no
+ * cambia: sigue diciendo si se puede PONER la ruta absoluta en el reintento, y
+ * sobre una que ya la lleva no. Pura.
+ */
+function commandDeFaro(command) {
+  return validMcpCommand(command)
+}
+
+/**
  * El `environment` de la entrada `name` tal como está en la configuración,
  * copiado ({} si no es un objeto plano). LLEVA TOKENS: sólo lo lee
  * `chooseWriteTarget` para que `mcpWritePatch` conserve el producto que el
@@ -738,12 +757,33 @@ export function mcpFailureHint(status) {
 
 /**
  * Una candidata a deshabilitar: la MISMA lectura que `resumenEntrada` +
- * `hostsDe`, sin `environment` (los tokens van ahí en claro y no salen de aquí).
- * Claves EXACTAS y en este orden: `name, enabled, command, type, timeout,
- * jiraHost, confluenceHost`.
+ * `hostsDe`, sin `environment` (los tokens van ahí en claro y no salen de aquí),
+ * más `restos` (revisión adversaria de H19). Claves EXACTAS y en este orden:
+ * `name, enabled, command, type, timeout, jiraHost, confluenceHost, restos`.
  */
 function candidataDe(name, entry) {
-  return { ...resumenEntrada(name, entry), ...hostsDe(entry) }
+  return { ...resumenEntrada(name, entry), ...hostsDe(entry), restos: tieneRestos(entry) }
+}
+
+/** Un argumento con forma CLAVE=valor, con el valor no vacío (`-e JIRA_PERSONAL_TOKEN=…` de docker). */
+const ARGUMENTO_CON_VALOR = /^[A-Za-z_][A-Za-z0-9_]*=./
+
+/**
+ * ¿Guarda la entrada datos que Faro no sabe vaciar? (revisión adversaria de
+ * H19) Quitar es reescribir la entrada con las diez `MCP_ENV_KEYS` a '', y el
+ * PATCH es una fusión profunda que NO quita claves (§7): una variable FUERA de
+ * las diez con valor (un `*_SSL_VERIFY`, un secreto OAuth en un bloque pegado a
+ * mano) se queda en el fichero, y el `command` se conserva byte a byte (un
+ * `-e JIRA_PERSONAL_TOKEN=…` de docker también). Pase en una propia o en una
+ * ajena, la confirmación lo tiene que decir en vez de prometer «sin claves». Es
+ * un BOOLEANO a propósito: ni el nombre de la variable ni su valor, ni el
+ * argumento, salen de aquí. Pura.
+ */
+function tieneRestos(entry) {
+  const env = plano(entry?.environment) ? entry.environment : {}
+  const deMas = Object.keys(env).some((k) => !MCP_ENV_KEYS.includes(k) && typeof env[k] === 'string' && env[k] !== '')
+  const enLinea = Array.isArray(entry?.command) && entry.command.some((a) => typeof a === 'string' && ARGUMENTO_CON_VALOR.test(a))
+  return deMas || enLinea
 }
 
 /**
@@ -760,12 +800,19 @@ function candidataDe(name, entry) {
  * `saved.mcpName` aunque ya no lleve el dominio (es la que el sitio tiene
  * apuntada). Sin repetir y en el orden de la configuración.
  *
- * - `propias`: las de Faro, por su NOMBRE (el `mcpName` guardado, si tiene
- *   forma de nombre, o el `mcpNameForHost` de alguno de los hosts mirados). Se
- *   quitan siempre.
- * - `ajenas`: el resto de candidatas (un bloque pegado a mano, uno con docker):
- *   las escribió otro, y el panel sólo las quita con una casilla aparte. Si no
- *   se quitan, `mcpForHost` las seguirá adoptando.
+ * - `propias`: las de Faro. Lo son por el `mcpNameForHost` de alguno de los
+ *   hosts mirados (el esqueleto de Faro), o por el `mcpName` guardado SÓLO si
+ *   además lleva un `command` de Faro (`commandDeFaro`: uvx con o sin la versión
+ *   fijada, o la ruta absoluta de uvx del reintento de H18). Se quitan siempre.
+ *   Por qué no basta el nombre guardado (revisión adversaria de H19): desde
+ *   H18 la adopción de `checkMcp` apunta en `saved.mcpName` la entrada que
+ *   encuentra CONECTADA para el dominio, venga de donde venga, así que una
+ *   docker o un bloque pegado a mano lleva el nombre guardado y no es de Faro:
+ *   se quitaba sin la casilla que README e INSTALL prometen.
+ * - `ajenas`: el resto de candidatas (un bloque pegado a mano, uno con docker,
+ *   también el adoptado bajo el nombre guardado): las escribió otro, y el panel
+ *   sólo las quita con una casilla aparte. Si no se quitan y están habilitadas,
+ *   `mcpForHost` las seguirá adoptando.
  * - `noQuitables`: las que `mcpScrubPatch` no sabe deshabilitar (una remota, un
  *   `command` que no es una lista de cadenas limpias, un nombre que no se puede
  *   escribir): se LISTAN para decirlo y no salen en las otras dos, porque una
@@ -797,7 +844,7 @@ export function mcpScrubCandidates({ config = null, saved = null, host = '' } = 
     if (!porDominio && !porNombre) continue
     const c = candidataDe(name, entry)
     if (!mcpScrubPatch(c)) out.noQuitables.push(c)
-    else if (porNombre || deFaro.includes(name)) out.propias.push(c)
+    else if (deFaro.includes(name) || (porNombre && commandDeFaro(c.command))) out.propias.push(c)
     else out.ajenas.push(c)
   }
   return out
@@ -864,33 +911,51 @@ export function scrubEffective(config, names) {
 
 /**
  * Los registros del sitio que dejan de estar configurados al quitar las claves
- * (H19): CADA registro de `sites` (en su orden) cuyo `mcpName` esté entre los
- * quitados, o cuyo host esté en `hosts` (sin distinguir mayúsculas: el de la
- * pestaña y sus enlazados). El `patch` es EXACTAMENTE `{configured: false,
- * mcpName: '', skippedKeys: false, jiraHost: '', confluenceHost: ''}`: deja el
- * sitio como antes de configurarlo, así que el arranque vuelve a la pantalla de
- * claves por el camino normal. NO toca `onboarded`, `indexedAt`, la Skill, el
- * contexto ni nada más: esto no es «Olvidar este sitio». No muta lo que recibe.
- * Pura.
+ * (H19, y su revisión adversaria), CADA uno de `sites` en su orden:
  *
- * @param {{sites: Record<string, object>|null, names: string[], hosts: string[]}} input
+ * - el de `host` (la pestaña), SIEMPRE, apunte a lo que apunte: es el sitio
+ *   desde el que se han quitado;
+ * - el de un host de `linked` (sus enlazados) sólo si su `mcpName` es '' (o no
+ *   hay) o está entre los quitados: un enlazado cuyo registro apunta a OTRO MCP
+ *   no ha perdido nada, y desmarcarlo hacía que su siguiente arranque adoptara
+ *   su MCP como «sin comprobar» con unas claves que sí estaban comprobadas;
+ * - cualquier otro, por nombre (`mcpName` entre los quitados).
+ *
+ * Los hosts se comparan sin distinguir mayúsculas. El `patch` es EXACTAMENTE
+ * `{configured: false, skippedKeys: false, jiraHost: '', confluenceHost: ''}`,
+ * y `mcpName` se CONSERVA a propósito (revisión adversaria de H19): tras
+ * quitar, el esqueleto deshabilitado lleva las URL vacías y ya no se encuentra
+ * por dominio, así que es el nombre apuntado lo que hace que `chooseWriteTarget`
+ * lo reutilice al volver a guardar desde CUALQUIER host de ese MCP (el enlazado
+ * de un Data Center, o una entrada adoptada con nombre propio, con su `command`
+ * conservado por `known`) y que `chosenMcpName` lo mire para que la pantalla de
+ * claves diga la frase «disabled». Con `mcpName: ''` sólo se reutilizaba desde
+ * el host cuyo `mcpNameForHost` era su nombre, y desde los demás se creaba una
+ * entrada nueva y el esqueleto quedaba huérfano. `configured: false` y
+ * `skippedKeys: false` bastan para que el arranque vuelva a la pantalla de
+ * claves, y `mcpForHost` no adopta la entrada deshabilitada (sin bucle). NO toca
+ * `onboarded`, `indexedAt`, la Skill, el contexto ni nada más: esto no es
+ * «Olvidar este sitio». No muta lo que recibe. Pura.
+ *
+ * @param {{sites: Record<string, object>|null, names: string[], host: string, linked: string[]}} input
  * @returns {Array<{host: string, patch: object}>}
  */
-export function unlinkRecords({ sites = null, names = [], hosts = [] } = {}) {
+export function unlinkRecords({ sites = null, names = [], host = '', linked = [] } = {}) {
   if (!plano(sites)) return []
   const nombres = new Set((Array.isArray(names) ? names : []).filter((n) => typeof n === 'string' && n !== ''))
-  const conHost = new Set(
-    (Array.isArray(hosts) ? hosts : [])
-      .filter((h) => typeof h === 'string' && h.trim() !== '')
-      .map((h) => h.trim().toLowerCase())
-  )
+  const minusculas = (h) => (typeof h === 'string' ? h.trim().toLowerCase() : '')
+  const pestana = minusculas(host)
+  const enlazados = new Set((Array.isArray(linked) ? linked : []).map(minusculas).filter(Boolean))
   const out = []
-  for (const host of Object.keys(sites)) {
-    const r = sites[host]
-    const porNombre = plano(r) && typeof r.mcpName === 'string' && nombres.has(r.mcpName)
-    const porHost = conHost.has(host.toLowerCase())
-    if (!porNombre && !porHost) continue
-    out.push({ host, patch: { configured: false, mcpName: '', skippedKeys: false, jiraHost: '', confluenceHost: '' } })
+  for (const h of Object.keys(sites)) {
+    const r = sites[h]
+    const apuntado = plano(r) && typeof r.mcpName === 'string' ? r.mcpName : ''
+    const porNombre = apuntado !== '' && nombres.has(apuntado)
+    const clave = h.toLowerCase()
+    const porPestana = pestana !== '' && clave === pestana
+    const porEnlace = enlazados.has(clave) && (apuntado === '' || nombres.has(apuntado))
+    if (!porNombre && !porPestana && !porEnlace) continue
+    out.push({ host: h, patch: { configured: false, skippedKeys: false, jiraHost: '', confluenceHost: '' } })
   }
   return out
 }
@@ -960,40 +1025,98 @@ function unaLineaLimpia(texto) {
  *
  * Desvío anotado del contrato: el de `noQuitables` concuerda en plural («no se
  * pueden… quítalas») cuando son varias; con una es el texto del contrato letra
- * a letra.
+ * a letra. Y, desde la revisión adversaria de H19, la principal con sólo
+ * ajenas también («que no son de Faro»).
+ *
+ * De la revisión adversaria de H19, además:
+ * - un CUARTO texto, `restos` (`conRestos`: los nombres, o las candidatas, que
+ *   guardan datos que Faro no sabe vaciar, `tieneRestos`): dice cuáles, sin
+ *   decir QUÉ guardan, y dónde quitarlos a mano;
+ * - los `noQuitables` con un nombre que no se puede escribir (con un espacio,
+ *   pegado a mano) no se imprimen pero se CUENTAN y se dicen: omitirlos dejaba
+ *   la confirmación diciendo que el sitio no tenía nada mientras `mcpForHost`
+ *   seguía adoptando esa entrada con su token. Sólo cuenta lo que trae un
+ *   nombre (una cadena no vacía, o una candidata con él); `null` o `7` no son
+ *   una entrada. Sin propias ni ajenas pero con algo no quitable, la principal
+ *   dice que HAY claves que Faro no puede quitar, en vez de que no hay ninguna;
+ *   y la frase de los omitidos empieza por «Hay…» cuando va sola y por «Y…»
+ *   cuando sigue a la de los nombres válidos;
+ * - las ajenas ya deshabilitadas (`ajenasApagadas`, que tienen que estar
+ *   también entre las `ajenas`) tienen su propia frase: `mcpForHost` salta las
+ *   `enabled: false`, así que «el sitio la seguirá adoptando» era falso, y lo
+ *   que de verdad pasa es que guardan claves en disco;
+ * - el host enlazado ya no lleva «(enlazado)»: se dice que usa esa misma
+ *   entrada, que es la razón de que se quede sin claves.
  */
-export function scrubConfirmText({ propias = [], ajenas = [], noQuitables = [], hostsEnlazados = [], carpeta = '' } = {}) {
+export function scrubConfirmText({ propias = [], ajenas = [], noQuitables = [], hostsEnlazados = [], carpeta = '', ajenasApagadas = [], conRestos = [] } = {}) {
   const limpios = (lista) => (Array.isArray(lista) ? lista.map(nombreImprimible).filter(Boolean) : [])
+  const conNombre = (x) => (typeof x === 'string' ? x !== '' : plano(x) && typeof x.name === 'string' && x.name !== '')
   const p = limpios(propias)
   const a = limpios(ajenas)
   const n = limpios(noQuitables)
+  const omitidos = (Array.isArray(noQuitables) ? noQuitables : []).filter((x) => conNombre(x) && !nombreImprimible(x)).length
+  const apagadas = new Set(limpios(ajenasApagadas))
+  const aVivas = a.filter((x) => !apagadas.has(x))
+  const aApagadas = a.filter((x) => apagadas.has(x))
+  const r = limpios(conRestos)
   const hosts = (Array.isArray(hostsEnlazados) ? hostsEnlazados : []).filter((h) => typeof h === 'string' && FORMA_DE_HOST.test(h))
   const dir = unaLineaLimpia(typeof carpeta === 'string' ? carpeta : '')
+  const donde = dir || 'la carpeta de configuración de opencode'
   const cita = (lista) => lista.map((x) => `«${x}»`).join(', ')
+  const uno = (lista) => lista.length === 1
 
   let principal
   if (p.length) {
     principal =
       `Se deshabilitarán en la configuración de opencode, sin claves: ${cita(p)}.` +
-      (hosts.length ? ` También deja sin claves ${hosts.join(' y ')} (enlazado).` : '') +
+      (hosts.length ? ` También deja sin claves ${hosts.join(' y ')}, que usa${uno(hosts) ? '' : 'n'} esa misma entrada.` : '') +
       ' Afecta a cualquier cliente de este opencode, la TUI incluida: opencode reinicia sus conexiones y una respuesta a medias en otra ventana se corta.' +
-      ` Queda una entrada deshabilitada y sin claves en ${dir || 'la carpeta de configuración de opencode'} (no hay borrado por la API), que Faro reutiliza al volver a guardarlas. Después te volverá a pedir las claves.`
+      ` Queda una entrada deshabilitada y sin claves en ${donde} (no hay borrado por la API), que Faro reutiliza al volver a guardarlas. Después te volverá a pedir las claves.`
   } else if (a.length) {
-    principal = `Este sitio no tiene ninguna entrada de Faro en opencode; sólo ${cita(a)}, que no es de Faro.`
+    principal = `Este sitio no tiene ninguna entrada de Faro en opencode; sólo ${cita(a)}, que no ${uno(a) ? 'es' : 'son'} de Faro.`
+  } else if (n.length || omitidos) {
+    principal = 'Este sitio tiene claves en la configuración de opencode que Faro no puede quitar desde aquí.'
   } else {
     principal = 'Este sitio no tiene claves en la configuración de opencode que quitar.'
   }
 
-  const textoAjenas = a.length
-    ? `También ${cita(a)}, que no ${a.length === 1 ? 'es' : 'son'} de Faro. Si no lo marcas, el sitio ${a.length === 1 ? 'la' : 'las'} seguirá adoptando y volverá a quedar configurado.`
-    : ''
-  const textoNo = n.length
-    ? n.length === 1
-      ? `${cita(n)} no se puede deshabilitar desde aquí (no es un MCP local de la forma que Faro escribe): quítala a mano.`
-      : `${cita(n)} no se pueden deshabilitar desde aquí (no son MCP locales de la forma que Faro escribe): quítalas a mano.`
+  const partesAjenas = []
+  if (aVivas.length) {
+    partesAjenas.push(
+      `También ${cita(aVivas)}, que no ${uno(aVivas) ? 'es' : 'son'} de Faro. Si no lo marcas, el sitio ${uno(aVivas) ? 'la' : 'las'} seguirá adoptando y volverá a quedar configurado.`
+    )
+  }
+  if (aApagadas.length) {
+    const s = uno(aApagadas) ? '' : 's'
+    const pl = uno(aApagadas) ? '' : 'n'
+    partesAjenas.push(
+      `También ${cita(aApagadas)}, que no ${uno(aApagadas) ? 'es' : 'son'} de Faro: está${pl} deshabilitada${s} pero guarda${pl} claves en disco; márcala${s} para vaciarla${s}.`
+    )
+  }
+
+  const partesNo = []
+  if (n.length) {
+    partesNo.push(
+      uno(n)
+        ? `${cita(n)} no se puede deshabilitar desde aquí (no es un MCP local de la forma que Faro escribe): quítala a mano.`
+        : `${cita(n)} no se pueden deshabilitar desde aquí (no son MCP locales de la forma que Faro escribe): quítalas a mano.`
+    )
+  }
+  if (omitidos) {
+    const s = omitidos === 1 ? '' : 's'
+    partesNo.push(`${n.length ? 'Y' : 'Hay'} ${omitidos} entrada${s} con un nombre que Faro no puede escribir: quítala${s} a mano en ${donde}.`)
+  }
+
+  const textoRestos = r.length
+    ? `${cita(r)} guarda${uno(r) ? '' : 'n'} además datos que Faro no sabe vaciar (variables de más o argumentos de su comando): quítalos a mano en ${donde}.`
     : ''
 
-  return { principal: unaLineaLimpia(principal), ajenas: unaLineaLimpia(textoAjenas), noQuitables: unaLineaLimpia(textoNo) }
+  return {
+    principal: unaLineaLimpia(principal),
+    ajenas: unaLineaLimpia(partesAjenas.join(' ')),
+    noQuitables: unaLineaLimpia(partesNo.join(' ')),
+    restos: unaLineaLimpia(textoRestos),
+  }
 }
 
 /** Los nombres del fichero global de opencode, en el orden en que los busca. */

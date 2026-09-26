@@ -385,7 +385,9 @@ puede escribir Faro en la configuración de opencode (§5, §8.24).
   una entrada nueva a su lado. Sólo una entrada NUEVA lleva el `command`
   estándar. Tras «Quitar las claves» las URL quedan vacías y el esqueleto no
   se encuentra por dominio: se recrea bajo `mcpNameForHost`, que es la misma
-  clave, y la fusión lo vuelve a habilitar (el sandbox de H19 prueba el ciclo
+  clave —desde la revisión adversaria de H19, por el `mcpName` que el registro
+  conserva, así que también desde el host enlazado o con una entrada de nombre
+  propio—, y la fusión lo vuelve a habilitar (el sandbox de H19 prueba el ciclo
   quitar → crear → connected, y también «deshabilitada a mano con sus URL →
   Cambiar las claves → connected»). La opción `sensitive` de `request` hace
   que ni `OpencodeError.body` ni el registro lleven el cuerpo (hoy
@@ -465,7 +467,13 @@ puede escribir Faro en la configuración de opencode (§5, §8.24).
   (no es «Olvidar este sitio», que sigue sin tocar opencode); invalidar
   `mcpCheck`/`mcpWait`/`pendingMcp` y `bootForSite()`, que llega a la
   pantalla de claves por el camino normal sin bucle. Queda un esqueleto
-  deshabilitado en `opencode.json`, y se dice.
+  deshabilitado en `opencode.json`, y se dice. (Desde la revisión adversaria de
+  H19, `mcpName` se conserva: tras quitar, el esqueleto ya no lleva el dominio,
+  y es ese nombre lo que hace que se reutilice desde cualquier host del MCP y
+  que la pantalla de claves lo vea «disabled»; el registro de un host enlazado
+  sólo se desmarca si no apunta a ningún MCP o apunta al quitado; y bajo
+  `saved.mcpName` una entrada es de Faro sólo si su `command` es el de Faro:
+  lo adoptado con docker o pegado a mano va con la casilla de las ajenas.)
 - **Integración GRATIS** (sin modelo): `tools/config-sandbox.mjs`, fuera de
   `npm run check` y de `test:integration` como `bench` y `contrast`, arranca
   `opencode serve` con el HOME entero redirigido (el `start-iso.ps1` del
@@ -1305,7 +1313,20 @@ Reglas transversales, que salen de los dos juicios y valen para todos:
   cuyo nombre de Faro lleva. Sin verificar: nada en la extensión cargada ni
   medido en el espejo; en real con Marco, su `opencode.json` con la entrada
   deshabilitada y sin tokens y la pantalla de claves otra vez. La bitácora, en
-  CLAUDE.md §12.5.
+  CLAUDE.md §12.5. Revisión adversaria aplicada el 2026-09-26: 25 confirmados
+  (10 medios; el mayor, que tras quitar el esqueleto sólo se reutilizaba desde
+  el host de su nombre y la pantalla de claves no decía «disabled» desde el
+  enlazado ni con una entrada de nombre propio) y 1 refutado; `mcpName` se
+  conserva al quitar (desvío de §3.2), lo adoptado con otro `command` es ajena,
+  lo que Faro no sabe vaciar se dice (`restos`), los no quitables de nombre raro
+  se cuentan, la casilla manda en «Quitar», un PATCH rechazado no da el MCP por
+  caído (y donde se aplicó sin desconfigurar el sitio se vuelve a comprobar), la
+  preparación lleva testigo, la frase «disabled» sale también en el aviso del
+  chat, los enlazados de otro MCP no se desmarcan, las ajenas ya deshabilitadas
+  tienen su frase, y los pines son de cuerpos enteros (las 30 mutaciones vivas
+  del panel caen); el espejo SÍ estaba medido (16 combinaciones en verde);
+  1431 pruebas; el sandbox, 9/9 tres veces con el registro que deja el panel;
+  el detalle en CLAUDE.md §12.5.
 
 ### H20 · Verificación en real del primer uso con un compañero
 

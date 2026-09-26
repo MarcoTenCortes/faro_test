@@ -251,14 +251,19 @@ qué va a deshabilitar —las entradas de Faro de ese sitio, y si tu Jira y tu
 Confluence comparten MCP, que el otro también se queda sin claves—, que afecta a
 cualquier cliente de ese opencode (la TUI incluida: se cortan las respuestas a
 medias) y dónde queda el rastro; una entrada que no escribió Faro (pegada a mano,
-con Docker) sólo se quita si marcas su casilla. Al pulsar **Quitar**, opencode no
-permite borrar una entrada por su API, así que Faro la reescribe **entera,
-deshabilitada y con las variables vacías** —sin un solo token— en una única
+con Docker) sólo se quita si marcas su casilla —también si Faro ya la estaba
+usando: lo que la hace «de Faro» es su comando, no su nombre—, y si sólo hay de
+ésas, **Quitar** no se enciende hasta que la marques. Al pulsar **Quitar**,
+opencode no permite borrar una entrada por su API, así que Faro la reescribe
+**entera, deshabilitada y con las diez variables de Faro vacías** en una única
 escritura, comprueba que lo que opencode carga es eso y sólo entonces da el
-sitio por desconfigurado y te vuelve a pedir las claves. En el fichero queda una
-entrada deshabilitada y sin claves, que Faro reutiliza si las vuelves a
-guardar. **«Olvidar este sitio»**, en cambio, borra lo que Faro guarda en el
-navegador y no toca la configuración de opencode.
+sitio por desconfigurado y te vuelve a pedir las claves. Si la entrada guarda
+algo más que Faro no sabe vaciar —una variable que añadiste tú, o lo que lleve
+el comando de una entrada con Docker—, te lo dice para que lo quites a mano: se
+queda en el fichero, deshabilitada y sin cargar. En el fichero queda una entrada
+deshabilitada y sin claves, que Faro reutiliza si las vuelves a guardar, desde
+ese sitio o desde el que comparte su MCP. **«Olvidar este sitio»**, en cambio,
+borra lo que Faro guarda en el navegador y no toca la configuración de opencode.
 
 Sólo si opencode no acepta la escritura —su fichero tiene un error de sintaxis,
 o una clave que no conoce— Faro te dice por qué y te deja el bloque de siempre
@@ -693,7 +698,7 @@ cuáles no), que desde H16 son tuyos y no de un sitio.
 ## Comprobaciones
 
 ```bash
-npm run check              # sintaxis + orden + manifest + 1425 pruebas unitarias + docs
+npm run check              # sintaxis + orden + manifest + 1431 pruebas unitarias + docs
 npm run check:docs         # sólo el paso docs: número de pruebas, títulos del registro, mensajes y ficheros del mapa
 npm run test:integration   # contra un opencode real que arranca la propia prueba
 npm run harness            # banco de pruebas visual en http://127.0.0.1:5175
@@ -1068,7 +1073,10 @@ Quitarlas («Quitar las claves de este sitio») pasa por la misma puerta y la
 misma barrera: la entrada **entera**, deshabilitada y con sus diez variables
 vacías —nunca un «deshabilitar» a secas, que dejaría los tokens en el
 fichero—, con su comando conservado tal cual, todas en una sola escritura; y
-las entradas que no escribió Faro, sólo si marcas su casilla.
+las entradas que no escribió Faro —«de Faro» es por su comando, no por su
+nombre—, sólo si marcas su casilla. Lo que Faro no sabe vaciar (una variable de
+más, los argumentos del comando de una entrada con Docker) se dice, sin copiar
+su valor, para que lo quites a mano.
 
 **Y el modelo no puede tocar tu máquina.** El agente por defecto de opencode
 trae herramientas de shell y de ficheros, y las usa: comprobado, ejecutaba

@@ -419,11 +419,14 @@
     <!-- H19: la confirmación en línea de «Quitar las claves de este sitio».
          Nace oculta; la rellena el panel con lo que opencode tiene de verdad
          (qué se deshabilita, el host enlazado, las entradas que no son de
-         Faro con su casilla y las que no se pueden quitar desde aquí). -->
+         Faro con su casilla, las que no se pueden quitar desde aquí y, desde la
+         revisión adversaria de H19, lo que Faro no sabe vaciar y hay que quitar
+         a mano en #remove-keys-leftovers). -->
     <div class="field hidden" id="remove-keys-confirm">
       <p class="fine" id="remove-keys-text"></p>
       <label class="check hidden" id="remove-keys-foreign-field"><input type="checkbox" id="remove-keys-foreign"> <span id="remove-keys-foreign-text"></span></label>
       <p class="fine hidden" id="remove-keys-unremovable"></p>
+      <p class="fine hidden" id="remove-keys-leftovers"></p>
       <div class="row wrap">
         <button class="ghost danger needs-idle" id="btn-remove-keys-go" type="button">Quitar</button>
         <button class="ghost" id="btn-remove-keys-cancel" type="button">Cancelar</button>
