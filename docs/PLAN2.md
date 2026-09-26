@@ -1240,7 +1240,14 @@ Reglas transversales, que salen de los dos juicios y valen para todos:
   nada con mcp-atlassian de verdad tras el PATCH, «Cambiar las claves» con el
   opencode de Marco (con copia del fichero), la ruta absoluta de uvx con un
   compañero, y el «Instructions from:» con un turno real (sin permiso de gasto).
-  La bitácora, en CLAUDE.md §12.5.
+  La bitácora, en CLAUDE.md §12.5. Revisión adversaria aplicada el 2026-09-26:
+  7 confirmados (1 alto: en Data Center, «Cambiar las claves» desde el host
+  enlazado vaciaba las variables del otro producto en la entrada compartida, y
+  ahora se conservan) y 3 refutados; además, el nombre que ya existe se
+  reutiliza sin pisar su `command`, sin la configuración no se escribe, la
+  vuelta atrás del reintento es incondicional, `verified` se decide host a
+  host, la cabecera suelta «comprobando MCP…» y los desenlaces se anuncian;
+  1416 pruebas; el detalle en CLAUDE.md §12.5.
 
 ### H19 · «Quitar las claves de este sitio»
 

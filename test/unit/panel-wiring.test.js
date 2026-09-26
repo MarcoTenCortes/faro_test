@@ -3928,7 +3928,14 @@ test('H14 P5: el chat no espera al MCP, y lo que la comprobación decide llega d
   assert(/^async function onMcpResult\(r, vigente\)/m.test(tarde), 'el resultado llega con la promesa que el panel tenía como suya')
   assert(/if \(state\.mcpCheck !== vigente\) return/.test(tarde), 'lo de una comprobación que ya no es la del panel no pinta nada')
   assert(!/state\.bootToken/.test(tarde), 'y el testigo del arranque no se mira: apagarlo no es cancelar la comprobación')
-  assert(/if \(state\.statusLine === COMPROBANDO_MCP\) \{/.test(tarde), 'la cabecera sólo se devuelve si el texto sigue siendo el suyo')
+  // Desde la revisión adversaria de H18 la cabecera se suelta en
+  // `soltarComprobandoMcp`, y ANTES de la guarda: una comprobación invalidada
+  // también ha terminado.
+  assert(/soltarComprobandoMcp\(\)\s*\n\s*if \(state\.mcpCheck !== vigente\) return/.test(tarde), 'la cabecera se devuelve antes de mirar si la comprobación sigue valiendo')
+  assert(
+    /function soltarComprobandoMcp\(\) \{\s*\n\s*if \(state\.statusLine === COMPROBANDO_MCP\) \{/.test(sinComentarios(JS)),
+    'la cabecera sólo se devuelve si el texto sigue siendo el suyo'
+  )
   assert(/state\.mcpPending = \{ host: r\.host, status: r\.status \}/.test(tarde) && /showMcpPending\(\)/.test(tarde), 'lo que falta se apunta con su host y se enseña si se puede ya')
   assert(!/showMcpSetup\(/.test(tarde) && !/attachMcpNotice\(/.test(tarde), 'y no se pinta desde aquí: sólo por showMcpPending, que sabe cuándo se puede')
   assert(/if \(r\.enlaceNuevo\) \{/.test(tarde) && /await loadLinkedContext\(r\.saved\)/.test(tarde), 'y un host enlazado descubierto tarde se lee al saberlo')
@@ -5200,7 +5207,10 @@ test('H18: las claves se escriben por la API de opencode, con consentimiento, co
 
   // (5) El reintento con la ruta absoluta de uvx: sólo una entrada NUEVA que
   // cayó al instante, y si no conecta, vuelta atrás al command estándar.
-  assert(guardar.includes('const creada = result.reuse === false'), 'creada = la escribió Faro ahora, no una que ya estaba')
+  // Desde la revisión adversaria de H18, también una reutilizada con el command
+  // estándar de Faro (`result.standard`); la línea entera se pina en «H18
+  // revisión: los cuerpos que deciden en saveKeys…».
+  assert(guardar.includes('const creada = result.reuse === false || result.standard === true'), 'creada = la escribió Faro ahora, o es suya con el command estándar')
   assert(
     guardar.includes('arrancarMcp({ cliente, host, name: result.name, espera, primero: aparecida.status, vigilarCaida: creada })'),
     'la caída sólo se vigila en una entrada creada'
@@ -5211,9 +5221,9 @@ test('H18: las claves se escriben por la API de opencode, con consentimiento, co
     [
       'const conRuta = uvxAbsoluteCommand(rutas)',
       'if (conRuta) {',
+      'let rutaEscrita = false',
       'configureMcp(cliente, { host, jira, confluence, dataCenter, saved, config: configAntes, command: conRuta })',
-      'if (arranque.status.connected) {',
-      '} else {',
+      '} finally {',
       'const vuelta = await configureMcp(cliente, { host, jira, confluence, dataCenter, saved, config: configAntes })',
     ],
     'la ruta absoluta (validada por UVX_ABS_PATH dentro de uvxAbsoluteCommand) y la vuelta atrás'
@@ -5291,7 +5301,7 @@ test('H18: las claves se escriben por la API de opencode, con consentimiento, co
   const adoptar = corte(JS_SIN, 'async function comprobarClavesAdoptadas(', '\n}\n')
   const region = claves + adoptar
   const PERMITIDAS = {
-    result: ['ok', 'status', 'kind', 'name', 'block', 'reuse'],
+    result: ['ok', 'status', 'kind', 'name', 'block', 'reuse', 'standard'],
     reintento: ['ok'],
     vuelta: ['ok', 'kind', 'status'],
     recarga: ['ok', 'status', 'kind'],
@@ -5323,14 +5333,22 @@ test('H18: las claves se escriben por la API de opencode, con consentimiento, co
 
   // (10) Escribir ≠ verificar, y la adopción sin verificar.
   const comprobar = corte(JS_SIN, 'async function checkMcp(', 'function mcpResultSoon(')
-  assert(
-    comprobar.includes('const mismoYaProbado = !!saved?.configured && saved?.mcpName === found.name && !keysUnverified(saved)'),
-    'sólo lo ya probado del MISMO MCP se conserva'
-  )
+  // Desde la revisión adversaria de H18, lo ya probado se decide HOST A HOST
+  // (`adoptionRecords`, en setup.js) y no con el registro del de la pestaña.
+  assert(!/mismoYaProbado/.test(JS_SIN), 'ya no hay un «mismoYaProbado» que decida por todos los hosts')
   orden(
     comprobar,
-    ['const registros = siteRecords({', 'verified: mismoYaProbado,', 'for (const registro of registros) await saveSite(registro.host, registro.patch)', "if (!mismoYaProbado) log.warn('Claves sin comprobar'"],
-    'la adopción escribe verified y lo dice'
+    [
+      'const registros = adoptionRecords({',
+      'registros: siteRecords({',
+      'verified: false,',
+      'sites: await getSites(),',
+      'mcpName: found.name,',
+      'for (const registro of registros) await saveSite(registro.host, registro.patch)',
+      'const sinProbar = registros.filter((registro) => keysUnverified(registro.patch)).map((registro) => registro.host)',
+      "if (sinProbar.length) log.warn('Claves sin comprobar', `${sinProbar.join(', ')} · ${found.name}: adoptado sin probar ningún token`)",
+    ],
+    'la adopción decide verified por host con lo guardado de cada uno, y dice cuáles quedan sin probar'
   )
   const fin = corte(JS_SIN, 'async function finishSetup(', 'function paintSnippet(')
   assert(!/configureMcp\(|updateMcpEntries\(|reloadGlobalConfig\(/.test(fin), 'finishSetup verifica y NO escribe en opencode')
@@ -5420,4 +5438,249 @@ test('H18: las claves se escriben por la API de opencode, con consentimiento, co
   const cajas = corte(espejo, 'const CAJAS = [', 'function check()')
   for (const caja of ["'#setup-consent'", "'#setup-consent .check'", "'#setup-manual-why'"]) assert(cajas.includes(caja), 'check() mide ' + caja + ' a lo ancho')
   assert(/setClaves\(k\) \{/.test(espejo), 'y el mando para ponerlo desde fuera')
+})
+
+test('H18 revisión: los cuerpos que deciden en saveKeys, no sólo sus literales', () => {
+  // Los pines de H18 eran presencia y orden de literales, y once mutaciones que
+  // anulaban una barrera CONSERVANDO el literal pasaban en verde (un
+  // `if (state.site) return true` delante del consentimiento, un
+  // `reconfiguring() && !escribiendoClaves`, un `state.mcpCheck = null ||
+  // state.mcpCheck`, un `sigue = () => true`, una guarda de §8.22 borrada…).
+  // Aquí se pinan los CUERPOS con igualdad y las líneas ENTERAS con su salto,
+  // sobre el fuente sin comentarios y sin las líneas que éstos dejan vacías.
+  const JS_SIN = sinComentarios(JS)
+  const sinVacias = (s) =>
+    s
+      .split('\n')
+      .filter((l) => l.trim())
+      .join('\n')
+  const LIMPIO = sinVacias(JS_SIN)
+  const corte = (src, desde, hasta) => {
+    const i = src.indexOf(desde)
+    assert(i >= 0, 'falta la marca de inicio del recorte: ' + desde)
+    const j = src.indexOf(hasta, i + desde.length)
+    assert(j > i, 'falta la marca de final del recorte (o va antes): ' + hasta)
+    return src.slice(i, j)
+  }
+  // Una función entera, de su firma hasta el `}` de la columna 0.
+  const funcion = (firma) => corte(LIMPIO, firma, '\n}\n') + '\n}'
+  const una = (src, linea, msg) => eq(src.split(linea).length - 1, 1, msg + ': «' + linea.trim() + '»')
+  const guardar = corte(LIMPIO, 'async function saveKeys() {', '\nasync function esperarEntrada(')
+  const claves = corte(LIMPIO, 'async function saveKeys() {', '\nasync function showManualStep(')
+
+  // (1) C4: los cuerpos de las dos puertas de §8.24, enteros.
+  eq(
+    funcion('function consentimientoListo() {'),
+    [
+      'function consentimientoListo() {',
+      "  if ($('setup-consent-ok').checked) return true",
+      '  return !!state.settings.configWriteConsent && !state.setupConfirmar',
+      '}',
+    ].join('\n'),
+    'SEGURIDAD: el permiso es la casilla, o el ya dado fuera de «Cambiar las claves», y nada más'
+  )
+  eq(
+    funcion('function reconfiguring() {'),
+    [
+      'function reconfiguring() {',
+      "  if (state.streaming) return 'Espera a que termine la respuesta: escribir en opencode la cortaría.'",
+      "  if (state.indexingAbort) return 'Espera a que termine el indexado: escribir en opencode lo cortaría.'",
+      "  if (state.modelProbeAbort) return 'Espera a que termine la comprobación del modelo: escribir en opencode la cortaría.'",
+      "  if (state.setupAbort) return 'Espera a que termine la comprobación de las claves: escribir en opencode la cortaría.'",
+      "  return ''",
+      '}',
+    ].join('\n'),
+    'SEGURIDAD: la guarda común, entera'
+  )
+
+  // (2) C4: las líneas que deciden en saveKeys, ENTERAS y con su salto.
+  una(guardar, '\n    const configAntes = await cliente.config().catch(() => null)\n    if (state.client !== cliente || (state.site?.host ?? state.lastHost) !== host) return\n', 'SEGURIDAD §8.22: tras las lecturas, el mismo cliente y el mismo sitio')
+  una(guardar, '\n    const ocupado = reconfiguring()\n    if (ocupado) {\n      decir(ocupado)\n      return\n    }\n', 'SEGURIDAD: la guarda común justo antes de escribir, y con algo en marcha no se escribe')
+  una(
+    guardar,
+    '\n    state.mcpCheck = null\n    soltarComprobandoMcp()\n    state.mcpPending = null\n    state.mcpWait?.abort()\n    state.mcpConnected = false\n',
+    'lo que el MCP tenía en marcha se invalida entero antes del PATCH, y la cabecera se suelta'
+  )
+  una(
+    guardar,
+    '\n    const sigue = () => !espera.signal.aborted && state.client === cliente && (state.site?.host ?? state.lastHost) === host\n',
+    'SEGURIDAD §8.22: «sigue» mira la espera, el cliente y el sitio'
+  )
+  una(guardar, '\n    const creada = result.reuse === false || result.standard === true\n', 'C2: la caída se vigila en una nueva o en una suya con el command estándar, nunca con uno propio')
+  una(
+    guardar,
+    '\n  if (!consentimientoListo()) {\n    decir(\'Marca la casilla de arriba: Faro necesita tu permiso para escribir en la configuración de opencode.\')\n    return\n  }\n',
+    'SEGURIDAD: sin permiso se vuelve sin escribir'
+  )
+  // Ningún plazo a mano (`4e2` también es un número): cada espera es la del módulo.
+  eq(claves.split('setTimeout(').length - 1, claves.split('setTimeout(r, MCP_RELOAD_LIMITS.pollMs)').length - 1, 'cada setTimeout de la escritura usa MCP_RELOAD_LIMITS.pollMs')
+  assert(claves.split('setTimeout(').length - 1 >= 2, 'y los hay: la espera a que aparezca y el respiro del reintento')
+
+  // (3) C3: el reintento con la ruta absoluta, ENTERO. La vuelta atrás va en un
+  // `finally` con el cliente capturado, no depende de `sigue()`, y entre
+  // `rutaEscrita = true` y el `finally` no hay ningún `return`.
+  const reintento = corte(guardar, '    if (arranque.caida && creada) {', '\n    if (!arranque.status.connected) {')
+  eq(
+    reintento,
+    [
+      '    if (arranque.caida && creada) {',
+      '      const conRuta = uvxAbsoluteCommand(rutas)',
+      '      if (conRuta) {',
+      '        let rutaEscrita = false',
+      '        try {',
+      "          status.textContent = 'opencode no encuentra uvx: pruebo con la ruta completa…'",
+      '          const reintento = await configureMcp(cliente, { host, jira, confluence, dataCenter, saved, config: configAntes, command: conRuta })',
+      '          if (reintento.ok) {',
+      '            rutaEscrita = true',
+      '            await new Promise((r) => setTimeout(r, MCP_RELOAD_LIMITS.pollMs))',
+      '            if (sigue()) {',
+      '              status.textContent = ESTADO_CLAVES.arrancando',
+      '              arranque = await arrancarMcp({ cliente, host, name: result.name, espera, primero: null, vigilarCaida: true })',
+      '            }',
+      "            if (arranque.status.connected) log.ok('MCP escrito en opencode', `${result.name} · arranca con la ruta completa de uvx`)",
+      '          }',
+      '        } finally {',
+      '          if (rutaEscrita && !arranque?.status?.connected) {',
+      '            const vuelta = await configureMcp(cliente, { host, jira, confluence, dataCenter, saved, config: configAntes })',
+      "            log.warn('MCP escrito en opencode', `${result.name} · tampoco con la ruta completa de uvx · command ${vuelta.ok ? 'devuelto a uvx' : 'sin devolver: ' + (vuelta.kind || vuelta.status)}`)",
+      '          }',
+      '        }',
+      '        if (!sigue()) return',
+      '      }',
+      '    }',
+    ].join('\n'),
+    'C3: el reintento y su vuelta atrás, enteros'
+  )
+  const tramo = corte(reintento, 'rutaEscrita = true', '} finally {')
+  assert(!/\breturn\b/.test(tramo), 'C3: ningún return entre rutaEscrita = true y el finally')
+  const vueltaAtras = corte(reintento, '} finally {', '\n        if (!sigue()) return')
+  assert(!/sigue\(\)/.test(vueltaAtras) && !/\breturn\b/.test(vueltaAtras), 'C3: la vuelta atrás no depende del sitio ni de la espera')
+  assert(vueltaAtras.includes('configureMcp(cliente, {') && !/command:/.test(vueltaAtras), 'C3: con el cliente capturado y sin command, que es el estándar')
+
+  // (4) C4: la relectura acepta sólo la entrada escrita, habilitada.
+  eq(
+    funcion('function entradaEfectiva(config, hosts, name) {'),
+    [
+      'function entradaEfectiva(config, hosts, name) {',
+      '  for (const h of hosts) {',
+      '    if (!h) continue',
+      '    const entrada = mcpEntriesForHost(config, h).find((e) => e.name === name)',
+      '    if (entrada) return entrada.enabled !== false ? entrada : null',
+      '  }',
+      '  return null',
+      '}',
+    ].join('\n'),
+    'SEGURIDAD: fuera de la rama que la encuentra, la relectura no devuelve nada verdadero'
+  )
+
+  // (5) «Ya lo he pegado»: la misma invalidación, y el PATCH {} por su puerta.
+  const recargar = funcion('async function reloadPastedConfig() {')
+  una(recargar, '\n  state.mcpCheck = null\n  soltarComprobandoMcp()\n  state.mcpPending = null\n  state.mcpConnected = false\n', 'la misma invalidación que al escribir, y la cabecera se suelta')
+  una(recargar, "\n  const recarga = await cliente.reloadGlobalConfig().catch(() => ({ ok: false, status: 0, kind: 'red' }))\n", 'SEGURIDAD: el PATCH {} fijo, y un fallo es un fallo')
+  assert(!/updateMcpEntries\(|configureMcp\(/.test(recargar), 'SEGURIDAD: «Ya lo he pegado» no escribe entradas')
+
+  // (6) C4: las guardas de «Comprobar las claves» y de su aviso, y la escritura
+  // de verified en la primera verificación buena, enteras.
+  const adoptar = funcion('async function comprobarClavesAdoptadas(boton) {')
+  una(adoptar, '\n  const config = await cliente.config().catch(() => null)\n  if (state.site?.host !== host || state.client !== cliente) return\n  const found = mcpForHost(config, host)\n', 'SEGURIDAD §8.22: «Comprobar las claves» del mismo sitio y el mismo cliente')
+  const aviso = funcion('async function avisarClavesSinComprobar(')
+  una(aviso, "\n  btn.addEventListener('click', () => {\n    if (state.streaming) return\n    comprobarClavesAdoptadas(btn).catch(console.error)\n  })\n", 'con una respuesta llegando, «Comprobar las claves» no hace nada')
+  const fin = funcion('async function finishSetup() {')
+  una(
+    fin,
+    [
+      '',
+      '    const registros = siteRecords({',
+      '      host: site.host,',
+      '      product: site.product,',
+      '      mcpName: name || mcpNameForHost(site.host),',
+      "      jiraHost: products?.jira || '',",
+      "      confluenceHost: products?.confluence || '',",
+      '      verified: true,',
+      '    })',
+      '    for (const { host, patch } of registros) await saveSite(host, patch)',
+      '',
+    ].join('\n'),
+    'la primera verificación buena escribe verified: true en TODOS los registros'
+  )
+  eq(fin.split('await saveSite(').length - 1, 1, 'y una sola escritura de registros en finishSetup')
+
+  // (7) C5: la adopción decide verified host a host con lo guardado de cada uno.
+  const comprobar = corte(LIMPIO, 'async function checkMcp(', '\nfunction mcpResultSoon(')
+  una(
+    comprobar,
+    [
+      '',
+      '    const registros = adoptionRecords({',
+      '      registros: siteRecords({',
+      '        host,',
+      '        product,',
+      '        mcpName: found.name,',
+      '        jiraHost: found.jiraHost,',
+      '        confluenceHost: found.confluenceHost,',
+      '        verified: false,',
+      '      }),',
+      '      sites: await getSites(),',
+      '      mcpName: found.name,',
+      '    })',
+      '    for (const registro of registros) await saveSite(registro.host, registro.patch)',
+      '',
+    ].join('\n'),
+    'C5: siteRecords sin verificar, y adoptionRecords decide con los registros de todos los sitios'
+  )
+  assert(!/mismoYaProbado/.test(JS_SIN), 'C5: ningún «mismoYaProbado»')
+  assert(/^import \{[^}]*\badoptionRecords,[^}]*\} from '\.\/setup\.js'/m.test(JS_SIN) && /^import \{[^}]*\bgetSites,[^}]*\} from '\.\.\/shared\/storage\.js'/m.test(JS_SIN), 'C5: adoptionRecords y getSites importados de verdad')
+
+  // (8) C6: la cabecera «comprobando MCP…» se suelta en los tres sitios.
+  eq(
+    funcion('function soltarComprobandoMcp() {'),
+    [
+      'function soltarComprobandoMcp() {',
+      '  if (state.statusLine === COMPROBANDO_MCP) {',
+      "    setStatus(state.client?.connected ? 'ok' : 'bad', state.client?.connected ? 'conectado' : 'sin conexión')",
+      '  }',
+      '}',
+    ].join('\n'),
+    'C6: la cabecera se devuelve sólo si el texto sigue siendo el suyo'
+  )
+  const tarde = funcion('async function onMcpResult(r, vigente) {')
+  assert(tarde.startsWith('async function onMcpResult(r, vigente) {\n  soltarComprobandoMcp()\n  if (state.mcpCheck !== vigente) return\n'), 'C6: onMcpResult suelta la cabecera ANTES de mirar si la comprobación sigue valiendo')
+  eq(LIMPIO.split('soltarComprobandoMcp()').length - 1, 4, 'C6: definida una vez y llamada en onMcpResult, saveKeys y «Ya lo he pegado»')
+
+  // (9) C7: los desenlaces TERMINALES se anuncian; los estados de paso, no.
+  una(guardar, '\n  const decir = (texto) => {\n    status.textContent = texto\n    announce(texto)\n  }\n', 'C7: decir escribe y anuncia')
+  for (const desenlace of [
+    "decir('He perdido de vista el sitio.",
+    "decir('Marca la casilla de arriba:",
+    'decir(ocupado)',
+    'decir(`Escrito en ${ruta}, pero el MCP «${result.name}» ${como}.`)',
+    'decir(\n        `La configuración que opencode carga no es la que se ha escrito',
+  ]) {
+    una(guardar, desenlace, 'C7: el desenlace se anuncia')
+  }
+  eq(guardar.split("decir('No he podido configurarlo: '").length - 1, 2, 'C7: los dos «No he podido configurarlo» se anuncian')
+  eq(
+    [...guardar.matchAll(/\bstatus\.textContent = (.+)/g)].map((m) => m[1]),
+    [
+      'texto',
+      "'Preparando la configuración…'",
+      'ESTADO_CLAVES.escribiendo',
+      'ESTADO_CLAVES.recargando + notaVersion()',
+      'ESTADO_CLAVES.arrancando',
+      "'opencode no encuentra uvx: pruebo con la ruta completa…'",
+      'ESTADO_CLAVES.arrancando',
+    ],
+    'C7: a secas sólo los estados de paso (y la línea de dentro de decir)'
+  )
+  const manual = funcion('async function showManualStep(')
+  una(manual, '\n  if (porQue.textContent) announce(porQue.textContent)\n', 'C7: el porqué del respaldo manual (sin escribir, o sin aparecer) se anuncia')
+
+  // (10) C2: el porqué de una configuración que no se pudo leer.
+  const porQue = funcion('function porQueNoSeEscribe(')
+  una(
+    porQue,
+    "\n  if (kind === 'config') return 'No he podido leer la configuración de opencode, y sin saber qué hay no escribo: reinténtalo, o pega el bloque a mano.'\n",
+    'C2: sin la configuración no se escribe, y se dice'
+  )
+  assert(porQue.indexOf("kind === 'config'") < porQue.indexOf("kind === 'red' || !status"), 'C2: antes del «no ha contestado», que también es status 0')
 })

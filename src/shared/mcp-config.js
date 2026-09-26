@@ -97,10 +97,16 @@ function cadenaLimpia(v, max = VALOR_MAX) {
   return typeof v === 'string' && v.length <= max && !PROHIBIDO.test(v)
 }
 
-/** La ruta de uvx.exe, además de casar con `UVX_ABS_PATH`: sin «..» ni controles. */
+/**
+ * La ruta de uvx.exe, además de casar con `UVX_ABS_PATH`: sin «..» ni «.» ni
+ * controles. Se parte por LOS DOS separadores, porque Windows acepta también
+ * «/» dentro de una ruta y `UVX_ABS_PATH` lo deja pasar en el medio: partida
+ * sólo por «\», «C:\a/../../Windows\uvx.exe» salía con un trozo «a/..» que no
+ * era «..» (revisión adversaria de H18).
+ */
 function rutaUvx(ruta) {
   if (!cadenaLimpia(ruta, 1024) || !UVX_ABS_PATH.test(ruta)) return false
-  return !ruta.split('\\').some((trozo) => trozo === '..' || trozo === '.')
+  return !ruta.split(/[\\/]/).some((trozo) => trozo === '..' || trozo === '.')
 }
 
 /** El segundo elemento de un `command` de lista blanca: el paquete, con la versión fijada o sin ella. */

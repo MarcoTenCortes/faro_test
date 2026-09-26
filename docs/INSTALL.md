@@ -243,13 +243,29 @@ de Cloud se quedan en blanco en vez de quedarse con el valor viejo. Una variable
 que hayas añadido tú (`CONFLUENCE_SSL_VERIFY`, por ejemplo) se conserva, porque
 Faro no la toca.
 
+**«Cambiar las claves» sólo renueva el producto de la pestaña.** En un Data
+Center, Jira y Confluence comparten el mismo MCP, y la pantalla de claves sólo
+trae marcado el producto de la pestaña desde la que la abres: desde una pestaña
+de Confluence se renueva el token de Confluence, y las variables de Jira se
+conservan tal como estaban (y al revés desde Jira). Si marcas los dos
+productos, se reescriben los dos. Tampoco se pisa el comando de un MCP que ya
+exista con el nombre de Faro aunque no lleve este dominio, y si opencode no
+contesta cuando Faro lee su configuración, **no escribe nada** —sin saber qué
+hay no puede saber qué se llevaría por delante— y te deja el bloque para
+pegarlo a mano, con «No he podido leer la configuración de opencode» como
+motivo.
+
 Si el MCP que Faro acaba de crear **cae al instante** con «Connection closed»
 (casi siempre, un opencode arrancado antes de instalar uv, que no encuentra
 `uvx`), Faro lo intenta una vez con la ruta completa
 `C:\Users\<tú>\.local\bin\uvx.exe`, que es donde la deja el instalador oficial
 de uv; si tampoco arranca, devuelve el comando a `uvx` y te enseña el consejo de
-siempre con **Reintentar**. Lo de fondo se arregla arrancando opencode desde una
-terminal nueva. Con un MCP que ya estaba en tu configuración no toca nada.
+siempre con **Reintentar**. Esa vuelta al comando `uvx` se hace aunque te vayas
+de la pantalla o a otra pestaña a mitad: la ruta completa no se queda escrita.
+Lo de fondo se arregla arrancando opencode desde una terminal nueva. Lo mismo
+vale para el MCP que Faro creó en un intento anterior (con su comando de
+siempre); con uno que lleve un comando tuyo (Docker, una ruta propia) no toca
+nada.
 
 Si recargas el panel a mitad —el MCP ya escrito y conectado, pero sin que se
 llegaran a comprobar los tokens—, Faro lo reconoce y lo adopta, pero lo dice en
@@ -1268,7 +1284,9 @@ corto y un detalle. Todos los títulos, por dónde salen:
 - «Claves sin comprobar» — en amarillo, Faro adoptó un MCP que ya estaba
   conectado sin que ningún turno hubiera probado sus tokens (recargaste el panel
   a mitad del primer uso, o pegaste el bloque a mano), y el chat lo dice con un
-  botón **Comprobar las claves**; en verde, esa primera comprobación salió bien.
+  botón **Comprobar las claves**; el detalle nombra los hosts que se quedan sin
+  comprobar, porque se decide host a host (el que ya tenías comprobado con ese
+  mismo MCP no vuelve a avisar); en verde, esa primera comprobación salió bien.
 - «MCP verificado» — los tokens se comprobaron, con una línea por producto
   («Jira: … · Confluence: …»).
 - «Sitio enlazado» — el otro host (Jira o Confluence) comparte el MCP de

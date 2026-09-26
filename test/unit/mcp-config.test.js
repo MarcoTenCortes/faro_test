@@ -87,6 +87,11 @@ test('SEGURIDAD H18: validMcpCommand — la lista blanca, la ruta absoluta de uv
     ['C:\\Users\\%USERNAME%\\uvx.exe', V],
     ['C:\\Users\\marco\\..\\otro\\uvx.exe', V],
     ['C:\\Users\\.\\uvx.exe', V],
+    // Revisión adversaria de H18: «..» y «.» vengan con la barra que vengan.
+    ['C:\\a/../../Windows\\uvx.exe', V],
+    ['C:\\Users/marco/..\\uvx.exe', V],
+    ['C:\\Users\\marco/./bin\\uvx.exe', V],
+    ['C:\\a/..\\uvx.exe', V],
     ['uvx.exe', V],
     ['.\\bin\\uvx.exe', V],
     ['C:uvx.exe', V],

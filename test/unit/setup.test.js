@@ -659,6 +659,7 @@ import {
   configFileCandidates,
   configureMcp,
   keysUnverified,
+  adoptionRecords,
 } from '../../src/panel/setup.js'
 import { MCP_ENV_KEYS, validMcpEntry } from '../../src/shared/mcp-config.js'
 
@@ -723,11 +724,13 @@ test('H18: mcpEntriesForHost da TODAS las entradas del dominio, habilitadas y de
 
 test('H18: chooseWriteTarget — reutiliza la habilitada del dominio o el esqueleto de Faro; una ajena deshabilitada, nunca', () => {
   // (1) Habilitada con el dominio: su nombre, y se conservan type, command y timeout.
+  // Revisión adversaria de H18: con su environment (para conservar el producto que no se trae) y `standard` false (docker).
   eq(chooseWriteTarget({ config: CONFIG_H18, saved: null, host: 'jira.x.eu' }), {
     name: 'mio-a-mano',
     reuse: true,
     knownCommand: CONFIG_H18.mcp['mio-a-mano'].command,
-    keep: { type: 'local', timeout: 120000 },
+    standard: false,
+    keep: { type: 'local', timeout: 120000, environment: CONFIG_H18.mcp['mio-a-mano'].environment },
   })
   // (2) Deshabilitada que es el esqueleto de Faro (el mcpName guardado, que un host enlazado comparte): se reutiliza.
   const esqueleto = chooseWriteTarget({ config: CONFIG_H18, saved: { mcpName: FARO }, host: 'confluence.x.eu' })
@@ -741,13 +744,13 @@ test('H18: chooseWriteTarget — reutiliza la habilitada del dominio o el esquel
   eq(chooseWriteTarget({ config: guardado, saved: null, host: 'jira.y.eu' }).reuse, false, 'el mismo esqueleto sin su nombre guardado es ajeno')
   // (3) Deshabilitada AJENA con el dominio: no vuelve a arrancar con tokens frescos; se crea una nueva a su lado.
   const soloAjena = { mcp: { ajena: CONFIG_H18.mcp.ajena } }
-  eq(chooseWriteTarget({ config: soloAjena, saved: null, host: 'jira.x.eu' }), { name: FARO, reuse: false, knownCommand: null, keep: null })
+  eq(chooseWriteTarget({ config: soloAjena, saved: null, host: 'jira.x.eu' }), { name: FARO, reuse: false, knownCommand: null, standard: true, keep: null })
   // (4) Ninguna: el mcpName guardado si tiene forma de nombre; si no, el de Faro por host.
   eq(chooseWriteTarget({ config: null, saved: { mcpName: 'atlassian-guardado' }, host: 'jira.x.eu' }).name, 'atlassian-guardado')
   for (const malo of ['con espacio', 'a/b', '__proto__', 'x'.repeat(65), '', 7, null]) {
     eq(chooseWriteTarget({ config: null, saved: { mcpName: malo }, host: 'jira.x.eu' }).name, FARO, 'un nombre guardado sin forma no se usa: ' + malo)
   }
-  eq(chooseWriteTarget({ host: 'jira.x.eu' }), { name: FARO, reuse: false, knownCommand: null, keep: null })
+  eq(chooseWriteTarget({ host: 'jira.x.eu' }), { name: FARO, reuse: false, knownCommand: null, standard: true, keep: null })
 })
 
 test('H18: mcpWritePatch conserva el command del usuario sólo si es el de GET /config, y rechaza otra clave, otra versión y metacaracteres', () => {
@@ -799,7 +802,7 @@ test('H18: configFileCandidates — jsonc antes que json antes que config.json, 
 })
 
 /** Un cliente falso para configureMcp: SIN addMcp ni connectMcp (si los llamara, reventaría). */
-function clienteDeEscritura({ config = null, respuesta = { ok: true, status: 200, kind: '' } } = {}) {
+function clienteDeEscritura({ config = {}, respuesta = { ok: true, status: 200, kind: '' } } = {}) {
   const llamadas = []
   return {
     llamadas,
@@ -822,7 +825,7 @@ test('H18: configureMcp escribe con updateMcpEntries, sin addMcp ni connectMcp, 
   const c = clienteDeEscritura()
   const r = await configureMcp(c, { host: 'jira.x.eu', ...DC })
   eq(c.llamadas.map((l) => l[0]), ['config', 'updateMcpEntries'], 'lee la configuración, escribe, y nada más: ni una espera')
-  eq(r, { ok: true, status: 200, kind: '', name: FARO, block: buildMcpConfig(DC), reuse: false })
+  eq(r, { ok: true, status: 200, kind: '', name: FARO, block: buildMcpConfig(DC), reuse: false, standard: true })
   eq(c.llamadas[1][1], { [FARO]: buildMcpConfig(DC) }, 'una entrada, con su nombre')
   eq(c.llamadas[1][2], { known: null })
   // Un 500 de opencode: {ok:false} con su kind, sin lanzar.
@@ -839,12 +842,12 @@ test('H18: configureMcp escribe con updateMcpEntries, sin addMcp ni connectMcp, 
   // El command del reintento sustituye al estándar SÓLO en una entrada nueva.
   const abs = ['C:\\Users\\marco\\.local\\bin\\uvx.exe', 'mcp-atlassian@' + MCP_ATLASSIAN_VERSION]
   const nueva = clienteDeEscritura()
-  eq((await configureMcp(nueva, { host: 'jira.x.eu', ...DC, config: null, command: abs })).block.command, abs)
+  eq((await configureMcp(nueva, { host: 'jira.x.eu', ...DC, config: {}, command: abs })).block.command, abs)
   const propia = clienteDeEscritura()
   eq((await configureMcp(propia, { host: 'jira.x.eu', ...DC, config: CONFIG_H18, command: abs })).block.command, CONFIG_H18.mcp['mio-a-mano'].command, 'en una reutilizada no se toca su command')
   // Lo que la barrera no deja pasar no sale: ni una petición.
   const mal = clienteDeEscritura()
-  const m = await configureMcp(mal, { host: 'jira.x.eu', ...DC, config: null, command: ['C:\\a&b\\uvx.exe', 'mcp-atlassian'] })
+  const m = await configureMcp(mal, { host: 'jira.x.eu', ...DC, config: {}, command: ['C:\\a&b\\uvx.exe', 'mcp-atlassian'] })
   eq([m.ok, m.status, m.kind], [false, 0, 'entrada'])
   eq(mal.llamadas.length, 0, 'sin petición')
   // Y en el código: ni addMcp ni connectMcp en setup.js, y el cliente ya no tiene addMcp.
@@ -859,6 +862,8 @@ test('H18: siteRecords lleva verified, y un registro guardado de HOY (sin verifi
   eq(sin.map((r) => r.patch.verified), [false, false], 'la adopción sin comprobar marca los DOS registros del MCP')
   eq(Object.keys(sin[0].patch), ['configured', 'mcpName', 'product', 'cloud', 'verified', 'confluenceHost'], 'claves exactas y en su orden')
   eq(siteRecords({ host: 'jira.x.eu', product: 'jira', mcpName: FARO }).map((r) => r.patch.verified), [true], 'por defecto, verificado')
+  // La misma regla que keysUnverified: sólo un false EXPLÍCITO deja sin verificar (revisión adversaria de H18).
+  for (const noFalse of [null, 'false', 0]) eq(siteRecords({ host: 'jira.x.eu', product: 'jira', mcpName: FARO, verified: noFalse })[0].patch.verified, true, 'sin false explícito: ' + JSON.stringify(noFalse))
   // Migración: la forma REAL de un registro guardado antes de H18, sin verified.
   const deHoy = {
     configured: true,
@@ -875,4 +880,193 @@ test('H18: siteRecords lleva verified, y un registro guardado de HOY (sin verifi
   eq(keysUnverified({ ...deHoy, verified: true }), false)
   eq(keysUnverified({ ...deHoy, verified: false }), true, 'sólo false EXPLÍCITO avisa')
   for (const raro of [null, undefined, {}, { verified: 'false' }, { verified: 0 }, { verified: null }, 'x']) eq(keysUnverified(raro), false, 'sin false explícito: ' + JSON.stringify(raro))
+})
+
+// ---------------------------------------------------------------------------
+// Revisión adversaria de H18: lo que la escritura pisaba sin querer.
+// ---------------------------------------------------------------------------
+
+const V18 = 'mcp-atlassian@' + MCP_ATLASSIAN_VERSION
+const UVX_ABS = ['C:\\Users\\marco\\.local\\bin\\uvx.exe', V18]
+const DOCKER = ['docker', 'run', '-i', '--rm', 'ghcr.io/sooperset/mcp-atlassian:0.23.1']
+
+/** Las diez variables de una entrada que Faro escribió con los DOS productos de un Data Center. */
+function entornoCompartido(cambios = {}) {
+  return {
+    JIRA_URL: 'https://jira.x.eu',
+    JIRA_PERSONAL_TOKEN: 'pat-jira-viejo',
+    JIRA_USERNAME: '',
+    JIRA_API_TOKEN: '',
+    CONFLUENCE_URL: 'https://confluence.x.eu',
+    CONFLUENCE_PERSONAL_TOKEN: 'pat-conf-viejo',
+    CONFLUENCE_USERNAME: '',
+    CONFLUENCE_API_TOKEN: '',
+    READ_ONLY_MODE: 'true',
+    TOOLSETS: 'all',
+    ...cambios,
+  }
+}
+
+/** La entrada COMPARTIDA por Jira y Confluence, con el mcpName del host desde el que se configuró. */
+function configCompartida(entorno = entornoCompartido()) {
+  return { mcp: { [FARO]: { type: 'local', command: ['uvx', V18], environment: entorno, enabled: true, timeout: 60000 } } }
+}
+
+const SOLO_CONFLUENCE = { confluence: { url: 'https://confluence.x.eu', token: 'pat-conf-nuevo' }, dataCenter: true }
+const JIRA_CLAVES = ['JIRA_URL', 'JIRA_PERSONAL_TOKEN', 'JIRA_USERNAME', 'JIRA_API_TOKEN']
+const trozo = (env, claves) => Object.fromEntries(claves.map((k) => [k, env[k]]))
+
+test('Revisión H18: en una entrada COMPARTIDA, cambiar las claves de un producto conserva las del otro', async () => {
+  // Desde el Confluence enlazado de un Data Center: la pantalla sólo trae Confluence.
+  const config = configCompartida()
+  const target = chooseWriteTarget({ config, saved: { mcpName: FARO }, host: 'confluence.x.eu' })
+  eq([target.name, target.reuse, target.standard], [FARO, true, true], 'se reutiliza la compartida')
+  const escrita = mcpWritePatch({ block: buildMcpConfig(SOLO_CONFLUENCE), target })
+  eq(trozo(escrita.environment, JIRA_CLAVES), trozo(entornoCompartido(), JIRA_CLAVES), 'Jira, byte a byte como estaba')
+  eq(escrita.environment.CONFLUENCE_PERSONAL_TOKEN, 'pat-conf-nuevo', 'y Confluence, lo nuevo')
+  eq([escrita.environment.READ_ONLY_MODE, escrita.environment.TOOLSETS], ['true', 'all'], 'READ_ONLY_MODE y TOOLSETS, del bloque')
+  eq(Object.keys(escrita.environment), [...MCP_ENV_KEYS], 'las diez, ni una más')
+  // Lo mismo por configureMcp: lo que llega al PATCH lleva el Jira de antes.
+  const c = clienteDeEscritura()
+  await configureMcp(c, { host: 'confluence.x.eu', ...SOLO_CONFLUENCE, saved: { mcpName: FARO }, config })
+  eq(trozo(c.llamadas[0][1][FARO].environment, JIRA_CLAVES), trozo(entornoCompartido(), JIRA_CLAVES), 'el PATCH no vacía el MCP de Jira')
+
+  // Con los DOS productos en el formulario se sobrescriben los dos.
+  const ambos = mcpWritePatch({ block: buildMcpConfig({ ...DC, jira: { url: 'https://jira.x.eu', token: 'pat-jira-nuevo' } }), target })
+  eq([ambos.environment.JIRA_PERSONAL_TOKEN, ambos.environment.CONFLUENCE_PERSONAL_TOKEN], ['pat-jira-nuevo', 'pat-conf'])
+  // El formulario SÍ trae Jira, en Cloud: sus cuatro son las del bloque, con el PAT viejo en ''.
+  const nube = buildMcpConfig({ jira: { url: 'https://jira.x.eu', email: 'yo@x.eu', token: 'tok-j' } })
+  const aNube = mcpWritePatch({ block: nube, target })
+  eq(trozo(aNube.environment, JIRA_CLAVES), { JIRA_URL: 'https://jira.x.eu', JIRA_PERSONAL_TOKEN: '', JIRA_USERNAME: 'yo@x.eu', JIRA_API_TOKEN: 'tok-j' }, 'lo que se trae no se mezcla con lo de antes')
+  eq(aNube.environment.CONFLUENCE_PERSONAL_TOKEN, 'pat-conf-viejo', 'y el Confluence que no se trae se conserva')
+
+  // Sólo se copian las cuatro del producto: lo que falte o no sea cadena queda en '', y una variable de más no entra.
+  const raro = configCompartida(entornoCompartido({ JIRA_USERNAME: 7, OTRA: 'x' }))
+  delete raro.mcp[FARO].environment.JIRA_API_TOKEN
+  const r = mcpWritePatch({ block: buildMcpConfig(SOLO_CONFLUENCE), target: chooseWriteTarget({ config: raro, saved: { mcpName: FARO }, host: 'confluence.x.eu' }) })
+  eq(trozo(r.environment, JIRA_CLAVES), { JIRA_URL: 'https://jira.x.eu', JIRA_PERSONAL_TOKEN: 'pat-jira-viejo', JIRA_USERNAME: '', JIRA_API_TOKEN: '' })
+  eq(Object.keys(r.environment), [...MCP_ENV_KEYS])
+  // Sin JIRA_URL en la entrada no hay Jira que conservar.
+  const sinJira = mcpWritePatch({ block: buildMcpConfig(SOLO_CONFLUENCE), target: chooseWriteTarget({ config: configCompartida(entornoCompartido({ JIRA_URL: '' })), saved: { mcpName: FARO }, host: 'confluence.x.eu' }) })
+  eq(sinJira.environment.JIRA_PERSONAL_TOKEN, '', 'sin dirección, nada de su token')
+})
+
+test('SEGURIDAD revisión H18: en una entrada NUEVA no se conserva nada, y un valor conservado sucio invalida la entrada', async () => {
+  // Nueva: aunque alguien le pase un environment viejo, el bloque tal cual.
+  const block = buildMcpConfig(SOLO_CONFLUENCE)
+  const falsa = { name: FARO, reuse: false, knownCommand: null, standard: true, keep: { type: 'local', timeout: null, environment: entornoCompartido() } }
+  eq(mcpWritePatch({ block, target: falsa }), block, 'una entrada nueva no hereda nada')
+  const nueva = chooseWriteTarget({ config: { mcp: {} }, host: 'jira.x.eu' })
+  eq(nueva.keep, null, 'y chooseWriteTarget no lleva environment en una nueva')
+  // Un valor conservado con un salto, un NEL o un RLO: la barrera tira la entrada entera (kind entrada, sin PATCH).
+  for (const sucio of ['pat\nmalo', 'pat' + String.fromCharCode(0x85) + 'malo', 'pat' + String.fromCharCode(0x202e) + 'malo']) {
+    const config = configCompartida(entornoCompartido({ JIRA_PERSONAL_TOKEN: sucio }))
+    const target = chooseWriteTarget({ config, saved: { mcpName: FARO }, host: 'confluence.x.eu' })
+    eq(mcpWritePatch({ block, target }), null, 'SEGURIDAD: un valor conservado sucio no se escribe')
+    const c = clienteDeEscritura()
+    const res = await configureMcp(c, { host: 'confluence.x.eu', ...SOLO_CONFLUENCE, saved: { mcpName: FARO }, config })
+    eq([res.ok, res.kind, c.llamadas.length], [false, 'entrada', 0])
+    assert(!JSON.stringify(res.block).includes('pat-jira-viejo'), 'y el respaldo manual lleva sólo lo construido')
+  }
+})
+
+test('Revisión H18: una entrada que ya existe con el nombre elegido se reutiliza aunque no lleve el dominio, y su command no se pisa', async () => {
+  // El nombre guardado existe, apunta a otro dominio y lleva docker: se reutiliza con su command.
+  const apuntada = { mcp: { apuntado: { type: 'local', command: DOCKER, environment: { JIRA_URL: 'https://jira.viejo.eu', JIRA_PERSONAL_TOKEN: 'secreto-v' }, enabled: false, timeout: 90000 } } }
+  const t = chooseWriteTarget({ config: apuntada, saved: { mcpName: 'apuntado' }, host: 'jira.x.eu' })
+  eq([t.name, t.reuse, t.knownCommand, t.standard], ['apuntado', true, DOCKER, false])
+  eq(mcpWritePatch({ block: buildMcpConfig(DC), target: t, command: UVX_ABS }).command, DOCKER, 'el command del reintento no pisa uno del usuario')
+  const c = clienteDeEscritura()
+  const res = await configureMcp(c, { host: 'jira.x.eu', ...DC, saved: { mcpName: 'apuntado' }, config: apuntada, command: UVX_ABS })
+  eq([res.name, res.reuse, res.standard, res.block.command, res.block.enabled], ['apuntado', true, false, DOCKER, true], 'se conserva docker y se habilita')
+  eq(c.llamadas[0][2], { known: { apuntado: DOCKER } })
+  // Sin nombre guardado, el de Faro por host, deshabilitado y sin el dominio, con el command de Faro: se reutiliza y es «estándar».
+  for (const estandar of [['uvx', 'mcp-atlassian'], ['uvx', V18]]) {
+    const deFaro = { mcp: { [FARO]: { type: 'local', command: estandar, environment: {}, enabled: false, timeout: 30000 } } }
+    const f = chooseWriteTarget({ config: deFaro, host: 'jira.x.eu' })
+    eq([f.reuse, f.standard], [true, true], 'standard con ' + JSON.stringify(estandar))
+    const c2 = clienteDeEscritura()
+    const r2 = await configureMcp(c2, { host: 'jira.x.eu', ...DC, config: deFaro, command: UVX_ABS })
+    eq([r2.reuse, r2.standard, r2.block.command], [true, true, UVX_ABS], 'en la de Faro, el reintento SÍ escribe la ruta absoluta')
+    eq(mcpWritePatch({ block: buildMcpConfig(DC), target: f }).command, estandar, 'sin reintento, el suyo')
+  }
+  // Ni otra versión ni una ruta absoluta ya escrita son «estándar».
+  for (const otro of [['uvx', 'mcp-atlassian@0.1.0'], UVX_ABS, DOCKER]) {
+    eq(chooseWriteTarget({ config: { mcp: { [FARO]: { type: 'local', command: otro, environment: {}, enabled: true } } }, host: 'jira.x.eu' }).standard, false, 'no estándar: ' + JSON.stringify(otro))
+  }
+  // Un nombre del prototipo no «existe»: nueva.
+  for (const proto of ['toString', 'constructor', 'hasOwnProperty']) {
+    eq(chooseWriteTarget({ config: { mcp: {} }, saved: { mcpName: proto }, host: 'jira.x.eu' }).reuse, false, 'SEGURIDAD: ' + proto + ' no es una entrada')
+  }
+  // …ni una heredada: sólo cuenta una entrada PROPIA (Object.hasOwn).
+  const heredada = { mcp: Object.create({ apuntado: apuntada.mcp.apuntado }) }
+  eq(chooseWriteTarget({ config: heredada, saved: { mcpName: 'apuntado' }, host: 'jira.x.eu' }).reuse, false, 'SEGURIDAD: una entrada del prototipo no existe')
+  // Una deshabilitada AJENA (otro nombre) sigue sin reutilizarse.
+  eq(chooseWriteTarget({ config: { mcp: { ajena: CONFIG_H18.mcp.ajena } }, saved: { mcpName: 'mio' }, host: 'jira.x.eu' }), {
+    name: 'mio',
+    reuse: false,
+    knownCommand: null,
+    standard: true,
+    keep: null,
+  })
+  // Claves exactas de los dos resultados.
+  eq(Object.keys(t), ['name', 'reuse', 'knownCommand', 'standard', 'keep'])
+  eq(Object.keys(t.keep), ['type', 'timeout', 'environment'])
+  eq(Object.keys(res), ['ok', 'status', 'kind', 'name', 'block', 'reuse', 'standard'])
+})
+
+test('SEGURIDAD revisión H18: sin la configuración de opencode no se escribe nada', async () => {
+  // config: null dado, o client.config() que falla: kind 'config', ni una llamada a updateMcpEntries.
+  const dado = clienteDeEscritura()
+  const r = await configureMcp(dado, { host: 'jira.x.eu', ...DC, saved: { mcpName: 'guardado-bien' }, config: null, command: UVX_ABS })
+  eq(r, { ok: false, status: 0, kind: 'config', name: 'guardado-bien', block: buildMcpConfig(DC), reuse: false, standard: true })
+  eq(dado.llamadas, [], 'sin petición ninguna')
+  const caido = clienteDeEscritura()
+  caido.config = async () => {
+    caido.llamadas.push(['config'])
+    throw new Error('opencode caído')
+  }
+  const r2 = await configureMcp(caido, { host: 'jira.x.eu', ...DC })
+  eq([r2.ok, r2.kind, r2.name, r2.reuse], [false, 'config', FARO, false])
+  eq(caido.llamadas.map((l) => l[0]), ['config'], 'lee, falla, y no escribe')
+  for (const raro of ['texto', 7, [], true]) {
+    const c = clienteDeEscritura()
+    eq((await configureMcp(c, { host: 'jira.x.eu', ...DC, config: raro })).kind, 'config', 'sin forma de configuración: ' + JSON.stringify(raro))
+    eq(c.llamadas.length, 0)
+  }
+})
+
+test('Revisión H18: adoptionRecords decide verified POR HOST, no uno para todos', () => {
+  const registros = siteRecords({ host: 'confluence.x.eu', product: 'confluence', mcpName: FARO, jiraHost: 'jira.x.eu', confluenceHost: 'confluence.x.eu' })
+  const deJ = (patch) => adoptionRecords({ registros, sites: patch, mcpName: FARO }).map((r) => [r.host, r.patch.verified])
+  // J verificado + C nuevo (se adopta desde el Confluence enlazado): J true, C false.
+  eq(deJ({ 'jira.x.eu': { configured: true, mcpName: FARO, product: 'jira', verified: true } }), [['confluence.x.eu', false], ['jira.x.eu', true]])
+  // C configurado y verificado + enlace nuevo J: C true, J false.
+  eq(deJ({ 'confluence.x.eu': { configured: true, mcpName: FARO, product: 'confluence', verified: true } }), [['confluence.x.eu', true], ['jira.x.eu', false]])
+  // La migración: un registro guardado de HOY, sin verified, cuenta como verificado.
+  eq(deJ({ 'jira.x.eu': { configured: true, mcpName: FARO, product: 'jira', cloud: false, onboarded: true } }), [['confluence.x.eu', false], ['jira.x.eu', true]])
+  // Sin nada guardado, todos false; y lo ya marcado sin comprobar, otro MCP o sin configurar, false.
+  eq(deJ({}), [['confluence.x.eu', false], ['jira.x.eu', false]])
+  eq(deJ(null), [['confluence.x.eu', false], ['jira.x.eu', false]])
+  for (const previo of [
+    { configured: true, mcpName: FARO, verified: false },
+    { configured: true, mcpName: 'otro-mcp', verified: true },
+    { configured: false, mcpName: FARO, verified: true },
+    { mcpName: FARO, verified: true },
+    { configured: 'true', mcpName: FARO },
+  ]) {
+    eq(deJ({ 'jira.x.eu': previo }), [['confluence.x.eu', false], ['jira.x.eu', false]], 'no probado: ' + JSON.stringify(previo))
+  }
+  eq(adoptionRecords({ registros, sites: { 'jira.x.eu': { configured: true, mcpName: '' } }, mcpName: '' }).map((r) => r.patch.verified), [false, false], 'sin nombre de MCP, nada probado')
+  // Claves exactas del patch (verified incluido, en su sitio) y sin mutar lo que recibe.
+  const antes = JSON.stringify(registros)
+  const sites = { 'jira.x.eu': { configured: true, mcpName: FARO } }
+  const antesSites = JSON.stringify(sites)
+  const r = adoptionRecords({ registros, sites, mcpName: FARO })
+  eq(Object.keys(r[0].patch), ['configured', 'mcpName', 'product', 'cloud', 'verified', 'jiraHost'])
+  eq(Object.keys(r[1].patch), ['configured', 'mcpName', 'product', 'cloud', 'verified', 'confluenceHost'])
+  eq([JSON.stringify(registros), JSON.stringify(sites)], [antes, antesSites], 'no muta lo que recibe')
+  assert(r[0].patch !== registros[0].patch, 'patch nuevo')
+  eq(adoptionRecords({ registros: null, sites, mcpName: FARO }), [])
+  eq(adoptionRecords(), [])
 })

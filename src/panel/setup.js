@@ -197,6 +197,43 @@ export function keysUnverified(saved) {
 }
 
 /**
+ * Los registros de una ADOPCIÓN (`checkMcp` encuentra conectado un MCP que no
+ * tenía apuntado) con `verified` decidido POR HOST y no uno para todos
+ * (revisión adversaria de H18). `siteRecords` pone el mismo `verified` en todos
+ * los registros del MCP, y `checkMcp` lo decidía con el de la PESTAÑA: adoptar
+ * desde el host enlazado sin configurar degradaba a «sin comprobar» el host ya
+ * verificado, y al revés un enlace nuevo heredaba un `verified: true` que nadie
+ * había probado.
+ *
+ * Un host sigue verificado sólo si su registro guardado (`sites[host]`) ya
+ * estaba `configured: true`, con ESTE `mcpName` y sin `verified: false`
+ * explícito (`keysUnverified`: un registro de antes de H18, sin `verified`,
+ * cuenta como verificado, que es la migración). Un host nuevo, un enlace nuevo
+ * o uno ya marcado sin comprobar va con `verified: false`. No muta lo que
+ * recibe; cada `patch` conserva sus claves y su orden. Pura.
+ *
+ * @param {{registros: Array<{host:string, patch:object}>, sites: Record<string, object>|null, mcpName: string}} input
+ * @returns {Array<{host:string, patch:object}>}
+ */
+export function adoptionRecords({ registros = [], sites = null, mcpName = '' } = {}) {
+  const mapa = plano(sites) ? sites : {}
+  const lista = Array.isArray(registros) ? registros : []
+  return lista
+    .filter((r) => plano(r) && typeof r.host === 'string' && plano(r.patch))
+    .map(({ host, patch }) => {
+      const previo = Object.hasOwn(mapa, host) ? mapa[host] : null
+      const probado =
+        typeof mcpName === 'string' &&
+        mcpName !== '' &&
+        plano(previo) &&
+        previo.configured === true &&
+        previo.mcpName === mcpName &&
+        !keysUnverified(previo)
+      return { host, patch: { ...patch, verified: probado } }
+    })
+}
+
+/**
  * El MCP que ya existe en opencode para este dominio, si lo hay.
  *
  * Faro sólo sabía de un MCP por dos vías: el nombre que deriva del host de la
@@ -294,14 +331,88 @@ export function mcpEntriesForHost(config, host) {
     if (!entry || typeof entry !== 'object') continue
     const { jiraHost, confluenceHost } = hostsDe(entry)
     if (jiraHost !== buscado && confluenceHost !== buscado) continue
-    out.push({
-      name,
-      enabled: entry.enabled !== false,
-      command: Array.isArray(entry.command) && entry.command.every((a) => typeof a === 'string') ? [...entry.command] : null,
-      type: typeof entry.type === 'string' ? entry.type : '',
-      timeout: Number.isInteger(entry.timeout) ? entry.timeout : null,
-      products: (jiraHost ? 1 : 0) + (confluenceHost ? 1 : 0),
-    })
+    out.push({ ...resumenEntrada(name, entry), products: (jiraHost ? 1 : 0) + (confluenceHost ? 1 : 0) })
+  }
+  return out
+}
+
+/** Un objeto plano (no una lista, no null). */
+function plano(x) {
+  return !!x && typeof x === 'object' && !Array.isArray(x)
+}
+
+/**
+ * `{name, enabled, command, type, timeout}` de una entrada MCP, sin su
+ * `environment`: la misma lectura para `mcpEntriesForHost` y para la entrada
+ * que `chooseWriteTarget` encuentra por su NOMBRE (revisión adversaria de H18).
+ */
+function resumenEntrada(name, entry) {
+  return {
+    name,
+    enabled: entry.enabled !== false,
+    command: Array.isArray(entry.command) && entry.command.every((a) => typeof a === 'string') ? [...entry.command] : null,
+    type: typeof entry.type === 'string' ? entry.type : '',
+    timeout: Number.isInteger(entry.timeout) ? entry.timeout : null,
+  }
+}
+
+/**
+ * Los dos `command` que escribe Faro: con la versión fijada (H15) y sin ella
+ * (lo que escribía antes de H15). Una entrada con cualquiera de los dos es «la
+ * de Faro» y se le puede poner la ruta absoluta de uvx en el reintento; con
+ * cualquier otro (docker, una ruta propia) el `command` es del usuario.
+ */
+function commandEstandar(command) {
+  if (!Array.isArray(command)) return false
+  const json = JSON.stringify(command)
+  return json === JSON.stringify(['uvx', 'mcp-atlassian@' + MCP_ATLASSIAN_VERSION]) || json === JSON.stringify(['uvx', 'mcp-atlassian'])
+}
+
+/**
+ * El `environment` de la entrada `name` tal como está en la configuración,
+ * copiado ({} si no es un objeto plano). LLEVA TOKENS: sólo lo lee
+ * `chooseWriteTarget` para que `mcpWritePatch` conserve el producto que el
+ * formulario no trae, y no sale de este módulo más que dentro de la entrada
+ * que se escribe.
+ */
+function entornoDe(config, name) {
+  const mcp = config?.mcp
+  if (!plano(mcp) || !Object.hasOwn(mcp, name)) return {}
+  const env = mcp[name]?.environment
+  return plano(env) ? { ...env } : {}
+}
+
+/** Los dos productos del `environment`, y las cuatro variables de cada uno. */
+const PRODUCTOS_ENV = Object.freeze(['JIRA', 'CONFLUENCE'])
+const VARIABLES_DE_PRODUCTO = Object.freeze(['_URL', '_PERSONAL_TOKEN', '_USERNAME', '_API_TOKEN'])
+
+/**
+ * El `environment` que se escribe en una entrada REUTILIZADA: el del bloque,
+ * salvo el producto que el formulario NO trae (su `_URL` viene en '') y que la
+ * entrada ya tenía (su `_URL` es una cadena no vacía): de ése se copian sus
+ * cuatro variables tal cual ('' las que falten o no sean cadena).
+ *
+ * Pasó en la revisión adversaria de H18: en Data Center la pantalla de claves
+ * sólo marca el producto de la pestaña, y la entrada es COMPARTIDA por Jira y
+ * Confluence (mismo `mcpName`); renovar el token de Confluence escribía las diez
+ * variables con JIRA_URL y JIRA_PERSONAL_TOKEN en '' y Jira se quedaba sin MCP
+ * en silencio. El producto que el formulario SÍ trae se escribe entero desde el
+ * bloque (con '' en las del otro modo de autenticación, que es lo que motivó las
+ * diez). READ_ONLY_MODE y TOOLSETS, siempre del bloque. Lo conservado pasa
+ * después por `validMcpEntry` como todo lo demás: un valor que no sea una cadena
+ * limpia invalida la entrada. Pura.
+ */
+function conOtroProducto(env, previo) {
+  if (!plano(env) || !plano(previo)) return env
+  const out = { ...env }
+  for (const p of PRODUCTOS_ENV) {
+    if (env[p + '_URL'] !== '') continue
+    const url = previo[p + '_URL']
+    if (typeof url !== 'string' || url === '') continue
+    for (const sufijo of VARIABLES_DE_PRODUCTO) {
+      const valor = previo[p + sufijo]
+      out[p + sufijo] = typeof valor === 'string' ? valor : ''
+    }
   }
   return out
 }
@@ -318,19 +429,38 @@ export function mcpEntriesForHost(config, host) {
  *   de `mcpNameForHost` o el `mcpName` guardado): una ajena que el usuario
  *   deshabilitó a mano no vuelve a arrancar con tokens frescos; se crea una
  *   nueva a su lado.
- * - Si no, una nueva bajo `saved.mcpName` (si tiene forma de nombre) o
- *   `mcpNameForHost(host)`, con el `command` estándar.
+ * - Si no, el nombre elegido es `saved.mcpName` (si tiene forma de nombre) o
+ *   `mcpNameForHost(host)`. Si YA EXISTE una entrada propia con ese nombre
+ *   —lleve o no el dominio de la pestaña, habilitada o no—, también se
+ *   reutiliza (revisión adversaria de H18: un nombre guardado cuya entrada ya
+ *   no llevaba este dominio caía en «nueva» y el PATCH le pisaba el `command`
+ *   al usuario, docker o una ruta propia). `reuse: false` queda SÓLO para un
+ *   nombre que no existe, con el `command` estándar. Una deshabilitada AJENA
+ *   (con otro nombre) sigue sin reutilizarse nunca.
  *
  * `knownCommand` es el `command` que `GET /config` trae para ESE nombre: lo
  * escribió el usuario, y la barrera lo acepta sólo si es byte a byte ése.
+ * `standard` dice si el `command` que se va a escribir es uno de los dos de
+ * Faro (`commandEstandar`): siempre en una nueva, y en una reutilizada sólo si
+ * su `knownCommand` lo es; es lo que deja poner la ruta absoluta del reintento.
+ * `keep.environment` es el `environment` de la entrada reutilizada, CON SUS
+ * TOKENS: lo usa `mcpWritePatch` para conservar el producto que el formulario
+ * no trae, y por eso esta función sólo la llama `configureMcp` (el panel no la
+ * importa).
  *
- * @returns {{name: string, reuse: boolean, knownCommand: string[]|null, keep: {type: string, timeout: number|null}|null}}
+ * @returns {{name: string, reuse: boolean, knownCommand: string[]|null, standard: boolean, keep: {type: string, timeout: number|null, environment: object}|null}}
  */
 export function chooseWriteTarget({ config = null, saved = null, host = '' } = {}) {
   const entradas = mcpEntriesForHost(config, host)
   const deFaro = mcpNameForHost(host)
   const guardado = validMcpName(saved?.mcpName) ? saved.mcpName : ''
-  const conservar = (e) => ({ name: e.name, reuse: true, knownCommand: e.command, keep: { type: e.type, timeout: e.timeout } })
+  const conservar = (e) => ({
+    name: e.name,
+    reuse: true,
+    knownCommand: e.command,
+    standard: commandEstandar(e.command),
+    keep: { type: e.type, timeout: e.timeout, environment: entornoDe(config, e.name) },
+  })
 
   const elegida = mcpForHost(config, host)
   const habilitada = elegida && entradas.find((e) => e.name === elegida.name && e.enabled)
@@ -339,7 +469,11 @@ export function chooseWriteTarget({ config = null, saved = null, host = '' } = {
   const esqueleto = entradas.find((e) => !e.enabled && (e.name === deFaro || (guardado && e.name === guardado)))
   if (esqueleto) return conservar(esqueleto)
 
-  return { name: guardado || deFaro, reuse: false, knownCommand: null, keep: null }
+  const nombre = guardado || deFaro
+  const mcp = config?.mcp
+  if (plano(mcp) && Object.hasOwn(mcp, nombre) && plano(mcp[nombre])) return conservar(resumenEntrada(nombre, mcp[nombre]))
+
+  return { name: nombre, reuse: false, knownCommand: null, standard: true, keep: null }
 }
 
 /**
@@ -351,17 +485,29 @@ export function chooseWriteTarget({ config = null, saved = null, host = '' } = {
  * El `timeout` conservado no BAJA del del bloque: los MCP que Faro escribía
  * antes de H15 llevan 30 000 ms, que el primer arranque de un compañero
  * vencía, y conservar ése dejaría fuera la subida de H15; uno más largo que
- * haya puesto el usuario se respeta (desvío anotado del contrato de H18). Pura.
+ * haya puesto el usuario se respeta (desvío anotado del contrato de H18).
  *
- * @param {{name?: string, block: object, target: ReturnType<typeof chooseWriteTarget>}} input
+ * En una reutilizada se conserva además el producto que el formulario no trae
+ * (`conOtroProducto`, con `target.keep.environment`: revisión adversaria de
+ * H18). `command` es el del reintento con la ruta absoluta de uvx: se escribe
+ * en una entrada nueva y en una reutilizada con `standard` —la de Faro—; con
+ * un `command` del usuario (docker, una ruta propia) se ignora y se conserva el
+ * suyo. Pura.
+ *
+ * @param {{name?: string, block: object, target: ReturnType<typeof chooseWriteTarget>, command?: string[]|null}} input
  */
-export function mcpWritePatch({ name = '', block = null, target = null } = {}) {
+export function mcpWritePatch({ name = '', block = null, target = null, command = null } = {}) {
   const nombre = name || target?.name || ''
   if (!block || typeof block !== 'object') return null
+  const delReintento = Array.isArray(command) ? [...command] : null
   let entrada = block
   if (target?.reuse) {
     const plazo = Number.isInteger(target.keep?.timeout) ? Math.max(target.keep.timeout, block.timeout) : block.timeout
-    entrada = { ...block, type: target.keep?.type, command: target.knownCommand, timeout: plazo }
+    const orden = delReintento && target.standard === true ? delReintento : target.knownCommand
+    const environment = conOtroProducto(block.environment, target.keep?.environment)
+    entrada = { ...block, type: target.keep?.type, command: orden, timeout: plazo, environment }
+  } else if (delReintento) {
+    entrada = { ...block, command: delReintento }
   }
   return validMcpEntry(nombre, entrada, { knownCommand: target?.reuse ? target.knownCommand : null })
 }
@@ -447,33 +593,43 @@ export async function waitForMcpReady(client, host, { timeoutMs = 90000, interva
  * (`mcpWritePatch`) y lo escribe con `client.updateMcpEntries` —el
  * `PATCH /global/config`, que en opencode 1.2.25 escribe el fichero global Y
  * recarga los MCP sin reiniciar (anexo 2-A)—. `command` sustituye al estándar
- * en una entrada NUEVA (el reintento con la ruta absoluta de uvx); en una
- * reutilizada no se toca el suyo.
+ * (el reintento con la ruta absoluta de uvx) en una entrada NUEVA y en una
+ * reutilizada que es la de Faro (`standard`); en una con el `command` del
+ * usuario no se toca el suyo. Se lo pasa a `mcpWritePatch`, que es quien
+ * decide: sustituirlo antes en el bloque, como hasta la revisión adversaria de
+ * H18, hacía que en una reutilizada se tirara siempre.
+ *
+ * Sin configuración (`client.config()` falló, o se dio `config: null`) NO se
+ * escribe: devuelve `kind: 'config'` sin llamar a `updateMcpEntries`. Sin saber
+ * qué hay, todo parecería «nuevo» y el PATCH pisaría el `command` y el
+ * `environment` de una entrada que ya existe (revisión adversaria de H18).
  *
  * Ya no llama a `addMcp` ni a `connectMcp`: `POST /mcp` no «no hace nada»,
  * como decía este comentario, sino que arranca el MCP SÓLO en memoria —sus
  * herramientas llegan al modelo, pero `GET /mcp` no lo ve, no se escribe nada
  * y muere con la primera recarga—, así que no deja nada configurado.
  *
- * Devuelve `{ok, status, kind, name, block, reuse}`: `block` es la entrada tal
- * como se ha escrito (o, si la barrera no la dejó pasar, el bloque construido,
- * para el respaldo manual) y `kind` el de `updateMcpEntries` ('entrada',
- * 'red', 'ConfigJsonError', 'ConfigInvalidError'…). Los errores de las claves
- * que faltan salen de `buildMcpConfig`, como siempre, antes de escribir nada.
+ * Devuelve `{ok, status, kind, name, block, reuse, standard}`: `block` es la
+ * entrada tal como se ha escrito (o, si no se ha llegado a escribir, el bloque
+ * construido, para el respaldo manual), `kind` el de `updateMcpEntries`
+ * ('entrada', 'config', 'red', 'ConfigJsonError', 'ConfigInvalidError'…) y
+ * `standard` el de `chooseWriteTarget`. Los errores de las claves que faltan
+ * salen de `buildMcpConfig`, como siempre, antes de escribir nada.
  */
 export async function configureMcp(client, { host, jira, confluence, dataCenter, saved = null, config, command = null } = {}) {
   const construido = buildMcpConfig({ jira, confluence, dataCenter })
   const cargada = config === undefined ? await client.config().catch(() => null) : config
+  if (!plano(cargada)) {
+    const nombre = chooseWriteTarget({ config: null, saved, host }).name
+    return { ok: false, status: 0, kind: 'config', name: nombre, block: construido, reuse: false, standard: true }
+  }
   const target = chooseWriteTarget({ config: cargada, saved, host })
-  // En una entrada reutilizada `mcpWritePatch` conserva el command suyo: el del
-  // reintento sólo llega a escribirse en una nueva.
-  const block = Array.isArray(command) ? { ...construido, command: [...command] } : construido
-  const entrada = mcpWritePatch({ name: target.name, block, target })
-  if (!entrada) return { ok: false, status: 0, kind: 'entrada', name: target.name, block: construido, reuse: target.reuse }
+  const entrada = mcpWritePatch({ name: target.name, block: construido, target, command })
+  if (!entrada) return { ok: false, status: 0, kind: 'entrada', name: target.name, block: construido, reuse: target.reuse, standard: target.standard }
 
   const known = target.reuse && target.knownCommand ? { [target.name]: target.knownCommand } : null
   const r = await client.updateMcpEntries({ [target.name]: entrada }, { known })
-  return { ok: !!r?.ok, status: r?.status ?? 0, kind: r?.kind ?? '', name: target.name, block: entrada, reuse: target.reuse }
+  return { ok: !!r?.ok, status: r?.status ?? 0, kind: r?.kind ?? '', name: target.name, block: entrada, reuse: target.reuse, standard: target.standard }
 }
 
 /**
