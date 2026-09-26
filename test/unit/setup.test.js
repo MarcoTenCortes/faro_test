@@ -59,7 +59,9 @@ test('EL CAMBIO: cada producto lleva su token; el de uno no se copia al otro', (
   eq(c.environment.JIRA_PERSONAL_TOKEN, 'pat-jira')
   eq(c.environment.CONFLUENCE_URL, 'https://confluence.simplprogramme.eu')
   eq(c.environment.CONFLUENCE_PERSONAL_TOKEN, 'pat-conf')
-  assert(!('CONFLUENCE_USERNAME' in c.environment) && !('JIRA_USERNAME' in c.environment), 'en DC no va el correo')
+  // H18: las diez variables van siempre (la fusión del PATCH no quita claves), así
+  // que «no va el correo» es que va VACÍO, que mcp-atlassian trata como ausente.
+  eq([c.environment.CONFLUENCE_USERNAME, c.environment.JIRA_USERNAME], ['', ''], 'en DC no va el correo')
   assert(!Object.values(c.environment).includes('pat-jira') || c.environment.CONFLUENCE_PERSONAL_TOKEN !== 'pat-jira', 'el token de Jira no acaba en Confluence')
 })
 
@@ -72,11 +74,11 @@ test('mcp: en Data Center el wiki está donde el usuario diga, sin añadir /wiki
 
 test('mcp: se puede habilitar sólo uno de los dos productos', () => {
   const soloJira = buildMcpConfig({ jira: { url: CLOUD, email: 'e@e.com', token: 't' } })
-  assert('JIRA_URL' in soloJira.environment)
-  assert(!('CONFLUENCE_URL' in soloJira.environment))
+  eq(soloJira.environment.JIRA_URL, CLOUD)
+  eq(soloJira.environment.CONFLUENCE_URL, '', 'el que no se habilita va vacío (H18: la clave está, sin valor)')
   const soloConf = buildMcpConfig({ confluence: { url: CLOUD, email: 'e@e.com', token: 't' } })
-  assert(!('JIRA_URL' in soloConf.environment))
-  assert('CONFLUENCE_URL' in soloConf.environment)
+  eq(soloConf.environment.JIRA_URL, '')
+  eq(soloConf.environment.CONFLUENCE_URL, CLOUD + '/wiki')
 })
 
 test('SEGURIDAD: el MCP se configura en modo sólo lectura', () => {
@@ -124,7 +126,7 @@ test('siteBaseUrl: de lo que se pega al sitio, sin la incidencia ni la página',
 
 test('siteRecords: en Cloud los dos productos comparten host y no hay nada que enlazar', () => {
   const r = siteRecords({ host: 'acme.atlassian.net', product: 'confluence', mcpName: 'atlassian-acme-atlassian-net', jiraHost: 'acme.atlassian.net', confluenceHost: 'acme.atlassian.net' })
-  eq(r, [{ host: 'acme.atlassian.net', patch: { configured: true, mcpName: 'atlassian-acme-atlassian-net', product: 'confluence', cloud: true } }])
+  eq(r, [{ host: 'acme.atlassian.net', patch: { configured: true, mcpName: 'atlassian-acme-atlassian-net', product: 'confluence', cloud: true, verified: true } }])
 })
 
 test('EL CAMBIO: en Data Center el otro host queda enlazado, con el mismo MCP y la referencia cruzada', () => {
@@ -138,8 +140,8 @@ test('EL CAMBIO: en Data Center el otro host queda enlazado, con el mismo MCP y 
     confluenceHost: 'confluence.simplprogramme.eu',
   })
   eq(r.map((x) => x.host), ['confluence.simplprogramme.eu', 'jira.simplprogramme.eu'])
-  eq(r[0].patch, { configured: true, mcpName: 'atlassian-confluence-simplprogramme-eu', product: 'confluence', cloud: false, jiraHost: 'jira.simplprogramme.eu' })
-  eq(r[1].patch, { configured: true, mcpName: 'atlassian-confluence-simplprogramme-eu', product: 'jira', cloud: false, confluenceHost: 'confluence.simplprogramme.eu' })
+  eq(r[0].patch, { configured: true, mcpName: 'atlassian-confluence-simplprogramme-eu', product: 'confluence', cloud: false, verified: true, jiraHost: 'jira.simplprogramme.eu' })
+  eq(r[1].patch, { configured: true, mcpName: 'atlassian-confluence-simplprogramme-eu', product: 'jira', cloud: false, verified: true, confluenceHost: 'confluence.simplprogramme.eu' })
 
   // Al revés: configurado desde Jira.
   const desdeJira = siteRecords({ host: 'jira.x.eu', product: 'jira', mcpName: 'atlassian-jira-x-eu', jiraHost: 'jira.x.eu', confluenceHost: 'confluence.x.eu' })
@@ -643,4 +645,234 @@ test('H16 revisión: una comprobación cancelada es «cancelado», nunca un fall
   // Sin señal, `signal` viaja como undefined: runTurn sigue como siempre.
   await verifyCredentials(cliente, { sessionID: 's', model: null, host: 'h', product: 'jira' })
   eq('signal' in opciones && opciones.signal === undefined, true)
+})
+
+// ---------------------------------------------------------------------------
+// H18 (docs/PLAN2.md §3.2): Faro escribe el MCP en la configuración de opencode
+// con PATCH /global/config. Lo que decide QUÉ se escribe es puro y vive aquí.
+// ---------------------------------------------------------------------------
+import {
+  mcpEntriesForHost,
+  chooseWriteTarget,
+  mcpWritePatch,
+  uvxAbsoluteCommand,
+  configFileCandidates,
+  configureMcp,
+  keysUnverified,
+} from '../../src/panel/setup.js'
+import { MCP_ENV_KEYS, validMcpEntry } from '../../src/shared/mcp-config.js'
+
+const DC = { jira: { url: 'https://jira.x.eu', token: 'pat-jira' }, confluence: { url: 'https://confluence.x.eu', token: 'pat-conf' }, dataCenter: true }
+const FARO = mcpNameForHost('jira.x.eu')
+
+/** El fuente sin comentarios: lo que se pina es código, no lo que se cuenta de él. */
+function sinComentarios(src) {
+  return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '')
+}
+
+test('H18: el environment va COMPLETO — las diez variables, vacías las que no se usan, y el bloque pasa la barrera', () => {
+  const nube = buildMcpConfig({
+    jira: { url: CLOUD, email: 'yo@acme.com', token: 'tok-j' },
+    confluence: { url: CLOUD, email: 'yo@acme.com', token: 'tok-c' },
+  })
+  eq(Object.keys(nube.environment), [...MCP_ENV_KEYS], 'claves exactas y en su orden')
+  eq(Object.keys(nube.environment), ['JIRA_URL', 'JIRA_PERSONAL_TOKEN', 'JIRA_USERNAME', 'JIRA_API_TOKEN', 'CONFLUENCE_URL', 'CONFLUENCE_PERSONAL_TOKEN', 'CONFLUENCE_USERNAME', 'CONFLUENCE_API_TOKEN', 'READ_ONLY_MODE', 'TOOLSETS'])
+  eq([nube.environment.JIRA_PERSONAL_TOKEN, nube.environment.CONFLUENCE_PERSONAL_TOKEN], ['', ''], 'en Cloud el token personal va vacío')
+  eq([nube.enabled, nube.type], [true, 'local'])
+  // Cloud → Data Center: la fusión del PATCH no quita claves, así que las de Cloud tienen que ir VACÍAS, no ausentes.
+  const dc = buildMcpConfig(DC)
+  eq(Object.keys(dc.environment), [...MCP_ENV_KEYS])
+  eq([dc.environment.JIRA_USERNAME, dc.environment.JIRA_API_TOKEN, dc.environment.CONFLUENCE_USERNAME, dc.environment.CONFLUENCE_API_TOKEN], ['', '', '', ''], 'Cloud→DC deja USERNAME/API_TOKEN en ""')
+  eq([dc.environment.JIRA_PERSONAL_TOKEN, dc.environment.CONFLUENCE_PERSONAL_TOKEN], ['pat-jira', 'pat-conf'])
+  // Sólo un producto: el otro, con su clave y vacío.
+  const soloJira = buildMcpConfig({ jira: { url: 'https://jira.x.eu', token: 'p' }, dataCenter: true })
+  eq([soloJira.environment.CONFLUENCE_URL, soloJira.environment.CONFLUENCE_PERSONAL_TOKEN], ['', ''])
+  // Lo que construye Faro es exactamente lo que la barrera deja escribir, sin tocar nada.
+  eq(validMcpEntry(FARO, dc), dc, 'el bloque de Faro pasa la barrera tal cual')
+  eq(validMcpEntry(FARO, nube), nube)
+})
+
+const CONFIG_H18 = {
+  mcp: {
+    'mio-a-mano': {
+      type: 'local',
+      command: ['docker', 'run', '-i', '--rm', 'ghcr.io/sooperset/mcp-atlassian:0.23.1'],
+      environment: { JIRA_URL: 'https://jira.x.eu', JIRA_PERSONAL_TOKEN: 'secreto-1' },
+      enabled: true,
+      timeout: 120000,
+    },
+    [FARO]: { type: 'local', command: ['uvx', 'mcp-atlassian'], environment: { CONFLUENCE_URL: 'https://confluence.x.eu', CONFLUENCE_PERSONAL_TOKEN: 'secreto-2' }, enabled: false, timeout: 30000 },
+    ajena: { type: 'local', command: ['otra-cosa'], environment: { JIRA_URL: 'https://jira.x.eu', JIRA_PERSONAL_TOKEN: 'secreto-3' }, enabled: false },
+    'de-otro-host': { type: 'local', command: ['uvx', 'mcp-atlassian'], environment: { JIRA_URL: 'https://jira.otro.eu' } },
+  },
+}
+
+test('H18: mcpEntriesForHost da TODAS las entradas del dominio, habilitadas y deshabilitadas, sin environment ni tokens', () => {
+  const r = mcpEntriesForHost(CONFIG_H18, 'jira.x.eu')
+  eq(r.map((e) => [e.name, e.enabled]), [['mio-a-mano', true], ['ajena', false]], 'en el orden de la configuración, las dos del dominio')
+  eq(Object.keys(r[0]).sort(), ['command', 'enabled', 'name', 'products', 'timeout', 'type'], 'claves exactas')
+  eq(r[0], { name: 'mio-a-mano', enabled: true, command: CONFIG_H18.mcp['mio-a-mano'].command, type: 'local', timeout: 120000, products: 1 })
+  eq(r[1].timeout, null, 'sin plazo, null')
+  assert(!JSON.stringify(mcpEntriesForHost(CONFIG_H18, 'confluence.x.eu')).includes('secreto'), 'SEGURIDAD: ningún token sale de aquí')
+  eq(mcpEntriesForHost(CONFIG_H18, 'Confluence.X.eu').map((e) => e.name), [FARO], 'la deshabilitada también, sin distinguir mayúsculas')
+  // mcpForHost sigue saltando las deshabilitadas: es lo que evita el bucle al quitar las claves.
+  eq(mcpForHost(CONFIG_H18, 'confluence.x.eu'), null)
+  for (const raro of [null, {}, { mcp: null }, { mcp: [] }, { mcp: { x: null, y: 7 } }]) eq(mcpEntriesForHost(raro, 'jira.x.eu'), [], 'sin forma: ' + JSON.stringify(raro))
+  eq(mcpEntriesForHost(CONFIG_H18, ''), [])
+})
+
+test('H18: chooseWriteTarget — reutiliza la habilitada del dominio o el esqueleto de Faro; una ajena deshabilitada, nunca', () => {
+  // (1) Habilitada con el dominio: su nombre, y se conservan type, command y timeout.
+  eq(chooseWriteTarget({ config: CONFIG_H18, saved: null, host: 'jira.x.eu' }), {
+    name: 'mio-a-mano',
+    reuse: true,
+    knownCommand: CONFIG_H18.mcp['mio-a-mano'].command,
+    keep: { type: 'local', timeout: 120000 },
+  })
+  // (2) Deshabilitada que es el esqueleto de Faro (el mcpName guardado, que un host enlazado comparte): se reutiliza.
+  const esqueleto = chooseWriteTarget({ config: CONFIG_H18, saved: { mcpName: FARO }, host: 'confluence.x.eu' })
+  eq([esqueleto.name, esqueleto.reuse, esqueleto.knownCommand], [FARO, true, ['uvx', 'mcp-atlassian']])
+  eq(chooseWriteTarget({ config: CONFIG_H18, saved: null, host: 'confluence.x.eu' }).reuse, false, 'sin el nombre guardado, ese nombre no es el de Faro para ESTE host')
+  // …o el nombre por host, sin nada guardado.
+  const porHost = { mcp: { [mcpNameForHost('jira.y.eu')]: { type: 'local', command: ['uvx', 'mcp-atlassian'], environment: { JIRA_URL: 'https://jira.y.eu' }, enabled: false } } }
+  eq(chooseWriteTarget({ config: porHost, saved: null, host: 'jira.y.eu' }).reuse, true)
+  const guardado = { mcp: { 'apuntado-por-faro': { type: 'local', command: ['uvx', 'mcp-atlassian'], environment: { JIRA_URL: 'https://jira.y.eu' }, enabled: false } } }
+  eq(chooseWriteTarget({ config: guardado, saved: { mcpName: 'apuntado-por-faro' }, host: 'jira.y.eu' }).reuse, true)
+  eq(chooseWriteTarget({ config: guardado, saved: null, host: 'jira.y.eu' }).reuse, false, 'el mismo esqueleto sin su nombre guardado es ajeno')
+  // (3) Deshabilitada AJENA con el dominio: no vuelve a arrancar con tokens frescos; se crea una nueva a su lado.
+  const soloAjena = { mcp: { ajena: CONFIG_H18.mcp.ajena } }
+  eq(chooseWriteTarget({ config: soloAjena, saved: null, host: 'jira.x.eu' }), { name: FARO, reuse: false, knownCommand: null, keep: null })
+  // (4) Ninguna: el mcpName guardado si tiene forma de nombre; si no, el de Faro por host.
+  eq(chooseWriteTarget({ config: null, saved: { mcpName: 'atlassian-guardado' }, host: 'jira.x.eu' }).name, 'atlassian-guardado')
+  for (const malo of ['con espacio', 'a/b', '__proto__', 'x'.repeat(65), '', 7, null]) {
+    eq(chooseWriteTarget({ config: null, saved: { mcpName: malo }, host: 'jira.x.eu' }).name, FARO, 'un nombre guardado sin forma no se usa: ' + malo)
+  }
+  eq(chooseWriteTarget({ host: 'jira.x.eu' }), { name: FARO, reuse: false, knownCommand: null, keep: null })
+})
+
+test('H18: mcpWritePatch conserva el command del usuario sólo si es el de GET /config, y rechaza otra clave, otra versión y metacaracteres', () => {
+  const block = buildMcpConfig(DC)
+  // Nueva: el bloque tal cual.
+  const nueva = chooseWriteTarget({ config: null, host: 'jira.x.eu' })
+  eq(mcpWritePatch({ name: nueva.name, block, target: nueva }), block)
+  // Reutilizada con un command propio (docker): se conserva porque es byte a byte el que ya tiene.
+  const reuso = chooseWriteTarget({ config: CONFIG_H18, host: 'jira.x.eu' })
+  const escrita = mcpWritePatch({ block, target: reuso })
+  eq(escrita.command, CONFIG_H18.mcp['mio-a-mano'].command)
+  eq([escrita.type, escrita.timeout, escrita.enabled], ['local', 120000, true], 'su plazo, más largo que el de Faro, se respeta')
+  eq(escrita.environment, block.environment, 'se reescribe el environment entero')
+  // Si el command conocido no coincide byte a byte con el que se escribiría, no vale.
+  eq(mcpWritePatch({ block, target: { ...reuso, knownCommand: ['docker', 'run'] } }).command, ['docker', 'run'], 'lo conocido es lo que se conserva')
+  eq(validMcpEntry('mio-a-mano', { ...escrita, command: ['docker', 'run', '-i'] }, { knownCommand: reuso.knownCommand }), null, 'otro command que el conocido: no')
+  // Un 30 000 viejo de Faro sube al de H15 (no se BAJA nunca el del usuario).
+  const viejo = chooseWriteTarget({ config: CONFIG_H18, saved: { mcpName: FARO }, host: 'confluence.x.eu' })
+  eq(mcpWritePatch({ block, target: viejo }).timeout, 60000)
+  // Otra clave en el bloque: nada.
+  eq(mcpWritePatch({ block: { ...block, agent: { build: {} } }, target: nueva }), null, 'SEGURIDAD: una clave de más no se escribe')
+  eq(mcpWritePatch({ block: { ...block, command: ['uvx', 'mcp-atlassian@9.9.9'] }, target: nueva }), null, 'otra versión, no')
+  eq(mcpWritePatch({ block: { ...block, command: ['C:\\Users\\a&b\\.local\\bin\\uvx.exe', 'mcp-atlassian'] }, target: nueva }), null, 'SEGURIDAD: metacaracteres en la ruta, no')
+  eq(mcpWritePatch({ block: { ...block, command: ['C:\\Users\\Marco Tenorio\\.local\\bin\\uvx.exe', 'mcp-atlassian'] }, target: nueva }).command[0], 'C:\\Users\\Marco Tenorio\\.local\\bin\\uvx.exe', 'una ruta con espacios sí')
+  // Una entrada remota o sin command no se puede reutilizar: la barrera la tira.
+  const remota = { mcp: { r: { type: 'remote', url: 'https://x', environment: { JIRA_URL: 'https://jira.x.eu' } } } }
+  eq(mcpWritePatch({ block, target: chooseWriteTarget({ config: remota, host: 'jira.x.eu' }) }), null)
+  eq(mcpWritePatch({ block: null, target: nueva }), null)
+  eq(mcpWritePatch({ block, target: { name: 'con espacio', reuse: false } }), null, 'un nombre sin forma, tampoco')
+})
+
+test('H18: uvxAbsoluteCommand — de home o del directorio de configuración, y null con metacaracteres', () => {
+  const v = 'mcp-atlassian@' + MCP_ATLASSIAN_VERSION
+  eq(uvxAbsoluteCommand({ home: 'C:\\Users\\marco', config: '' }), ['C:\\Users\\marco\\.local\\bin\\uvx.exe', v])
+  eq(uvxAbsoluteCommand({ home: '', config: 'C:\\Users\\marco\\.config\\opencode' }), ['C:\\Users\\marco\\.local\\bin\\uvx.exe', v], 'sin home, dos niveles por encima de config')
+  eq(uvxAbsoluteCommand({ home: 'C:\\Users\\Marco Tenorio\\' }), ['C:\\Users\\Marco Tenorio\\.local\\bin\\uvx.exe', v], 'con espacios y barra final')
+  for (const malo of [null, {}, { home: '/home/marco' }, { home: 'C:\\Users\\a&b' }, { home: 'C:\\Users\\a^b' }, { home: 'C:\\Users\\a%b%' }, { config: 'C:\\opencode' }, { home: 'C:\\x\\..\\y' }]) {
+    eq(uvxAbsoluteCommand(malo), null, 'sin ruta válida: ' + JSON.stringify(malo))
+  }
+})
+
+test('H18: configFileCandidates — jsonc antes que json antes que config.json, y opencode.jsonc si no hay ninguno', () => {
+  eq(configFileCandidates(['config.json', 'opencode.json', 'opencode.jsonc', 'otro.txt']), ['opencode.jsonc', 'opencode.json', 'config.json'])
+  eq(configFileCandidates(['opencode.json', 'package.json'])[0], 'opencode.json')
+  eq(configFileCandidates(['config.json']), ['config.json'])
+  eq(configFileCandidates([]), ['opencode.jsonc'], 'sin ninguno, opencode crea el .jsonc')
+  eq(configFileCandidates(null), ['opencode.jsonc'])
+  eq(configFileCandidates([7, null, 'OPENCODE.JSON']), ['opencode.jsonc'], 'sólo los nombres exactos')
+})
+
+/** Un cliente falso para configureMcp: SIN addMcp ni connectMcp (si los llamara, reventaría). */
+function clienteDeEscritura({ config = null, respuesta = { ok: true, status: 200, kind: '' } } = {}) {
+  const llamadas = []
+  return {
+    llamadas,
+    config: async () => {
+      llamadas.push(['config'])
+      return config
+    },
+    listMcp: async () => {
+      llamadas.push(['listMcp'])
+      return {}
+    },
+    updateMcpEntries: async (entradas, barrera) => {
+      llamadas.push(['updateMcpEntries', entradas, barrera])
+      return respuesta
+    },
+  }
+}
+
+test('H18: configureMcp escribe con updateMcpEntries, sin addMcp ni connectMcp, y no espera', async () => {
+  const c = clienteDeEscritura()
+  const r = await configureMcp(c, { host: 'jira.x.eu', ...DC })
+  eq(c.llamadas.map((l) => l[0]), ['config', 'updateMcpEntries'], 'lee la configuración, escribe, y nada más: ni una espera')
+  eq(r, { ok: true, status: 200, kind: '', name: FARO, block: buildMcpConfig(DC), reuse: false })
+  eq(c.llamadas[1][1], { [FARO]: buildMcpConfig(DC) }, 'una entrada, con su nombre')
+  eq(c.llamadas[1][2], { known: null })
+  // Un 500 de opencode: {ok:false} con su kind, sin lanzar.
+  const roto = clienteDeEscritura({ respuesta: { ok: false, status: 500, kind: 'ConfigJsonError' } })
+  const f = await configureMcp(roto, { host: 'jira.x.eu', ...DC })
+  eq([f.ok, f.status, f.kind, f.name], [false, 500, 'ConfigJsonError', FARO])
+  eq(f.block, buildMcpConfig(DC), 'el bloque, para el respaldo manual')
+  // Con la configuración dada no la vuelve a leer, y reutiliza la entrada del usuario pasando su command como conocido.
+  const reuso = clienteDeEscritura()
+  const r2 = await configureMcp(reuso, { host: 'jira.x.eu', ...DC, config: CONFIG_H18 })
+  eq(reuso.llamadas.map((l) => l[0]), ['updateMcpEntries'])
+  eq([r2.name, r2.reuse], ['mio-a-mano', true])
+  eq(reuso.llamadas[0][2], { known: { 'mio-a-mano': CONFIG_H18.mcp['mio-a-mano'].command } })
+  // El command del reintento sustituye al estándar SÓLO en una entrada nueva.
+  const abs = ['C:\\Users\\marco\\.local\\bin\\uvx.exe', 'mcp-atlassian@' + MCP_ATLASSIAN_VERSION]
+  const nueva = clienteDeEscritura()
+  eq((await configureMcp(nueva, { host: 'jira.x.eu', ...DC, config: null, command: abs })).block.command, abs)
+  const propia = clienteDeEscritura()
+  eq((await configureMcp(propia, { host: 'jira.x.eu', ...DC, config: CONFIG_H18, command: abs })).block.command, CONFIG_H18.mcp['mio-a-mano'].command, 'en una reutilizada no se toca su command')
+  // Lo que la barrera no deja pasar no sale: ni una petición.
+  const mal = clienteDeEscritura()
+  const m = await configureMcp(mal, { host: 'jira.x.eu', ...DC, config: null, command: ['C:\\a&b\\uvx.exe', 'mcp-atlassian'] })
+  eq([m.ok, m.status, m.kind], [false, 0, 'entrada'])
+  eq(mal.llamadas.length, 0, 'sin petición')
+  // Y en el código: ni addMcp ni connectMcp en setup.js, y el cliente ya no tiene addMcp.
+  const fuente = sinComentarios(readFileSync(join(import.meta.dirname, '..', '..', 'src/panel/setup.js'), 'utf8'))
+  assert(!/addMcp|connectMcp/.test(fuente), 'setup.js no registra por POST /mcp')
+  const cliente = sinComentarios(readFileSync(join(import.meta.dirname, '..', '..', 'src/opencode/client.js'), 'utf8'))
+  assert(!/addMcp\s*\(/.test(cliente) && !/'POST', '\/mcp'/.test(cliente), 'y el cliente ya no tiene la puerta de POST /mcp')
+})
+
+test('H18: siteRecords lleva verified, y un registro guardado de HOY (sin verified) cuenta como verificado', () => {
+  const sin = siteRecords({ host: 'jira.x.eu', product: 'jira', mcpName: FARO, jiraHost: 'jira.x.eu', confluenceHost: 'confluence.x.eu', verified: false })
+  eq(sin.map((r) => r.patch.verified), [false, false], 'la adopción sin comprobar marca los DOS registros del MCP')
+  eq(Object.keys(sin[0].patch), ['configured', 'mcpName', 'product', 'cloud', 'verified', 'confluenceHost'], 'claves exactas y en su orden')
+  eq(siteRecords({ host: 'jira.x.eu', product: 'jira', mcpName: FARO }).map((r) => r.patch.verified), [true], 'por defecto, verificado')
+  // Migración: la forma REAL de un registro guardado antes de H18, sin verified.
+  const deHoy = {
+    configured: true,
+    mcpName: 'atlassian-jira-simplprogramme-eu',
+    product: 'jira',
+    cloud: false,
+    confluenceHost: 'confluence.simplprogramme.eu',
+    onboarded: true,
+    indexedAt: 1758000000000,
+    skill: 'analisis',
+    model: { providerID: 'github-copilot', modelID: 'gpt-5.6-luna' },
+  }
+  eq(keysUnverified(deHoy), false, 'nadie ve «claves sin comprobar» por actualizar')
+  eq(keysUnverified({ ...deHoy, verified: true }), false)
+  eq(keysUnverified({ ...deHoy, verified: false }), true, 'sólo false EXPLÍCITO avisa')
+  for (const raro of [null, undefined, {}, { verified: 'false' }, { verified: 0 }, { verified: null }, 'x']) eq(keysUnverified(raro), false, 'sin false explícito: ' + JSON.stringify(raro))
 })

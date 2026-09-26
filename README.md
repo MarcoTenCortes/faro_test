@@ -7,7 +7,8 @@ la respuesta**.
 - Chat en un panel lateral, con el modelo que tú elijas de los que ya tiene tu
   opencode (aquí, 43 entre tres proveedores).
 - Consulta Jira y Confluence de verdad, a través del servidor MCP
-  `mcp-atlassian`. Faro te prepara el bloque de configuración y espera a
+  `mcp-atlassian`. Faro escribe el bloque en la configuración de tu opencode
+  por su API, con tu permiso (y si no puede, te lo deja para pegar), y espera a
   detectarlo; las claves van a tu opencode, no al navegador.
 - Un mapa del sitio construido la primera vez —**incluido el árbol de páginas
   completo**, que es lo que permite enseñarte el camino— y que se enriquece con
@@ -73,7 +74,7 @@ la respuesta**.
   MCP sirve a los dos, y si viven en hosts distintos el otro queda enlazado:
   no vuelve a pedir claves, y desde Jira se lleva el contexto del Confluence
   de su pareja para saber qué páginas mirar. Y si el MCP ya existe en tu
-  opencode con ese dominio dentro —lo pegaste a mano, o lo configuraste desde
+  opencode con ese dominio dentro —lo escribiste a mano, o lo configuraste desde
   el otro producto—, Faro lo reconoce y lo usa sin pedirte nada.
 - **Análisis con marcas numeradas**: el modo Análisis numera sus observaciones y
   **subraya en la página el pasaje del que habla cada una**, con su número
@@ -230,17 +231,35 @@ de cada producto en Data Center). Si tu Jira y tu Confluence viven en hosts
 distintos, dalos juntos aquí: el otro host queda enlazado y no volverá a pedir
 nada.
 
-Después te enseñará un bloque de configuración para pegar en el `opencode.json`
-de tu opencode, y te pedirá reiniciarlo. **Esto es una vez por sitio** (o por
-pareja de sitios), y hoy no se puede evitar: opencode 1.2.25 sólo carga los
-servidores MCP de su configuración al arrancar, y su endpoint para registrarlos
-en caliente (`POST /mcp`) arranca el proceso sólo en memoria: no se guarda en
-ningún fichero, `GET /mcp` no lo ve y muere en la siguiente recarga. Faro se
-queda vigilando y, en cuanto detecta el MCP conectado, comprueba los dos tokens
-y sigue solo. Si el MCP se queda en «failed», el panel dice por qué suele pasar
+La primera vez te pedirá además **permiso para escribir en la configuración de
+tu opencode**: te enseña la carpeta exacta y te avisa de lo que pasa al escribir
+—opencode reformatea su fichero y reinicia sus conexiones, así que una respuesta
+a medias en otra ventana conectada a ese opencode se corta—. Con la casilla
+marcada, **Faro escribe él mismo el bloque del MCP** con la API de opencode
+(`PATCH /global/config`), espera a que aparezca y conecte («Escribiendo en
+opencode…», «Esperando a que opencode recargue…», «Arrancando el MCP…»),
+comprueba que lo que opencode carga es lo que se ha escrito y sigue solo con la
+comprobación de los tokens. **Ya no hay que pegar nada ni reiniciar opencode.**
+Si ese dominio ya tenía un MCP en tu configuración (pegado a mano, con Docker…),
+se reutiliza y se conserva su comando. «Cambiar las claves», en Ajustes, vuelve
+a pedir el permiso cada vez, porque escribir corta lo que otras ventanas tengan
+a medias.
+
+Sólo si opencode no acepta la escritura —su fichero tiene un error de sintaxis,
+o una clave que no conoce— Faro te dice por qué y te deja el bloque de siempre
+para pegar a mano, con un botón **Ya lo he pegado** que hace que opencode lo
+relea sin reiniciar. Y si lo escribió pero tu opencode no lo recarga (una
+versión distinta de la probada, la 1.2.25), te dice dónde está escrito y que lo
+reinicies. Si el MCP se queda en «failed», el panel dice por qué suele pasar
 (casi siempre, que opencode no encuentra `uvx`), te da el comando para
 arreglarlo y un botón **Reintentar** que lo vuelve a arrancar sin reiniciar
-opencode.
+opencode; y si el MCP que Faro acaba de crear cae al instante, prueba antes una
+vez con la ruta completa de `uvx`.
+
+Lo que el panel apunta es el nombre del MCP y que ese sitio está configurado;
+las claves, no. Si recargas el panel a mitad y el MCP ya estaba conectado sin
+que se llegaran a comprobar los tokens, el chat te lo dice («las claves no se
+han comprobado todavía») con un botón **Comprobar las claves**.
 
 Luego te ofrecerá construir el contexto, traer el tuyo, o empezar sin él.
 
@@ -658,13 +677,14 @@ cuáles no), que desde H16 son tuyos y no de un sitio.
 ## Comprobaciones
 
 ```bash
-npm run check              # sintaxis + orden + manifest + 1378 pruebas unitarias + docs
+npm run check              # sintaxis + orden + manifest + 1410 pruebas unitarias + docs
 npm run check:docs         # sólo el paso docs: número de pruebas, títulos del registro, mensajes y ficheros del mapa
 npm run test:integration   # contra un opencode real que arranca la propia prueba
 npm run harness            # banco de pruebas visual en http://127.0.0.1:5175
 npm run turn -- --n 1      # el último turno real (pregunta, sistema, herramientas, respuesta) desde una copia de opencode.db
 npm run bench              # el metro: cuánto pesa el system de cada escenario y cuánto tardan los módulos puros
 npm run contrast           # el contraste de cada pareja de colores, por tema: informa, y falla si alguna baja de 4,5 (texto) o 3 (control)
+npm run sandbox            # escribe de verdad en la configuración de un opencode PROPIO y aislado, y comprueba lo que Faro escribe ahí (Windows)
 npm run snapshots          # regenera las instantáneas de los prompts (test/fixtures/prompts) cuando un cambio de prompt es intencionado
 ```
 
@@ -871,6 +891,23 @@ Con el banco levantado hay dos páginas:
   `test/contrast-pairs.js`, que es la misma lista que pina `panel-css.test.js`,
   el que sí corre en `npm run check`.
 
+- **`npm run sandbox`** comprueba lo que Faro escribe en la configuración de
+  opencode, escribiendo DE VERDAD —y por eso nunca en el tuyo—: arranca un
+  `opencode serve` propio con toda la carpeta de usuario redirigida a una
+  carpeta temporal (no sólo una variable: `OPENCODE_CONFIG_DIR` no redirige la
+  configuración global, y una prueba que lo creía escribió una vez en el fichero
+  de verdad), en un puerto alto que nunca es el 4096, y ANTES de escribir nada
+  pregunta a ese opencode dónde tiene su configuración; si no está dentro de la
+  carpeta temporal, se va sin tocar nada. Con un MCP de juguete comprueba siete
+  casos: que lo que no pasa la barrera no se manda, que una entrada nueva
+  conecta en menos de 2 s, que una entrada desactivada deja el fichero sin el
+  token, que un bloque pegado a mano se carga sin reiniciar, que con el fichero
+  roto no se escribe nada y el token no llega a ningún registro, que una ruta
+  con espacios arranca, y que opencode no carga ningún AGENTS.md ni CLAUDE.md.
+  Al acabar mata el proceso y sus hijos y borra la carpeta, también si algo
+  falla. Queda fuera de `npm run check` porque arranca un servidor; lo que no
+  puede dejar de hacer lo vigila una prueba que sí corre ahí. Hoy: 7/7.
+
 - **`npm run snapshots`** reescribe `test/fixtures/prompts/*.txt` con los
   prompts que el código produce hoy para 37 escenarios fijos (Confluence y Jira
   Data Center × cada Skill × con y sin página en bloques, páginas base,
@@ -992,6 +1029,25 @@ que Faro guarda de ese sitio— y se borra con **«Borrar mi actividad»**, o co
 fondo escriben ese diario cada uno por su lado, así que al borrarlo se deja una
 señal que el otro mira antes de guardar, para que lo que tuviera a medias no te
 devuelva lo que acabas de tirar.
+
+**Faro escribe en la configuración de tu opencode, y sólo el MCP.** Para no
+tener que pegar las claves a mano, Faro las escribe él en el fichero de
+configuración global de opencode con su API, y ese fichero es también donde
+viven los agentes, los permisos, los complementos y los comandos de opencode:
+una escritura cualquiera sería poder ejecutar código en tu equipo. Por eso hay
+**dos puertas y las dos cerradas**: una que sólo escribe entradas de MCP de
+Atlassian con una forma fija —un comando de una lista blanca (`uvx
+mcp-atlassian` con la versión fijada, o la ruta completa de `uvx.exe` sin
+caracteres que un intérprete de órdenes pudiera usar; o, si ese MCP ya estaba
+en tu fichero, el comando que escribiste tú, tal cual), exactamente las diez
+variables que Faro sabe poner, nada más— y otra que sólo pide a opencode que
+relea su fichero, sin mandar nada. Lo que no pasa esa barrera no sale en
+ninguna petición. Se pide **permiso** la primera vez, con la carpeta exacta, y
+cada vez desde «Cambiar las claves»; y sólo con el panel quieto, porque cada
+escritura corta los turnos en curso de ese opencode. La respuesta de opencode
+—que es su configuración entera, con las claves de todos tus MCP— **se lee y se
+tira**: no llega al registro, ni a un error, ni a la pantalla. Y Faro **no
+guarda las claves** en ningún sitio suyo: van del campo al opencode local.
 
 **Y el modelo no puede tocar tu máquina.** El agente por defecto de opencode
 trae herramientas de shell y de ficheros, y las usa: comprobado, ejecutaba
@@ -1161,10 +1217,13 @@ la página ni entra en ninguna pregunta.
   cuántas de cuántas. Hasta H14 leía las más ANTIGUAS del espacio, que es lo que
   la API devuelve por defecto, y el mapa podía no contener ni la página que
   tenías abierta. Y sigue profundizando con el uso.
-- **No arranca opencode por ti, ni escribe su configuración.** Una extensión no
-  puede tocar el disco. Por eso el MCP se pega a mano una vez por sitio y hay
-  que reiniciar opencode. Un host de mensajería nativa resolvería ambas cosas;
-  no está hecho.
+- **No arranca opencode por ti.** Una extensión no puede tocar el disco ni
+  lanzar procesos; para eso están `tools\instalar.ps1` y
+  `tools\arrancar-opencode.ps1`. Lo que sí hace desde H18 es **pedirle a
+  opencode que escriba** el MCP en su propia configuración, por su API y con tu
+  permiso, así que ya no hay que pegarlo a mano; sólo si opencode no acepta la
+  escritura, el bloque se pega (y «Ya lo he pegado» hace que lo relea sin
+  reiniciar).
 - **La navegación asistida depende del DOM de Atlassian.** Cuando el destino no
   aparece, se degrada a salto directo en vez de quedarse colgado, pero si
   Atlassian rediseña la barra lateral habrá que revisar
@@ -1216,14 +1275,14 @@ la página ni entra en ninguna pregunta.
 manifest.json               MV3 · key fija el id · sidePanel
 src/
   panel/
-    panel.js                chat, ajustes, memoria, indexador, planificador; desde H17 la pantalla «Elige el modelo» y el orden del primer uso (conexión → modelo → claves → contexto)
+    panel.js                chat, ajustes, memoria, indexador, planificador; desde H17 la pantalla «Elige el modelo» y el orden del primer uso (conexión → modelo → claves → contexto); desde H18 las claves escritas en opencode con permiso, la espera hasta que el MCP aparece y conecta, y el aviso de unas claves sin comprobar
     chat-scroll.js          ¿está el chat pegado al fondo? (puro)
     screens.js              qué pantalla cierra Escape, y con qué botón o sin
                             guardar (Ajustes); la del modelo sólo cuando su
                             flecha está a la vista (puro)
     links.js                qué enlaces del chat se abren: el sitio, su Confluence enlazado, id.atlassian.com (puro)
     skills.js               General · Búsqueda · Resumen · Análisis; Búsqueda habla distinto en Jira (JQL) y en Confluence (árbol) (puro)
-    setup.js                claves por producto → bloque MCP (versión fijada, todas las herramientas, un minuto para arrancar); hosts enlazados; y por qué un MCP está en «failed» y qué hacer (puro salvo las llamadas a opencode)
+    setup.js                claves por producto → bloque MCP (versión fijada, todas las herramientas, un minuto para arrancar, las diez variables siempre); hosts enlazados; por qué un MCP está en «failed» y qué hacer; y desde H18 bajo qué nombre se escribe en la configuración de opencode y qué se conserva de lo que ya había, y si las claves de un sitio se han comprobado (puro salvo las llamadas a opencode)
     sources.js              páginas base del análisis: forma, alcance, autocompletado desde el índice, URL pegada, vigilancia del alcance (puro)
     suggestions.js          las tres sugerencias del chat vacío, por producto y por Skill (puro)
     today.js                qué mirar hoy: a quién se pregunta, qué puntúa cada señal y el porqué de cada fila (puro)
@@ -1250,7 +1309,7 @@ src/
     picker.js               modo de selección: subrayar texto, elegir imágenes
     pick-payload.js         lo que viaja de esa selección (puro)
     runner.js               ejecutor de un paso
-  opencode/                 cliente HTTP + SSE, reconstrucción de turnos; desde H17 la sonda de «Comprobar» (un turno corto en una sesión que se borra)
+  opencode/                 cliente HTTP + SSE, reconstrucción de turnos; desde H17 la sonda de «Comprobar» (un turno corto en una sesión que se borra); desde H18 las dos únicas puertas de escritura en la configuración de opencode, que tiran la respuesta y no registran ningún cuerpo con claves
   atlassian/                detección de sitio, índice de contenido
     activity.js             el diario local de lo que has visto y analizado: sólo ids, títulos y rutas relativas (puro)
   nav/                      esquema NavigationPlan y su validación
@@ -1262,6 +1321,7 @@ src/
     config.js               ajustes por defecto y su migración (el modelo es de la persona); el plazo de la sonda de «Comprobar»; NAV_TIMING, el único sitio con los tiempos de la navegación; los topes de la eficiencia (cuántos mensajes se piden al restaurar, cuándo se avisa de una conversación pesada); y la lista de lo que Faro guarda, con el área del navegador en la que vive cada cosa
     activity-store.js       dónde vive ese diario y cómo se escribe sin que el service worker y el panel se pisen
     storage.js              lo guardado del navegador; todo lo de un sitio en UNA lectura (getSiteBundle), lo que arrastra la sesión abierta, y «olvidar este sitio» en una sola función que deriva de esa lista lo que borra
+    mcp-config.js           la única barrera de lo que Faro puede escribir en la configuración de opencode: sólo entradas de MCP con forma fija, comando de lista blanca y las diez variables (puro)
     permissions.js          los permisos de cada sesión de opencode: todo denegado salvo el MCP, y una copia de cómo los evalúa opencode para probarlo (puro)
     timing.js               el cronómetro por fases que el registro enseña: sólo etiquetas y números, nunca cuerpos ni claves (puro)
     models.js               elegir modelo, y desde H16 qué enseña un fallo: clasificarlo, sacar de él los veredictos (también de proveedor y de la lista de Copilot), recordarlos con caducidad y que ninguna elección automática vuelva a caer en lo que falló (puro)
@@ -1273,6 +1333,8 @@ tools/                      generación de iconos, clave del manifest, servidor 
   last-turn.mjs             el último turno real desde una copia de opencode.db (npm run turn)
   bench.mjs                 el metro: tamaño del system por escenario y tiempos de los módulos puros (npm run bench)
   contrast-report.mjs       la tabla de contraste del panel y del overlay, por tema, con las parejas de test/contrast-pairs.js (npm run contrast); un token que no exista es un fallo, no un hueco
+  config-sandbox.mjs        lo que Faro escribe en la configuración de opencode, comprobado contra un opencode propio con la carpeta de usuario entera redirigida (npm run sandbox)
+  toy-mcp.mjs               el MCP de juguete del sandbox: una herramienta, faro_ping, y un registro de arranques dentro del sandbox
   prompt-snapshots.mjs      comprobar o regenerar (--update) las instantáneas de los prompts (npm run snapshots)
   instalar.ps1              Windows: deja uv y mcp-atlassian en la versión fijada, mira Node y opencode, y avisa si hay un opencode abierto que no verá uvx (-SoloComprobar, -Si); nunca toca la configuración de opencode ni la contraseña
   arrancar-opencode.ps1     Windows: arranca opencode con el PATH releído, en una carpeta propia y pidiendo la contraseña sin guardarla (-Port, -SoloMostrar)

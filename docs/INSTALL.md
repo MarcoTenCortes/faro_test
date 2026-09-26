@@ -178,8 +178,9 @@ confunde con un token malo. Si ya tienes uno elegido de otro sitio, no la ves.
    En Data Center marca la casilla: se usan los tokens personales y no hace
    falta correo.
 
-Faro construye entonces el bloque de configuración y te lo deja copiado. Con
-el MCP conectado comprueba **los dos tokens**, uno detrás de otro, y lo dice.
+Con el permiso dado (abajo), Faro **escribe él mismo el MCP en la configuración
+de opencode** y, en cuanto está conectado, comprueba **los dos tokens**, uno
+detrás de otro, y lo dice.
 
 Si Jira y Confluence viven en **hosts distintos**, el otro host queda
 **enlazado** a éste: comparte el MCP —no se levanta un segundo proceso con el
@@ -192,17 +193,76 @@ cualquiera de los dos dominios reconoce el MCP que lo lleva dentro y lo adopta
 qué páginas mirar, y en el registro sale como «Contexto de Confluence
 enlazado», con el host y su tamaño.
 
-### Por qué hay un paso manual
+### Faro escribe el MCP en opencode
 
-opencode 1.2.25 **sólo carga los servidores MCP de su configuración al arrancar**
-(o al recargarla). Su endpoint para registrarlos en caliente (`POST /mcp`) sí
-arranca el proceso, pero **sólo en memoria**: no se escribe en ningún fichero,
-`GET /mcp` no lo ve (sólo recorre los de la configuración) y muere en cuanto
-opencode recarga o se reinicia. Comprobado contra un servidor real aislado. Por
-eso hoy el bloque se pega a mano; un hito posterior del plan lo escribirá Faro
-por la API de configuración.
+opencode 1.2.25 carga los servidores MCP de su configuración al arrancar **y
+cada vez que alguien la cambia por su API** (`PATCH /global/config`: comprobado
+contra un servidor real aislado; no está en su documentación). Así que Faro ya
+no te pide que pegues nada: escribe él el bloque en el fichero de configuración
+global de opencode y espera a que lo cargue. (Su otro camino, `POST /mcp`,
+arranca el proceso **sólo en memoria**: no se escribe en ningún fichero,
+`GET /mcp` no lo ve y muere en cuanto opencode recarga. Por eso no se usa.)
 
-Así que Faro te enseña exactamente qué pegar y dónde:
+Lo que ves en la pantalla de claves:
+
+1. **La primera vez, un permiso.** Encima del botón sale la carpeta donde tu
+   opencode tiene su configuración (en Windows, `C:\Users\<tú>\.config\opencode`)
+   y lo que pasa al escribir: opencode escribe en el primero que exista de
+   `opencode.jsonc`, `opencode.json` y `config.json` (si no hay ninguno, crea
+   `opencode.jsonc`), **reformatea el fichero** (sangría de dos espacios y las
+   claves reordenadas; un `.jsonc` conserva su formato) y **reinicia sus
+   conexiones**: si tienes una respuesta a medias en otra ventana conectada a ese
+   mismo opencode —otra ventana de Chrome, la TUI—, se corta. El botón no se
+   enciende hasta que marcas la casilla. Faro recuerda el permiso, pero
+   **«Cambiar las claves»** (en Ajustes) lo vuelve a pedir siempre.
+2. **Escribe con el panel quieto.** Con una respuesta llegando, un indexado en
+   marcha, «Comprobar» probando un modelo o la comprobación de las claves a
+   medias, Faro no escribe: te dice que esperes, porque escribir lo cortaría.
+3. **Espera**, en tres pasos que se leen bajo el botón: «Escribiendo en
+   opencode…», «Esperando a que opencode recargue…» (hasta que el MCP aparece
+   en su lista; contra un servidor aislado, menos de una décima de segundo) y
+   «Arrancando el MCP…» (la primera vez, `uvx` descarga; abajo). Si tu opencode
+   no es la versión probada (1.2.25), lo dice ahí mismo.
+4. **Comprueba que lo que carga es lo escrito.** Si arrancaste opencode desde
+   una carpeta que tiene su propio `opencode.json` de proyecto, ése taparía al
+   global: Faro lo detecta y te lo dice («hay una configuración de proyecto
+   delante»). `tools\arrancar-opencode.ps1` arranca en una carpeta propia, así
+   que con él no pasa.
+5. **Comprueba los tokens**, ya sin escribir nada en opencode: si vuelves a la
+   pantalla del modelo porque el modelo falló, al elegir otro sólo se repite
+   esta comprobación.
+
+Si ese dominio **ya tenía un MCP** en tu configuración (pegado a mano, con
+Docker, de una versión anterior de Faro), se reutiliza: conserva su nombre, su
+comando y su plazo (que no baja de un minuto), y sólo se reescriben las
+variables. Uno que tú desactivaste a mano (`"enabled": false`) no se vuelve a
+encender: se crea otro a su lado. Y el bloque lleva siempre las diez variables
+que Faro sabe poner, vacías las que no usa: opencode **fusiona** lo que recibe
+con lo que ya hay, así que al pasar de Cloud a Data Center el correo y el token
+de Cloud se quedan en blanco en vez de quedarse con el valor viejo. Una variable
+que hayas añadido tú (`CONFLUENCE_SSL_VERIFY`, por ejemplo) se conserva, porque
+Faro no la toca.
+
+Si el MCP que Faro acaba de crear **cae al instante** con «Connection closed»
+(casi siempre, un opencode arrancado antes de instalar uv, que no encuentra
+`uvx`), Faro lo intenta una vez con la ruta completa
+`C:\Users\<tú>\.local\bin\uvx.exe`, que es donde la deja el instalador oficial
+de uv; si tampoco arranca, devuelve el comando a `uvx` y te enseña el consejo de
+siempre con **Reintentar**. Lo de fondo se arregla arrancando opencode desde una
+terminal nueva. Con un MCP que ya estaba en tu configuración no toca nada.
+
+Si recargas el panel a mitad —el MCP ya escrito y conectado, pero sin que se
+llegaran a comprobar los tokens—, Faro lo reconoce y lo adopta, pero lo dice en
+el chat: «Las claves de <sitio> no se han comprobado todavía…», con un botón
+**Comprobar las claves** que hace esa comprobación sin volver a escribir nada.
+El aviso se va con la primera comprobación buena. Si ya tenías el sitio
+configurado de antes, no lo verás.
+
+### El paso manual, sólo si falla
+
+Si opencode **no acepta la escritura** —su fichero tiene un error de sintaxis,
+o una clave que no conoce—, Faro te dice cuál de las dos es (sin enseñarte el
+fichero: lleva tus claves) y te deja exactamente qué pegar y dónde:
 
 ```
 C:\Users\marco\.config\opencode\opencode.json
@@ -219,8 +279,14 @@ C:\Users\marco\.config\opencode\opencode.json
         "mcp-atlassian@0.23.1"
       ],
       "environment": {
+        "JIRA_URL": "",
+        "JIRA_PERSONAL_TOKEN": "",
+        "JIRA_USERNAME": "",
+        "JIRA_API_TOKEN": "",
         "CONFLUENCE_URL": "https://confluence.simplprogramme.eu",
         "CONFLUENCE_PERSONAL_TOKEN": "...",
+        "CONFLUENCE_USERNAME": "",
+        "CONFLUENCE_API_TOKEN": "",
         "READ_ONLY_MODE": "true",
         "TOOLSETS": "all"
       },
@@ -237,13 +303,19 @@ actualiza solo, y sin fijarla cada uno se quedaba con la del día de su primer
 arranque); `TOOLSETS: "all"` conserva todas las herramientas, porque
 mcp-atlassian avisa de que en una versión futura su valor por defecto pasará a
 seis grupos y Faro perdería herramientas sin que nada fallara; y `timeout` es el
-plazo de **arranque**, un minuto.
+plazo de **arranque**, un minuto. Las variables vacías son las que no se usan,
+y mcp-atlassian las trata como si no estuvieran.
 
 Si el fichero ya existe, el panel tiene un botón para copiar **sólo el bloque
 `mcp`** y que lo fusiones tú.
 
-Después **reinicia opencode**. Faro está mirando: en cuanto ve el MCP conectado,
-comprueba el token y sigue solo. No tienes que volver a pulsar nada.
+Después pulsa **Ya lo he pegado**: opencode relee su configuración sin
+reiniciar. Si aun así no lo ve, reinícialo con el mismo comando. Faro está
+mirando: en cuanto ve el MCP conectado, comprueba los tokens y sigue solo.
+
+Y si Faro **lo escribió pero opencode no lo ha cargado** en 20 segundos (una
+versión que no recarga la configuración en caliente), no hay nada que pegar: te
+dice dónde está escrito y que reinicies opencode; en cuanto vuelve, sigue solo.
 
 La primera vez, `uvx` descarga `mcp-atlassian` (unos 107 paquetes, y Python si
 no lo tienes) y el proceso tarda en arrancar: con la caché ya caliente son de 8 a
@@ -255,7 +327,9 @@ segundo plano, así que el segundo intento suele entrar). Si ejecutaste antes
 arranque se ahorra la descarga.
 
 Las claves acaban en la configuración de opencode, en disco, protegidas por los
-permisos del sistema de ficheros. La extensión sólo recuerda que ese host ya
+permisos del sistema de ficheros. Faro las manda ahí en una sola petición y no
+las guarda en el navegador: la extensión sólo recuerda el nombre del MCP, si
+sus claves se han comprobado y que ese host ya
 está configurado.
 
 ### Server / Data Center
@@ -1008,6 +1082,31 @@ lo que el código produce y, si un prompt cambió, falla con la primera línea
 distinta. Se regenera sólo cuando el cambio es intencionado, revisando el
 `git diff` de los `.txt` antes de commitear.
 
+### `npm run sandbox`: probar lo que Faro escribe en opencode, sin tocar el tuyo
+
+Faro escribe en la configuración de opencode, y eso sólo se puede probar
+escribiendo de verdad. `npm run sandbox` lo hace en un opencode **propio**:
+arranca `opencode serve` con toda la carpeta de usuario redirigida a una
+carpeta temporal (`%TEMP%\faro-sandbox-<número>`), sin ninguna variable
+`OPENCODE_*` heredada y en un puerto entre 4200 y 4299 (nunca el 4096), y antes
+de escribir nada le pregunta dónde tiene su configuración: si no está dentro de
+esa carpeta temporal, se va con un error sin tocar nada. No basta con
+`OPENCODE_CONFIG_DIR`: en opencode 1.2.25 esa variable NO redirige la
+configuración global, y una prueba que lo daba por hecho escribió una vez en el
+fichero de verdad.
+
+Con un MCP de juguete (`tools/toy-mcp.mjs`) comprueba siete casos e imprime cada
+uno con sus milisegundos: que lo que no pasa la barrera no se manda, que una
+entrada nueva conecta en menos de 2 s, que una entrada desactivada deja el
+fichero sin el token, que un bloque pegado a mano se carga con «Ya lo he pegado»
+sin reiniciar, que con el fichero roto no se escribe nada y el token no llega a
+ningún registro, que una ruta con espacios arranca, y que opencode no carga
+ningún AGENTS.md ni CLAUDE.md. Sale con 1 si alguno falla. Al acabar, pase lo
+que pase, mata opencode y sus hijos y borra la carpeta temporal (`--conservar`
+la deja, con los registros de opencode dentro; `--exe <ruta>` usa otro
+`opencode.exe`). Sólo Windows, fuera de `npm run check`, y no manda ningún turno
+de modelo.
+
 ### El banco de pruebas
 
 `npm run harness` levanta en <http://127.0.0.1:5175> una Confluence y un Jira de
@@ -1148,11 +1247,34 @@ corto y un detalle. Todos los títulos, por dónde salen:
   tenías delante la pantalla de contexto, al salir de ella. Un sitio que todavía
   no has configurado sí la espera: ahí la pantalla de claves es lo primero que
   hay que ver.
+- «MCP escrito en opencode» — Faro escribió el MCP de este sitio en la
+  configuración de opencode por su API (`PATCH /global/config`). En verde, con
+  el nombre del MCP, la carpeta, los milisegundos del PATCH y los que tardó en
+  aparecer en la lista de opencode, o «arranca con la ruta completa de uvx» si
+  hizo falta el reintento. En amarillo: «no aparece en 20 s» (escrito, pero
+  opencode no lo ha recargado: reinícialo), «tampoco con la ruta completa de
+  uvx · command devuelto a uvx» (arranca opencode desde una terminal nueva) o
+  «la configuración que opencode carga no es la escrita» (una configuración de
+  proyecto delante). En gris, «espera cancelada», si te fuiste a otro sitio a
+  mitad. Nunca lleva el contenido del fichero ni ninguna clave.
+- «MCP sin escribir» — opencode no aceptó la escritura, o Faro no pudo montar
+  una entrada válida con esos datos. El detalle es el código y el tipo:
+  `500 · ConfigJsonError` (el fichero tiene un error de sintaxis),
+  `400 · ConfigInvalidError` (una clave que opencode no conoce), `0 · entrada`
+  o `0 · red` (opencode no contestó). Sale el paso manual con el porqué.
+- «Configuración recargada» — pulsaste **Ya lo he pegado** en el paso manual y
+  opencode releyó su fichero sin reiniciar (en verde, con los milisegundos), o no
+  lo aceptó (en amarillo, con el código y el tipo).
+- «Claves sin comprobar» — en amarillo, Faro adoptó un MCP que ya estaba
+  conectado sin que ningún turno hubiera probado sus tokens (recargaste el panel
+  a mitad del primer uso, o pegaste el bloque a mano), y el chat lo dice con un
+  botón **Comprobar las claves**; en verde, esa primera comprobación salió bien.
 - «MCP verificado» — los tokens se comprobaron, con una línea por producto
   («Jira: … · Confluence: …»).
 - «Sitio enlazado» — el otro host (Jira o Confluence) comparte el MCP de
   éste y no pedirá claves.
-- «Espera del MCP cancelada» — estabas en el paso manual del MCP (pegar el
+- «Espera del MCP cancelada» — estabas esperando al MCP (tras escribirlo Faro
+  en opencode, o en el paso manual de pegar el
   bloque y reiniciar opencode) y has cambiado a OTRO sitio de Atlassian antes
   de que opencode lo cargara: la espera se corta; al volver se vuelve a pedir,
   o el MCP ya conectado se reconoce solo. Pasar a una pestaña fuera de
@@ -1624,6 +1746,51 @@ Venció el plazo de arranque del bloque (60 s). Suele ser la primera vez, con
 proceso no muere: sigue descargando en segundo plano. Espera unos segundos y
 pulsa **Reintentar**. Tras un plazo vencido puede quedar un `mcp-atlassian` de
 más vivo hasta que cierres opencode; es inofensivo.
+
+**Faro dice que ha escrito la configuración y el MCP no aparece**
+«Ya está escrito en <carpeta>, pero opencode no lo ha cargado en 20 s»: tu
+opencode no ha recargado su configuración en caliente, que es algo que sólo está
+probado en la versión 1.2.25 (si la tuya es otra, la espera ya te lo avisaba).
+**Reinicia opencode** con el mismo comando: al arrancar lee su fichero, y Faro,
+que sigue mirando, continúa solo en cuanto el MCP aparece conectado. No hay nada
+que pegar: el bloque ya está en el fichero, y si abres la carpeta que te dice
+lo verás (en `opencode.jsonc` o en `opencode.json`, el que ya tuvieras). En el
+registro sale «MCP escrito en opencode» en amarillo, con «no aparece en 20 s».
+
+**«La configuración de opencode tiene un error de sintaxis» (o «una clave que opencode no conoce»)**
+Faro intentó escribir y opencode no lo aceptó, porque su fichero de
+configuración ya estaba mal: tiene un error de sintaxis (una coma de más, una
+comilla sin cerrar, un BOM al principio…) o una clave que opencode no reconoce.
+Faro no te enseña el contenido del fichero (lleva tus claves); abre tú la
+carpeta de la pantalla, arregla el fichero, pega el bloque que te enseña el
+paso manual y pulsa **Ya lo he pegado**. En el registro sale «MCP sin escribir»
+con `500 · ConfigJsonError` (sintaxis) o `400 · ConfigInvalidError` (clave
+desconocida), y tras pulsar el botón, «Configuración recargada».
+
+**«Hay una configuración de proyecto delante»**
+Faro escribió el MCP en la configuración global de opencode, pero opencode está
+cargando otra: la de un `opencode.json` de proyecto en la carpeta desde la que lo
+arrancaste, que manda sobre la global. Arranca opencode desde otra carpeta
+—`tools\arrancar-opencode.ps1` usa una propia y vacía, y además le dice que no
+lea configuraciones de proyecto— y vuelve a pulsar **Conectar y comprobar**. En
+el registro, «MCP escrito en opencode» con «la configuración que opencode carga
+no es la escrita».
+
+**«Las claves de … no se han comprobado todavía»**
+El MCP de este sitio ya estaba conectado en opencode cuando se abrió el panel,
+pero ningún turno ha probado sus tokens: pasa si recargas el panel a mitad del
+primer uso, o si pegaste el bloque a mano. Pulsa **Comprobar las claves**: hace
+la misma comprobación de siempre (un turno corto por producto) sin volver a
+escribir nada en opencode, y el aviso se va si sale bien. En el registro, «Claves
+sin comprobar» en amarillo al adoptarlo y en verde al comprobarlas.
+
+**Faro no me deja guardar las claves: «Espera a que termine…»**
+Escribir en la configuración de opencode corta TODO lo que ese opencode tenga en
+marcha, así que Faro sólo escribe con el panel quieto: sin una respuesta
+llegando, sin un indexado, sin «Comprobar» probando un modelo y sin la
+comprobación de las claves a medias. Espera a que termine y vuelve a pulsar. Y
+si el botón está apagado sin nada en marcha, es que falta marcar la casilla del
+permiso, justo encima.
 
 **opencode no arranca: «is not valid JSON(C)… InvalidSymbol 1:1»**
 El `opencode.json` está guardado con BOM (tres bytes invisibles al principio).

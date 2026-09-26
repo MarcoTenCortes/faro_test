@@ -11,6 +11,7 @@
     "turn": "node tools/last-turn.mjs",
     "bench": "node tools/bench.mjs",
     "contrast": "node tools/contrast-report.mjs",
+    "sandbox": "node tools/config-sandbox.mjs",
     "snapshots": "node tools/prompt-snapshots.mjs --update",
     "test": "node test/run.js",
     "test:integration": "node test/integration/opencode.test.js",

@@ -205,8 +205,19 @@
       y el mismo vale para los dos productos: pégalo en ambos. En Server / Data Center cada producto tiene el suyo:
       tu perfil → <em>Personal Access Tokens</em>, en Jira y en Confluence.</p>
 
+    <!-- H18: Faro escribe el MCP en la configuración de opencode por su API. Se pide permiso la
+         primera vez, y siempre desde «Cambiar las claves». La carpeta la pone el panel (GET /path). -->
+    <div class="field hidden" id="setup-consent">
+      <p class="fine">Faro escribirá estas claves en la configuración global de opencode, en
+        <span id="setup-consent-path">la carpeta de configuración de opencode</span>: en el primero que exista de
+        opencode.jsonc, opencode.json y config.json (si no hay ninguno, opencode crea opencode.jsonc). opencode
+        reformatea el fichero y reinicia sus conexiones: si tienes una respuesta a medias en otra ventana conectada
+        a este opencode, se corta.</p>
+      <label class="check"><input type="checkbox" id="setup-consent-ok"> Entendido: que Faro escriba en la configuración de opencode</label>
+    </div>
+
     <div class="row">
-      <button class="primary" id="btn-setup-save" type="button">Conectar y comprobar</button>
+      <button class="primary needs-idle" id="btn-setup-save" type="button">Conectar y comprobar</button>
       <button class="ghost" id="btn-setup-skip" type="button">Ahora no</button>
       <span class="grow"></span>
     </div>
@@ -222,10 +233,13 @@
       </button>
       <h1>Un paso más, y solo esta vez</h1>
     </div>
-    <p>Tu versión de opencode sólo carga los servidores MCP al arrancar, así que
-      hay que dejar esto escrito en su configuración. Es el motivo por el que
-      tus claves no acaban en el navegador.</p>
+    <p>Faro no ha podido dejar el MCP listo por su cuenta, así que queda hacerlo a
+      mano en la configuración de opencode. Es el motivo por el que tus claves no
+      acaban en el navegador.</p>
+    <!-- H18: por qué se ha llegado aquí (el tipo del error de opencode, o que ya está escrito). Lo rellena showManualStep. -->
+    <p class="fine hidden" id="setup-manual-why"></p>
 
+    <div id="setup-manual-paste">
     <h2>1 · Abre este fichero</h2>
     <div class="cmd">
       <code id="setup-config-path">…</code>
@@ -242,13 +256,19 @@
     </div>
     <pre class="snippet" id="setup-snippet"></pre>
 
-    <h2>3 · Reinicia opencode</h2>
-    <p class="fine">Para el servidor y vuelve a arrancarlo con el mismo comando.
-      En cuanto lo detecte, Faro sigue solo.</p>
+    <h2>3 · Pulsa «Ya lo he pegado»</h2>
+    <p class="fine">opencode relee su configuración sin reiniciar. Si aun así no lo
+      ve, para el servidor y vuelve a arrancarlo con el mismo comando. En cuanto lo
+      detecte, Faro sigue solo.</p>
+    </div>
 
     <div class="waiting" id="setup-waiting">
       <span class="spinner" aria-hidden="true"></span>
       <span id="setup-waiting-text">Esperando a que opencode cargue el MCP…</span>
+    </div>
+    <div class="row">
+      <button class="ghost needs-idle" id="btn-setup-reload" type="button">Ya lo he pegado</button>
+      <span class="grow"></span>
     </div>
     <!-- H15: el mismo consejo, mientras la espera vea el MCP en «failed». Lo rellena showManualStep. -->
     <div class="hidden" id="setup-manual-hint"></div>

@@ -1299,3 +1299,168 @@ test('H17: probeModel nunca lanza — opencode caído, una sesión que no se cre
     eq(pasosDeSonda(s), [], 'ni una petición')
   })
 })
+
+// ---- H18: escribir el MCP en la configuración de opencode -------------------
+//
+// PATCH /global/config escribe el fichero global Y recarga (anexo 2-A). Su
+// respuesta buena trae la configuración ENTERA con los tokens de todos los MCP
+// en claro, y un 500 ConfigJsonError trae el fichero entero dentro del error:
+// nada de eso puede acabar en el registro, en OpencodeError.body ni en lo que
+// devuelven las dos puertas.
+
+import { MCP_ENV_KEYS } from '../../src/shared/mcp-config.js'
+import { MCP_ATLASSIAN_VERSION } from '../../src/shared/config.js'
+
+const TOKEN = 'FALSO-5678-token-de-mentira'
+const CONFIG_CON_TOKENS = { $schema: 'x', mcp: { otro: { type: 'local', command: ['x'], environment: { JIRA_PERSONAL_TOKEN: TOKEN } } } }
+const ROTO = JSON.stringify({ name: 'ConfigJsonError', data: { path: 'C:/h/opencode.json', message: '--- JSONC Input --- {"mcp":{"otro":{"environment":{"JIRA_PERSONAL_TOKEN":"' + TOKEN + '"}}' } })
+
+/** Un registro que apunta TODO lo que el cliente le cuenta, en cualquier nivel. */
+function registroQueApunta() {
+  const lineas = []
+  const apunta = (nivel) => (...args) => lineas.push(nivel + ' ' + args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' '))
+  return { lineas, logger: { debug: apunta('debug'), info: apunta('info'), warn: apunta('warn'), error: apunta('error') } }
+}
+
+/** Una entrada MCP buena, como la escribe Faro. */
+function entradaMcp(cambios = {}) {
+  const environment = Object.fromEntries(MCP_ENV_KEYS.map((k) => [k, '']))
+  Object.assign(environment, { JIRA_URL: 'https://jira.x.eu', JIRA_PERSONAL_TOKEN: 'pat-nuevo', READ_ONLY_MODE: 'true', TOOLSETS: 'all' })
+  return { type: 'local', command: ['uvx', 'mcp-atlassian@' + MCP_ATLASSIAN_VERSION], environment, enabled: true, timeout: 60000, ...cambios }
+}
+
+async function errorDe(p) {
+  try {
+    await p
+  } catch (e) {
+    return e
+  }
+  return null
+}
+
+test('SEGURIDAD H18: con sensitive ni el registro ni OpencodeError.body llevan el cuerpo, tampoco en config()', () =>
+  conServidor(
+    {
+      'GET /config': { status: 500, body: ROTO },
+      'GET /roto-400': { status: 400, body: JSON.stringify({ name: 'ConfigInvalidError', data: { issues: [{ message: TOKEN }] } }) },
+      'GET /roto-raro': { status: 500, body: JSON.stringify({ name: 'Config<script>' + TOKEN }) },
+      'GET /roto-texto': { status: 500, body: 'no es json ' + TOKEN },
+      'GET /normal': { status: 500, body: ROTO },
+    },
+    async (_c, s) => {
+      const { lineas, logger } = registroQueApunta()
+      const client = new OpencodeClient({ baseUrl: BASE, password: 'secreta', logger })
+      const err = await errorDe(client.config())
+      assert(err instanceof OpencodeError, 'config() sigue lanzando su error')
+      eq([err.status, err.body, err.kind], [500, null, 'ConfigJsonError'], 'sin cuerpo; sólo qué fue')
+      eq([s.calls[0].method, s.calls[0].path], ['GET', '/config'])
+      const e400 = await errorDe(client.request('GET', '/roto-400', { sensitive: true }))
+      eq([e400.status, e400.body, e400.kind], [400, null, 'ConfigInvalidError'])
+      eq((await errorDe(client.request('GET', '/roto-raro', { sensitive: true }))).kind, '', 'un name sin forma de identificador no pasa')
+      eq((await errorDe(client.request('GET', '/roto-texto', { sensitive: true }))).kind, '', 'sin JSON, sin kind')
+      const todo = lineas.join('\n') + JSON.stringify([err, e400]) + String(err.message) + String(e400.message)
+      assert(!todo.includes(TOKEN), 'SEGURIDAD: el token no está en nada de lo que el cliente registró ni en los errores')
+      assert(lineas.some((l) => l.includes('500 · ConfigJsonError')), 'el registro dice el código y el kind: ' + lineas.join(' | '))
+      // Sin sensitive, lo de siempre: el cuerpo se guarda y se registra (por eso config() lo lleva).
+      const normal = await errorDe(client.request('GET', '/normal'))
+      assert(String(normal.body).includes(TOKEN) && lineas.at(-1).includes('ConfigJsonError'), 'sin sensitive nada cambia')
+    }
+  ))
+
+test('SEGURIDAD H18: config() va sensitive y su respuesta buena se sigue devolviendo entera (checkMcp la necesita)', () =>
+  conServidor({ 'GET /config': CONFIG_CON_TOKENS }, async (client) => {
+    eq(await client.config(), CONFIG_CON_TOKENS)
+  }))
+
+test('H18: updateMcpEntries — PATCH /global/config con el cuerpo exacto; devuelve {ok, status, kind} y NADA de la respuesta', () =>
+  conServidor({ 'PATCH /global/config': CONFIG_CON_TOKENS }, async (_c, s) => {
+    const { lineas, logger } = registroQueApunta()
+    const client = new OpencodeClient({ baseUrl: BASE, password: 'secreta', logger })
+    const e = entradaMcp()
+    const r = await client.updateMcpEntries({ 'atlassian-jira-x-eu': e })
+    eq(r, { ok: true, status: 200, kind: '' })
+    eq(Object.keys(r).sort(), ['kind', 'ok', 'status'], 'claves exactas: nunca la configuración')
+    const llamada = s.calls[0]
+    eq([llamada.method, llamada.path], ['PATCH', '/global/config'])
+    eq(llamada.body, { mcp: { 'atlassian-jira-x-eu': e } }, 'el cuerpo exacto')
+    eq(Object.keys(llamada.body), ['mcp'], 'SEGURIDAD: ninguna otra clave raíz que mcp')
+    eq(llamada.headers.Authorization, 'Basic b3BlbmNvZGU6c2VjcmV0YQ==')
+    eq(llamada.headers['Content-Type'], 'application/json')
+    assert(!JSON.stringify(r).includes(TOKEN) && !lineas.join('\n').includes(TOKEN), 'la respuesta, con los tokens de todos los MCP, se tira')
+    // Lo conocido por nombre deja conservar el command del usuario; sin ello, la barrera lo tira sin pedir nada.
+    const docker = ['docker', 'run', '-i', 'img']
+    eq(await client.updateMcpEntries({ mio: entradaMcp({ command: docker }) }, { known: { mio: docker } }), { ok: true, status: 200, kind: '' })
+    eq(s.calls[1].body.mcp.mio.command, docker)
+    const antes = s.calls.length
+    for (const mala of [{ mio: entradaMcp({ command: docker }) }, { mio: entradaMcp({ agent: {} }) }, { 'con espacio': entradaMcp() }, {}, null]) {
+      eq(await client.updateMcpEntries(mala), { ok: false, status: 0, kind: 'entrada' }, 'no vale: ' + String(JSON.stringify(mala)).slice(0, 40))
+    }
+    eq(s.calls.length, antes, 'SEGURIDAD: lo que la barrera no deja pasar no sale en ninguna petición')
+  }))
+
+test('SEGURIDAD H18: las dos puertas con un 500 ConfigJsonError, un 400, un 401 o sin red: {ok:false, status, kind}, sin el cuerpo', async () => {
+  const casos = [
+    [{ status: 500, body: ROTO }, { ok: false, status: 500, kind: 'ConfigJsonError' }],
+    [{ status: 400, body: JSON.stringify({ name: 'ConfigInvalidError', data: { message: TOKEN } }) }, { ok: false, status: 400, kind: 'ConfigInvalidError' }],
+    [{ status: 400, body: TOKEN }, { ok: false, status: 400, kind: '' }],
+    [{ status: 401, body: TOKEN }, { ok: false, status: 401, kind: '' }],
+  ]
+  for (const [respuestaDelServidor, esperado] of casos) {
+    await conServidor({ 'PATCH /global/config': respuestaDelServidor }, async (_c, s) => {
+      const { lineas, logger } = registroQueApunta()
+      const client = new OpencodeClient({ baseUrl: BASE, password: 'secreta', logger })
+      const r = await client.updateMcpEntries({ n: entradaMcp() })
+      eq(r, esperado)
+      eq(await client.reloadGlobalConfig(), esperado, 'y lo mismo la otra puerta')
+      eq(s.calls.length, 2)
+      assert(!JSON.stringify(r).includes(TOKEN) && !lineas.join('\n').includes(TOKEN), 'SEGURIDAD: ni un carácter del cuerpo: ' + lineas.join(' | '))
+    })
+  }
+  await conServidor({}, async (client) => {
+    globalThis.fetch = async () => {
+      throw new TypeError('fetch failed')
+    }
+    eq(await client.updateMcpEntries({ n: entradaMcp() }), { ok: false, status: 0, kind: 'red' })
+    eq(await client.reloadGlobalConfig(), { ok: false, status: 0, kind: 'red' })
+  })
+})
+
+test('H18: reloadGlobalConfig manda {} FIJO y no admite nada más; addMcp ya no existe y connectMcp sigue', () =>
+  conServidor({ 'PATCH /global/config': CONFIG_CON_TOKENS, 'POST /mcp/atlassian-x/connect': true }, async (client, s) => {
+    eq(await client.reloadGlobalConfig(), { ok: true, status: 200, kind: '' })
+    eq([s.calls[0].method, s.calls[0].path, s.calls[0].body], ['PATCH', '/global/config', {}])
+    for (const arg of [{ mcp: { x: {} } }, {}, undefined, 'x']) {
+      let err = null
+      try {
+        client.reloadGlobalConfig(arg)
+      } catch (e) {
+        err = e
+      }
+      assert(err instanceof TypeError, 'con un argumento, TypeError: ' + JSON.stringify(arg))
+    }
+    eq(s.calls.length, 1, 'y ninguna petición más')
+    eq(typeof client.addMcp, 'undefined', 'POST /mcp es sólo memoria: la puerta ya no existe')
+    eq(await client.connectMcp('atlassian-x'), true)
+    eq([s.calls[1].method, s.calls[1].path, s.calls[1].body], ['POST', '/mcp/atlassian-x/connect', {}])
+  }))
+
+test('H18: paths() devuelve SÓLO {config, state, home}; version() la versión o una cadena vacía', () => {
+  let ruta = null
+  let salud = null
+  return conServidor({ 'GET /path': () => ruta, 'GET /global/health': () => salud }, async (client) => {
+    ruta = { home: 'C:\\Users\\marco', state: 'C:\\Users\\marco\\.local\\state\\opencode', config: 'C:\\Users\\marco\\.config\\opencode', worktree: '/', directory: 'C:\\proyecto' }
+    eq(await client.paths(), { config: 'C:\\Users\\marco\\.config\\opencode', state: 'C:\\Users\\marco\\.local\\state\\opencode', home: 'C:\\Users\\marco' }, 'sin el directorio de trabajo')
+    for (const raro of [{}, { config: 7, state: null, home: ['x'] }, 'texto']) {
+      ruta = raro
+      eq(await client.paths(), { config: '', state: '', home: '' }, 'sin forma: ' + JSON.stringify(raro))
+    }
+    salud = { healthy: true, version: '1.2.25' }
+    eq(await client.version(), '1.2.25')
+    salud = { healthy: true, version: ' 1.3.0-beta.2 ' }
+    eq(await client.version(), '1.3.0-beta.2')
+    for (const raro of [{ healthy: true }, { version: 7 }, { version: 'uno dos' }, { version: '1.2.25\n' + TOKEN }, { version: 'x'.repeat(41) }, null]) {
+      salud = raro
+      eq(await client.version(), '', 'sin forma de versión: ' + JSON.stringify(raro))
+    }
+  })
+})

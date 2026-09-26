@@ -300,3 +300,26 @@ test('H17: el plazo de la sonda de «Comprobar» es un entero de al menos 5 s, y
   assert(m, 'la integración declara PROBE_MS')
   eq(Number(m[1]), MODEL_LIMITS.probeMs, 'la sonda del panel y la de la integración esperan lo mismo')
 })
+
+// ---- H18: Faro escribe el MCP en la configuración de opencode -----------------
+
+import { MCP_RELOAD_LIMITS, OPENCODE_VERIFIED_VERSION } from '../../src/shared/config.js'
+
+test('H18: el permiso para escribir en la configuración de opencode nace sin dar, y sólo un booleano cuenta', () => {
+  eq(DEFAULT_SETTINGS.configWriteConsent, false)
+  eq(migrateSettings({}).configWriteConsent, false, 'unos ajustes de antes de H18 no lo traen: no está dado')
+  eq(migrateSettings({ configWriteConsent: true }).configWriteConsent, true, 'lo que dio la persona se respeta')
+  eq(migrateSettings({ configWriteConsent: false }).configWriteConsent, false)
+  for (const raro of ['true', 1, 'sí', {}, [], null]) {
+    eq(migrateSettings({ configWriteConsent: raro }).configWriteConsent, false, 'no lo escribió Faro: ' + JSON.stringify(raro))
+  }
+  const entra = { configWriteConsent: 'true' }
+  migrateSettings(entra)
+  eq(entra.configWriteConsent, 'true', 'no se muta lo que entra')
+})
+
+test('H18: la versión probada de opencode y los tiempos de la recarga, uno por módulo', () => {
+  eq(OPENCODE_VERIFIED_VERSION, '1.2.25', 'la de CLAUDE.md §7: con otra, la recarga en caliente no está verificada')
+  eq(MCP_RELOAD_LIMITS, { appearMs: 20000, pollMs: 400, fastFailMs: 2000 })
+  assert(MCP_RELOAD_LIMITS.pollMs < MCP_RELOAD_LIMITS.fastFailMs && MCP_RELOAD_LIMITS.fastFailMs < MCP_RELOAD_LIMITS.appearMs, 'sondear más a menudo de lo que se tarda en fallar, y fallar rápido antes de rendirse')
+})

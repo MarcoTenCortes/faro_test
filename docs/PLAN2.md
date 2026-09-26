@@ -1197,6 +1197,51 @@ Reglas transversales, que salen de los dos juicios y valen para todos:
   documentada (la red es «reinicia opencode»). Es el hito donde un fallo
   silencioso más cuesta y por eso va sobre un primer uso ya estable.
 
+- **Hecho el 2026-09-26** (rama `plan/h18-mcp-automatico`): todo lo de «Qué».
+  La barrera pura `src/shared/mcp-config.js` (`validMcpEntry`, `mcpPatchBody`,
+  `validMcpCommand` con `UVX_ABS_PATH`), importada por el cliente y por
+  setup.js; las dos puertas del cliente (`updateMcpEntries`,
+  `reloadGlobalConfig`) con `sensitive` también en `config()`, `paths()` con
+  sólo `{config, state, home}`, `version()`, y `addMcp` borrado; en setup.js el
+  environment completo, `mcpEntriesForHost`, `chooseWriteTarget`,
+  `mcpWritePatch`, `uvxAbsoluteCommand`, `configFileCandidates`,
+  `configureMcp` sin `addMcp`/`connectMcp` ni espera, y `siteRecords` con
+  `verified` (+ `keysUnverified`, la regla de la migración); en el panel
+  `saveKeys` y `showManualStep` reescritas (permiso, guarda común
+  `reconfiguring()`, invalidación antes del PATCH, espera hasta que aparezca y
+  conecte, reintento con la ruta absoluta sólo en una entrada nueva y con
+  vuelta atrás, relectura de la entrada efectiva, respaldo manual con «Ya lo he
+  pegado»), la adopción con `verified: false` y su aviso «Comprobar las
+  claves», `verified: true` añadido a `finishSetup`, y la versión de opencode
+  leída sin esperarla; y `npm run sandbox` (`tools/config-sandbox.mjs` +
+  `tools/toy-mcp.mjs`), **ejecutado de verdad: 7/7** contra opencode 1.2.25
+  aislado, con los cuatro casos de §3.2 más la puerta real, la ruta con
+  espacios y el «sin instructions». Cuatro títulos («MCP escrito en
+  opencode», «MCP sin escribir», «Configuración recargada», «Claves sin
+  comprobar»); 1410 pruebas (+32); las 37 instantáneas intactas; 47 + 40
+  mutaciones del panel y del sandbox, todas cazadas. Desvíos: el `timeout` de
+  una entrada reutilizada se conserva pero nunca baja de 60 000 (las de antes
+  de H15 llevan 30 000); el texto del consentimiento dice «el primero que exista
+  de opencode.jsonc, opencode.json y config.json (si no hay ninguno, opencode
+  crea opencode.jsonc)», porque el panel no puede listar la carpeta y sin
+  fichero opencode crea el `.jsonc` (confirmado por el sandbox);
+  `reconfiguring()` también espera a la comprobación de las claves
+  (`state.setupAbort`); la adopción conserva `verified` cuando es el MISMO MCP
+  ya verificado y sólo aprende un host enlazado; `updateMcpEntries` recibe como
+  segundo argumento las opciones de la barrera (`known` para conservar el
+  `command` de una entrada reutilizada, y `allowCommand`, que sólo pasa el
+  sandbox); `storage.js` no se tocó (`verified` viaja en `siteRecords` y
+  `saveSite` lo funde); `mcpScrubPatch` no existe todavía (es del borrado, H19).
+  El espejo SÍ está medido (Browser pane, 2026-09-26: `check()` en verde en los
+  cinco estados de la pantalla de claves, el paso manual, Ajustes y el chat ×
+  320/420 × claro y oscuro), y medirlo destapó que una carpeta de configuración
+  real desbordaba el consentimiento a 320 px: una regla de `overflow-wrap` en
+  `#setup-consent-path`, con su pin. Sin verificar: nada en la extensión cargada,
+  nada con mcp-atlassian de verdad tras el PATCH, «Cambiar las claves» con el
+  opencode de Marco (con copia del fichero), la ruta absoluta de uvx con un
+  compañero, y el «Instructions from:» con un turno real (sin permiso de gasto).
+  La bitácora, en CLAUDE.md §12.5.
+
 ### H19 · «Quitar las claves de este sitio»
 
 - **Qué**: el botón de §3.2 con su confirmación (lista de nombres, host
@@ -1591,7 +1636,13 @@ a partirse si en su revisión adversaria salen más de ~15 hallazgos.
   ha probado con fetch falso; que opencode 1.2.25 acepte de verdad `variant`
   en `prompt_async`, que un mudo se corte a los 15 s y que la sesión «Faro ·
   probando modelo» no quede en opencode (abort + DELETE) se ve la primera vez
-  que alguien pulse «Comprobar» con ese permiso.
+  que alguien pulse «Comprobar» con ese permiso. **Tras H18 sigue pendiente**: la
+  escritura está verificada contra un opencode 1.2.25 AISLADO con un MCP de
+  juguete (`npm run sandbox`, 7/7), no contra el de Marco ni con mcp-atlassian:
+  «Cambiar las claves» sin pegar nada (con copia del fichero), cuánto tarda
+  mcp-atlassian en aparecer y conectar tras el PATCH en frío, y que el primer
+  `GET /mcp` de una entrada reutilizada no conteste todavía con la instancia
+  vieja.
 - **Supuestos que sólo se cierran allí**: que un rechazo de Copilot no cuenta
   como request; que la configuración de PROYECTO tapa a la global (por eso se
   relee `GET /config`); ~~que `uvx mcp-atlassian@0.23.1` arranca con esa

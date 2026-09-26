@@ -17,6 +17,32 @@ export const DEFAULT_SERVER = 'http://127.0.0.1:4096'
  */
 export const MCP_ATLASSIAN_VERSION = '0.23.1'
 
+/**
+ * La versión de opencode contra la que está verificado todo lo que Faro sabe
+ * de su API (CLAUDE.md §7), y en concreto la recarga en caliente de H18:
+ * `PATCH /global/config` escribe el fichero Y recarga los MCP sin reiniciar,
+ * pero eso NO está documentado y upstream cerró sin fusionar los PR de
+ * recarga (anexo 2-A). Con otra versión, el panel lo dice en el texto de
+ * espera («si el MCP no aparece, reinícialo») en vez de prometer que aparecerá.
+ */
+export const OPENCODE_VERIFIED_VERSION = '1.2.25'
+
+/**
+ * Los tiempos de la espera tras escribir el MCP en la configuración (H18).
+ *
+ * `appearMs` 20 s: cuánto se sondea `GET /mcp` hasta que la entrada escrita
+ * APAREZCA. Con un MCP de juguete aparece en 180-210 ms (medido en un
+ * opencode 1.2.25 aislado, anexo 2-A), pero el primer `GET` tras el PATCH
+ * puede contestarlo todavía la instancia vieja, y una versión que no recargue
+ * no la enseñará nunca: pasado el plazo se dice «ya está escrito; reinicia
+ * opencode» en vez de esperar a ciegas. `pollMs` 400: bastante menos que lo
+ * que tarda en aparecer de verdad, sin martillear el servidor. `fastFailMs`
+ * 2 s: un «Connection closed» antes de eso es que el proceso ni arrancó (uvx
+ * ausente da ese error a los ~40-190 ms), y es cuando tiene sentido el
+ * reintento con la ruta absoluta de uvx; un fallo más tardío es otra cosa.
+ */
+export const MCP_RELOAD_LIMITS = { appearMs: 20000, pollMs: 400, fastFailMs: 2000 }
+
 /** Nombre del servidor MCP en opencode para un host dado. */
 export function mcpNameForHost(host) {
   return 'atlassian-' + String(host).replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-|-$/g, '').toLowerCase()
@@ -104,6 +130,13 @@ export const DEFAULT_SETTINGS = {
    * El `model` que se guardaba por sitio queda como migración (`resolveModel`).
    */
   model: null,
+  /**
+   * Si la persona ya dio su permiso para que Faro escriba el MCP en la
+   * configuración de opencode (H18, docs/PLAN2.md §3.2). Global, y false hasta
+   * que marca la casilla la primera vez: escribir reformatea su fichero y
+   * reinicia todas las conexiones de ese opencode, y eso se pregunta antes.
+   */
+  configWriteConsent: false,
 }
 
 /** Lo más largo que se admite en un id de proveedor o de modelo guardado. */
@@ -158,6 +191,9 @@ export function migrateSettings(raw) {
   // El modelo de la persona (H16): sólo `{providerID, modelID}` con las dos
   // cadenas buenas, reconstruido con claves blancas; lo demás, null.
   s.model = modeloGuardado(s.model)
+  // El permiso para escribir en la configuración de opencode (H18): sólo un
+  // booleano de verdad cuenta como dado; lo demás, como no preguntado.
+  if (typeof s.configWriteConsent !== 'boolean') s.configWriteConsent = DEFAULT_SETTINGS.configWriteConsent
   return s
 }
 

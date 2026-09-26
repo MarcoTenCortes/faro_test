@@ -150,6 +150,14 @@
   </div>
 
   <div class="grp">
+    <div class="grp-title">Claves · escribir en opencode (H18)</div>
+    <button class="rig on" data-claves="" title="H15: el MCP en «failed» al arrancar el panel">MCP caído al arrancar</button>
+    <button class="rig" data-claves="escribiendo">Escribiendo en opencode</button>
+    <button class="rig" data-claves="recargando">Esperando a que recargue</button>
+    <button class="rig" data-claves="arrancando">Arrancando el MCP</button>
+    <button class="rig" data-claves="fallo" title="escrito, pero el MCP sigue en «failed»: el consejo de H15 con Reintentar">Falló · Reintentar</button>
+  </div>
+  <div class="grp">
     <div class="grp-title">Barra inferior</div>
     <button class="rig on" data-pick="off">Sin selección</button>
     <button class="rig" data-pick="chip">Con algo señalado</button>
@@ -561,7 +569,7 @@ async function arrancar() {
    */
   const HOY_VISTO = AHORA - 12 * HORA
 
-  const estado = { chat: 'confluence', pantalla: '', status: 'ok', pick: 'off', sources: 'off', ancho: 360, tema: 'dark', quinto: true, today: 'auto', primerUso: false }
+  const estado = { chat: 'confluence', pantalla: '', status: 'ok', pick: 'off', sources: 'off', ancho: 360, tema: 'dark', quinto: true, today: 'auto', primerUso: false, claves: '' }
   // Tres de las cinco conversaciones son de Jira («jira», «jira-busqueda» y el
   // vacío «empty-jira»): el producto se mira por el nombre, que es lo que decide
   // la cabecera, las etiquetas de las páginas base y si hay chips.
@@ -1071,6 +1079,48 @@ async function arrancar() {
   }
 
   /**
+   * El recordatorio de unas claves que Faro ADOPTÓ sin comprobar (H18): el MCP
+   * ya estaba conectado en opencode —una recarga a mitad del primer uso— y
+   * ningún turno ha probado sus tokens. Como lo cuelga `avisarClavesSinComprobar`
+   * de panel.js: el aviso y «Comprobar las claves», que pide el turno parado.
+   */
+  function avisoClavesSinComprobar() {
+    const wrap = doc.createElement('div')
+    wrap.appendChild(
+      aviso(
+        `Las claves de ${SITIOS.jira.host} no se han comprobado todavía: opencode tenía el MCP conectado y Faro lo ha adoptado ` +
+          'sin probar ningún token. Si una consulta a Jira o a Confluence falla, empieza por aquí.',
+        true
+      )
+    )
+    const acciones = mk('div', 'nav-actions')
+    const btn = mk('button', 'ghost small needs-idle', 'Comprobar las claves')
+    btn.type = 'button'
+    acciones.appendChild(btn)
+    wrap.appendChild(acciones)
+    return wrap
+  }
+
+  /**
+   * Los estados de la pantalla de claves mientras `saveKeys` escribe y espera
+   * (H18). Los tres primeros textos son los de `ESTADO_CLAVES` de panel.js, y el
+   * de «Falló» el que pinta cuando el MCP escrito sigue sin conectar, con el
+   * consejo de H15 y su «Reintentar» debajo. '' vuelve al MCP caído al arrancar
+   * el panel (H15), que es como nace esta pantalla en el espejo.
+   */
+  function pintarClaves(k) {
+    const TEXTOS = {
+      '': `El MCP «${NOMBRE_MCP}» está registrado pero en «failed». Revisa ese bloque y reinicia opencode, o quítalo si sobra.`,
+      escribiendo: 'Escribiendo en opencode…',
+      recargando: 'Esperando a que opencode recargue…',
+      arrancando: 'Arrancando el MCP…',
+      fallo: `Escrito en C:\\Users\\marco\\.config\\opencode, pero el MCP «${NOMBRE_MCP}» sigue en «failed».`,
+    }
+    estado.claves = k in TEXTOS ? k : ''
+    $('setup-status').textContent = TEXTOS[estado.claves]
+    $('setup-mcp-hint').classList.toggle('hidden', estado.claves !== '' && estado.claves !== 'fallo')
+  }
+  /**
    * El aviso de que el MCP no está conectado (H14, P5), tal como lo cuelga
    * `attachMcpNotice` del chat cuando la comprobación llega tarde y no se le
    * puede abrir la pantalla de claves al usuario (está escribiendo, esperando
@@ -1408,6 +1458,8 @@ async function arrancar() {
 
     chat.appendChild(tarjetaPermiso(SITIOS.jira.host))
     chat.appendChild(avisoMcpSinConectar())
+    // H18: el recordatorio de unas claves adoptadas sin comprobar, con su botón.
+    chat.appendChild(avisoClavesSinComprobar())
   }
 
   /**
@@ -1680,6 +1732,18 @@ async function arrancar() {
     $(id).classList.remove('hidden')
   }
   $('setup-waiting-text').textContent = 'El MCP está en «failed»…'
+  // H18: la pantalla de claves pide permiso para ESCRIBIR en la configuración de
+  // opencode, con la carpeta que da `GET /path` (aquí, la de Marco, de mentira).
+  // Es una ruta larga y sin espacios: lo que hay que mirar a 320 px.
+  $('setup-consent').classList.remove('hidden')
+  $('setup-consent-path').textContent = 'C:\\Users\\marco\\.config\\opencode'
+  // Y el paso manual, que desde H18 es el RESPALDO: el porqué de haber llegado
+  // (el error de sintaxis, el `kind` más probable tras editar a mano) y «Ya lo
+  // he pegado», que viene en el panel.html real. El texto es el de
+  // `porQueNoSeEscribe` de panel.js, que no se puede importar desde aquí.
+  $('setup-manual-why').textContent =
+    'Faro no ha podido escribirlo por ti. La configuración de opencode tiene un error de sintaxis: corrígelo, pega el bloque y pulsa «Ya lo he pegado».'
+  $('setup-manual-why').classList.remove('hidden')
   $('busy-title').textContent = 'Levantando el mapa'
   $('busy-text').textContent = 'Recorriendo el espacio ENG…'
 
@@ -2039,6 +2103,15 @@ async function arrancar() {
     })
   )
 
+  lado.querySelectorAll('[data-claves]').forEach((b) =>
+    b.addEventListener('click', () => {
+      marcar('claves', b.dataset.claves)
+      pintarClaves(b.dataset.claves)
+      marcar('screen', 'screen-setup')
+      mostrarPantalla('screen-setup')
+      programarCheck()
+    })
+  )
   lado.querySelectorAll('[data-status]').forEach((b) =>
     b.addEventListener('click', () => {
       estado.status = b.dataset.status
@@ -2187,6 +2260,11 @@ async function arrancar() {
     '#setup-mcp-hint .cmd',
     '#setup-manual-hint',
     '#setup-manual-hint .cmd',
+    // H18: el consentimiento para escribir en opencode (con la carpeta, que es
+    // una ruta larga sin espacios donde partir) y el porqué del respaldo manual.
+    '#setup-consent',
+    '#setup-consent .check',
+    '#setup-manual-why',
     // H17: la fila de un modelo (nombre, etiquetas y el porqué, que con el
     // mensaje de Copilot son mil caracteres sin acotar) y la lista entera.
     '.model-row',
@@ -2379,6 +2457,14 @@ async function arrancar() {
       estado.today = modo
       marcar('today', modo)
       pintarConversacion()
+      return pintarMedidas()
+    },
+    /** H18: '' | 'escribiendo' | 'recargando' | 'arrancando' | 'fallo', con la pantalla de claves abierta. */
+    setClaves(k) {
+      marcar('claves', k || '')
+      pintarClaves(k || '')
+      marcar('screen', 'screen-setup')
+      mostrarPantalla('screen-setup')
       return pintarMedidas()
     },
     setScreen(id) {

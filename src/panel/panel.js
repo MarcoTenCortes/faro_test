@@ -38,7 +38,17 @@ import {
   wikiPrefix as wikiPrefixOf,
 } from '../atlassian/site.js'
 import { mergeIndex, mergeIndexKeepingTree, indexSize, normalizeIndex, ancestryOf, isPlaceholderTitle } from '../atlassian/index-store.js'
-import { CORS_ORIGIN, DEFAULT_SETTINGS, INDEX_LIMITS, PROFILE_LIMITS, RESTORE_LIMITS, SESSION_LIMITS, mcpNameForHost } from '../shared/config.js'
+import {
+  CORS_ORIGIN,
+  DEFAULT_SETTINGS,
+  INDEX_LIMITS,
+  MCP_RELOAD_LIMITS,
+  OPENCODE_VERIFIED_VERSION,
+  PROFILE_LIMITS,
+  RESTORE_LIMITS,
+  SESSION_LIMITS,
+  mcpNameForHost,
+} from '../shared/config.js'
 import { MSG } from '../shared/messages.js'
 import {
   JIRA_REST_LIMITS,
@@ -76,6 +86,10 @@ import {
   mcpForHost,
   chosenMcpName,
   mcpFailureHint,
+  buildMcpConfig,
+  mcpEntriesForHost,
+  uvxAbsoluteCommand,
+  keysUnverified,
   PRODUCTS,
 } from './setup.js'
 import { buildContext, harvestIndex, harvestFromSearch, indexFromSpacePages, countWithParent } from './indexer.js'
@@ -358,6 +372,19 @@ const state = {
   pendingMcp: null,
   snippets: null,
   mcpWait: null,
+  // La versión de opencode, leída de `GET /global/health` en cada arranque
+  // (H18): la recarga en caliente de su configuración está verificada SÓLO en
+  // `OPENCODE_VERIFIED_VERSION`, y con otra el texto de espera lo dice. '' si no
+  // se sabe (y entonces no se dice nada: no se puede afirmar lo que no se ve).
+  opencodeVersion: '',
+  // La pantalla de claves abierta desde «Cambiar las claves» (H18): el
+  // consentimiento para escribir en opencode se pide SIEMPRE, aunque ya se diera
+  // una vez, porque la guarda «opencode se está reconfigurando» es local a este
+  // panel y no ve otras ventanas de Chrome ni la TUI conectadas al mismo opencode.
+  setupConfirmar: false,
+  // El aviso «claves sin comprobar» colgado del chat, para no colgarlo dos veces
+  // y quitarlo en cuanto la primera verificación las dé por buenas (H18).
+  avisoSinComprobar: null,
   // Un arranque que no se pudo hacer porque la pestaña estaba fuera de
   // Atlassian: el host al que le toca, en cuanto se vuelva a él.
   bootPending: '',
@@ -797,6 +824,16 @@ async function bootForSite() {
   if (state.bootToken !== testigo) return
   cron.mark('health')
   client.connect()
+  // La versión de opencode (H18), SIN esperarla: es el mismo `GET /global/health`
+  // de arriba otra vez, pero el chat no tiene por qué pagar su ida y vuelta. Sólo
+  // se usa en el texto de espera de la pantalla de claves, y se apunta sólo si
+  // el cliente sigue siendo éste cuando conteste (§8.22: es del servidor).
+  client
+    .version()
+    .then((v) => {
+      if (state.client === client) state.opencodeVersion = v
+    })
+    .catch(() => {})
 
   // 2. Todo lo que este sitio tiene guardado, la lista de modelos y la sesión
   // abierta: las tres cosas A LA VEZ, y lo de storage en UNA sola lectura.
@@ -1308,16 +1345,29 @@ async function checkMcp(client, testigo, previo) {
     // Esto se escribe aunque el panel ya esté en otro sitio: va bajo el host que
     // lo aprendió, como el índice y el contexto de §4.6, y es lo que hace que al
     // volver el MCP ya esté reconocido.
+    //
+    // Adoptar NO es verificar (H18, docs/PLAN2.md §3.2): un MCP que opencode ya
+    // tiene conectado con este dominio —la recarga a mitad del primer uso, tras
+    // escribirlo `saveKeys` y antes de que `finishSetup` lo comprobara, o uno
+    // pegado a mano— no ha pasado ningún turno con sus tokens, y el primer
+    // fallo saldría como una fila de herramienta fallida en mitad de un
+    // análisis. Queda `verified: false` y el chat lo dice hasta la primera
+    // verificación buena. Sólo se CONSERVA lo verificado cuando es el MISMO MCP
+    // ya configurado y lo único nuevo es un host enlazado: ahí los tokens son
+    // los que ya se comprobaron (desvío anotado del contrato de H18).
+    const mismoYaProbado = !!saved?.configured && saved?.mcpName === found.name && !keysUnverified(saved)
     const registros = siteRecords({
       host,
       product,
       mcpName: found.name,
       jiraHost: found.jiraHost,
       confluenceHost: found.confluenceHost,
+      verified: mismoYaProbado,
     })
     for (const registro of registros) await saveSite(registro.host, registro.patch)
     saved = await getSite(host)
     log.ok('MCP reconocido', `${found.name} · ${found.products === 2 ? 'Jira y Confluence' : found.jiraHost ? 'sólo Jira' : 'sólo Confluence'}`)
+    if (!mismoYaProbado) log.warn('Claves sin comprobar', `${host} · ${found.name}: adoptado sin probar ningún token`)
   } else if (found && !found.connected) {
     log.warn('MCP sin conectar', `${found.name} lleva este dominio pero no está conectado`)
   }
@@ -1389,6 +1439,8 @@ async function onMcpResult(r, vigente) {
     state.mcpPending = { host: r.host, status: r.status }
     showMcpPending()
   }
+  // Un MCP adoptado sin comprobar (H18): se dice ya, en el chat que está puesto.
+  if (keysUnverified(r.saved)) avisarClavesSinComprobar({ anunciar: true }).catch(() => {})
   // Y si la adopción ha traído un host enlazado que no estaba cuando se leyó el
   // contexto, se lee ahora: desde un Jira, el CONTEXT.md del Confluence enlazado
   // es lo que dice qué páginas mirar (§4.7). Sólo pasa la primera vez que se
@@ -1483,8 +1535,14 @@ let setupHintPintado = null
  * arriba (que sigue escrita una sola vez): por qué suele pasar, el comando para
  * arreglarlo y «Reintentar» (H15, docs/PLAN2.md §3.1). Sin consejo —conectado,
  * ausente, o un estado que no es «failed»— la caja se vacía y se esconde.
+ *
+ * Desde H18 lo pinta también la espera de `saveKeys` tras escribir el MCP
+ * (`espera`: su testigo, `state.mcpWait`). Mientras esa espera vive,
+ * «Reintentar» es como el del paso manual —`manual`: la espera lo ve conectado
+ * y sigue ella con `finishSetup`—; rearrancar el panel a la vez adoptaría el MCP
+ * sin comprobar las claves. Vencida o sin espera, lo de siempre.
  */
-function paintSetupMcpHint(status) {
+function paintSetupMcpHint(status, { host = '', espera = null } = {}) {
   const caja = $('setup-mcp-hint')
   const consejo = mcpFailureHint(status)
   // Lo que hace el paso manual (revisión adversaria de H15): el mismo consejo
@@ -1503,7 +1561,9 @@ function paintSetupMcpHint(status) {
       onRetry: (boton) =>
         retryMcp(status.name, {
           boton,
-          repintar: paintSetupMcpHint,
+          host,
+          manual: !!espera && state.mcpWait === espera,
+          repintar: (s) => paintSetupMcpHint(s, { host, espera }),
           // Conectado con un turno en vuelo: la pantalla se cierra y se dice en
           // el chat; sin turno, `retryMcp` rearranca el panel y ya no hace falta.
           avisar: () => {
@@ -2340,6 +2400,10 @@ async function restoreConversation(testigo = state.bootToken, { all = false } = 
   // de contexto (o el velo) lo tapaba: un aviso colgado antes de esto se habría
   // ido con el `textContent = ''` de arriba.
   showMcpPending()
+  // Y, por lo mismo, el recordatorio de unas claves adoptadas sin comprobar
+  // (H18): se vuelve a colgar en cada repintado hasta la primera verificación
+  // buena. Sin anunciarlo: repintar el chat no anuncia nada.
+  avisarClavesSinComprobar().catch(() => {})
   if (all) {
     // Se ha pedido ver lo ANTERIOR: irse al fondo devolvería al usuario justo a
     // donde ya estaba, con lo que acaba de traer fuera de la pantalla. La vista
@@ -6932,9 +6996,13 @@ function portOf(url) {
  * rellenas con éste; en Server/Data Center sólo la del producto en el que
  * estás, y el otro queda sin marcar hasta que el usuario diga dónde vive.
  */
-function showSetupScreen() {
+function showSetupScreen({ confirmar = false } = {}) {
   state.mcpWait?.abort()
   const site = state.site
+  // Desde «Cambiar las claves» el permiso para escribir en opencode se vuelve a
+  // pedir aunque ya se diera (H18): reescribir las claves reinicia las
+  // conexiones de ese opencode para TODAS sus ventanas, que este panel no ve.
+  state.setupConfirmar = !!confirmar
   $('setup-host').textContent = site.host
   $('setup-dc-field').classList.toggle('hidden', !!site.cloud)
   $('setup-dc').checked = !site.cloud
@@ -6957,6 +7025,7 @@ function showSetupScreen() {
   $('setup-manual').classList.add('hidden')
   $('setup-main').classList.remove('hidden')
   showScreen('screen-setup')
+  paintSetupConsent().catch(() => {})
 }
 
 /** Qué campos se ven: los de cada producto marcado, y el correo sólo en Cloud. */
@@ -7553,6 +7622,11 @@ function setStreaming(on) {
   // pasada nacerían desactivados y ahí se quedarían, porque la de arriba sólo
   // recorre el chat.
   for (const b of $('screen-today').querySelectorAll('.' + NEEDS_IDLE)) b.disabled = on
+  // Y los de la pantalla de claves (H18): escribir en opencode —guardar las
+  // claves, «Ya lo he pegado»— abortaría el turno. El de guardar lo repinta
+  // `paintSetupSave`, que además lo deja apagado sin el permiso para escribir.
+  for (const b of $('screen-setup').querySelectorAll('.' + NEEDS_IDLE)) b.disabled = on
+  paintSetupSave()
   // El lector de pantalla: mientras llega la respuesta a trozos, el chat está
   // «ocupado»; lo que hay que decir se dice una vez al final (A2).
   el.chat.setAttribute('aria-busy', on ? 'true' : 'false')
@@ -7816,6 +7890,7 @@ function wireEvents() {
 
   // --- pantalla de claves
   $('btn-setup-save').addEventListener('click', saveKeys)
+  $('setup-consent-ok').addEventListener('change', paintSetupSave)
   for (const id of ['setup-jira', 'setup-confluence', 'setup-dc']) {
     $(id).addEventListener('change', paintSetupProducts)
   }
@@ -7841,6 +7916,7 @@ function wireEvents() {
   })
   $('btn-copy-snippet').addEventListener('click', () => copyToClipboard($('setup-snippet').textContent, 'btn-copy-snippet'))
   $('btn-copy-path').addEventListener('click', () => copyToClipboard($('setup-config-path').textContent, 'btn-copy-path'))
+  $('btn-setup-reload').addEventListener('click', () => reloadPastedConfig().catch(console.error))
   $('btn-setup-back').addEventListener('click', () => {
     state.mcpWait?.abort()
     $('setup-manual').classList.add('hidden')
@@ -7937,7 +8013,7 @@ function wireEvents() {
     hideScreens()
     await generateContext()
   })
-  $('btn-edit-keys').addEventListener('click', () => showSetupScreen())
+  $('btn-edit-keys').addEventListener('click', () => showSetupScreen({ confirmar: true }))
   // Desde Ajustes, con la flecha a la vista: aquí se viene a mirar y quizá a
   // cambiar, y volver sin elegir deja el modelo como estaba.
   $('btn-change-model').addEventListener('click', () => showModelScreen({ modo: 'ajustes', marcado: state.model }).catch(console.error))
@@ -8043,6 +8119,117 @@ function wireEvents() {
 
 // --------------------------------------------------------------- acciones
 
+/**
+ * ¿Qué impide ahora mismo que Faro reconfigure opencode? El motivo, o '' con el
+ * panel quieto (H18, la guarda común «opencode se está reconfigurando»,
+ * docs/PLAN2.md §3.2 y §4).
+ *
+ * POR QUÉ: cada `PATCH /global/config` —escribir el MCP, o el `{}` de «Ya lo he
+ * pegado»— hace que opencode deseche TODAS sus instancias (medido en 1.2.25,
+ * anexo 2-A): aborta los turnos en vuelo de ese proceso, cierra el stream de
+ * eventos y rearranca todos los MCP. Un turno del chat, un indexado, la sonda
+ * de «Comprobar» o la comprobación de las claves a medias se cortarían sin
+ * decir por qué. Así que sólo con el panel quieto; lo que no ve —otras ventanas
+ * de Chrome, la TUI— lo cubre el consentimiento, que en «Cambiar las claves» se
+ * pide siempre.
+ */
+function reconfiguring() {
+  if (state.streaming) return 'Espera a que termine la respuesta: escribir en opencode la cortaría.'
+  if (state.indexingAbort) return 'Espera a que termine el indexado: escribir en opencode lo cortaría.'
+  if (state.modelProbeAbort) return 'Espera a que termine la comprobación del modelo: escribir en opencode la cortaría.'
+  if (state.setupAbort) return 'Espera a que termine la comprobación de las claves: escribir en opencode la cortaría.'
+  return ''
+}
+
+/**
+ * ¿Hay permiso para escribir en la configuración de opencode? La casilla del
+ * bloque de consentimiento marcada, o el permiso ya dado (`configWriteConsent`)
+ * cuando la pantalla NO se abrió desde «Cambiar las claves», que pregunta
+ * siempre (H18).
+ */
+function consentimientoListo() {
+  if ($('setup-consent-ok').checked) return true
+  return !!state.settings.configWriteConsent && !state.setupConfirmar
+}
+
+/**
+ * El botón de guardar las claves: apagado sin permiso para escribir y con un
+ * turno en vuelo (lleva `NEEDS_IDLE`, y `setStreaming` lo repinta por aquí para
+ * no encenderlo sin el permiso). Lo demás que impide escribir (un indexado, la
+ * sonda) lo dice `reconfiguring()` al pulsarlo.
+ */
+function paintSetupSave() {
+  $('btn-setup-save').disabled = escribiendoClaves || state.streaming || !consentimientoListo()
+}
+
+/**
+ * El bloque de consentimiento de la pantalla de claves (H18): a la vista la
+ * primera vez y SIEMPRE desde «Cambiar las claves», con la carpeta REAL donde
+ * opencode tiene su configuración (`GET /path`). El panel no puede listar esa
+ * carpeta —opencode no tiene ningún endpoint para eso—, así que el nombre del
+ * fichero lo dice el texto fijo del HTML («el primero que exista de
+ * opencode.jsonc, opencode.json y config.json»). Cliente capturado antes del
+ * await (§8.22): la ruta es de ESE servidor.
+ */
+async function paintSetupConsent() {
+  const pedir = !state.settings.configWriteConsent || state.setupConfirmar
+  $('setup-consent').classList.toggle('hidden', !pedir)
+  $('setup-consent-ok').checked = false
+  $('setup-consent-path').textContent = 'la carpeta de configuración de opencode'
+  paintSetupSave()
+  if (!pedir) return
+  const cliente = state.client
+  if (!cliente) return
+  const rutas = await cliente.paths().catch(() => null)
+  if (state.client !== cliente || !rutas?.config) return
+  $('setup-consent-path').textContent = rutas.config
+}
+
+/** Mientras `saveKeys` escribe y espera: un segundo clic no escribe dos veces. */
+let escribiendoClaves = false
+
+/** Lo que dice la pantalla de claves mientras escribe y espera (H18; el espejo dice lo mismo). */
+const ESTADO_CLAVES = Object.freeze({
+  escribiendo: 'Escribiendo en opencode…',
+  recargando: 'Esperando a que opencode recargue…',
+  arrancando: 'Arrancando el MCP…',
+})
+
+/**
+ * La nota de la versión (H18): la recarga en caliente de la configuración sólo
+ * está verificada en `OPENCODE_VERIFIED_VERSION`. Con otra versión se dice en el
+ * texto de espera en vez de prometer que el MCP aparecerá; sin versión conocida,
+ * nada (no se afirma lo que no se ve).
+ */
+function notaVersion() {
+  const v = state.opencodeVersion
+  if (!v || v === OPENCODE_VERIFIED_VERSION) return ''
+  return ` Esta versión de opencode (${v}) no es la probada (${OPENCODE_VERIFIED_VERSION}): si el MCP no aparece, reinícialo.`
+}
+
+/**
+ * Guardar las claves: ESCRIBIR el MCP en la configuración de opencode y esperar
+ * a que opencode lo cargue (H18, docs/PLAN2.md §3.2). Verificar los tokens es de
+ * `finishSetup`, que va detrás y no escribe nada: así volver a la pantalla del
+ * modelo tras un fallo por modelo repite SÓLO la verificación, sin otro PATCH
+ * que abortaría turnos y rearrancaría todos los MCP (escribir ≠ verificar).
+ *
+ * POR QUÉ: hasta H18 esto llamaba a `POST /mcp`, que en opencode 1.2.25 arranca
+ * el MCP sólo EN MEMORIA —`GET /mcp` no lo ve, no se escribe nada y muere con la
+ * primera recarga—, así que siempre acababa en el paso manual: pegar un bloque
+ * con los tokens en un fichero y reiniciar opencode, que es justo donde se
+ * atascaron los compañeros. `PATCH /global/config` escribe el fichero Y recarga
+ * en caliente (anexo 2-A); el paso manual se queda como RESPALDO.
+ *
+ * En orden: permiso (la primera vez, y siempre desde «Cambiar las claves»);
+ * sitio, cliente y host capturados antes del primer await (§8.22); la guarda
+ * común con el panel quieto; lo que el MCP tenía pendiente se invalida ANTES de
+ * escribir —si no, P5 (H14) podría abrir la pantalla de claves con un resultado
+ * viejo justo después—; escribir; esperar a que la entrada APAREZCA; esperar a
+ * que conecte con el consejo de H15; un reintento con la ruta absoluta de uvx
+ * sólo si la entrada es NUEVA y cayó al instante; releer la configuración para
+ * comprobar que la que opencode carga es la escrita; y `finishSetup`.
+ */
 async function saveKeys() {
   const status = $('setup-status')
 
@@ -8050,9 +8237,17 @@ async function saveKeys() {
     status.textContent = 'He perdido de vista el sitio. Abre una página de Jira o Confluence y vuelve a intentarlo.'
     return
   }
+  if (escribiendoClaves) return
+
+  // El sitio, el host y el cliente con los que se escribe, ANTES del primer
+  // await (§8.22): la espera dura segundos y la pestaña puede irse a otro sitio.
+  const sitio = state.site
+  const host = sitio.host
+  const cliente = state.client
 
   // Cada producto con lo suyo: dirección, correo (sólo en Cloud) y token. Lo
-  // que falte lo dice `buildMcpConfig` con el nombre del producto.
+  // que falte lo dice `buildMcpConfig` con el nombre del producto, y se dice
+  // ANTES de tocar nada de opencode ni del estado.
   const dataCenter = $('setup-dc').checked
   const keysOf = (product) =>
     $(`setup-${product}`).checked
@@ -8064,56 +8259,344 @@ async function saveKeys() {
       : null
   const jira = keysOf('jira')
   const confluence = keysOf('confluence')
-
-  status.textContent = 'Preparando la configuración…'
-
-  let result
   try {
-    result = await configureMcp(state.client, { host: state.site.host, jira, confluence, dataCenter })
+    buildMcpConfig({ jira, confluence, dataCenter })
   } catch (err) {
     status.textContent = 'No he podido configurarlo: ' + (err?.message || err)
     return
   }
 
-  // Los hosts de cada producto salen de la configuración que se acaba de
-  // construir —ya normalizada—, no de lo que se escribió en el campo.
-  const env = result.config.environment
-  // Con el sitio con el que se pidieron: el paso manual espera hasta 15 min y
-  // la pestaña activa entonces puede ser otra (C5).
-  state.pendingMcp = {
-    ...result,
-    site: state.site,
-    products: {
-      jira: jira ? hostOf(env.JIRA_URL) : '',
-      confluence: confluence ? hostOf(env.CONFLUENCE_URL) : '',
-    },
-  }
-
-  if (result.ready) {
-    await finishSetup()
+  // (1) El permiso para escribir en la configuración de opencode.
+  if (!consentimientoListo()) {
+    status.textContent = 'Marca la casilla de arriba: Faro necesita tu permiso para escribir en la configuración de opencode.'
     return
   }
 
-  // opencode sólo carga los MCP al arrancar, así que toca el paso manual.
-  await showManualStep(result)
+  escribiendoClaves = true
+  paintSetupSave()
+  status.textContent = 'Preparando la configuración…'
+  try {
+    if (!state.settings.configWriteConsent) state.settings = await saveSettings({ configWriteConsent: true })
+    const saved = await getSite(host).catch(() => null)
+    // La carpeta donde opencode tiene su configuración, para decir DÓNDE se ha
+    // escrito y para la ruta absoluta de uvx del reintento.
+    const rutas = await cliente.paths().catch(() => null)
+    // Lo que opencode tiene AHORA, para decidir bajo qué nombre escribir y qué
+    // conservar (`chooseWriteTarget`, dentro de `configureMcp`). Lleva los tokens
+    // de todos los MCP en claro: de aquí no sale nada más que esa decisión.
+    const configAntes = await cliente.config().catch(() => null)
+    if (state.client !== cliente || (state.site?.host ?? state.lastHost) !== host) return
+
+    // (2) La guarda común, justo antes de escribir: entre las lecturas de arriba
+    // ha podido empezar un turno.
+    const ocupado = reconfiguring()
+    if (ocupado) {
+      status.textContent = ocupado
+      return
+    }
+    // Lo que el MCP de este panel tenía en marcha deja de valer: la comprobación
+    // del arranque y su resultado sin enseñar hablan del MCP de ANTES, y una
+    // espera vieja vería el nuevo por su cuenta.
+    state.mcpCheck = null
+    state.mcpPending = null
+    state.mcpWait?.abort()
+    state.mcpConnected = false
+    // El testigo de ESTA escritura: cambiar a otro sitio (`refreshTab`), volver a
+    // abrir la pantalla o la flecha del paso manual la abortan, como a cualquier
+    // espera del MCP.
+    const espera = new AbortController()
+    state.mcpWait = espera
+    const sigue = () => !espera.signal.aborted && state.client === cliente && (state.site?.host ?? state.lastHost) === host
+    const ruta = rutas?.config || 'la carpeta de configuración de opencode'
+
+    status.textContent = ESTADO_CLAVES.escribiendo
+    const t0 = performance.now()
+    let result
+    try {
+      result = await configureMcp(cliente, { host, jira, confluence, dataCenter, saved, config: configAntes })
+    } catch (err) {
+      status.textContent = 'No he podido configurarlo: ' + (err?.message || err)
+      return
+    }
+    const msPatch = Math.round(performance.now() - t0)
+
+    // Los hosts de cada producto salen de la configuración que se acaba de
+    // construir —ya normalizada—, no de lo que se escribió en el campo. Con el
+    // sitio con el que se pidieron: la espera y la verificación duran y la
+    // pestaña activa entonces puede ser otra (C5).
+    const env = result.block?.environment || {}
+    state.pendingMcp = {
+      ...result,
+      site: sitio,
+      products: {
+        jira: jira ? hostOf(env.JIRA_URL) : '',
+        confluence: confluence ? hostOf(env.CONFLUENCE_URL) : '',
+      },
+    }
+
+    // (6) No se ha podido escribir: el respaldo manual, con el porqué.
+    if (!result.ok) {
+      log.warn('MCP sin escribir', `${result.status || 0} · ${result.kind || 'sin tipo'}`)
+      if (!sigue()) return
+      await showManualStep(result, { motivo: 'sin-escribir', kind: result.kind })
+      return
+    }
+
+    // (4) Que APAREZCA en `GET /mcp`. No un sleep: la recarga es asíncrona y un
+    // GET inmediato puede contestarlo todavía la instancia vieja.
+    status.textContent = ESTADO_CLAVES.recargando + notaVersion()
+    const aparecida = await esperarEntrada(cliente, host, result.name, espera.signal)
+    if (!sigue()) {
+      log.info('MCP escrito en opencode', `${result.name} · ${ruta} · PATCH ${msPatch} ms · espera cancelada`)
+      return
+    }
+    if (!aparecida) {
+      log.warn('MCP escrito en opencode', `${result.name} · ${ruta} · PATCH ${msPatch} ms · no aparece en ${MCP_RELOAD_LIMITS.appearMs / 1000} s`)
+      await showManualStep(result, { motivo: 'no-aparece', ruta })
+      return
+    }
+    log.ok('MCP escrito en opencode', `${result.name} · ${ruta} · PATCH ${msPatch} ms · aparece en ${aparecida.ms} ms`)
+
+    // (4) Que CONECTE, con el consejo de H15 si cae. Sólo una entrada que Faro
+    // acaba de CREAR con el `command` estándar vigila la caída al instante: con
+    // un `command` que puso el usuario (docker, una ruta propia, una entrada
+    // ajena) no se toca nada.
+    const creada = result.reuse === false
+    status.textContent = ESTADO_CLAVES.arrancando
+    let arranque = await arrancarMcp({ cliente, host, name: result.name, espera, primero: aparecida.status, vigilarCaida: creada })
+    if (!sigue()) return
+
+    // (5) Cayó con «Connection closed» en menos de `fastFailMs`: casi siempre es
+    // que el opencode en marcha no tiene uvx en su PATH (se arrancó antes de
+    // instalar uv). UN reintento con la ruta absoluta del instalador oficial, y
+    // si tampoco, se devuelve el `command` estándar y sale el consejo de H15.
+    if (arranque.caida && creada) {
+      const conRuta = uvxAbsoluteCommand(rutas)
+      if (conRuta) {
+        status.textContent = 'opencode no encuentra uvx: pruebo con la ruta completa…'
+        const reintento = await configureMcp(cliente, { host, jira, confluence, dataCenter, saved, config: configAntes, command: conRuta })
+        if (!sigue()) return
+        if (reintento.ok) {
+          await new Promise((r) => setTimeout(r, MCP_RELOAD_LIMITS.pollMs))
+          if (!sigue()) return
+          status.textContent = ESTADO_CLAVES.arrancando
+          arranque = await arrancarMcp({ cliente, host, name: result.name, espera, primero: null, vigilarCaida: true })
+          if (!sigue()) return
+        }
+        if (arranque.status.connected) {
+          log.ok('MCP escrito en opencode', `${result.name} · arranca con la ruta completa de uvx`)
+        } else {
+          // Vuelta atrás: el `command` estándar, que es el que vale en cuanto
+          // opencode se arranque desde una terminal que ve uvx.
+          const vuelta = await configureMcp(cliente, { host, jira, confluence, dataCenter, saved, config: configAntes })
+          log.warn('MCP escrito en opencode', `${result.name} · tampoco con la ruta completa de uvx · command ${vuelta.ok ? 'devuelto a uvx' : 'sin devolver: ' + (vuelta.kind || vuelta.status)}`)
+          if (!sigue()) return
+        }
+      }
+    }
+
+    if (!arranque.status.connected) {
+      // Sin conectar: el consejo de H15 se queda con su «Reintentar», que ahora
+      // —sin espera viva— rearranca el panel si conecta, y el arranque adopta el
+      // MCP con las claves sin comprobar (y lo dice).
+      if (state.mcpWait === espera) state.mcpWait = null
+      const como = arranque.status.present ? `sigue en «${arranque.status.status}»` : 'no aparece en opencode'
+      status.textContent = `Escrito en ${ruta}, pero el MCP «${result.name}» ${como}.`
+      paintSetupMcpHint(arranque.status, { host })
+      return
+    }
+    paintSetupMcpHint(arranque.status, { host })
+
+    // Releer lo que opencode CARGA: una configuración de proyecto en el
+    // directorio donde se arrancó el servidor taparía la escrita (con
+    // tools/arrancar-opencode.ps1 no pasa; arrancado a mano, sí puede).
+    const configDespues = await cliente.config().catch(() => null)
+    if (!sigue()) return
+    const hosts = [host, state.pendingMcp.products.jira, state.pendingMcp.products.confluence]
+    if (!entradaEfectiva(configDespues, hosts, result.name)) {
+      if (state.mcpWait === espera) state.mcpWait = null
+      log.warn('MCP escrito en opencode', `${result.name} · la configuración que opencode carga no es la escrita`)
+      status.textContent =
+        `La configuración que opencode carga no es la que se ha escrito: hay una configuración de proyecto delante. ` +
+        `Faro escribió en ${ruta}; arranca opencode desde otra carpeta (tools\\arrancar-opencode.ps1 usa una propia) y vuelve a intentarlo.`
+      return
+    }
+
+    // Escrito, cargado y conectado: ahora sí, a comprobar los tokens.
+    if (state.mcpWait === espera) state.mcpWait = null
+    await finishSetup()
+  } finally {
+    escribiendoClaves = false
+    paintSetupSave()
+  }
+}
+
+/**
+ * Sondea `GET /mcp` cada `pollMs` hasta que aparezca la entrada `name` (tope
+ * `appearMs`). Devuelve `{status, ms}` con el estado con el que apareció, o null
+ * si no apareció o se canceló. Espera `pollMs` ANTES de la primera pregunta: un
+ * GET justo después del PATCH puede contestarlo la instancia vieja, y en una
+ * entrada reutilizada eso sería «ya está» con los tokens de antes.
+ */
+async function esperarEntrada(cliente, host, name, signal) {
+  const t0 = performance.now()
+  for (;;) {
+    await new Promise((r) => setTimeout(r, MCP_RELOAD_LIMITS.pollMs))
+    if (signal.aborted) return null
+    const lista = await cliente.listMcp().catch(() => ({}))
+    if (signal.aborted) return null
+    const s = mcpStatusFor(lista, host, name)
+    const ms = Math.round(performance.now() - t0)
+    if (s.present) return { status: s, ms }
+    if (ms >= MCP_RELOAD_LIMITS.appearMs) return null
+  }
+}
+
+/**
+ * Espera a que el MCP recién aparecido conecte (`waitForMcpReady`, 90 s),
+ * pintando en la pantalla de claves el estado real y el consejo de H15.
+ *
+ * Con `vigilarCaida`, si cae con «Connection closed» (`mcpFailureHint` →
+ * `sin-arranque`) antes de `MCP_RELOAD_LIMITS.fastFailMs` desde que apareció,
+ * corta la espera y devuelve `caida: true`: es el caso del reintento con la
+ * ruta absoluta de uvx. `primero` es el estado con el que apareció, que ya
+ * puede ser ése. Devuelve `{status, caida}`.
+ */
+async function arrancarMcp({ cliente, host, name, espera, primero, vigilarCaida }) {
+  const desde = performance.now()
+  const cayoYa = (s) => vigilarCaida && mcpFailureHint(s)?.kind === 'sin-arranque' && performance.now() - desde < MCP_RELOAD_LIMITS.fastFailMs
+  if (primero?.connected) return { status: primero, caida: false }
+  if (primero && cayoYa(primero)) return { status: primero, caida: true }
+  const ronda = new AbortController()
+  const cortar = () => ronda.abort()
+  espera.signal.addEventListener('abort', cortar)
+  let caida = false
+  const status = await waitForMcpReady(cliente, host, {
+    mcpName: name,
+    intervalMs: MCP_RELOAD_LIMITS.pollMs,
+    signal: ronda.signal,
+    onTick: (s) => {
+      if (cayoYa(s)) {
+        caida = true
+        ronda.abort()
+        return
+      }
+      if (espera.signal.aborted) return
+      $('setup-status').textContent = s.present && s.status ? `El MCP está en «${s.status}»…` : ESTADO_CLAVES.arrancando
+      paintSetupMcpHint(s, { host, espera })
+    },
+  })
+  espera.signal.removeEventListener('abort', cortar)
+  return { status, caida }
+}
+
+/**
+ * ¿La entrada que opencode CARGA es la escrita? Busca `name` entre las que
+ * llevan alguno de estos dominios (`mcpEntriesForHost`, sin tokens) y exige que
+ * esté habilitada. De la configuración no sale nada más.
+ */
+function entradaEfectiva(config, hosts, name) {
+  for (const h of hosts) {
+    if (!h) continue
+    const entrada = mcpEntriesForHost(config, h).find((e) => e.name === name)
+    if (entrada) return entrada.enabled !== false ? entrada : null
+  }
+  return null
+}
+
+/**
+ * «Ya lo he pegado» (H18): que opencode relea su configuración global sin
+ * reiniciar. Es el `PATCH /global/config` con el cuerpo `{}` FIJO
+ * (`reloadGlobalConfig`, sin argumentos), verificado en 1.2.25: lo pegado a mano
+ * aparece en ~200 ms. Es otro PATCH, así que pasa por la misma guarda común y
+ * deja de fiarse de lo que el MCP tuviera pendiente; la espera del paso manual
+ * sigue viva, que es la que lo verá conectado.
+ */
+async function reloadPastedConfig() {
+  const boton = $('btn-setup-reload')
+  const porQue = $('setup-manual-why')
+  const cliente = state.client
+  if (!cliente || boton.disabled) return
+  const ocupado = reconfiguring()
+  if (ocupado) {
+    porQue.textContent = ocupado
+    porQue.classList.remove('hidden')
+    return
+  }
+  state.mcpCheck = null
+  state.mcpPending = null
+  state.mcpConnected = false
+  boton.disabled = true
+  const t0 = performance.now()
+  const recarga = await cliente.reloadGlobalConfig().catch(() => ({ ok: false, status: 0, kind: 'red' }))
+  const ms = Math.round(performance.now() - t0)
+  boton.disabled = state.streaming
+  if (recarga.ok) log.ok('Configuración recargada', `${ms} ms`)
+  else log.warn('Configuración recargada', `${recarga.status || 0} · ${recarga.kind || 'sin tipo'} · ${ms} ms`)
+  if (state.client !== cliente) return
+  if (recarga.ok) {
+    $('setup-waiting-text').textContent = 'opencode ha releído su configuración: esperando al MCP…'
+    return
+  }
+  porQue.textContent = porQueNoSeEscribe({ status: recarga.status, kind: recarga.kind })
+  porQue.classList.remove('hidden')
+  announce(porQue.textContent)
+}
+
+/**
+ * Por qué opencode no ha aceptado la escritura, en palabras (H18). Sólo el TIPO
+ * del error (`kind`, el `name` del JSON de opencode) y su código: el cuerpo, que
+ * con un fichero roto trae el fichero ENTERO con los tokens, no llega nunca aquí.
+ */
+function porQueNoSeEscribe({ status = 0, kind = '' } = {}) {
+  if (kind === 'ConfigJsonError') return 'La configuración de opencode tiene un error de sintaxis: corrígelo, pega el bloque y pulsa «Ya lo he pegado».'
+  if (kind === 'ConfigInvalidError') return 'La configuración de opencode tiene una clave que opencode no conoce: quítala, pega el bloque y pulsa «Ya lo he pegado».'
+  if (kind === 'entrada') return 'Faro no ha podido montar una entrada válida con estos datos: pégala a mano y pulsa «Ya lo he pegado».'
+  if (kind === 'red' || !status) return 'opencode no ha contestado: comprueba que sigue en marcha, pega el bloque y pulsa «Ya lo he pegado».'
+  const tipo = /^[A-Za-z]{1,40}$/.test(kind) ? ` (${kind})` : ''
+  return `opencode ha contestado ${status}${tipo}: pega el bloque a mano y pulsa «Ya lo he pegado».`
 }
 
 /**
  * Paso manual: enseñar dónde va la configuración, dejarla copiada, y esperar
  * a que opencode la cargue. En cuanto aparece conectada, sigue solo.
+ *
+ * Desde H18 es el RESPALDO de `saveKeys`, que escribe por la API: se llega aquí
+ * cuando opencode no ha aceptado la escritura (`motivo: 'sin-escribir'`, con el
+ * `kind` del error: sintaxis rota, una clave que no conoce…), y entonces el
+ * bloque de siempre se pega a mano y «Ya lo he pegado» hace que opencode lo
+ * relea sin reiniciar; o cuando se escribió pero opencode no lo ha cargado en
+ * `appearMs` (`motivo: 'no-aparece'`: una versión que no recarga en caliente),
+ * y entonces no hay nada que pegar —ya está escrito—: se dice dónde y que hay
+ * que reiniciar opencode, sin el bloque a la vista, y se espera igual.
  */
-async function showManualStep(result) {
+async function showManualStep(result, { motivo = '', kind = '', ruta = '' } = {}) {
   const paths = await state.client.paths().catch(() => null)
   const path = configFilePath(paths)
 
   state.snippets = {
-    full: fullConfigSnippet(result.name, result.config),
-    block: mcpBlockSnippet(result.name, result.config),
+    full: fullConfigSnippet(result.name, result.block),
+    block: mcpBlockSnippet(result.name, result.block),
     mode: 'full',
   }
 
   $('setup-config-path').textContent = path
   paintSnippet()
+  // Por qué se ha llegado aquí, y qué parte del paso hace falta.
+  const yaEscrito = motivo === 'no-aparece'
+  const porQue = $('setup-manual-why')
+  porQue.textContent =
+    motivo === 'sin-escribir'
+      ? 'Faro no ha podido escribirlo por ti. ' + porQueNoSeEscribe({ status: result.status, kind })
+      : yaEscrito
+        ? `Ya está escrito en ${ruta || path}, pero opencode no lo ha cargado en ${MCP_RELOAD_LIMITS.appearMs / 1000} s: ` +
+          'reinícialo con el mismo comando y Faro seguirá solo.' +
+          notaVersion()
+        : ''
+  porQue.classList.toggle('hidden', !porQue.textContent)
+  $('setup-manual-paste').classList.toggle('hidden', yaEscrito)
+  $('btn-setup-reload').classList.toggle('hidden', yaEscrito)
+  $('btn-setup-reload').disabled = state.streaming
   $('setup-main').classList.add('hidden')
   $('setup-manual').classList.remove('hidden')
   // El botón que se acaba de pulsar («Conectar y comprobar») queda escondido con
@@ -8190,6 +8673,9 @@ async function showManualStep(result) {
 
   const status = await waitForMcpReady(state.client, site.host, {
     timeoutMs: 15 * 60 * 1000,
+    // El nombre con el que se ha escrito (H18): puede ser el de una entrada que
+    // ya existía para este dominio, que no tiene por qué seguir la forma de Faro.
+    mcpName: result.name,
     signal: controller.signal,
     onTick: (s, left) => {
       $('setup-waiting-text').textContent =
@@ -8326,14 +8812,21 @@ async function finishSetup() {
     say('Conectado. ' + detalles.join(' · '))
     log.ok('MCP verificado', detalles.join(' · '))
 
+    // Si eran unas claves adoptadas sin comprobar (H18), esta es la primera
+    // verificación buena: se dice, y el recordatorio del chat se va.
+    const antes = await getSite(site.host).catch(() => null)
     const registros = siteRecords({
       host: site.host,
       product: site.product,
       mcpName: name || mcpNameForHost(site.host),
       jiraHost: products?.jira || '',
       confluenceHost: products?.confluence || '',
+      verified: true,
     })
     for (const { host, patch } of registros) await saveSite(host, patch)
+    if (keysUnverified(antes)) log.ok('Claves sin comprobar', `${site.host}: comprobadas · ${detalles.join(' · ')}`)
+    state.avisoSinComprobar?.remove()
+    state.avisoSinComprobar = null
     for (const { host } of registros.slice(1)) {
       log.ok('Sitio enlazado', `${host} comparte el MCP de ${site.host}; no pedirá claves`)
     }
@@ -8364,6 +8857,87 @@ function paintSnippet() {
   $('setup-snippet').textContent = s.mode === 'full' ? s.full : s.block
   $('btn-snippet-full').classList.toggle('on', s.mode === 'full')
   $('btn-snippet-block').classList.toggle('on', s.mode === 'block')
+}
+
+/**
+ * El recordatorio «claves sin comprobar» (H18, docs/PLAN2.md §3.2): el sitio de
+ * la pestaña tiene un MCP que `checkMcp` ADOPTÓ conectado —la recarga a mitad
+ * del primer uso, o un bloque pegado a mano— sin que ningún turno haya probado
+ * sus tokens, y queda `verified: false` hasta la primera verificación buena.
+ * Sin esto el sitio quedaba `configured` y el primer token malo salía como una
+ * fila de herramienta fallida en mitad de un análisis.
+ *
+ * Lee el registro del ALMACÉN, no de lo que el arranque leyó (la adopción lo
+ * reescribe después), y sólo avisa con `verified: false` EXPLÍCITO
+ * (`keysUnverified`): los registros guardados antes de H18 no lo llevan y nadie
+ * tiene que ver este aviso por actualizar Faro. Una vez por chat (se vuelve a
+ * colgar en cada repintado, desde `restoreConversation`) y nunca con el chat a
+ * punto de vaciarse. El botón pide el turno parado (`NEEDS_IDLE`): verificar
+ * son uno o dos turnos de modelo.
+ */
+async function avisarClavesSinComprobar({ anunciar = false } = {}) {
+  const host = state.site?.host
+  if (!host) return
+  const saved = await getSite(host).catch(() => null)
+  if (state.site?.host !== host || !keysUnverified(saved)) return
+  if (state.avisoSinComprobar?.isConnected) return
+  if (!$('screen-context').classList.contains('hidden') || !el.busy.classList.contains('hidden')) return
+  const texto =
+    `Las claves de ${host} no se han comprobado todavía: opencode tenía el MCP conectado y Faro lo ha adoptado ` +
+    'sin probar ningún token. Si una consulta a Jira o a Confluence falla, empieza por aquí.'
+  const wrap = document.createElement('div')
+  wrap.appendChild(noticeNode(texto, true))
+  const row = document.createElement('div')
+  row.className = 'nav-actions'
+  const btn = document.createElement('button')
+  btn.className = 'ghost small ' + NEEDS_IDLE
+  btn.type = 'button'
+  btn.textContent = 'Comprobar las claves'
+  btn.disabled = state.streaming
+  btn.addEventListener('click', () => {
+    if (state.streaming) return
+    comprobarClavesAdoptadas(btn).catch(console.error)
+  })
+  row.appendChild(btn)
+  wrap.appendChild(row)
+  el.chat.appendChild(wrap)
+  state.avisoSinComprobar = wrap
+  if (anunciar) announce(texto)
+  scrollChat()
+}
+
+/**
+ * «Comprobar las claves» del recordatorio: la MISMA verificación de siempre
+ * (`finishSetup`), sin escribir nada en opencode —las claves ya están ahí—.
+ * Como tras una recarga no queda ningún `pendingMcp`, se reconstruye de lo que
+ * opencode tiene de verdad para este dominio (`mcpForHost`: sólo los hosts y el
+ * nombre, nunca el `environment`), con el sitio, el cliente y el host
+ * capturados antes del primer await (§8.22). Sin un MCP que lleve el dominio no
+ * hay nada que verificar, y se dice: escribir `verified: true` sin haber probado
+ * un solo token sería mentir.
+ */
+async function comprobarClavesAdoptadas(boton) {
+  const sitio = state.site
+  const host = sitio?.host
+  const cliente = state.client
+  if (!host || !cliente) return
+  boton.disabled = true
+  const config = await cliente.config().catch(() => null)
+  if (state.site?.host !== host || state.client !== cliente) return
+  const found = mcpForHost(config, host)
+  if (!found) {
+    boton.disabled = state.streaming
+    showNotice('No encuentro en opencode ningún MCP con este dominio: vuelve a poner las claves desde Ajustes.', true, { force: true })
+    return
+  }
+  state.pendingMcp = { name: found.name, site: sitio, products: { jira: found.jiraHost, confluence: found.confluenceHost } }
+  state.avisoSinComprobar?.remove()
+  state.avisoSinComprobar = null
+  $('setup-host').textContent = host
+  $('setup-manual').classList.add('hidden')
+  $('setup-main').classList.remove('hidden')
+  showScreen('screen-setup')
+  await finishSetup()
 }
 
 /**
@@ -8407,6 +8981,7 @@ function attachSetupModelNotice(texto) {
   scrollChat({ force: true })
   return wrap
 }
+
 
 /**
  * Lo que se puede leer de la API del propio sitio antes de gastar un turno.

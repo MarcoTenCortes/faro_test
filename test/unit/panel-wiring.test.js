@@ -16,6 +16,9 @@ import { SUGGESTION_COUNT } from '../../src/panel/suggestions.js'
 import { SEARCH_CHIP_COUNT } from '../../src/panel/search-chips.js'
 import { TODAY_LIMITS } from '../../src/panel/today.js'
 import { ESCAPE_CLOSES } from '../../src/panel/screens.js'
+// H18: la regla de «claves sin comprobar» es UNA y vive en setup.js; el panel
+// sólo la llama. Aquí se ejecuta con un registro guardado de HOY (la migración).
+import { keysUnverified } from '../../src/panel/setup.js'
 
 const ROOT = join(import.meta.dirname, '..', '..')
 const HTML = readFileSync(join(ROOT, 'src/panel/panel.html'), 'utf8')
@@ -326,7 +329,10 @@ test('EL CAMBIO: claves por producto, host enlazado y contexto de Confluence des
   const claves = JS.slice(JS.indexOf('async function saveKeys'), JS.indexOf('async function showManualStep'))
   assert(/setup-\$\{product\}-token/.test(claves), 'cada producto lee su token')
   assert(!/'setup-token'|'setup-email'/.test(claves), 'y no hay un token para los dos')
-  assert(/configureMcp\(state\.client, \{ host: state\.site\.host, jira, confluence, dataCenter \}\)/.test(claves), 'las claves viajan por producto')
+  // Desde H18 con el cliente y el host capturados antes del primer await
+  // (§8.22), y con lo que el sitio guardaba y lo que opencode tenía antes de
+  // escribir, para decidir bajo qué nombre se escribe (chooseWriteTarget).
+  assert(/configureMcp\(cliente, \{ host, jira, confluence, dataCenter, saved, config: configAntes \}\)/.test(claves), 'las claves viajan por producto')
   assert(/hostOf\(env\.JIRA_URL\)/.test(claves) && /hostOf\(env\.CONFLUENCE_URL\)/.test(claves), 'los hosts salen de la configuración construida, no del campo')
 
   // Se comprueban los dos tokens, y el otro host queda enlazado.
@@ -389,7 +395,9 @@ test('EL CAMBIO: un MCP que ya existe en opencode para este dominio se adopta, s
   const estado = JS.slice(JS.indexOf('async function paintState'), JS.indexOf('async function treeDebug'))
   assert(/chosenMcpName\(config, await getSite\(state\.site\.host\), state\.site\.host, \{ status: list \}\)/.test(estado), 'el registro mira el mismo MCP')
   const cliente = readFileSync(join(ROOT, 'src/opencode/client.js'), 'utf8')
-  assert(/config\(\) \{\s*return this\.request\('GET', '\/config'\)/.test(cliente), 'el cliente lee /config')
+  // Desde H18 `sensitive`: la respuesta trae las claves de todos los MCP en
+  // claro, y un error no puede registrarla ni guardarla.
+  assert(/config\(\) \{\s*return this\.request\('GET', '\/config', \{ sensitive: true \}\)/.test(cliente), 'el cliente lee /config')
 })
 
 test('EL CAMBIO: el análisis en Jira lee la incidencia, permite leerla en el alcance y elige páginas base del Confluence enlazado', () => {
@@ -610,7 +618,9 @@ test('H2 C4: «Nueva sesión» a mitad de turno cancela el turno, y el botón no
 
 test('H2 C5: tras esperar al MCP se usa el sitio con el que se pidieron las claves, no la pestaña de ahora', () => {
   const claves = JS.slice(JS.indexOf('async function saveKeys'), JS.indexOf('async function showManualStep'))
-  assert(/site: state\.site/.test(claves), 'el sitio viaja con la configuración pendiente')
+  // Desde H18 el sitio se captura antes del primer await de `saveKeys`, y es el
+  // que viaja: entre leer y escribir la pestaña puede ser otra (§8.22).
+  assert(/const sitio = state\.site\n/.test(claves) && /site: sitio,/.test(claves), 'el sitio viaja con la configuración pendiente')
   const fin = JS.slice(JS.indexOf('async function finishSetup'), JS.indexOf('function paintSnippet'))
   assert(!/state\.site\.host/.test(fin), 'tras esperar al MCP se usa el sitio con el que se pidieron las claves, no la pestaña de ahora')
   assert(/state\.pendingMcp/.test(fin) && /site\.host/.test(fin))
@@ -5083,4 +5093,331 @@ test('H17 revisión: los cuerpos que deciden, no sólo el orden de las cadenas',
   assert(CSS_LIMPIO.includes('.model-why {') && /^\.model-why \{[^}]*overflow-wrap: anywhere;[^}]*\}/.test(porQue), '.model-why parte las palabras largas')
   assert(!/^\.model-why \{[^}]*white-space: nowrap/.test(porQue), 'y no se queda en una línea')
   assert(HTML.includes('<label for="model-filter">Buscar un modelo</label>'), 'el filtro tiene su etiqueta')
+})
+
+test('H18: las claves se escriben por la API de opencode, con consentimiento, con el panel quieto y sin fugas', () => {
+  // docs/PLAN2.md §3.2: hasta H18 `saveKeys` llamaba a `POST /mcp`, que en
+  // opencode 1.2.25 sólo arranca el MCP en memoria, y siempre acababa en el paso
+  // manual. Ahora escribe por `PATCH /global/config` (las dos puertas cerradas
+  // del cliente), espera a que la entrada aparezca y conecte, relee lo que
+  // opencode carga y sólo entonces verifica. Todo sobre el fuente SIN
+  // comentarios, recortado por CÓDIGO y con cada marca comprobada.
+  const JS_SIN = sinComentarios(JS)
+  const corte = (src, desde, hasta) => {
+    const i = src.indexOf(desde)
+    assert(i >= 0, 'falta la marca de inicio del recorte: ' + desde)
+    const j = src.indexOf(hasta, i + desde.length)
+    assert(j > i, 'falta la marca de final del recorte (o va antes): ' + hasta)
+    return src.slice(i, j)
+  }
+  const orden = (src, marcas, msg) => {
+    let desde = 0
+    for (const m of marcas) {
+      const p = src.indexOf(m, desde)
+      assert(p >= 0, msg + ': falta «' + m + '» (o va antes de la anterior)')
+      desde = p + m.length
+    }
+  }
+  const claves = corte(JS_SIN, 'async function saveKeys() {', 'async function showManualStep(')
+  const guardar = corte(claves, 'async function saveKeys() {', 'async function esperarEntrada(')
+
+  // (1) El consentimiento, antes de escribir, y la carpeta REAL de GET /path.
+  orden(
+    guardar,
+    [
+      'const sitio = state.site',
+      'const host = sitio.host',
+      'const cliente = state.client',
+      'if (!consentimientoListo()) {',
+      'return',
+      'state.settings = await saveSettings({ configWriteConsent: true })',
+      'const rutas = await cliente.paths().catch(() => null)',
+      'result = await configureMcp(cliente, { host, jira, confluence, dataCenter, saved, config: configAntes })',
+    ],
+    'sitio, host y cliente capturados; sin permiso no se escribe'
+  )
+  assert(corte(guardar, 'if (!consentimientoListo()) {', '\n  }').includes('return'), 'sin permiso, se vuelve sin escribir')
+  const permiso = corte(JS_SIN, 'function consentimientoListo() {', '\n}')
+  assert(permiso.includes("if ($('setup-consent-ok').checked) return true"), 'la casilla marcada vale')
+  assert(permiso.includes('return !!state.settings.configWriteConsent && !state.setupConfirmar'), 'el permiso ya dado vale, salvo desde «Cambiar las claves»')
+  const bloque = corte(JS_SIN, 'async function paintSetupConsent() {', '\n}')
+  orden(
+    bloque,
+    ['const pedir = !state.settings.configWriteConsent || state.setupConfirmar', 'const cliente = state.client', 'await cliente.paths()', 'if (state.client !== cliente', "$('setup-consent-path').textContent = rutas.config"],
+    'el bloque enseña la carpeta del servidor que contesta'
+  )
+  const pantalla = corte(JS_SIN, 'function showSetupScreen(', 'function paintSetupProducts(')
+  assert(pantalla.includes('function showSetupScreen({ confirmar = false } = {}) {') && pantalla.includes('state.setupConfirmar = !!confirmar'), 'la pantalla sabe si viene de «Cambiar las claves»')
+  assert(pantalla.includes('paintSetupConsent()'), 'y pinta el consentimiento al abrirse')
+  assert(JS_SIN.includes("$('btn-edit-keys').addEventListener('click', () => showSetupScreen({ confirmar: true }))"), '«Cambiar las claves» confirma SIEMPRE')
+  assert(JS_SIN.includes("$('setup-consent-ok').addEventListener('change', paintSetupSave)"), 'marcar la casilla enciende el botón')
+
+  // (2) La guarda común «opencode se está reconfigurando»: sólo con el panel
+  // quieto, y lo que el MCP tenía en marcha se invalida ANTES del PATCH.
+  const guarda = corte(JS_SIN, 'function reconfiguring() {', '\n}')
+  for (const q of ['if (state.streaming) return', 'if (state.indexingAbort) return', 'if (state.modelProbeAbort) return', 'if (state.setupAbort) return']) {
+    assert(guarda.includes(q), 'la guarda mira: ' + q)
+  }
+  assert(guarda.trim().endsWith("return ''"), 'y con todo quieto deja escribir')
+  orden(
+    guardar,
+    ['const configAntes = await cliente.config()', 'const ocupado = reconfiguring()', 'if (ocupado) {', 'return', 'state.mcpCheck = null', 'state.mcpPending = null', 'state.mcpWait?.abort()', 'state.mcpConnected = false', 'result = await configureMcp(cliente, { host, jira, confluence, dataCenter, saved, config: configAntes })'],
+    'la guarda justo antes de escribir, y la invalidación antes del PATCH'
+  )
+  assert(corte(guardar, 'if (ocupado) {', '\n    }').includes('return'), 'con algo en marcha, no se escribe')
+  assert(HTML.includes('<button class="primary needs-idle" id="btn-setup-save" type="button">'), 'el botón de guardar pide el turno parado')
+  const streaming = corte(JS_SIN, 'function setStreaming(on) {', '\n}')
+  orden(streaming, ["for (const b of $('screen-setup').querySelectorAll('.' + NEEDS_IDLE)) b.disabled = on", 'paintSetupSave()'], 'setStreaming apaga la pantalla de claves y repinta el de guardar con el permiso')
+  const boton = corte(JS_SIN, 'function paintSetupSave() {', '\n}')
+  assert(/disabled = escribiendoClaves \|\| state\.streaming \|\| !consentimientoListo\(\)/.test(boton), 'sin permiso, con un turno o escribiendo, apagado')
+
+  // (3) Nunca POST /mcp: ni addMcp en el panel, y connectMcp SÓLO en retryMcp.
+  assert(!/addMcp\(/.test(JS_SIN), 'addMcp no existe en el panel')
+  assert(!/connectMcp\(/.test(claves), 'saveKeys no conecta nada a mano')
+  eq(JS_SIN.split('connectMcp(').length - 1, 1, 'connectMcp sólo en retryMcp (H15)')
+  assert(corte(JS_SIN, 'async function retryMcp(', 'async function loadLinkedContext(').includes('connectMcp('), 'y es retryMcp quien lo tiene')
+
+  // (4) La espera: que APAREZCA, con los plazos de MCP_RELOAD_LIMITS y no con
+  // números a mano; después que conecte, con el consejo de H15.
+  const aparecer = corte(claves, 'async function esperarEntrada(', 'async function arrancarMcp(')
+  orden(
+    aparecer,
+    ['setTimeout(r, MCP_RELOAD_LIMITS.pollMs)', 'await cliente.listMcp()', 'mcpStatusFor(lista, host, name)', 'if (s.present) return', 'MCP_RELOAD_LIMITS.appearMs'],
+    'se sondea hasta que aparece, con los plazos del módulo'
+  )
+  assert(!/setTimeout\([^)]*\d{3,}/.test(claves), 'ningún plazo escrito a mano')
+  orden(
+    guardar,
+    ['status.textContent = ESTADO_CLAVES.escribiendo', 'configureMcp(cliente,', 'ESTADO_CLAVES.recargando + notaVersion()', 'esperarEntrada(cliente, host, result.name, espera.signal)', 'ESTADO_CLAVES.arrancando', 'arrancarMcp('],
+    'los tres estados de la espera, en su orden'
+  )
+  const arrancar = corte(claves, 'async function arrancarMcp(', 'function entradaEfectiva(')
+  assert(arrancar.includes("mcpFailureHint(s)?.kind === 'sin-arranque'") && arrancar.includes('MCP_RELOAD_LIMITS.fastFailMs'), 'la caída al instante es «Connection closed» antes de fastFailMs')
+  assert(arrancar.includes('waitForMcpReady(cliente, host, {') && arrancar.includes('intervalMs: MCP_RELOAD_LIMITS.pollMs'), 'y la espera es la de siempre')
+  assert(arrancar.includes('paintSetupMcpHint(s, { host, espera })'), 'con el consejo de H15, sin duplicarlo')
+  const hint = corte(JS_SIN, 'function paintSetupMcpHint(', 'function attachMcpNotice(')
+  assert(hint.includes('manual: !!espera && state.mcpWait === espera'), 'con la espera viva, Reintentar deja que siga ella')
+
+  // (5) El reintento con la ruta absoluta de uvx: sólo una entrada NUEVA que
+  // cayó al instante, y si no conecta, vuelta atrás al command estándar.
+  assert(guardar.includes('const creada = result.reuse === false'), 'creada = la escribió Faro ahora, no una que ya estaba')
+  assert(
+    guardar.includes('arrancarMcp({ cliente, host, name: result.name, espera, primero: aparecida.status, vigilarCaida: creada })'),
+    'la caída sólo se vigila en una entrada creada'
+  )
+  const reintentar = corte(guardar, 'if (arranque.caida && creada) {', 'const como = arranque.status.present')
+  orden(
+    reintentar,
+    [
+      'const conRuta = uvxAbsoluteCommand(rutas)',
+      'if (conRuta) {',
+      'configureMcp(cliente, { host, jira, confluence, dataCenter, saved, config: configAntes, command: conRuta })',
+      'if (arranque.status.connected) {',
+      '} else {',
+      'const vuelta = await configureMcp(cliente, { host, jira, confluence, dataCenter, saved, config: configAntes })',
+    ],
+    'la ruta absoluta (validada por UVX_ABS_PATH dentro de uvxAbsoluteCommand) y la vuelta atrás'
+  )
+  eq(guardar.split('uvxAbsoluteCommand(').length - 1, 1, 'un solo reintento')
+
+  // (6) La relectura DESPUÉS de conectar: la entrada que opencode carga es la
+  // escrita; si no, se dice y no se verifica.
+  orden(
+    guardar,
+    [
+      'if (!arranque.status.connected) {',
+      'return',
+      'const configDespues = await cliente.config()',
+      'if (!entradaEfectiva(configDespues, hosts, result.name)) {',
+      'hay una configuración de proyecto delante',
+      'return',
+      'await finishSetup()',
+    ],
+    'se relee tras conectar, y sólo con la entrada efectiva se verifica'
+  )
+  const efectiva = corte(claves, 'function entradaEfectiva(', 'async function reloadPastedConfig(')
+  assert(
+    efectiva.includes('mcpEntriesForHost(config, h).find((e) => e.name === name)') && efectiva.includes('entrada.enabled !== false'),
+    'la entrada efectiva: por nombre, entre las del dominio, y habilitada'
+  )
+
+  // (7) Las degradaciones: sin escribir, el respaldo manual con el porqué; sin
+  // aparecer, «ya está escrito, reinicia opencode».
+  orden(
+    guardar,
+    ['if (!result.ok) {', "log.warn('MCP sin escribir', `${result.status || 0} · ${result.kind || 'sin tipo'}`)", "await showManualStep(result, { motivo: 'sin-escribir', kind: result.kind })"],
+    'sin escribir: respaldo manual'
+  )
+  orden(
+    guardar,
+    [
+      'if (!aparecida) {',
+      "log.warn('MCP escrito en opencode',",
+      "await showManualStep(result, { motivo: 'no-aparece', ruta })",
+      "log.ok('MCP escrito en opencode', `${result.name} · ${ruta} · PATCH ${msPatch} ms · aparece en ${aparecida.ms} ms`)",
+    ],
+    'sin aparecer: ya está escrito'
+  )
+  const manual = corte(JS_SIN, 'async function showManualStep(', 'async function finishSetup(')
+  assert(manual.includes("async function showManualStep(result, { motivo = '', kind = '', ruta = '' } = {}) {"), 'el paso manual sabe por qué se llega')
+  assert(manual.includes('fullConfigSnippet(result.name, result.block)') && manual.includes('mcpBlockSnippet(result.name, result.block)'), 'el bloque de siempre, el que se ha intentado escribir')
+  assert(
+    manual.includes('porQueNoSeEscribe({ status: result.status, kind })') && manual.includes("$('setup-manual-paste').classList.toggle('hidden', yaEscrito)"),
+    'el porqué a la vista, y sin nada que pegar si ya está escrito'
+  )
+  assert(manual.includes('mcpName: result.name,'), 'la espera busca el nombre con el que se escribió')
+  const porQue = corte(claves, 'function porQueNoSeEscribe(', '\n}')
+  assert(
+    porQue.includes("kind === 'ConfigJsonError'") && porQue.includes('error de sintaxis') && porQue.includes("kind === 'ConfigInvalidError'") && porQue.includes('una clave que opencode no conoce'),
+    'el tipo del error en palabras'
+  )
+  assert(porQue.includes('/^[A-Za-z]{1,40}$/.test(kind)'), 'y un tipo que no conoce sólo si tiene forma de nombre')
+
+  // (8) «Ya lo he pegado»: el PATCH {} fijo, por la misma guarda.
+  const recargar = corte(claves, 'async function reloadPastedConfig() {', 'function porQueNoSeEscribe(')
+  orden(
+    recargar,
+    ['const ocupado = reconfiguring()', 'return', 'state.mcpCheck = null', 'state.mcpPending = null', 'state.mcpConnected = false', 'await cliente.reloadGlobalConfig()'],
+    'la misma guarda y la misma invalidación antes del PATCH {}'
+  )
+  assert(!/reloadGlobalConfig\([^)]/.test(JS_SIN), 'reloadGlobalConfig nunca lleva argumentos')
+  assert(recargar.includes("log.ok('Configuración recargada'") && recargar.includes("log.warn('Configuración recargada'"), 'se registra, bien o mal')
+  assert(JS_SIN.includes("$('btn-setup-reload').addEventListener('click', () => reloadPastedConfig()"), 'el botón está cableado')
+
+  // (9) SEGURIDAD: de la respuesta del PATCH y de GET /config no sale NADA —ni
+  // al registro, ni a un anuncio, ni a la pantalla—. Cada variable que las
+  // recibe sólo se lee por lo que las puertas devuelven ({ok, status, kind}) o
+  // se pasa a una pura que sólo saca hosts y nombres.
+  const adoptar = corte(JS_SIN, 'async function comprobarClavesAdoptadas(', '\n}\n')
+  const region = claves + adoptar
+  const PERMITIDAS = {
+    result: ['ok', 'status', 'kind', 'name', 'block', 'reuse'],
+    reintento: ['ok'],
+    vuelta: ['ok', 'kind', 'status'],
+    recarga: ['ok', 'status', 'kind'],
+  }
+  for (const [nombre, props] of Object.entries(PERMITIDAS)) {
+    let lecturas = 0
+    for (const m of region.matchAll(new RegExp('(\\.\\.\\.)?\\b' + nombre + '\\b(\\??\\.(\\w+))?', 'g'))) {
+      const antes = region.slice(Math.max(0, m.index - 20), m.index)
+      const despues = region.slice(m.index + m[0].length, m.index + m[0].length + 4)
+      const declara = /(const|let)\s+$/.test(antes) || /^\s*=[^=]/.test(despues)
+      // `result` entero sólo va al respaldo manual, que lee de él name, block y
+      // status (el bloque que se intentó escribir, no la respuesta).
+      const alRespaldo = nombre === 'result' && /showManualStep\($/.test(antes)
+      const ok = declara || alRespaldo || (!!m[1] && nombre === 'result') || (!!m[3] && props.includes(m[3]))
+      assert(ok, `SEGURIDAD: «${m[0]}» no es una lectura permitida de la respuesta del PATCH`)
+      lecturas++
+    }
+    assert(lecturas > 1, 'la variable ' + nombre + ' existe y se lee')
+  }
+  eq(region.match(/\bconfigAntes\b/g).length, region.match(/config: configAntes\b/g).length + 1, 'configAntes sólo va a configureMcp (chooseWriteTarget)')
+  eq(region.match(/\bconfigDespues\b/g).length, 2, 'configDespues sólo va a entradaEfectiva')
+  eq(adoptar.match(/(?<!\.)\bconfig\b/g).length, 2, 'la config de «Comprobar las claves» sólo va a mcpForHost')
+  assert(adoptar.includes('const found = mcpForHost(config, host)'), 'de ella sólo salen hosts y nombre')
+  for (const linea of region.split('\n')) {
+    if (/log\.\w+\(|announce\(|textContent/.test(linea)) {
+      assert(!/configAntes|configDespues|\benvironment\b|\.block\b/.test(linea), 'SEGURIDAD: una línea que registra o pinta no lleva configuración: ' + linea.trim())
+    }
+  }
+
+  // (10) Escribir ≠ verificar, y la adopción sin verificar.
+  const comprobar = corte(JS_SIN, 'async function checkMcp(', 'function mcpResultSoon(')
+  assert(
+    comprobar.includes('const mismoYaProbado = !!saved?.configured && saved?.mcpName === found.name && !keysUnverified(saved)'),
+    'sólo lo ya probado del MISMO MCP se conserva'
+  )
+  orden(
+    comprobar,
+    ['const registros = siteRecords({', 'verified: mismoYaProbado,', 'for (const registro of registros) await saveSite(registro.host, registro.patch)', "if (!mismoYaProbado) log.warn('Claves sin comprobar'"],
+    'la adopción escribe verified y lo dice'
+  )
+  const fin = corte(JS_SIN, 'async function finishSetup(', 'function paintSnippet(')
+  assert(!/configureMcp\(|updateMcpEntries\(|reloadGlobalConfig\(/.test(fin), 'finishSetup verifica y NO escribe en opencode')
+  orden(
+    fin,
+    [
+      "if (!check.ok && check.reason === 'modelo') {",
+      'const antes = await getSite(site.host)',
+      'const registros = siteRecords({',
+      'verified: true,',
+      'for (const { host, patch } of registros) await saveSite(host, patch)',
+      "if (keysUnverified(antes)) log.ok('Claves sin comprobar'",
+    ],
+    'la primera verificación buena escribe verified: true en todos los registros, detrás de la rama del modelo'
+  )
+  const aviso = corte(JS_SIN, 'async function avisarClavesSinComprobar(', 'async function comprobarClavesAdoptadas(')
+  orden(
+    aviso,
+    ['const saved = await getSite(host)', 'if (state.site?.host !== host || !keysUnverified(saved)) return', "btn.className = 'ghost small ' + NEEDS_IDLE", "'Comprobar las claves'", 'btn.disabled = state.streaming', 'comprobarClavesAdoptadas(btn)'],
+    'el aviso: sólo con verified false explícito, y su botón pide el turno parado'
+  )
+  orden(
+    adoptar,
+    ['const sitio = state.site', 'const cliente = state.client', 'await cliente.config()', 'if (!found) {', 'return', 'state.pendingMcp = { name: found.name, site: sitio,', "showScreen('screen-setup')", 'await finishSetup()'],
+    '«Comprobar las claves» verifica lo que hay, sin escribir'
+  )
+  assert(!/configureMcp\(|updateMcpEntries\(|reloadGlobalConfig\(/.test(adoptar), 'sin escribir nada en opencode')
+  // La migración: nadie lee `verified` a mano en el panel —un `!saved?.verified`
+  // avisaría a todos los registros guardados antes de H18—, sólo keysUnverified.
+  assert(!/\.verified\b/.test(JS_SIN), 'el panel no mira verified a mano')
+  const DE_HOY = { configured: true, mcpName: 'atlassian-jira-simplprogramme-eu', product: 'jira', cloud: false, confluenceHost: 'confluence.simplprogramme.eu', onboarded: true, skill: 'analisis' }
+  eq(keysUnverified(DE_HOY), false, 'un registro guardado hoy, sin verified, NO avisa')
+  eq(keysUnverified({ ...DE_HOY, verified: false }), true, 'sólo verified: false explícito avisa')
+  eq(keysUnverified({ ...DE_HOY, verified: true }), false, 'y verificado, no')
+  const restaurar = corte(JS_SIN, 'async function restoreConversation(', 'function showWelcome(')
+  assert(/showMcpPending\(\)\s*\n\s*avisarClavesSinComprobar\(\)/.test(restaurar), 'el recordatorio se vuelve a colgar al repintar el chat, sin anunciar')
+  assert(
+    corte(JS_SIN, 'async function onMcpResult(', 'function showMcpPending(').includes('if (keysUnverified(r.saved)) avisarClavesSinComprobar({ anunciar: true })'),
+    'y la adopción tardía lo dice ya'
+  )
+
+  // (11) La versión de opencode, leída sin esperarla, y dicha en la espera.
+  const arranque = corte(JS_SIN, 'async function bootForSite() {', 'function refreshProfileSoon(')
+  orden(arranque, ["cron.mark('health')", '.version()', 'if (state.client === client) state.opencodeVersion = v'], 'la versión, junto a health y del cliente que preguntó')
+  assert(!/await client\.version\(\)/.test(arranque), 'sin que el arranque la espere')
+  assert(corte(JS_SIN, 'function notaVersion() {', '\n}').includes('v === OPENCODE_VERIFIED_VERSION'), 'y la espera dice si no es la probada')
+
+  // (12) El HTML: el consentimiento delante del botón, y el respaldo manual.
+  for (const id of ['setup-consent', 'setup-consent-path', 'setup-consent-ok', 'btn-setup-reload', 'setup-manual-why', 'setup-manual-paste']) {
+    assert(htmlIds.has(id), 'falta #' + id)
+  }
+  const main = corte(HTML, 'id="setup-main"', 'id="setup-manual"')
+  orden(
+    main,
+    ['<div class="field hidden" id="setup-consent">', 'id="setup-consent-path"', '<label class="check"><input type="checkbox" id="setup-consent-ok">', 'id="btn-setup-save"'],
+    'el consentimiento, con su carpeta y su casilla, delante del botón'
+  )
+  assert(main.includes('si tienes una respuesta a medias en otra ventana conectada') && main.includes('opencode.jsonc'), 'y dice lo que pasa y dónde')
+  // La carpeta es una ruta de Windows sin espacios: medido en el espejo al cerrar
+  // H18, una de 80 caracteres empujaba el bloque a 347 px en un panel de 320 y
+  // `check()` salía en rojo. Se parte, nunca empuja a lo ancho.
+  assert(/#setup-consent-path \{[^}]*overflow-wrap: anywhere/.test(CSS_LIMPIO), 'la carpeta del consentimiento se parte en vez de desbordar a 320 px')
+  const paso = corte(HTML, 'id="setup-manual"', 'id="btn-setup-later"')
+  orden(
+    paso,
+    ['<p class="fine hidden" id="setup-manual-why"></p>', 'id="setup-manual-paste"', 'id="setup-waiting"', '<button class="ghost needs-idle" id="btn-setup-reload" type="button">Ya lo he pegado</button>'],
+    'el porqué arriba, y «Ya lo he pegado» junto a la espera'
+  )
+  assert(!/href/.test(main) && !/href/.test(paso), 'sin enlaces')
+
+  // (13) El espejo: el consentimiento con una carpeta de mentira, los estados de
+  // la espera, el respaldo manual con su porqué y el recordatorio en el chat de
+  // Jira, con los MISMOS textos que el panel (panel.js no se puede importar desde
+  // el iframe) y con sus cajas medidas a lo ancho.
+  const espejo = readFileSync(join(ROOT, 'harness/panel-preview.html'), 'utf8')
+  for (const k of ['escribiendo', 'recargando', 'arrancando', 'fallo']) assert(espejo.includes(`data-claves="${k}"`), 'el espejo tiene el estado ' + k)
+  for (const t of ['Escribiendo en opencode…', 'Esperando a que opencode recargue…', 'Arrancando el MCP…']) {
+    assert(espejo.includes(`'${t}'`) && guardar.length && JS_SIN.includes(`'${t}'`), 'el espejo y el panel dicen lo mismo: ' + t)
+  }
+  assert(espejo.includes("$('setup-consent').classList.remove('hidden')") && espejo.includes("$('setup-consent-path').textContent = 'C:"), 'el consentimiento, con su carpeta')
+  const errorSintaxis = 'La configuración de opencode tiene un error de sintaxis: corrígelo, pega el bloque y pulsa «Ya lo he pegado».'
+  assert(espejo.includes('Faro no ha podido escribirlo por ti. ' + errorSintaxis) && JS_SIN.includes(errorSintaxis) && JS_SIN.includes("'Faro no ha podido escribirlo por ti. '"), 'el porqué del respaldo, igual en los dos')
+  const recordatorio = 'no se han comprobado todavía: opencode tenía el MCP conectado y Faro lo ha adoptado'
+  assert(espejo.includes(recordatorio) && JS_SIN.includes(recordatorio), 'el recordatorio, igual en los dos')
+  assert(corte(espejo, 'function avisoClavesSinComprobar() {', '\n  }\n').includes("mk('button', 'ghost small needs-idle', 'Comprobar las claves')"), 'con su botón, que pide el turno parado')
+  assert(/chat\.appendChild\(avisoMcpSinConectar\(\)\)\s*\n(\s*\/\/[^\n]*\n)*\s*chat\.appendChild\(avisoClavesSinComprobar\(\)\)/.test(espejo), 'en la conversación de Jira, debajo del aviso del MCP')
+  const cajas = corte(espejo, 'const CAJAS = [', 'function check()')
+  for (const caja of ["'#setup-consent'", "'#setup-consent .check'", "'#setup-manual-why'"]) assert(cajas.includes(caja), 'check() mide ' + caja + ' a lo ancho')
+  assert(/setClaves\(k\) \{/.test(espejo), 'y el mando para ponerlo desde fuera')
 })

@@ -16,14 +16,39 @@
 
 import { TurnTracker, structuredOutputOf } from './turn.js'
 import { SAFE_PERMISSIONS, MODEL_LIMITS } from '../shared/config.js'
+import { mcpPatchBody } from '../shared/mcp-config.js'
 
 export class OpencodeError extends Error {
-  constructor(message, { status = 0, body = '' } = {}) {
+  constructor(message, { status = 0, body = '', kind = '' } = {}) {
     super(message)
     this.name = 'OpencodeError'
     this.status = status
     this.body = body
+    // El `name` del JSON de error de opencode (ConfigJsonError, ConfigInvalidError…),
+    // sólo en las peticiones `sensitive`, donde el cuerpo se tira (H18).
+    this.kind = kind
   }
+}
+
+/**
+ * El `name` de un cuerpo de error de opencode, validado por su forma, o ''.
+ *
+ * H18: en una petición `sensitive` el cuerpo de un error NO se guarda ni se
+ * registra —un 500 `ConfigJsonError` de `PATCH /global/config` trae el fichero
+ * de configuración ENTERO, tokens incluidos (medido, anexo 2-A)—, pero sí hace
+ * falta saber QUÉ fue, para decirle al usuario si su fichero tiene un error de
+ * sintaxis o una clave que opencode no conoce. Se parsea, se lee `name` (o
+ * `data.name`), se valida que sea un identificador y lo demás se tira. Puro.
+ */
+function kindOf(text) {
+  let json
+  try {
+    json = JSON.parse(text)
+  } catch {
+    return ''
+  }
+  const nombre = typeof json?.name === 'string' ? json.name : typeof json?.data?.name === 'string' ? json.data.name : ''
+  return /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(nombre) ? nombre : ''
 }
 
 function b64(str) {
@@ -96,7 +121,14 @@ export class OpencodeClient {
     return u.toString()
   }
 
-  async request(method, path, { body, params, signal, raw } = {}) {
+  /**
+   * `sensitive` (H18): la respuesta puede traer las claves de Atlassian en claro
+   * (la configuración de opencode con los `environment` de todos sus MCP), así
+   * que un error NO registra ni un carácter de su cuerpo ni lo guarda en
+   * `OpencodeError.body` (va `null`); sólo su `kind`, el `name` del JSON de
+   * error, parseado y tirado. Sin `sensitive`, exactamente lo de siempre.
+   */
+  async request(method, path, { body, params, signal, raw, sensitive = false } = {}) {
     const t0 = Date.now()
     const label = `${method} ${path}`
     let res
@@ -124,6 +156,11 @@ export class OpencodeClient {
     }
     if (!res.ok) {
       const text = await res.text().catch(() => '')
+      if (sensitive) {
+        const kind = kindOf(text)
+        this.logger?.error(label, res.status + (kind ? ' · ' + kind : ''))
+        throw new OpencodeError(`${method} ${path} devolvió ${res.status}`, { status: res.status, body: null, kind })
+      }
       this.logger?.error(label, res.status + ' ' + String(text).slice(0, 160))
       throw new OpencodeError(`${method} ${path} devolvió ${res.status}`, { status: res.status, body: text })
     }
@@ -145,8 +182,31 @@ export class OpencodeClient {
     return this.request('GET', '/global/health')
   }
 
-  paths() {
-    return this.request('GET', '/path')
+  /**
+   * Dónde tiene opencode su configuración y su estado (`GET /path`), SÓLO
+   * `{config, state, home}` como cadenas ('' si falta). La respuesta cruda no
+   * se devuelve: lleva también el directorio de trabajo del servidor, que nadie
+   * de Faro necesita. `config` es el directorio del fichero global donde H18
+   * escribe (y que el consentimiento enseña); `home`, de donde sale la ruta
+   * absoluta de uvx del reintento.
+   */
+  async paths() {
+    const r = await this.request('GET', '/path')
+    const cadena = (v) => (typeof v === 'string' ? v : '')
+    return { config: cadena(r?.config), state: cadena(r?.state), home: cadena(r?.home) }
+  }
+
+  /**
+   * La versión de opencode (`GET /global/health` → `version`), o '' si no la
+   * dice o no tiene forma de versión. Los errores de red salen como los de
+   * `health()`: quien llama decide. H18 la compara con
+   * `OPENCODE_VERIFIED_VERSION`, porque la recarga en caliente de la
+   * configuración no está documentada.
+   */
+  async version() {
+    const r = await this.request('GET', '/global/health')
+    const v = typeof r?.version === 'string' ? r.version.trim() : ''
+    return /^[0-9A-Za-z][0-9A-Za-z.+-]{0,39}$/.test(v) ? v : ''
   }
 
   /**
@@ -154,10 +214,11 @@ export class OpencodeClient {
    *
    * Ojo: trae el `environment` de cada servidor MCP, con las claves en claro.
    * Se lee para saber qué MCP lleva qué dominio (`mcpForHost`) y nada más: ni
-   * se guarda, ni se registra, ni sale del panel.
+   * se guarda, ni se registra, ni sale del panel. Y va `sensitive` (H18): un
+   * error de esta petición tampoco registra ni guarda su cuerpo.
    */
   config() {
-    return this.request('GET', '/config')
+    return this.request('GET', '/config', { sensitive: true })
   }
 
   providers() {
@@ -579,12 +640,65 @@ export class OpencodeClient {
     return this.request('GET', '/mcp')
   }
 
-  addMcp(name, config) {
-    return this.request('POST', '/mcp', { body: { name, config } })
-  }
+  // `addMcp` (POST /mcp) se borró en H18: en opencode 1.2.25 arranca el MCP
+  // SÓLO en memoria —invisible para `GET /mcp`, sin escribir nada y muerto con
+  // cualquier recarga (anexo 2-A)—, así que registrar por ahí no deja nada
+  // configurado. Lo que queda es la configuración, por las dos puertas de abajo.
 
+  /** Vuelve a arrancar un MCP que ya está en la configuración («Reintentar», H15). */
   connectMcp(name) {
     return this.request('POST', `/mcp/${encodeURIComponent(name)}/connect`, { body: {} })
+  }
+
+  /**
+   * Una de las DOS puertas de escritura en la configuración de opencode (H18,
+   * §8.24): escribe estas entradas MCP con `PATCH /global/config`.
+   *
+   * El cuerpo se construye AQUÍ, con `mcpPatchBody` (src/shared/mcp-config.js):
+   * sólo la clave `mcp`, cada entrada reconstruida por la barrera. Si alguna no
+   * vale no sale ninguna petición. Nunca un `updateGlobalConfig(patch)`
+   * genérico: con Faro escribiendo en ese fichero, una puerta que aceptara
+   * cualquier parche permitiría `agent`, `permission`, `plugin` o `command`.
+   *
+   * La respuesta buena trae la configuración global ENTERA con los tokens de
+   * todos los MCP en claro, y un 500 con el fichero roto la trae dentro del
+   * error: la petición va `sensitive`, la respuesta se lee y se TIRA, y lo que
+   * se devuelve es sólo `{ok, status, kind}`. `kind`: el `name` del error de
+   * opencode, 'entrada' si la barrera no dejó pasar algo, 'red' sin conexión.
+   *
+   * @param {Record<string, object>} entradas nombre → entrada MCP completa
+   * @param {object} [barrera] las opciones de `mcpPatchBody`, tal cual
+   *        (`known`: nombre → el `command` que `GET /config` ya trae)
+   */
+  async updateMcpEntries(entradas, barrera = {}) {
+    const body = mcpPatchBody(entradas, barrera)
+    if (!body) return { ok: false, status: 0, kind: 'entrada' }
+    return this._escribirConfig(body)
+  }
+
+  /**
+   * La otra puerta (H18): `PATCH /global/config` con el cuerpo `{}` FIJO, que
+   * hace que opencode relea su fichero global y recargue los MCP sin reiniciar
+   * (verificado en 1.2.25: lo pegado a mano aparece en ~200 ms). Es el «Ya lo he
+   * pegado» del respaldo manual. No admite argumentos: quien le pase algo
+   * recibe un TypeError, porque aquí no puede viajar nada más que `{}`.
+   */
+  reloadGlobalConfig(...args) {
+    if (args.length) throw new TypeError('reloadGlobalConfig no admite argumentos: el cuerpo es siempre {}')
+    return this._escribirConfig({})
+  }
+
+  /** El PATCH de las dos puertas: sensitive, la respuesta tirada, `{ok, status, kind}`. */
+  async _escribirConfig(body) {
+    try {
+      const res = await this.request('PATCH', '/global/config', { body, sensitive: true, raw: true })
+      // La respuesta es la configuración global entera con tokens: se consume y se tira.
+      await res.text().catch(() => '')
+      return { ok: true, status: res.status, kind: '' }
+    } catch (err) {
+      if (err instanceof OpencodeError) return { ok: false, status: err.status, kind: err.status === 0 ? 'red' : err.kind || '' }
+      throw err
+    }
   }
 
   // ------------------------------------------------------------- permisos

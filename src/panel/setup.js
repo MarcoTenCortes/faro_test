@@ -20,6 +20,7 @@
 
 import { mcpNameForHost, MCP_ATLASSIAN_VERSION } from '../shared/config.js'
 import { sinInvisibles } from '../atlassian/site.js'
+import { MCP_ENV_KEYS, validMcpEntry, validMcpName, validMcpCommand } from '../shared/mcp-config.js'
 
 /** Los dos productos, en el orden en que se enseñan y se comprueban. */
 export const PRODUCTS = ['jira', 'confluence']
@@ -37,7 +38,12 @@ const PREFIX = { jira: 'JIRA', confluence: 'CONFLUENCE' }
 export function buildMcpConfig({ jira = null, confluence = null, dataCenter = false } = {}) {
   if (!jira && !confluence) throw new Error('Hay que habilitar al menos Jira o Confluence.')
 
-  const environment = {}
+  // Las DIEZ variables siempre, '' en las que no se usan (H18): desde que Faro
+  // escribe con `PATCH /global/config`, que FUSIONA y no quita claves, escribir
+  // sólo las de ahora dejaría en el fichero, tras un cambio de Cloud a Data
+  // Center, el USERNAME/API_TOKEN de antes; y la barrera (`validMcpEntry`) exige
+  // exactamente estas diez. mcp-atlassian trata '' como ausente (anexo 2-A).
+  const environment = Object.fromEntries(MCP_ENV_KEYS.map((k) => [k, '']))
   if (jira) Object.assign(environment, productEnv('jira', jira, dataCenter))
   if (confluence) Object.assign(environment, productEnv('confluence', confluence, dataCenter))
 
@@ -150,16 +156,23 @@ function hostOf(url) {
  * que es lo que permite compartir el contexto de Confluence desde Jira. En
  * Cloud los dos productos comparten host y no hay nada que enlazar. Pura.
  *
- * @param {{host:string, product:string, mcpName:string, jiraHost?:string, confluenceHost?:string}} input
+ * `verified` (H18, docs/PLAN2.md §3.2) dice si esas claves se han PROBADO con
+ * un turno de verdad: true tras la verificación de `finishSetup`, false cuando
+ * `checkMcp` adopta un MCP conectado que nadie ha comprobado (una recarga a
+ * mitad del primer uso), y entonces el chat avisa «claves sin comprobar» hasta
+ * la primera verificación buena. Leerlo es `keysUnverified`.
+ *
+ * @param {{host:string, product:string, mcpName:string, jiraHost?:string, confluenceHost?:string, verified?:boolean}} input
  * @returns {Array<{host:string, patch:object}>} el del host actual primero
  */
-export function siteRecords({ host, product, mcpName, jiraHost = '', confluenceHost = '' }) {
+export function siteRecords({ host, product, mcpName, jiraHost = '', confluenceHost = '', verified = true }) {
   const h = String(host || '').toLowerCase()
   const j = String(jiraHost || '').toLowerCase()
   const c = String(confluenceHost || '').toLowerCase()
+  const probadas = verified !== false
 
   const record = (target, prod) => {
-    const patch = { configured: true, mcpName, product: prod, cloud: isCloudHost(target) }
+    const patch = { configured: true, mcpName, product: prod, cloud: isCloudHost(target), verified: probadas }
     if (j && j !== target) patch.jiraHost = j
     if (c && c !== target) patch.confluenceHost = c
     return { host: target, patch }
@@ -169,6 +182,18 @@ export function siteRecords({ host, product, mcpName, jiraHost = '', confluenceH
   if (j && j !== h) out.push(record(j, 'jira'))
   if (c && c !== h && c !== j) out.push(record(c, 'confluence'))
   return out
+}
+
+/**
+ * ¿Hay que avisar de que las claves de este sitio no se han comprobado? Sólo
+ * con `verified: false` EXPLÍCITO (H18). Es la migración: los registros
+ * guardados antes de H18 no llevan `verified` y cuentan como verificados,
+ * porque nadie tiene que ver «claves sin comprobar» por actualizar Faro. Pura.
+ *
+ * @param {object|null} saved el registro guardado del sitio (`sites[host]`)
+ */
+export function keysUnverified(saved) {
+  return !!saved && typeof saved === 'object' && saved.verified === false
 }
 
 /**
@@ -237,6 +262,140 @@ export function chosenMcpName(config, saved, host, { status = null } = {}) {
   return mcpForHost(config, host, { status })?.name || String(saved?.mcpName || '') || mcpNameForHost(host)
 }
 
+/** Los hosts de JIRA_URL y CONFLUENCE_URL de una entrada, en minúsculas ('' si no hay). */
+function hostsDe(entry) {
+  const env = entry?.environment
+  if (!env || typeof env !== 'object') return { jiraHost: '', confluenceHost: '' }
+  return {
+    jiraHost: hostOf(String(env.JIRA_URL || '')).toLowerCase(),
+    confluenceHost: hostOf(String(env.CONFLUENCE_URL || '')).toLowerCase(),
+  }
+}
+
+/**
+ * TODAS las entradas MCP de la configuración que llevan este dominio en
+ * `JIRA_URL` o `CONFLUENCE_URL`, habilitadas Y deshabilitadas (H18), en el orden
+ * de la configuración. A diferencia de `mcpForHost`, que salta las
+ * deshabilitadas a propósito (es lo que evita el bucle al quitar las claves),
+ * aquí hacen falta todas: para escribir hay que saber si ya hay un nombre que
+ * reutilizar, y para comprobar tras escribir, que la entrada efectiva es la
+ * escrita. Cada una con `{name, enabled, command, type, timeout, products}`:
+ * SIN `environment` ni tokens, que van ahí en claro. Pura.
+ *
+ * @param {object} config lo que devuelve `GET /config`
+ * @param {string} host
+ */
+export function mcpEntriesForHost(config, host) {
+  const buscado = String(host || '').trim().toLowerCase()
+  const mcp = config?.mcp
+  if (!buscado || !mcp || typeof mcp !== 'object' || Array.isArray(mcp)) return []
+  const out = []
+  for (const [name, entry] of Object.entries(mcp)) {
+    if (!entry || typeof entry !== 'object') continue
+    const { jiraHost, confluenceHost } = hostsDe(entry)
+    if (jiraHost !== buscado && confluenceHost !== buscado) continue
+    out.push({
+      name,
+      enabled: entry.enabled !== false,
+      command: Array.isArray(entry.command) && entry.command.every((a) => typeof a === 'string') ? [...entry.command] : null,
+      type: typeof entry.type === 'string' ? entry.type : '',
+      timeout: Number.isInteger(entry.timeout) ? entry.timeout : null,
+      products: (jiraHost ? 1 : 0) + (confluenceHost ? 1 : 0),
+    })
+  }
+  return out
+}
+
+/**
+ * Bajo qué nombre escribe Faro el MCP de este host, y qué conserva (H18,
+ * docs/PLAN2.md §3.2). Pura.
+ *
+ * - Una entrada HABILITADA que ya lleve el dominio se REUTILIZA: su nombre, y
+ *   se conservan su `type`, su `command` y su `timeout` (se reescriben el
+ *   `environment` y `enabled`). Es la que `mcpForHost` elegiría: con dos, la de
+ *   los dos productos; en igualdad, la primera.
+ * - Una DESHABILITADA sólo se reutiliza si es el esqueleto de Faro (el nombre
+ *   de `mcpNameForHost` o el `mcpName` guardado): una ajena que el usuario
+ *   deshabilitó a mano no vuelve a arrancar con tokens frescos; se crea una
+ *   nueva a su lado.
+ * - Si no, una nueva bajo `saved.mcpName` (si tiene forma de nombre) o
+ *   `mcpNameForHost(host)`, con el `command` estándar.
+ *
+ * `knownCommand` es el `command` que `GET /config` trae para ESE nombre: lo
+ * escribió el usuario, y la barrera lo acepta sólo si es byte a byte ése.
+ *
+ * @returns {{name: string, reuse: boolean, knownCommand: string[]|null, keep: {type: string, timeout: number|null}|null}}
+ */
+export function chooseWriteTarget({ config = null, saved = null, host = '' } = {}) {
+  const entradas = mcpEntriesForHost(config, host)
+  const deFaro = mcpNameForHost(host)
+  const guardado = validMcpName(saved?.mcpName) ? saved.mcpName : ''
+  const conservar = (e) => ({ name: e.name, reuse: true, knownCommand: e.command, keep: { type: e.type, timeout: e.timeout } })
+
+  const elegida = mcpForHost(config, host)
+  const habilitada = elegida && entradas.find((e) => e.name === elegida.name && e.enabled)
+  if (habilitada) return conservar(habilitada)
+
+  const esqueleto = entradas.find((e) => !e.enabled && (e.name === deFaro || (guardado && e.name === guardado)))
+  if (esqueleto) return conservar(esqueleto)
+
+  return { name: guardado || deFaro, reuse: false, knownCommand: null, keep: null }
+}
+
+/**
+ * La entrada que se va a escribir, ya pasada por la barrera (`validMcpEntry`),
+ * o null si no vale. Con un destino reutilizado se conservan su `type`, su
+ * `command` (aceptado sólo si pasa la lista blanca o es byte a byte el
+ * `knownCommand`) y su `timeout`; con uno nuevo, el bloque tal cual.
+ *
+ * El `timeout` conservado no BAJA del del bloque: los MCP que Faro escribía
+ * antes de H15 llevan 30 000 ms, que el primer arranque de un compañero
+ * vencía, y conservar ése dejaría fuera la subida de H15; uno más largo que
+ * haya puesto el usuario se respeta (desvío anotado del contrato de H18). Pura.
+ *
+ * @param {{name?: string, block: object, target: ReturnType<typeof chooseWriteTarget>}} input
+ */
+export function mcpWritePatch({ name = '', block = null, target = null } = {}) {
+  const nombre = name || target?.name || ''
+  if (!block || typeof block !== 'object') return null
+  let entrada = block
+  if (target?.reuse) {
+    const plazo = Number.isInteger(target.keep?.timeout) ? Math.max(target.keep.timeout, block.timeout) : block.timeout
+    entrada = { ...block, type: target.keep?.type, command: target.knownCommand, timeout: plazo }
+  }
+  return validMcpEntry(nombre, entrada, { knownCommand: target?.reuse ? target.knownCommand : null })
+}
+
+/**
+ * El `command` del reintento con la ruta absoluta de uvx (H18): el MCP que Faro
+ * acaba de crear falló con «Connection closed» en menos de
+ * `MCP_RELOAD_LIMITS.fastFailMs`, que casi siempre es que el opencode en marcha
+ * no tiene uvx en su PATH (se arrancó antes de instalar uv). El instalador
+ * oficial de uv lo deja en `<home>\.local\bin\uvx.exe`; `home` sale de
+ * `client.paths()` o, si no viene, del directorio de configuración subiendo
+ * dos niveles (`<home>\.config\opencode`). null si el `command` no pasa la
+ * barrera (`validMcpCommand`: `UVX_ABS_PATH`, sin «..»; no es Windows, lleva
+ * metacaracteres…), que es la misma que lo vuelve a mirar al escribir. Faro no puede
+ * comprobar que el fichero exista: con winget o pip el reintento falla igual y
+ * se vuelve atrás. Pura.
+ *
+ * @param {{home?: string, config?: string}|null} paths
+ */
+export function uvxAbsoluteCommand(paths) {
+  const home = typeof paths?.home === 'string' && paths.home ? paths.home : subirDos(paths?.config)
+  if (!home) return null
+  const ruta = home.replace(/\\+$/, '') + '\\.local\\bin\\uvx.exe'
+  const command = [ruta, 'mcp-atlassian@' + MCP_ATLASSIAN_VERSION]
+  return validMcpCommand(command) ? command : null
+}
+
+/** El directorio dos niveles por encima (`C:\Users\x\.config\opencode` → `C:\Users\x`), o ''. */
+function subirDos(dir) {
+  if (typeof dir !== 'string' || !dir.includes('\\')) return ''
+  const trozos = dir.replace(/\\+$/, '').split('\\')
+  return trozos.length > 3 ? trozos.slice(0, -2).join('\\') : ''
+}
+
 /**
  * ¿Está ya configurado y conectado el MCP de este host?
  *
@@ -278,25 +437,43 @@ export async function waitForMcpReady(client, host, { timeoutMs = 90000, interva
 }
 
 /**
- * Intenta registrar el MCP en caliente.
+ * Escribe el MCP de Atlassian de este host en la configuración de opencode
+ * (H18, docs/PLAN2.md §3.2), y NO espera: esperar a que aparezca y conecte es
+ * del panel, que es quien pinta la espera.
  *
- * Ojo: en opencode 1.2.25 `POST /mcp` responde 200 pero no tiene ningún
- * efecto — ni escribe configuración, ni expone herramientas, ni aparece en
- * `GET /mcp`. Se sigue intentando por si una versión futura lo implementa,
- * pero el camino que funciona de verdad es escribir el bloque `mcp` en
- * `opencode.json` y reiniciar el servidor. Por eso esto devuelve `ready`
- * en vez de dar por hecho que quedó configurado.
+ * Construye el bloque (`buildMcpConfig`), decide bajo qué nombre y qué se
+ * conserva (`chooseWriteTarget`, con la configuración que se le dé o, si no,
+ * la que lee él con `client.config()`), lo pasa por la barrera
+ * (`mcpWritePatch`) y lo escribe con `client.updateMcpEntries` —el
+ * `PATCH /global/config`, que en opencode 1.2.25 escribe el fichero global Y
+ * recarga los MCP sin reiniciar (anexo 2-A)—. `command` sustituye al estándar
+ * en una entrada NUEVA (el reintento con la ruta absoluta de uvx); en una
+ * reutilizada no se toca el suyo.
+ *
+ * Ya no llama a `addMcp` ni a `connectMcp`: `POST /mcp` no «no hace nada»,
+ * como decía este comentario, sino que arranca el MCP SÓLO en memoria —sus
+ * herramientas llegan al modelo, pero `GET /mcp` no lo ve, no se escribe nada
+ * y muere con la primera recarga—, así que no deja nada configurado.
+ *
+ * Devuelve `{ok, status, kind, name, block, reuse}`: `block` es la entrada tal
+ * como se ha escrito (o, si la barrera no la dejó pasar, el bloque construido,
+ * para el respaldo manual) y `kind` el de `updateMcpEntries` ('entrada',
+ * 'red', 'ConfigJsonError', 'ConfigInvalidError'…). Los errores de las claves
+ * que faltan salen de `buildMcpConfig`, como siempre, antes de escribir nada.
  */
-export async function configureMcp(client, { host, jira, confluence, dataCenter }) {
-  const name = mcpNameForHost(host)
-  const config = buildMcpConfig({ jira, confluence, dataCenter })
+export async function configureMcp(client, { host, jira, confluence, dataCenter, saved = null, config, command = null } = {}) {
+  const construido = buildMcpConfig({ jira, confluence, dataCenter })
+  const cargada = config === undefined ? await client.config().catch(() => null) : config
+  const target = chooseWriteTarget({ config: cargada, saved, host })
+  // En una entrada reutilizada `mcpWritePatch` conserva el command suyo: el del
+  // reintento sólo llega a escribirse en una nueva.
+  const block = Array.isArray(command) ? { ...construido, command: [...command] } : construido
+  const entrada = mcpWritePatch({ name: target.name, block, target })
+  if (!entrada) return { ok: false, status: 0, kind: 'entrada', name: target.name, block: construido, reuse: target.reuse }
 
-  await client.addMcp(name, config).catch(() => {})
-  await client.connectMcp(name).catch(() => {})
-
-  // Margen corto: si el registro en caliente funcionase, se notaría enseguida.
-  const status = await waitForMcpReady(client, host, { timeoutMs: 8000, intervalMs: 1000 })
-  return { name, config, status, ready: status.connected }
+  const known = target.reuse && target.knownCommand ? { [target.name]: target.knownCommand } : null
+  const r = await client.updateMcpEntries({ [target.name]: entrada }, { known })
+  return { ok: !!r?.ok, status: r?.status ?? 0, kind: r?.kind ?? '', name: target.name, block: entrada, reuse: target.reuse }
 }
 
 /**
@@ -376,7 +553,35 @@ export function mcpFailureHint(status) {
   }
 }
 
-/** Ruta del fichero de configuración global de opencode. */
+/** Los nombres del fichero global de opencode, en el orden en que los busca. */
+const FICHEROS_DE_CONFIG = Object.freeze(['opencode.jsonc', 'opencode.json', 'config.json'])
+
+/**
+ * En qué fichero escribe opencode su configuración global, a partir del
+ * listado del directorio (H18): opencode 1.2.25 escribe en el PRIMERO que
+ * exista de `opencode.jsonc`, `opencode.json` y `config.json`, y si no existe
+ * ninguno CREA `opencode.jsonc` (medido, anexo 2-A). Devuelve los que existen,
+ * en ese orden —el primero es donde escribe—, o `['opencode.jsonc']`. Pura.
+ *
+ * Es para quien SÍ puede listar el directorio (tools/config-sandbox.mjs y las
+ * pruebas): el panel no puede, opencode no tiene ningún endpoint para eso, así
+ * que el panel enseña el directorio de `client.paths().config` y dice
+ * «opencode.jsonc si ya existe, si no opencode.json».
+ *
+ * @param {string[]} listado los nombres de fichero del directorio
+ */
+export function configFileCandidates(listado) {
+  const hay = new Set(Array.isArray(listado) ? listado.filter((n) => typeof n === 'string') : [])
+  const existen = FICHEROS_DE_CONFIG.filter((n) => hay.has(n))
+  return existen.length ? existen : ['opencode.jsonc']
+}
+
+/**
+ * Ruta del fichero de configuración global de opencode para el paso MANUAL.
+ * Dice `opencode.json` a propósito, aunque opencode, sin ningún fichero, cree
+ * `opencode.jsonc` (ver `configFileCandidates`): es el nombre por defecto que
+ * alguien que pega el bloque a mano crea o ya tiene, y opencode lo lee igual.
+ */
 export function configFilePath(paths) {
   const dir = paths?.config || ''
   if (!dir) return 'opencode.json'

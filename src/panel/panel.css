@@ -997,6 +997,11 @@ html.faro-still .busy-bar i { animation: none; width: 100%; }
    uno largo se saldría a lo ancho del panel a 320 px, y eso sí lo cazaría el
    `scrollWidth` del documento en `faroPreview.check()`. */
 #privacy-others { overflow-wrap: anywhere; }
+/* H18: la carpeta de configuración de opencode que enseña el consentimiento es una
+   ruta de Windows sin espacios (`C:\Users\nombre.apellido\AppData\Roaming\…`), y sin
+   esto una ruta real de 80 caracteres empujaba el bloque a 347 px en un panel de
+   320 (medido en el espejo al cerrar H18). Se parte, nunca empuja a lo ancho. */
+#setup-consent-path { overflow-wrap: anywhere; }
 
 /* ------------------------------------------------ «Elige el modelo» (H17) */
 
