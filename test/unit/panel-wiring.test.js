@@ -3724,6 +3724,14 @@ test('H13: Ajustes dice qué guarda Faro de este sitio, con su medida y sin ense
     'Math.round',
     'cuota',
     'err.message',
+    // H16: las dos filas GLOBALES, de la persona. El modelo elegido se enseña
+    // como «proveedor/modelo» (`modelKey`) reconstruido por `parseModelKey`: es
+    // el id que opencode da a un modelo, no contenido de ningún sitio, y por eso
+    // entra aquí como la clave del proyecto del perfil (§4.11). Los veredictos,
+    // sólo su CUENTA: nunca qué modelos ni con qué mensaje del proveedor.
+    'elegido',
+    'modelKey',
+    'veredictos',
   ])
   // Cada `add(` de la función (menos su propia definición), con su segundo
   // argumento recortado por paréntesis balanceados.
@@ -4234,4 +4242,194 @@ test('H15 revisión: Reintentar tras vencer la espera sigue solo, un arranque si
   orden(sinConectar, ['repintar?.(status)', 'announce(', 'return status'], 'un reintento fallido se anuncia con su motivo')
   assert(/mcpFailureHint\(status\)/.test(sinConectar), 'y el motivo es el mismo consejo que se pinta')
   eq(reintento.split('announce(').length - 1, 2, 'dos anuncios en retryMcp: el fallo y el éxito del paso manual, sin duplicar los de avisar')
+})
+
+test('H16: el modelo es de la persona, y un fallo por modelo no culpa a las claves ni deja un sitio sin contexto', () => {
+  // El fallo del compañero (docs/PLAN2.md §3.3, anexo C): su plan rechazaba el
+  // modelo que Faro elegía solo, la verificación de las claves lo contaba como
+  // «Jira: …», el sitio se quedaba sin configurar, «Reintentar con…» saltaba a
+  // otro rechazado, y al indexar el `catch` escribía `onboarded: true` sin
+  // contexto. Todo por regex sobre el fuente SIN comentarios, recortado por
+  // CÓDIGO y con el orden por posición, como el resto de este fichero.
+  const JS_SIN = sinComentarios(JS)
+  const corte = (src, desde, hasta) => {
+    const i = src.indexOf(desde)
+    assert(i >= 0, 'falta la marca de inicio del recorte: ' + desde)
+    const j = src.indexOf(hasta, i + desde.length)
+    assert(j > i, 'falta la marca de final del recorte (o va antes): ' + hasta)
+    return src.slice(i, j)
+  }
+  // En SECUENCIA: cada marca se busca DESPUÉS de la anterior, porque algunas
+  // (el testigo, `return`) aparecen muchas veces y lo que importa es que haya
+  // una justo en ese hueco, no la primera del trozo.
+  const orden = (src, marcas, msg) => {
+    let desde = 0
+    for (let k = 0; k < marcas.length; k++) {
+      const p = src.indexOf(marcas[k], desde)
+      assert(p >= 0, msg + `: falta «${marcas[k]}»` + (k ? ` detrás de «${marcas[k - 1]}»` : ''))
+      desde = p + marcas[k].length
+    }
+  }
+
+  // (1) El arranque RESUELVE el modelo con la lista delante: los veredictos se
+  // leen después de la lista (su huella son los modelos), con el testigo al
+  // volver, y `resolveModel` decide antes de pintar el desplegable.
+  const paso3 = corte(JS_SIN, 'async function bootForSite(', 'const primeraVez = !saved?.configured')
+  orden(
+    paso3,
+    [
+      'const [bundle, sessionID, modelos] = await Promise.all([',
+      'const checks = await getModelChecks({',
+      'fingerprint: modelsFingerprint(modelos.models),',
+      'if (state.bootToken !== testigo) return',
+      'state.modelChecks = checks',
+      'const resuelto = resolveModel(modelos.models, {',
+      'fillModels(modelos.models, elegido)',
+    ],
+    'los veredictos se leen con la lista delante y resolveModel va antes de fillModels'
+  )
+  assert(paso3.includes('settingsModel: state.settings.model,') && paso3.includes('savedModel: saved?.model,'), 'primero lo de la persona, y el del sitio sólo como migración')
+  assert(!/saved\?\.model \|\|/.test(paso3), 'el modelo del sitio ya no manda por delante de todo')
+  eq(paso3.split('fillModels(').length - 1, 1, 'el desplegable se pinta UNA vez, con el modelo ya resuelto')
+  // Sólo sin modelo propio: `resolveModel` cae en el del sitio también cuando el
+  // de la persona tiene un fallo apuntado, y escribir ahí sería cambiarle la
+  // elección por detrás en cada arranque.
+  const migra = corte(paso3, 'if (resuelto.migrate && elegido && !state.settings.model) {', 'if (!elegido) {')
+  assert(/await saveSettings\(\{ model \}\)/.test(migra) && /state\.settings = \{ \.\.\.state\.settings, model \}/.test(migra), 'la migración escribe settings.model')
+  assert(!/saveSite\(/.test(migra), 'y no vuelve a tocar saved.model')
+  eq(paso3.split('saveSettings(').length - 1, 1, 'una sola escritura de ajustes en el arranque: la de la migración')
+  const respaldo = corte(paso3, 'if (!elegido) {', 'fillModels(modelos.models, elegido)')
+  orden(
+    respaldo,
+    ['recommendModel(modelos.models, { configModel: null, defaults: modelos.defaults, checks, now: ahora })', 'pickDefaultModel(modelos.models, modelos.defaults, { checks, now: ahora })'],
+    'sin modelo resuelto, se preselecciona saltando lo que falla (H17 pone aquí la pantalla)'
+  )
+  assert(!/saveSettings\(/.test(respaldo), 'y la preselección NO se guarda como elección de la persona')
+  // Sin lista, lo de siempre: el aviso de P4 y ningún ajuste tocado.
+  const sinLista = corte(paso3, '} else {', "showNotice('No he podido leer la lista de modelos: ")
+  assert(!/saveSettings\(|getModelChecks\(/.test(sinLista), 'sin lista de modelos no se decide nada del modelo')
+
+  // `fillModels` no asigna lo que no está, y marca lo que tiene un fallo vigente.
+  const rellenar = corte(JS_SIN, 'function fillModels(', '\n}\n')
+  assert(/const enLista = selected \? models\.find\(\(m\) => modelKey\(m\) === modelKey\(selected\)\) : null/.test(rellenar), 'el elegido se busca en la lista')
+  assert(/log\.warn\('Modelo no disponible', `\$\{modelKey\(selected\)\}: no está en la lista`\)/.test(rellenar), 'y si no está se dice')
+  assert(/const elegido = enLista \|\| pickDefaultModel\(models, state\.defaults, \{ checks: state\.modelChecks, now: ahora \}\)/.test(rellenar), 'y se cae al respaldo, que salta lo que falla')
+  assert(!/state\.model = \{ providerID: selected\./.test(rellenar), 'nunca se asigna el que no está')
+  assert(/opt\.textContent = modelOptionText\(m, ahora\)/.test(rellenar), 'cada opción dice lo que se sabe de ella')
+  assert(/const NO_DISPONIBLE = ' · no disponible'/.test(JS_SIN), 'con el sufijo de sólo texto')
+  const texto = corte(JS_SIN, 'function modelOptionText(', '\n}\n')
+  assert(/modelFailing\(m, now\) \? NO_DISPONIBLE : ''/.test(texto), 'que sale sólo con un fallo vigente')
+
+  // (2) El desplegable escribe los ajustes de la PERSONA, y ningún sitio vuelve
+  // a guardar un modelo en su registro.
+  const cambio = corte(JS_SIN, "el.model.addEventListener('change'", "el.skill.addEventListener('change'")
+  assert(/saveSettings\(\{ model: parsed \}\)/.test(cambio), 'el desplegable guarda en settings.model')
+  assert(!/saveSite\(/.test(cambio), 'y no en el sitio')
+  assert(!/saveSite\([^)\n]*\{ model/.test(JS_SIN), 'SEGURIDAD §8.25: ningún saveSite(…{ model en todo el panel')
+  // Y el modelo no viaja a la página: `pushSettings` sigue sin él (sus claves
+  // exactas las pina service-worker.test.js; aquí, que ni se nombre).
+  // Sobre el fuente CRUDO: el del worker lleva cadenas «'/*'» (patrones de
+  // permisos) que `sinComentarios` toma por el principio de un comentario y se
+  // comería media función; la de aquí no tiene ningún comentario dentro.
+  const sw = readFileSync(join(ROOT, 'src/background/service-worker.js'), 'utf8')
+  const empuje = corte(sw, 'async function pushSettings(', '\n}\n')
+  assert(!/model/.test(empuje), 'SEGURIDAD: settings.model no viaja a la página')
+
+  // (3) Un turno que falla por el modelo apunta el veredicto ANTES del aviso,
+  // con el modelo que se mandó de verdad; el que acaba bien apunta un ok.
+  const envio = corte(JS_SIN, 'async function send(', 'function paintTurn(')
+  const colgado = corte(envio, 'if (turn.stalled) {', 'if (turn.aborted) {')
+  orden(colgado, ['await noteModelFailure({ model: turn.model || peticion.model, rawError: turn.rawError, stalled: true })', 'cuerpo.appendChild(errorNode('], 'un turno colgado se apunta antes del aviso')
+  const fallido = corte(envio, 'if (!turn.ok) {', 'splitAnchorsBlock(turn.text)')
+  orden(
+    fallido,
+    ['if (suggestsAnotherModel(turn.rawError)) {', 'await noteModelFailure({ model: turn.model || peticion.model, rawError: turn.rawError, stalled: false })', 'cuerpo.appendChild(errorNode('],
+    'un turno fallido por el proveedor se apunta antes del aviso, y uno por la conversación no'
+  )
+  orden(envio, ['warnAboutSources(', 'await noteModelOk(peticion.model)', "cron.mark('pintar')"], 'un turno bueno apunta que el modelo contesta, donde antes guardaba saved.model')
+  const apuntar = corte(JS_SIN, 'async function noteModelFailure(', 'async function noteModelOk(')
+  orden(
+    apuntar,
+    ['const ctx = modelChecksCtx()', 'verdictsForFailure({ model: elegido, rawError, stalled, models: state.models, now: ctx.now })', "'Modelo no disponible'", 'await recordModelChecks(verdicts, ctx)', 'if (state.settings.serverUrl === ctx.server) {', 'state.modelChecks = guardado'],
+    '§8.22: el servidor se captura antes de escribir y se comprueba al volver'
+  )
+  assert(/fallo\.message\.slice\(0, 120\)/.test(apuntar) && /' · colgado'/.test(apuntar), 'el registro lleva el motivo y el mensaje acotado, o que se colgó')
+  const bien = corte(JS_SIN, 'async function noteModelOk(', '\n}\n')
+  assert(/recordModelChecks\(\[\{ key, ok: true, reason: 'ok', message: '', at: ctx\.now \}\], ctx\)/.test(bien), 'el ok se apunta con su forma')
+
+  // «Reintentar con X» sólo si X tiene un veredicto ok vigente.
+  const error = corte(JS_SIN, 'function errorNode(', 'const MOTIVO_MODELO')
+  assert(/pickAlternativeModel\(state\.models, state\.defaults, [^\n]*\{\s*checks: state\.modelChecks,/.test(error), 'la alternativa salta lo que falla')
+  orden(error, ['if (!modelVerdict(state.modelChecks, modelKey(alt), ahora)?.ok) return wrap', "document.createElement('button')"], 'sin veredicto ok, ningún botón')
+  assert(/saveSettings\(\{ model: state\.model \}\)/.test(error) && !/saveSite\(/.test(error), 'y la elección va a los ajustes')
+
+  // (4) La verificación: con `reason 'modelo'` no se culpa a las claves, no se
+  // escribe ningún registro y `pendingMcp` se conserva para volver a comprobar.
+  const fin = corte(JS_SIN, 'async function finishSetup(', 'function paintSnippet(')
+  const rama = corte(fin, "if (!check.ok && check.reason === 'modelo') {", 'if (!check.ok) {')
+  orden(
+    rama,
+    ['await noteModelFailure({ model: modelo, rawError: check.rawError, stalled: check.stalled })', 'hideScreens()', 'attachSetupModelNotice(texto)', 'return'],
+    'se apunta, se cierra la pantalla y se dice en el chat'
+  )
+  assert(!/siteRecords\(|saveSite\(/.test(rama), 'sin registros del sitio: sigue sin configurar')
+  assert(!/state\.pendingMcp\s*=/.test(rama) && !/state\.pendingMcp\s*=\s*null/.test(fin), 'y la configuración pendiente se conserva')
+  const literales = (rama.match(/'[^'\n]*'|`[^`]*`/g) || []).join(' ')
+  assert(!/claves/i.test(literales) && !/Jira:|Confluence:|\$\{etiqueta\}/.test(literales), 'el aviso no culpa a las claves ni lleva el producto delante')
+  assert(JS_SIN.includes('No se ha llegado a comprobar ningún token: elige otro modelo en el desplegable y pulsa «Volver a comprobar».'), 'con el texto que dice qué hacer')
+  orden(fin, ["if (!check.ok && check.reason === 'modelo') {", 'if (!check.ok) {', "check.reason === 'sin-herramientas'", 'siteRecords({'], 'la rama va antes de las de siempre, que no cambian')
+  assert(/const modelo = state\.model/.test(fin), 'el modelo se captura al empezar la comprobación')
+  assert(/verifyCredentials\(state\.client, \{[^}]*model: modelo,[^}]*product,/.test(fin), 'y es con ése con el que se comprueba')
+  const aviso = corte(JS_SIN, 'function attachSetupModelNotice(', 'async function restIndexFor(')
+  assert(/noticeNode\(texto, true\)/.test(aviso) && /'Volver a comprobar'/.test(aviso), 'el aviso y su botón')
+  assert(/btn\.className = 'ghost small ' \+ NEEDS_IDLE/.test(aviso) && /btn\.disabled = state\.streaming/.test(aviso), 'un turno de modelo más: no con otro en vuelo')
+  orden(aviso, ["showScreen('screen-setup')", 'await finishSetup()'], 'vuelve a comprobar donde se ve lo que pasa')
+  assert(!/pendingMcp/.test(aviso) && /announce\(texto\)/.test(aviso), 'con lo pendiente tal cual, y se anuncia')
+
+  // (5) El catch del indexado: por modelo no da el sitio por configurado, y el
+  // aviso se pinta DESPUÉS de repintar el chat (el pendiente de H2).
+  const indexar = corte(JS_SIN, 'async function generateContext(', 'function attachReindexButton(')
+  orden(indexar, ['await restIndexFor(', 'modeloDelIndexado = state.model', 'await buildContext('], 'el modelo del indexado se captura justo antes de lanzarlo, tras la lectura de la API')
+  const captura = indexar.slice(indexar.indexOf('} catch (err) {'))
+  orden(
+    captura,
+    ['AbortError', "log.error('Indexado fallido'", 'const porModelo = !!(err?.stalled || err?.rawError)', 'await noteModelFailure(', 'if (!porModelo) await saveSite(host, { onboarded: true })', 'await restoreConversation()', 'showNotice(aviso, true)'],
+    'por modelo se apunta y no se da por configurado, y el aviso va detrás del repintado'
+  )
+  eq(captura.split('saveSite(host, { onboarded: true })').length - 1, 1, 'onboarded sólo en la rama que no es por modelo')
+  assert(!/showNotice\(/.test(corte(captura, "log.error('Indexado fallido'", 'await restoreConversation()')), 'ningún aviso antes de repintar: restoreConversation se lo llevaría')
+  assert(/vuelve a generar el contexto\./.test(captura) && /attachReindexButton\(\{ keepContext \}\)/.test(captura), 'y dice qué hacer, con el botón a mano')
+
+  // (6) El planificador tampoco cae en lo que ya falló.
+  assert(/pickPlannerModel\(state\.models, state\.model, \{ checks: state\.modelChecks, now: Date\.now\(\) \}\)/.test(JS_SIN), 'el planificador salta lo que falla')
+
+  // (7) Lo global se ve y se borra: dos filas al final de «Qué guarda Faro de
+  // mí» y su botón, que no toca el modelo elegido.
+  const lista = corte(JS_SIN, 'async function paintPrivacy(', 'function hace(at)')
+  orden(
+    lista,
+    ["'páginas base elegidas'", "const elegido = parseModelKey(modelKey(state.settings.model))", "'modelo elegido'", 'await getModelChecks(modelChecksCtx())', 'if (state.site?.host !== host) return', "'veredictos de modelos'", "'espacio usado'"],
+    'las dos filas globales van al final, con el host comprobado tras leer'
+  )
+  assert(/const veredictos = Object\.keys\(guardados\?\.checks \|\| \{\}\)\.length\n/.test(lista), 'los veredictos son una CUENTA')
+  assert(/veredictos · todos los sitios/.test(lista), 'y dicen que son de todos los sitios')
+  const ajustesHtml = HTML.slice(HTML.indexOf('id="privacy-list"'))
+  orden(ajustesHtml, ['id="btn-forget"', 'id="btn-forget-model-checks"'], 'el botón vive junto a «Olvidar este sitio»')
+  assert(/<button class="ghost small" id="btn-forget-model-checks" type="button">Olvidar los veredictos<\/button>/.test(HTML), 'ghost small, con su texto')
+  const olvidarV = corte(JS_SIN, "$('btn-forget-model-checks').addEventListener", "$('btn-forget').addEventListener")
+  orden(olvidarV, ['await clearModelChecks()', 'state.modelChecks = null', "'Veredictos de modelos olvidados'", 'announce(', 'await paintPrivacy()'], 'se borra, se dice y se repinta')
+  assert(!/saveSettings\(|state\.model\s*=|settings\.model/.test(olvidarV), 'y el modelo elegido se queda')
+  const olvidarSitio = corte(JS_SIN, "$('btn-forget').addEventListener", "$('mem-enabled').addEventListener")
+  assert(!/ModelChecks/.test(olvidarSitio), 'olvidar un sitio no toca lo de la persona')
+  // Global: el cambio de host no lo vacía; el de servidor, sí.
+  assert(!/state\.modelChecks = null/.test(corte(JS_SIN, 'async function refreshTab(', 'async function bootForSite(')), 'no es del sitio: cambiar de host no lo tira')
+  const cerrar = corte(JS_SIN, "$('btn-settings-close').addEventListener", "$('btn-reindex')")
+  orden(cerrar, ['const clientChanged =', 'if (clientChanged) state.modelChecks = null', 'await bootForSite()'], 'otro servidor, otros veredictos')
+
+  // (8) El espejo: las dos filas, delante del espacio usado, y una opción con
+  // el mismo sufijo que el panel.
+  const espejo = readFileSync(join(ROOT, 'harness/panel-preview.html'), 'utf8')
+  orden(espejo, ["['modelo elegido',", "['veredictos de modelos',", "['espacio usado',"], 'el espejo enseña las dos filas globales donde el panel')
+  assert(espejo.includes("' · no disponible'") && JS.includes("' · no disponible'"), 'y el sufijo del desplegable es el mismo: los dos textos se han separado')
+  assert(/NO_DISPONIBLES\.has\(n\) \? ' · no disponible' : ''/.test(espejo), 'con alguna opción marcada')
 })

@@ -85,13 +85,20 @@ export async function buildContext(
       }
     )
 
+    // Un fallo del MODELO sale con lo necesario para clasificarlo (H16): si fue
+    // por callarse, el error crudo del proveedor y con qué modelo. Con sólo el
+    // mensaje, el `catch` de `generateContext` no podía distinguirlo de un
+    // fallo del sitio y dejaba el sitio `onboarded` sin contexto. Los errores
+    // de `promptStructured` (fases 2 y 3) ya salen así del cliente y pasan tal cual.
+    const conModelo = (err, extra) => Object.assign(err, { model: explore.model || model || null, ...extra })
     if (explore.stalled) {
-      throw new Error(
-        'El modelo dejó de responder mientras recorría el sitio. Prueba con otro: los gratuitos se cuelgan a menudo.'
+      throw conModelo(
+        new Error('El modelo dejó de responder mientras recorría el sitio. Prueba con otro: los gratuitos se cuelgan a menudo.'),
+        { stalled: true, rawError: explore.rawError || null }
       )
     }
     if (explore.aborted) throw new DOMException('Cancelado', 'AbortError')
-    if (explore.error) throw new Error(explore.error)
+    if (explore.error) throw conModelo(new Error(explore.error), { rawError: explore.rawError || null })
 
     const contextMd = explore.text.trim()
     if (!contextMd) throw new Error('El indexador no devolvió ningún documento de contexto.')

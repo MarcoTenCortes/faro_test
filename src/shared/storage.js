@@ -3,6 +3,7 @@
 import { DEFAULT_SETTINGS, STORAGE_AREAS, STORAGE_KEYS, migrateSettings } from './config.js'
 import { INDEX_VERSION } from '../atlassian/index-store.js'
 import { normalizeProfile } from './jira-rest.js'
+import { MODEL_CHECKS_VERSION, normalizeModelChecks, recordVerdicts } from './models.js'
 // El diario tiene su propia puerta de borrado (deja una marca y va por su cola),
 // y «Olvidar este sitio» pasa por ella: mira `forgetEverythingFor`. shared →
 // shared, sin ciclo (activity-store.js sólo importa config.js y activity.js).
@@ -260,6 +261,49 @@ export async function saveProfile(host, profile) {
   }
   await chrome.storage.local.set({ [STORAGE_KEYS.profile(host)]: limpio })
   return limpio
+}
+
+/**
+ * Lo que Faro sabe de cada modelo (H16, `faro:model-checks`): qué contestó y qué
+ * falló, con su motivo y su caducidad. Es GLOBAL (el modelo es de la persona,
+ * no de un sitio) y entra y sale por `normalizeModelChecks`, como el perfil por
+ * `normalizeProfile`: con otro servidor de opencode u otros proveedores
+ * conectados (`fingerprint`) lo guardado no dice nada y se lee vacío.
+ *
+ * `forgetEverythingFor` NO la toca: no es de ningún host. Se borra con su propio
+ * botón («Olvidar los veredictos», `clearModelChecks`).
+ */
+export async function getModelChecks({ server = '', fingerprint = '', now = Date.now() } = {}) {
+  const key = STORAGE_KEYS.modelChecks
+  const got = await chrome.storage.local.get(key)
+  return normalizeModelChecks(got[key], { server, fingerprint, now })
+}
+
+/** Guarda ya normalizado —por aquí no pasa nada sin reconstruir— y devuelve lo guardado. */
+export async function saveModelChecks(checks, { server = '', fingerprint = '', now = Date.now() } = {}) {
+  // Se acepta el objeto guardado entero (y si es de OTRO servidor u otra huella
+  // se normaliza a vacío: no se puede guardar lo de otro opencode como de éste)
+  // o sólo su mapa de veredictos, que se envuelve con los de ahora.
+  const entero = !!checks && typeof checks === 'object' && !Array.isArray(checks) && 'version' in checks
+  const raw = entero ? checks : { version: MODEL_CHECKS_VERSION, server, fingerprint, checks }
+  const limpio = normalizeModelChecks(raw, { server, fingerprint, now })
+  await chrome.storage.local.set({ [STORAGE_KEYS.modelChecks]: limpio })
+  return limpio
+}
+
+/**
+ * Apunta veredictos nuevos: lee, funde con `recordVerdicts` (la entrada más
+ * reciente gana) y escribe. Dos fallos seguidos no se pisan porque cada uno
+ * relee lo que dejó el anterior. Devuelve lo guardado.
+ */
+export async function recordModelChecks(verdicts, { server = '', fingerprint = '', now = Date.now() } = {}) {
+  const actual = await getModelChecks({ server, fingerprint, now })
+  return saveModelChecks(recordVerdicts(actual, verdicts), { server, fingerprint, now })
+}
+
+/** «Olvidar los veredictos»: quita la clave entera (no toca el modelo elegido). */
+export async function clearModelChecks() {
+  await chrome.storage.local.remove(STORAGE_KEYS.modelChecks)
 }
 
 /** La sesión activa por sitio. En storage.session: se va al cerrar Chrome. */

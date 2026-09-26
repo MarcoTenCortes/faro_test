@@ -283,7 +283,7 @@ De ahí que haya dos caminos hasta el mismo sitio: la extensión ve **la página
 que tienes delante**, y opencode consulta **la API**. Ninguno de los dos
 escribe nada.
 
-Dieciocho decisiones que sostienen el diseño:
+Diecinueve decisiones que sostienen el diseño:
 
 1. **El panel es el único que habla con opencode.** El content script vive
    dentro de una página que no controlamos: no conoce la contraseña del
@@ -573,7 +573,11 @@ Dieciocho decisiones que sostienen el diseño:
    como si Faro no lo hubiera visto nunca. La lista se lee del almacén de
    verdad, no de lo que el panel recuerde, así que la propia pantalla es la
    comprobación: después de olvidar un sitio, todo lo suyo sale como «(nada)»
-   (el espacio usado sigue contando, porque cuenta el navegador entero).
+   (el espacio usado sigue contando, porque cuenta el navegador entero). Desde
+   H16 la lista acaba con dos líneas que son **tuyas y no del sitio** —el
+   **modelo elegido** y cuántos **veredictos de modelos** hay apuntados— con su
+   propio botón, **Olvidar los veredictos**, porque «Olvidar este sitio» no los
+   toca.
 
 18. **Los nombres que Jira te enseña están traducidos; una búsqueda va por id.**
    Si tu Jira está en español, la API y la pantalla dicen «Tarea», «Historia»,
@@ -587,6 +591,16 @@ Dieciocho decisiones que sostienen el diseño:
    sigue enseñándote el nombre, que es lo que tú reconoces. Los componentes y
    las etiquetas los escribió tu equipo, Jira no los traduce, y ésos siguen
    yendo por su nombre.
+
+19. **El modelo es tuyo, y el que falla no se vuelve a proponer.** El modelo
+   que eliges vale para todos tus sitios, no para uno. opencode no sabe qué
+   modelos permite tu plan, pero un rechazo del proveedor es gratis y dice por
+   qué: Faro lo apunta con caducidad, no vuelve a ofrecer ese modelo en ninguna
+   elección automática, y no cuenta nunca un fallo del modelo como un fallo de
+   tus claves ni da un sitio por configurado sin su contexto. Pasó de verdad con
+   un compañero de Marco, cuyo plan rechazaba el modelo que Faro elegía solo: la
+   comprobación de sus claves decía «Jira: …» como si el token estuviera mal, y
+   «Reintentar con…» saltaba a otro modelo que su plan también rechazaba.
 
 ---
 
@@ -607,7 +621,9 @@ sitio (es justo lo que enseña «Qué guarda Faro de mí»): el **índice**, el
 **contexto** del sitio, la **memoria entre sesiones** si la tienes activada, el
 **perfil del proyecto**, el **historial de páginas base**, el **diario de
 actividad** (30 días), las **páginas base elegidas** con su alcance, las
-**últimas búsquedas**, y el **modelo** y la **Skill** de ese sitio.
+**últimas búsquedas** y la **Skill** de ese sitio; y, de TODOS los sitios, tu
+**modelo elegido** y los **veredictos de modelos** (qué modelos han contestado y
+cuáles no), que desde H16 son tuyos y no de un sitio.
 
 **No se conserva** (y es a propósito):
 
@@ -635,7 +651,7 @@ actividad** (30 días), las **páginas base elegidas** con su alcance, las
 ## Comprobaciones
 
 ```bash
-npm run check              # sintaxis + orden + manifest + 1337 pruebas unitarias + docs
+npm run check              # sintaxis + orden + manifest + 1368 pruebas unitarias + docs
 npm run check:docs         # sólo el paso docs: número de pruebas, títulos del registro, mensajes y ficheros del mapa
 npm run test:integration   # contra un opencode real que arranca la propia prueba
 npm run harness            # banco de pruebas visual en http://127.0.0.1:5175
@@ -1064,6 +1080,15 @@ contra un opencode real el 2026-09-19, con un turno de dos palabras por modelo:
 | `github-copilot/claude-sonnet-4.6` | `APIError: not available for integrator "opencode"` |
 | `openai/gpt-5.4` | no soportado con una cuenta de ChatGPT |
 
+Y los tres rechazos que midió el segundo plan (2026-09-25 y 2026-09-26, un
+turno «Di solo: ok» por modelo; los tres `APIError` con `isRetryable: false`):
+
+| Modelo | Tiempo · código | Qué dice el proveedor |
+|---|---|---|
+| `openai/gpt-5.4` | 802 ms · 400 | «not supported when using Codex with a ChatGPT account» |
+| `github-copilot/claude-sonnet-4.6` | 0,2-1,3 s · 400 | «not available for integrator "opencode". Available models: […]» —**con la lista entera** de los 57 que el plan sí permite; en esa máquina faltaban 3 de los 32 de Copilot: `claude-sonnet-4.6`, `gpt-5.4-nano` y `mai-code-1-flash-picker`— |
+| `opencode/big-pickle` | 666 ms · 403 | «free tier can only be used from within OpenCode» (vale para todos los `opencode/*`) |
+
 Lo importante de esa tabla: **el nivel gratuito de opencode (`opencode/*-free`,
 y también `big-pickle`) ya no se puede usar desde `opencode serve`**, sólo desde
 la propia TUI de opencode. Como Faro habla con el servidor, hay que elegir un
@@ -1071,8 +1096,29 @@ modelo del proveedor propio. `opencode/hy3-free`, que antes funcionaba, ya no
 está en la lista.
 
 Por eso Faro trae un vigilante: si un turno deja de producir contenido durante
-90 segundos, se rinde, lo dice, y ofrece reintentar con otro proveedor. El
-modelo que funciona se recuerda para ese sitio.
+90 segundos, se rinde y lo dice. Y desde H16 **el modelo es tuyo, no del
+sitio**: el que eliges en el desplegable vale para todos tus Jira y Confluence
+(el segundo sitio ya no pregunta), y lo que una versión anterior guardaba por
+sitio se copia como tuyo una sola vez. Faro no elige un modelo por ti como si
+fuera tuyo: sin ninguno guardado, preselecciona el último que contestó o un
+predeterminado que no haya fallado, sin guardarlo (una versión próxima trae la
+pantalla «Elige el modelo»).
+
+**Cuando un modelo falla, Faro se acuerda.** opencode no sabe qué modelos
+permite tu plan (los 43 de la máquina de Marco dicen todos «activo» y «con
+herramientas»), pero el rechazo del proveedor es gratis y trae el motivo: Faro
+lo clasifica (*plan*, *credenciales*, *no contesta*, *transitorio*, *otro*), lo
+apunta con caducidad (7 días lo del plan, una hora lo de las credenciales…) y
+ese modelo sale «· no disponible» en el desplegable y no se vuelve a proponer;
+los que faltan en la lista de Copilot y todos los `opencode/*` tras un 403 de
+free tier caen de golpe. «Reintentar con X» sólo aparece si X ya ha contestado
+bien: se acabó el ir y venir entre dos modelos que tu plan rechaza. Un modelo
+que falla al comprobar las claves **no se cuenta como un fallo de las claves**
+(«Volver a comprobar» repite sólo la comprobación con otro modelo), y un
+indexado que falla por el modelo no da el sitio por configurado. Todo eso se ve
+y se borra en **Ajustes → Qué guarda Faro de mí** («modelo elegido»,
+«veredictos de modelos» y el botón **Olvidar los veredictos**), y nunca viaja a
+la página ni entra en ninguna pregunta.
 
 ## Lo que no hace
 
@@ -1186,8 +1232,9 @@ src/
     storage.js              lo guardado del navegador; todo lo de un sitio en UNA lectura (getSiteBundle), lo que arrastra la sesión abierta, y «olvidar este sitio» en una sola función que deriva de esa lista lo que borra
     permissions.js          los permisos de cada sesión de opencode: todo denegado salvo el MCP, y una copia de cómo los evalúa opencode para probarlo (puro)
     timing.js               el cronómetro por fases que el registro enseña: sólo etiquetas y números, nunca cuerpos ni claves (puro)
+    models.js               elegir modelo, y desde H16 qué enseña un fallo: clasificarlo, sacar de él los veredictos (también de proveedor y de la lista de Copilot), recordarlos con caducidad y que ninguna elección automática vuelva a caer en lo que falló (puro)
 harness/                    Confluence y Jira de mentira para pruebas visuales; issues.json es la fixture de la Jira falsa
-test/                       arnés propio, sin dependencias; test/fixtures/prompts/ son las instantáneas de los prompts
+test/                       arnés propio, sin dependencias; test/fixtures/prompts/ son las instantáneas de los prompts, y test/fixtures/models/ los rechazos REALES de tres proveedores y la lista de modelos de opencode
 tools/                      generación de iconos, clave del manifest, servidor del banco
   check-docs.mjs            el paso «docs» de npm run check (npm run check:docs suelto)
   jql-eval.mjs              el mini-evaluador de JQL de la Jira falsa del banco: lista blanca de cláusulas y 400 con su mensaje para todo lo demás (puro)

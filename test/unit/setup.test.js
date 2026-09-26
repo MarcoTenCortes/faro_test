@@ -560,3 +560,46 @@ test('SEGURIDAD H15: el error de opencode sale en UNA línea, sin invisibles y c
   assert(cita.startsWith('primera') && cita.length <= 200, 'el error va citado y acotado a 200: ' + cita.length)
   assert(h.text.length < 400, 'y el consejo entero no crece con el error: ' + h.text.length)
 })
+
+// ---- H16: un fallo del MODELO no dice nada de las claves --------------------
+// Pasó con un compañero de Marco: su modelo no estaba en su plan y el panel
+// decía «Jira: <error del modelo>» como si el token estuviera mal.
+
+import { verifyCredentials } from '../../src/panel/setup.js'
+
+/** Un cliente de mentira cuyo `runTurn` devuelve lo que se le diga. */
+const clienteQueDevuelve = (turno) => ({ runTurn: async () => turno })
+
+test('H16: si el MODELO falla, verifyCredentials lo dice como del modelo, con el error crudo', async () => {
+  const CRUDO = {
+    name: 'APIError',
+    data: { message: "Bad Request: … The 'gpt-5.4' model is not supported when using Codex with a ChatGPT account.", statusCode: 400, isRetryable: false },
+  }
+  const r = await verifyCredentials(clienteQueDevuelve({ ok: false, error: 'El modelo no aceptó la petición', rawError: CRUDO, parts: [], tools: [] }), {
+    sessionID: 's',
+    model: { providerID: 'openai', modelID: 'gpt-5.4' },
+    host: 'jira.simplprogramme.eu',
+    product: 'jira',
+  })
+  eq(r, { ok: false, reason: 'modelo', detail: 'El modelo no aceptó la petición', rawError: CRUDO, stalled: false })
+  // Sin error crudo, null: nunca undefined, que se perdería al guardarlo.
+  const sin = await verifyCredentials(clienteQueDevuelve({ ok: false, error: 'x', parts: [] }), { sessionID: 's', model: null, host: 'h', product: 'confluence' })
+  eq([sin.reason, sin.rawError, sin.stalled], ['modelo', null, false])
+})
+
+test('H16: si el modelo se calla, verifyCredentials devuelve stalled, y un fallo de CLAVES sigue siendo de claves', async () => {
+  const r = await verifyCredentials(clienteQueDevuelve({ ok: false, stalled: true, parts: [], rawError: null }), {
+    sessionID: 's',
+    model: null,
+    host: 'h',
+    product: 'jira',
+  })
+  eq([r.ok, r.reason, r.stalled, r.rawError], [false, 'modelo', true, null])
+  // Un turno que SÍ usó el MCP y recibió un 401 de Atlassian no pasa por aquí.
+  const claves = await verifyCredentials(
+    clienteQueDevuelve({ ok: true, parts: [{ type: 'tool', tool: 'jira_search', state: { status: 'error', error: '401 Unauthorized' } }] }),
+    { sessionID: 's', model: null, host: 'h', product: 'jira' }
+  )
+  eq(claves.reason, 'credenciales')
+  eq('rawError' in claves, false, 'lo del modelo sólo viaja cuando falló el modelo')
+})

@@ -314,14 +314,20 @@ test('H13 revisión: el área declarada de cada clave por host es la que USA el 
     lineas.forEach((linea, i) => {
       const area = linea.match(/chrome\.storage\.(local|session)\.(?:get|set|remove)\(/)
       if (!area) return
-      for (const m of linea.matchAll(/STORAGE_KEYS\.(\w+)\(/g)) {
+      // Por host: `STORAGE_KEYS.<x>(`. GLOBALES (H16): `STORAGE_KEYS.<x>` seguido
+      // de `]` o `)` —`{ [STORAGE_KEYS.settings]: … }`, `remove(STORAGE_KEYS.modelChecks)`—.
+      // Hasta H16 esta prueba saltaba toda clave que no fuera función de un host,
+      // así que `faro:settings`, `faro:sites` y `faro:model-checks` podían
+      // declararse en un área y usarse en otra sin que nada fallara.
+      for (const m of linea.matchAll(/STORAGE_KEYS\.(\w+)(?:\(|[\])])/g)) {
         if (!usos.has(m[1])) usos.set(m[1], [])
         usos.get(m[1]).push({ area: area[1], donde: fichero.split(/[\\/]/).slice(-2).join('/') + ':' + (i + 1) })
       }
     })
   }
-  for (const [nombre, clave] of Object.entries(STORAGE_KEYS)) {
-    if (typeof clave !== 'function') continue
+  const globales = Object.keys(STORAGE_KEYS).filter((n) => typeof STORAGE_KEYS[n] === 'string')
+  eq(globales, ['settings', 'sites', 'modelChecks'], 'las claves GLOBALES, que ahora también se cruzan')
+  for (const nombre of Object.keys(STORAGE_KEYS)) {
     const vistos = usos.get(nombre) || []
     assert(vistos.length > 0, nombre + ': ninguna línea de src/ la usa junto a su área (si se escribe de otra forma, este pin hay que enseñárselo)')
     for (const u of vistos) eq(u.area, STORAGE_AREAS[nombre], `${nombre} se usa en storage.${u.area} (${u.donde}) y está declarada en ${STORAGE_AREAS[nombre]}`)
@@ -503,4 +509,64 @@ test('bundle: lo que devuelve es lo mismo que daban getSite y getIndex por separ
       eq({ index: bundle.index, stale: bundle.stale }, await getIndex(HOST))
     }
   )
+})
+
+// ---- H16: lo que Faro sabe de cada modelo -----------------------------------
+// `faro:model-checks` es GLOBAL (el modelo es de la persona, no de un sitio) y
+// entra y sale por `normalizeModelChecks`: con otro servidor u otros proveedores
+// conectados lo guardado ya no habla de lo mismo y se lee vacío.
+
+import { getModelChecks, saveModelChecks, recordModelChecks, clearModelChecks } from '../../src/shared/storage.js'
+import { MODEL_CHECKS_VERSION } from '../../src/shared/models.js'
+
+const SERVER = 'http://127.0.0.1:4096'
+const HUELLA = '43-0badc0de'
+const AHORA_M = Date.UTC(2026, 8, 26, 10, 0, 0)
+const OPT = { server: SERVER, fingerprint: HUELLA, now: AHORA_M }
+const fallo = (key, at, reason = 'plan') => ({ key, ok: false, reason, message: 'no está en tu plan', at })
+
+test('H16: los veredictos se leen normalizados, se guardan normalizados y se borran enteros', async () => {
+  await conChrome({}, async (diario, local) => {
+    eq(await getModelChecks(OPT), { version: MODEL_CHECKS_VERSION, server: SERVER, fingerprint: HUELLA, checks: {} }, 'sin nada, vacío')
+    const guardado = await saveModelChecks(
+      { 'openai/gpt-5.4': { ok: false, reason: 'plan', message: 'a\nb', at: AHORA_M - 1000, extra: 1 }, 'sin barra': { ok: true, at: 1 } },
+      OPT
+    )
+    eq(guardado.checks, { 'openai/gpt-5.4': { ok: false, reason: 'plan', message: 'a b', at: AHORA_M - 1000 } }, 'sólo lo que tiene forma, y en una línea')
+    eq(local[STORAGE_KEYS.modelChecks], guardado, 'por aquí no pasa nada sin reconstruir')
+    eq(await getModelChecks(OPT), guardado)
+    // Otro opencode (otro servidor) u otros proveedores conectados: lo guardado no dice nada.
+    eq((await getModelChecks({ ...OPT, server: 'http://127.0.0.1:4123' })).checks, {})
+    eq((await getModelChecks({ ...OPT, fingerprint: '44-00000000' })).checks, {})
+    // Y lo de otro servidor tampoco se puede guardar como de éste.
+    eq((await saveModelChecks({ version: 1, server: 'otro', fingerprint: HUELLA, checks: guardado.checks }, OPT)).checks, {})
+    await clearModelChecks()
+    eq(STORAGE_KEYS.modelChecks in local, false, '«Olvidar los veredictos» quita la clave entera')
+    eq(diario.removed.at(-1), 'faro:model-checks')
+  })
+})
+
+test('H16: apuntar veredictos lee, funde y escribe: dos seguidos no se pisan', async () => {
+  await conChrome({}, async (diario, local) => {
+    await recordModelChecks([fallo('openai/gpt-5.4', AHORA_M - 5000)], OPT)
+    const r = await recordModelChecks([fallo('github-copilot/claude-sonnet-4.6', AHORA_M - 4000)], OPT)
+    eq(Object.keys(r.checks).sort(), ['github-copilot/claude-sonnet-4.6', 'openai/gpt-5.4'], 'el segundo no se lleva el primero')
+    eq(local[STORAGE_KEYS.modelChecks], r, 'y lo devuelto es lo guardado')
+    // La más reciente gana; una más vieja no pisa lo que ya se sabía.
+    await recordModelChecks([{ key: 'openai/gpt-5.4', ok: true, reason: 'ok', message: '', at: AHORA_M - 100 }], OPT)
+    const s = await recordModelChecks([fallo('openai/gpt-5.4', AHORA_M - 9000, 'mudo')], OPT)
+    eq(s.checks['openai/gpt-5.4'], { ok: true, reason: 'ok', message: '', at: AHORA_M - 100 })
+    eq(diario.sets.length, 4, 'una escritura por apunte, sin lecturas escondidas que escriban')
+  })
+})
+
+test('H16: «Olvidar este sitio» NO toca los veredictos de los modelos: no son de ningún host', async () => {
+  const guardado = { version: 1, server: SERVER, fingerprint: HUELLA, checks: { 'openai/gpt-5.4': { ok: false, reason: 'plan', message: '', at: AHORA_M } } }
+  await conChrome({ 'faro:sites': { [HOST]: SITIO }, [STORAGE_KEYS.modelChecks]: guardado }, async (diario, local) => {
+    await forgetEverythingFor(HOST)
+    eq(local[STORAGE_KEYS.modelChecks], guardado, 'la clave global sigue ahí, intacta')
+    for (const quitadas of diario.removed) {
+      assert(![].concat(quitadas).includes(STORAGE_KEYS.modelChecks), 'el olvido de un sitio no pide borrarla')
+    }
+  })
 })

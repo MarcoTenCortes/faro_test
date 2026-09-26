@@ -232,3 +232,59 @@ test('H15: la versión fijada de mcp-atlassian es una cadena de tres números', 
   eq(typeof MCP_ATLASSIAN_VERSION, 'string')
   assert(/^\d+\.\d+\.\d+$/.test(MCP_ATLASSIAN_VERSION), 'tres números separados por puntos: ' + MCP_ATLASSIAN_VERSION)
 })
+
+// ---- H16: el modelo es de la persona, y lo que Faro sabe de cada modelo ------
+
+import { MODEL_LIMITS, STORAGE_AREAS } from '../../src/shared/config.js'
+
+test('H16: el modelo es de la persona y nace sin elegir: ningún modelo se elige solo', () => {
+  eq(DEFAULT_SETTINGS.model, null)
+  eq(migrateSettings({}).model, null)
+  eq(migrateSettings(undefined).model, null)
+  const bueno = { providerID: 'github-copilot', modelID: 'gpt-5.6-luna' }
+  eq(migrateSettings({ model: bueno }).model, bueno)
+  eq(migrateSettings({ model: { providerID: ' openrouter ', modelID: ' meta/llama-3 ', extra: 1, name: 'x' } }).model, { providerID: 'openrouter', modelID: 'meta/llama-3' }, 'recortado y con claves blancas')
+  const NEL = String.fromCharCode(0x85)
+  const LS = String.fromCharCode(0x2028)
+  for (const malo of [
+    'github-copilot/gpt-5.6-luna',
+    ['a', 'b'],
+    7,
+    true,
+    { providerID: 'a' },
+    { modelID: 'b' },
+    { providerID: '', modelID: 'b' },
+    { providerID: '   ', modelID: 'b' },
+    { providerID: 'a', modelID: 3 },
+    { providerID: 'a', modelID: 'x'.repeat(121) },
+    { providerID: 'a\nb', modelID: 'c' },
+    { providerID: 'a', modelID: 'b' + NEL + 'c' },
+    { providerID: 'a', modelID: 'b' + LS + 'c' },
+    { providerID: 'a', modelID: 'b' + String.fromCharCode(0) },
+  ]) {
+    eq(migrateSettings({ model: malo }).model, null, 'sin forma: ' + JSON.stringify(malo))
+  }
+  eq(migrateSettings({ model: { providerID: 'a', modelID: 'x'.repeat(120) } }).model.modelID.length, 120, 'el tope es inclusivo')
+  const entra = { model: { providerID: 'a', modelID: 'b', extra: 1 } }
+  const copia = JSON.stringify(entra)
+  migrateSettings(entra)
+  eq(JSON.stringify(entra), copia, 'no se muta lo que entra')
+})
+
+test('H16: los veredictos de los modelos tienen su clave GLOBAL, en local, distinta de las demás', () => {
+  eq(STORAGE_KEYS.modelChecks, 'faro:model-checks')
+  eq(typeof STORAGE_KEYS.modelChecks, 'string', 'no es una función de un host: el modelo no es de ningún sitio')
+  eq(STORAGE_AREAS.modelChecks, 'local')
+  const otras = Object.entries(STORAGE_KEYS)
+    .filter(([n]) => n !== 'modelChecks')
+    .map(([, k]) => (typeof k === 'function' ? k('faro:model-checks') : k))
+  assert(!otras.includes('faro:model-checks'), 'no pisa ninguna otra clave')
+  assert(!otras.some((k) => k.startsWith('faro:model-checks')), 'ni es el prefijo de ninguna')
+})
+
+test('H16: cada motivo de fallo caduca a su ritmo, y hay uno para cada motivo', () => {
+  const H = 60 * 60 * 1000
+  eq(MODEL_LIMITS.ttlMs, { ok: 7 * 24 * H, plan: 7 * 24 * H, credenciales: H, mudo: 24 * H, transitorio: 15 * 60 * 1000, otro: H })
+  eq([MODEL_LIMITS.maxEntries, MODEL_LIMITS.messageMax], [100, 200])
+  eq(Object.keys(MODEL_LIMITS).sort(), ['maxEntries', 'messageMax', 'ttlMs'])
+})

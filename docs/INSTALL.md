@@ -471,7 +471,8 @@ Junto al selector de modelo, abajo, hay otras dos cosas:
   *Sólo estas*, leer la propia incidencia por el MCP (sus comentarios
   plegados, su historial) no cuenta como salirse.
 
-  La elección se recuerda por sitio, igual que el modelo.
+  La elección se recuerda por sitio; el modelo no, que es tuyo para todos los
+  sitios (más abajo, «Elegir modelo»).
 
 - **Páginas base del análisis** — el icono de las dos hojas, que sólo aparece
   con la Skill Análisis. Abre una pantalla para decir **en base a qué páginas**
@@ -615,6 +616,48 @@ Junto al selector de modelo, abajo, hay otras dos cosas:
   apuntado de este sitio, una línea por cosa y con su medida, y debajo el botón
   que se lo lleva todo. Está entero en el apartado 8 de esta guía.
 
+- **Elegir modelo** — el desplegable de abajo, junto a la Skill. Lista los
+  modelos que **tu** opencode tiene conectados (`GET /config/providers`: los
+  proveedores que conectaste con `opencode auth login`), agrupados por
+  proveedor. Lo que elijas **es tuyo y no del sitio**: vale para todos tus Jira
+  y Confluence, así que el segundo sitio ya no vuelve a preguntar ni arranca
+  con otro. Si traes una versión anterior de Faro, que guardaba un modelo por
+  sitio, el primer sitio que abras copia el suyo como tuyo **una sola vez** (y
+  sólo si todavía no tenías uno); los demás modelos por sitio ya no se usan, y
+  para cambiar basta el desplegable. Faro no elige un modelo por ti como si lo
+  hubieras elegido tú: si no tienes ninguno guardado, **preselecciona** el
+  último que contestó bien o un predeterminado de tus proveedores que no haya
+  fallado, sin guardarlo como tuyo (en una versión próxima eso será una
+  pantalla «Elige el modelo»).
+
+  **Cuando un modelo falla**, Faro se lo apunta, gratis y sin preguntar nada
+  más, con el motivo: *no disponible con tu plan* (el proveedor lo rechaza:
+  «not supported», «not available», «free tier»…), *credenciales* (la sesión
+  con el proveedor caducó: `opencode auth login`), *no contesta* (se quedó
+  colgado), *transitorio* (un 429 o un 5xx) u *otro*. Lo apuntado caduca solo
+  según el motivo —7 días lo del plan, una hora lo de las credenciales, un día
+  el que no contesta, un cuarto de hora lo transitorio— y mientras vale ese
+  modelo sale en el desplegable como «· no disponible» y **no se vuelve a
+  proponer** en ninguna elección automática. El rechazo enseña a veces más de
+  lo que falló: el de GitHub Copilot trae la lista de los modelos que tu plan sí
+  permite, y los que faltan en ella quedan apuntados a la vez; el 403 «free tier
+  can only be used from within OpenCode» vale para todos los modelos
+  `opencode/*` de golpe. Lo que contesta bien también se apunta, y **«Reintentar
+  con X»**, bajo un error, sólo aparece si X ya ha contestado alguna vez en los
+  últimos 7 días: ya no salta a ciegas entre dos modelos que tu plan rechaza.
+  Nada de esto viaja a la página ni entra en ninguna pregunta.
+
+  **En el primer uso** (la comprobación de las claves) un modelo que no contesta
+  **no se cuenta como un fallo de tus claves**: la pantalla de claves se cierra,
+  el sitio se queda sin configurar y el chat dice «El modelo «X» no ha podido
+  contestar (…). No se ha llegado a comprobar ningún token: elige otro modelo en
+  el desplegable y pulsa «Volver a comprobar».». Ese botón repite sólo la
+  comprobación, con el modelo que elijas, sin volver a escribir nada en
+  opencode. Y **un indexado que falla por el modelo no da el sitio por hecho**:
+  el aviso sale después de repintar el chat —antes se perdía— con un botón
+  «Generar el contexto otra vez», y la pantalla de contexto vuelve a ofrecerse
+  en el siguiente arranque.
+
 - **Teclado y lector de pantalla** — `Esc` cierra Ajustes, Memoria, Registro,
   Páginas base (donde primero vacía las sugerencias) y Qué mirar hoy y cancela el
   velo «Trabajando…»; con una pantalla abierta el resto del panel queda inerte
@@ -732,6 +775,12 @@ incidencia, ni una línea del contexto—:
   aquí, para ofrecerlas como pastilla.
 - **páginas base elegidas** — «2 páginas»: las que tienes puestas ahora mismo
   para el análisis.
+- **modelo elegido** — «github-copilot/gpt-5.6-luna» o «(ninguno)»: el modelo
+  que elegiste. Es **tuyo, no de este sitio** (vale para todos), y por eso se
+  enseña su nombre: es el que opencode le da, no nada de tu sitio.
+- **veredictos de modelos** — «4 veredictos · todos los sitios»: cuántos modelos
+  tiene Faro apuntados como que contestan o que fallan, con su caducidad. Sólo
+  la cuenta: ni cuáles ni con qué mensaje. También es tuyo y no del sitio.
 - **espacio usado** — «1,4 MB de 10 MB»: lo que Faro ocupa en el navegador. Esta
   cuenta es de **todos** los sitios, no sólo de este.
 
@@ -749,6 +798,13 @@ ese sitio como si Faro no lo hubiera visto nunca. No se puede deshacer, y la
 próxima vez volverá a preguntarte por el contexto. Para borrar sólo el diario,
 **Qué mirar hoy → Borrar mi actividad**; para sólo el historial de páginas base,
 **Olvidar el historial**, en la pantalla de páginas base.
+
+«Olvidar este sitio» **no toca el modelo elegido ni los veredictos de
+modelos**, que no son de ningún sitio. Para los veredictos está al lado
+**Olvidar los veredictos**: los borra todos —vuelven a apuntarse con el
+siguiente turno que falle o conteste— y deja tu modelo como está. Cambiar la
+dirección del servidor de opencode en Ajustes también los deja de lado, porque
+lo apuntado es de aquel opencode.
 
 La lista se lee del almacenamiento de verdad, no de lo que el panel tenga en
 memoria, así que sirve para comprobarlo: después de olvidar un sitio, vuelve a
@@ -768,7 +824,8 @@ porque ése cuenta el navegador entero).
 **Aunque cierres el navegador** se conserva todo lo de la lista de arriba: el
 índice, el contexto, la memoria entre sesiones, el perfil del proyecto, el
 historial de páginas base, el diario de actividad, las páginas base elegidas con
-su alcance, las últimas búsquedas, y el modelo y la Skill de ese sitio.
+su alcance, las últimas búsquedas y la Skill de ese sitio; y, de todos los
+sitios, tu modelo elegido y los veredictos de modelos.
 
 **No se conserva**, y es a propósito:
 
@@ -1089,7 +1146,20 @@ corto y un detalle. Todos los títulos, por dónde salen:
   entero, porque el aviso se va con él).
 - «Skill» — cambió la Skill (desde el desplegable, o porque «Pedirlo
   numerado» la fija en Análisis).
-- «Modelo cambiado» — elegiste otro modelo; se recuerda para el sitio.
+- «Modelo cambiado» — elegiste otro modelo; desde H16 se recuerda como tuyo,
+  para todos los sitios, no para éste.
+- «Modelo no disponible» — un turno, la comprobación de las claves o el
+  indexado fallaron por el MODELO, y Faro lo apuntó: el detalle es
+  «proveedor/modelo: <motivo> · <mensaje del proveedor>» o «… · colgado», y el
+  motivo es *plan* (no está en tu plan), *credenciales* (`opencode auth login`),
+  *mudo* (no contestó), *transitorio* (429 o 5xx) u *otro*. También sale con
+  «proveedor/modelo: no está en la lista» si el modelo que tenías elegido ya no
+  está entre los que tu opencode tiene conectados, y entonces se preselecciona
+  otro. En un turno sólo sale si el error es del proveedor: uno de la
+  conversación, como un contexto desbordado, no dice nada del modelo.
+- «Veredictos de modelos olvidados» — pulsaste **Olvidar los veredictos** en
+  Ajustes: Faro olvida qué modelos contestan y cuáles no; «el modelo elegido se
+  conserva».
 - «Sesión nueva» — pulsaste «nueva sesión»: se olvidan la sesión de opencode y
   las marcas; «la anterior quedó resumida» si la memoria entre sesiones está
   activa.
@@ -1515,7 +1585,9 @@ arrancar. No es culpa del token: espera y reintenta desde ajustes.
 Son dos tokens y se comprueban los dos; el resultado queda en el registro como
 «MCP verificado», con una línea por producto. El que falla se dice con su nombre:
 revisa ese, no el otro. En Data Center, comprueba además que la dirección de
-ese producto es la suya (`https://jira.…`, no la de Confluence).
+ese producto es la suya (`https://jira.…`, no la de Confluence). Si lo que
+falló fue el MODELO y no el token, ya no sale así: el chat dice «El modelo «X»
+no ha podido contestar…» (la entrada de más abajo sobre el modelo).
 
 **Abro el Jira de mi Confluence (u otro host) y me vuelve a pedir claves**
 No debería: al arrancar, Faro le pregunta a opencode qué servidores MCP tiene
@@ -1599,8 +1671,28 @@ panel están en el apartado **«Qué guarda Faro de mí»** de esta guía.
 
 **«El modelo no aceptó la petición» o el turno se queda pensando**
 Es el modelo, no Faro. Cambia de modelo en el desplegable: el propio mensaje
-trae un botón para reintentar con otro proveedor. Ver la tabla de modelos del
-README.
+trae un botón para reintentar con otro proveedor **si hay otro que ya haya
+contestado bien** (si no, no hay botón, para no mandarte a ciegas a otro que
+también falle). Ver la tabla de modelos del README y la entrada siguiente.
+
+**El modelo que elegí no contesta, o «no está disponible con mi plan»**
+opencode lista todos los modelos de los proveedores que tienes conectados, pero
+no sabe cuáles permite tu plan: eso sólo lo dice el proveedor al rechazar un
+turno («not supported when using Codex with a ChatGPT account», «not available
+for integrator opencode», «free tier can only be used from within OpenCode»).
+Faro apunta ese rechazo —«Modelo no disponible» en el registro, con el
+motivo— y marca el modelo como «· no disponible» en el desplegable durante 7
+días (una hora si es de credenciales, un día si no contestó, un cuarto de hora
+si fue un 429 o un 5xx). Con GitHub Copilot, el rechazo trae además la lista de
+lo que tu plan sí permite, y los que faltan se marcan a la vez; con el nivel
+gratuito de opencode se marcan todos sus modelos. Qué hacer: **elige otro
+modelo en el desplegable** (vale para todos tus sitios). Si pasó al comprobar
+las claves, el chat lo dice sin culpar a tus tokens y trae **Volver a
+comprobar**, que repite sólo la comprobación con el modelo nuevo; si pasó al
+generar el contexto, el sitio NO se da por configurado y el aviso trae
+**Generar el contexto otra vez**. Si el motivo es *credenciales*, ejecuta
+`opencode auth login` y reinicia opencode. Si cambiaste de plan y un modelo
+sigue marcado, **Ajustes → Olvidar los veredictos** lo deja probar otra vez.
 
 **Quiero ver qué está pasando por dentro**
 El icono de las líneas, en la cabecera del panel, abre el **registro**: cada

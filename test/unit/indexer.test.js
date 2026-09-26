@@ -725,3 +725,52 @@ test('SEGURIDAD: lo que vuelve de la pestaña no entra en el índice sin validar
   }
   eq(Object.keys(indexFromSpacePages(muchas, { site: CONF, scope: ESPACIO }).pages).length, INDEX_LIMITS.maxPages)
 })
+
+// ---- H16: un indexado que falla por el MODELO sale con lo que hace falta ------
+// para clasificarlo. Con sólo el mensaje, el `catch` de `generateContext` no lo
+// distinguía de un fallo del sitio y dejaba el sitio `onboarded` sin contexto.
+
+/** Un cliente cuyo turno de la fase 1 devuelve `turno`, y que apunta si se borró la sesión. */
+function clienteQueFalla(turno) {
+  const c = clienteFalso()
+  c.runTurn = async () => ({ parts: [], tools: [], text: '', ...turno })
+  return c
+}
+
+async function errorDe(client) {
+  try {
+    await buildContext(client, { scope: ESPACIO, site: CONF, model: { providerID: 'openai', modelID: 'gpt-5.4' }, onProgress: () => {} })
+  } catch (e) {
+    return e
+  }
+  return null
+}
+
+test('H16: el indexado que falla por el modelo lleva el error crudo y con qué modelo', async () => {
+  const CRUDO = { name: 'APIError', data: { message: 'not supported', statusCode: 400, isRetryable: false } }
+  const client = clienteQueFalla({ ok: false, error: 'El modelo no aceptó la petición', rawError: CRUDO, model: { providerID: 'openai', modelID: 'gpt-5.4' } })
+  const err = await errorDe(client)
+  assert(err instanceof Error && err.message === 'El modelo no aceptó la petición', String(err))
+  eq(err.rawError, CRUDO)
+  eq(err.model, { providerID: 'openai', modelID: 'gpt-5.4' })
+  eq(err.stalled, undefined, 'contestó con un error: no se calló')
+  eq(client.diario.borradas, 1, 'y la sesión desechable se borra igual')
+  // Sin modelo en el turno, el que se pidió.
+  const sinModelo = await errorDe(clienteQueFalla({ ok: false, error: 'x', rawError: null }))
+  eq([sinModelo.rawError, sinModelo.model], [null, { providerID: 'openai', modelID: 'gpt-5.4' }])
+})
+
+test('H16: el indexado que se calla lo dice (stalled), y los errores de la salida estructurada pasan tal cual', async () => {
+  const err = await errorDe(clienteQueFalla({ ok: false, stalled: true, rawError: null }))
+  assert(/dejó de responder/.test(err.message), err.message)
+  eq([err.stalled, err.rawError], [true, null])
+  // Las fases 2 y 3 usan promptStructured, cuyo error ya sale del cliente con
+  // rawError/stalled/model: buildContext no lo envuelve ni lo cambia.
+  const client = clienteFalso()
+  const delCliente = Object.assign(new Error('colgado'), { stalled: true, rawError: null, model: { providerID: 'a', modelID: 'b' } })
+  client.promptStructured = async () => {
+    throw delCliente
+  }
+  const e2 = await errorDe(client)
+  assert(e2 === delCliente, 'el mismo error, no uno nuevo')
+})

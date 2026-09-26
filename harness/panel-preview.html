@@ -777,6 +777,7 @@ async function arrancar() {
   // ------------------------------------------------------------- redactor
 
   const sel = $('model')
+  const NO_DISPONIBLES = new Set(['claude-sonnet-4.6', 'big-pickle'])
   for (const [proveedor, modelos] of [
     ['github-copilot', ['gpt-5.6-luna', 'claude-sonnet-4.6', 'claude-opus-5']],
     // El nombre más largo de la lista es el caso peor de la fila del redactor:
@@ -787,7 +788,10 @@ async function arrancar() {
     og.label = proveedor
     for (const n of modelos) {
       const o = doc.createElement('option')
-      o.textContent = n
+      // H16: un modelo con un fallo apuntado lleva el mismo sufijo que pinta
+      // `modelOptionText` en el panel (sólo texto; la lista con sus motivos es la
+      // pantalla de H17). `claude-sonnet-4.6` es el que el plan de Copilot rechaza.
+      o.textContent = n + (NO_DISPONIBLES.has(n) ? ' · no disponible' : '')
       og.appendChild(o)
     }
     sel.appendChild(og)
@@ -1594,6 +1598,11 @@ async function arrancar() {
     ['diario de actividad', '12 entradas · 2 descartes'],
     ['últimas búsquedas', '(nada)'],
     ['páginas base elegidas', '2 páginas'],
+    // H16: las dos filas GLOBALES, de la persona y no del sitio, delante del
+    // espacio usado como en el panel; el botón «Olvidar los veredictos» viene
+    // ya en el panel.html real que carga el iframe.
+    ['modelo elegido', 'github-copilot/gpt-5.6-luna'],
+    ['veredictos de modelos', '4 veredictos · todos los sitios'],
     ['espacio usado', '8,4 MB de 10 MB · todos los sitios'],
   ]) {
     const fila = doc.createElement('li')

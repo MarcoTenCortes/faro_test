@@ -93,6 +93,44 @@ export const DEFAULT_SETTINGS = {
    * tampoco quiere un diario de lo que abre (docs/PLAN.md §3.1, §8.20).
    */
   todaySuggestions: true,
+  /**
+   * El modelo de la PERSONA, `{providerID, modelID}` (H16, docs/PLAN2.md §8.25).
+   *
+   * Global y no por sitio: el modelo lo decide el plan de quien usa Faro, no el
+   * Jira o el Confluence que tenga abierto, y así el segundo sitio no vuelve a
+   * preguntar. null hasta que alguien lo elige: ningún modelo se elige solo la
+   * primera vez (el `pickDefaultModel` de antes cogía el primer default de
+   * opencode, `openai/gpt-5.4`, que el plan del compañero de Marco no permitía).
+   * El `model` que se guardaba por sitio queda como migración (`resolveModel`).
+   */
+  model: null,
+}
+
+/** Lo más largo que se admite en un id de proveedor o de modelo guardado. */
+const MODEL_ID_MAX = 120
+
+/**
+ * Un id de proveedor o de modelo tal como se guarda: una cadena no vacía,
+ * recortada, ≤ `MODEL_ID_MAX` y sin saltos ni controles, o null. Los saltos se
+ * miran con escape (`\s` de JS no cubre el NEL, U+0085).
+ */
+function idGuardado(value) {
+  if (typeof value !== 'string') return null
+  const v = value.trim()
+  if (!v || v.length > MODEL_ID_MAX) return null
+  return new RegExp('[\\u0000-\\u001F\\u007F-\\u009F\\u2028\\u2029]').test(v) ? null : v
+}
+
+/**
+ * `settings.model` con claves blancas, o null. Pura: lo que no tiene la forma
+ * `{providerID, modelID}` con las dos cadenas buenas no lo escribió Faro, y un
+ * modelo a medias acabaría en el cuerpo de un turno.
+ */
+function modeloGuardado(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const providerID = idGuardado(raw.providerID)
+  const modelID = idGuardado(raw.modelID)
+  return providerID && modelID ? { providerID, modelID } : null
 }
 
 /**
@@ -117,6 +155,9 @@ export function migrateSettings(raw) {
   // Igual con el de las sugerencias por actividad (H11): unos ajustes de antes
   // no lo traen, y lo que no es un booleano no lo escribió Faro.
   if (typeof s.todaySuggestions !== 'boolean') s.todaySuggestions = DEFAULT_SETTINGS.todaySuggestions
+  // El modelo de la persona (H16): sólo `{providerID, modelID}` con las dos
+  // cadenas buenas, reconstruido con claves blancas; lo demás, null.
+  s.model = modeloGuardado(s.model)
   return s
 }
 
@@ -187,6 +228,47 @@ export const SESSION_LIMITS = { heavyToolChars: 200000 }
  */
 export const PROFILE_LIMITS = { ttlMs: 24 * 60 * 60 * 1000 }
 
+const HORA = 60 * 60 * 1000
+const DIA = 24 * HORA
+
+/**
+ * Lo que Faro recuerda de cada modelo (H16, `faro:model-checks`; docs/PLAN2.md
+ * §3.3 y §8.25). Los topes de su FORMA viven aquí, como `PROFILE_LIMITS`: uno
+ * por módulo, y models.js los importa.
+ *
+ * `ttlMs` es cuánto vale un veredicto según su motivo, porque cada motivo cambia
+ * a un ritmo distinto:
+ * - `ok` 7 días: si contestó, lo normal es que siga contestando; y si deja de
+ *   hacerlo, el primer turno que falle lo apunta gratis (no hace falta sondear).
+ * - `plan` 7 días: «no está en tu plan» o «no existe para este integrador» no
+ *   cambia solo; cambia cuando cambias de plan, que es cosa de semanas.
+ * - `credenciales` 1 h: se arregla con `opencode auth login` en un minuto, y
+ *   tenerlo marcado un día entero después de arreglarlo sería castigar a quien
+ *   lo arregló.
+ * - `mudo` 1 día: un modelo que no contesta suele ser un gratuito saturado o un
+ *   despliegue a medias; mañana es otra historia, esta tarde probablemente no.
+ * - `transitorio` 15 min: un 429 o un 503 es exactamente eso, pasajero.
+ * - `otro` 1 h: no se sabe qué fue; lo bastante para no volver a proponerlo en
+ *   el mismo rato, lo bastante corto para no condenarlo por un error raro.
+ *
+ * `maxEntries` 100: una persona tiene del orden de 40 modelos conectados (43 en
+ * la máquina de Marco); con 100 caben todos y los de un cambio de proveedor.
+ * `messageMax` 200: el mensaje del proveedor se guarda para enseñarlo, y el de
+ * Copilot con su lista de 57 modelos mide más de mil caracteres.
+ */
+export const MODEL_LIMITS = {
+  ttlMs: {
+    ok: 7 * DIA,
+    plan: 7 * DIA,
+    credenciales: HORA,
+    mudo: DIA,
+    transitorio: 15 * 60 * 1000,
+    otro: HORA,
+  },
+  maxEntries: 100,
+  messageMax: 200,
+}
+
 export const STORAGE_KEYS = {
   settings: 'faro:settings',
   sites: 'faro:sites',
@@ -229,6 +311,12 @@ export const STORAGE_KEYS = {
   // storage.session, como la sesión: abrir el panel cinco veces en una mañana
   // no puede costar cinco tandas de peticiones, y al cerrar Chrome se va sola.
   today: (host) => `faro:today:${host}`,
+  // Lo que Faro sabe de cada MODELO (H16): cuál contestó y cuál falló, y por
+  // qué, con su caducidad (`MODEL_LIMITS`). Es GLOBAL —una cadena, no una
+  // función de un host—, porque el modelo es de la persona y del opencode con
+  // el que habla, no de un sitio: «Olvidar este sitio» no lo toca. Se ve y se
+  // borra aparte (docs/PLAN2.md §8.25).
+  modelChecks: 'faro:model-checks',
 }
 
 /**
@@ -263,6 +351,7 @@ export const STORAGE_AREAS = {
   activity: 'local',
   activityCleared: 'session',
   today: 'session',
+  modelChecks: 'local',
 }
 
 /**

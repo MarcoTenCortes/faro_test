@@ -427,10 +427,24 @@ export async function verifyCredentials(client, { sessionID, model, host, produc
     { stallMs: 60000, maxMs: 180000 }
   )
 
+  // Un fallo del MODELO no dice nada de las claves (H16, docs/PLAN2.md §3.3):
+  // el turno no llegó a usar el MCP. Se devuelve con el error crudo del
+  // proveedor y si fue por callarse, para que quien llama lo clasifique
+  // (`classifyModelFailure`), apunte el veredicto y NO culpe a las claves. Pasó
+  // de verdad: con un modelo que el plan no permitía, el panel decía «Jira:
+  // <error del modelo>» como si el token estuviera mal.
   if (turn.stalled) {
-    return { ok: false, reason: 'modelo', detail: 'el modelo se quedó colgado. Prueba con otro.' }
+    return {
+      ok: false,
+      reason: 'modelo',
+      detail: 'el modelo se quedó colgado. Prueba con otro.',
+      rawError: turn.rawError || null,
+      stalled: true,
+    }
   }
-  if (turn.error) return { ok: false, reason: 'modelo', detail: turn.error }
+  if (turn.error) {
+    return { ok: false, reason: 'modelo', detail: turn.error, rawError: turn.rawError || null, stalled: false }
+  }
 
   return readVerification(turn.parts)
 }

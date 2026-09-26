@@ -1052,6 +1052,31 @@ Reglas transversales, que salen de los dos juicios y valen para todos:
   sigue sin llevar `model`.
 - **Riesgo**: medio. Toca `finishSetup` y el `catch` del indexado (pines de
   C5/C2) y cambia el comportamiento del modelo por sitio (decisión de Marco).
+- **Hecho el 2026-09-26** (rama `plan/h16-modelos-i`): todo lo de «Qué» salvo
+  la pantalla, que es H17. Las puras de los veredictos en `models.js`,
+  `client.models()` con `isDefault`/`toolcall`/`status`/`variants` y el
+  `reasoning` arreglado, `promptStructured` y `buildContext` con
+  `rawError`/`model`/`stalled`, `settings.model` global con la migración de
+  `saved.model`, `faro:model-checks` (global, `local`, TTL por motivo en
+  `MODEL_LIMITS`), `verifyCredentials` con `rawError`, y en el panel la
+  resolución del modelo en el arranque, los veredictos gratis de cada turno,
+  `errorNode` con veredicto ok, `finishSetup` con `'modelo'` y «Volver a
+  comprobar», el `catch` del indexado sin `onboarded` y con el aviso detrás de
+  `restoreConversation`, el planificador saltando lo que falla y las dos filas
+  globales de «Qué guarda Faro de mí» con «Olvidar los veredictos»; dos títulos
+  de registro («Modelo no disponible», «Veredictos de modelos olvidados»);
+  1368 pruebas (+31), las 37 instantáneas intactas y 57 + 57 mutaciones
+  cazadas. La lista entera de Copilot **se recapturó con la sonda del anexo**
+  (un turno rechazado, 400, 57 ids; 3 de los 32 de Copilot fuera, como el
+  anexo), así que la fixture es real. Desvíos: la migración sólo se escribe si
+  la persona no tenía modelo propio (con el suyo marcado vale como preselección
+  de esa vez); en un turno el veredicto de fallo sólo se apunta si el error es
+  del proveedor (`suggestsAnotherModel`); `recommendModel` salta además lo
+  retirado o sin herramientas; `availableFromError` da null con una lista
+  vacía; el indexado fallido por modelo trae «Generar el contexto otra vez»;
+  y sin modelo resuelto el arranque PRESELECCIONA sin guardar
+  (`recommendModel` o `pickDefaultModel` saltando fallos) hasta que H17 ponga
+  la pantalla ahí. La bitácora, en CLAUDE.md §12.5.
 
 ### H17 · Modelos II: pantalla «Elige el modelo» y el orden del primer uso
 
@@ -1532,7 +1557,11 @@ a partirse si en su revisión adversaria salen más de ~15 hallazgos.
   sintaxis (lo medido fue `uv tool install ==`)~~ **VERIFICADO en H15**
   (2026-09-26: arranca, 1,3 s con la caché caliente); ~~el valor exacto de
   `TOOLSETS` que significa «todas»~~ **VERIFICADO en H15** (`all`, leído en
-  `utils/toolsets.py` de 0.23.1); que `variant` abarata la sonda.
+  `utils/toolsets.py` de 0.23.1); que `variant` abarata la sonda. Lo que la sonda de H16 SÍ
+  cerró (2026-09-26): el formato «Available models: […]» del rechazo de
+  Copilot sigue siendo el mismo, con la lista ENTERA (57 ids, 1 022
+  caracteres), y ahora está guardado como fixture; que el rechazo no cuente
+  como request sigue sin verificar.
 - **En el Jira y el Confluence reales, con el método blob de H14 (sólo
   GET)**: la CSP `img-src` para el cursor en `data:`; SIMPL y DCPIAS leídos
   por la API, fundidos, `subIndex`, `treeTitles` y `treeSteps` entre

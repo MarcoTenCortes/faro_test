@@ -1,0 +1,44 @@
+{
+  "_que": "Los tres rechazos REALES de un turno «Di solo: ok» contra el opencode 1.2.25 de Marco (sesión desechable, abort + delete). Forma real del error de opencode: {name, data:{message, statusCode, isRetryable}} (data traía además responseHeaders, responseBody y metadata, que no se guardan). openai y opencode, copiados tal cual del final de docs/plan/anexo-2-C-modelos.md (2026-09-25; el de openai lleva el «…» con que lo recortó el anexo). github-copilot, capturado ENTERO por H16 el 2026-09-26 con la sonda del anexo contra un opencode serve desechable en el 4151 con el HOME real.",
+  "rechazos": [
+    {
+      "model": "openai/gpt-5.4",
+      "ms": 802,
+      "capturado": "2026-09-25",
+      "rawError": {
+        "name": "APIError",
+        "data": {
+          "message": "Bad Request: … The 'gpt-5.4' model is not supported when using Codex with a ChatGPT account.",
+          "statusCode": 400,
+          "isRetryable": false
+        }
+      }
+    },
+    {
+      "model": "github-copilot/claude-sonnet-4.6",
+      "ms": 14528,
+      "capturado": "2026-09-26",
+      "rawError": {
+        "name": "APIError",
+        "data": {
+          "message": "The requested model is not available for integrator \"opencode\". Available models: [gpt-4.1 claude-fable-5.1 claude-fable-5 claude-opus-4.7 claude-opus-4.8-fast claude-opus-4.8 claude-opus-5.5 claude-opus-5 claude-sonnet-5 copilot-search-a copilot-search-b copilot-search-c exec-agent-a exec-agent-b exec-agent-c gemini-3.5-flash gemini-3.6-flash gemini-3.7-flash gemini-3.8-flash gpt-5.3-codex gpt-5.4-mini gpt-5.4 gpt-5.5 gpt-5.6-luna gpt-5.6-sol gpt-5.6-terra gpt-5.6-luna-utility gpt-6-astra gpt-6-luna gpt-6-sol grok-4.5 grok-4.6 grok-4.7 kimi-k2.7-code kimi-k3 mai-code-1.1-flash trajectory-compaction gpt-5-mini gpt-3.5-turbo gpt-3.5-turbo-0613 gpt-4o-mini gpt-4o-mini-2024-07-18 copilot-preview-4o-mini-a1cfd608 gpt-4 gpt-4-0613 copilot-preview-gpt4-centralus gpt-4o gpt-4o-2024-11-20 gpt-4o-2024-05-13 gpt-4-o-preview gpt-4o-japanwest copilot-preview-gpt4o-centralus gpt-4o-2024-08-06 claude-haiku-4.5 gpt-4.1-2025-04-14 goldeneye-secondary gpt-5.2]. Verify the correct Copilot-Integration-Id header is being sent.",
+          "statusCode": 400,
+          "isRetryable": false
+        }
+      }
+    },
+    {
+      "model": "opencode/big-pickle",
+      "ms": 666,
+      "capturado": "2026-09-25",
+      "rawError": {
+        "name": "APIError",
+        "data": {
+          "message": "Error from provider (Console): OpenCode's free tier can only be used from within OpenCode",
+          "statusCode": 403,
+          "isRetryable": false
+        }
+      }
+    }
+  ]
+}

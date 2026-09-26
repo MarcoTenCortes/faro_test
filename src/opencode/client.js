@@ -155,21 +155,40 @@ export class OpencodeClient {
     return this.request('GET', '/config/providers')
   }
 
-  /** Lista plana de modelos, lista para pintar en un desplegable. */
+  /**
+   * Lista plana de modelos, lista para pintar en un desplegable.
+   *
+   * De H16 (docs/PLAN2.md §3.3), por modelo: `isDefault` (el predeterminado de
+   * su proveedor en opencode), `toolcall` (Faro necesita herramientas para el
+   * MCP: un modelo sin ellas no puede ni comprobar las claves), `status`
+   * (`active` si no lo dice; `deprecated` es un modelo que opencode va a
+   * retirar), `variants` (sus niveles de razonamiento, sólo los nombres) y
+   * `reasoning` ARREGLADO: se leía `m.reasoning`, que en opencode 1.2.25 no
+   * existe —está en `m.capabilities.reasoning`— y salía siempre false.
+   * Ninguno de estos campos dice si el plan de la persona permite el modelo
+   * (los 43 de Marco son `active` y con herramientas): eso sólo lo dice un
+   * turno, y lo recuerda `faro:model-checks`.
+   */
   async models() {
     const data = await this.providers()
+    const defaults = data?.default && typeof data.default === 'object' ? data.default : {}
     const out = []
     for (const p of data?.providers || []) {
       const ids = Object.keys(p.models || {})
       for (const id of ids) {
         const m = p.models[id] || {}
+        const variantes = m.variants && typeof m.variants === 'object' && !Array.isArray(m.variants) ? m.variants : {}
         out.push({
           providerID: p.id,
           modelID: id,
           providerName: p.name || p.id,
           name: m.name || id,
           free: /(^|[-_])free$/.test(id),
-          reasoning: !!m.reasoning,
+          reasoning: !!m.capabilities?.reasoning,
+          isDefault: Object.hasOwn(defaults, p.id) && defaults[p.id] === id,
+          toolcall: m.capabilities?.toolcall !== false,
+          status: typeof m.status === 'string' && m.status ? m.status : 'active',
+          variants: Object.keys(variantes),
         })
       }
     }
@@ -421,18 +440,29 @@ export class OpencodeClient {
       opts
     )
 
+    // Los errores de MODELO llevan con qué modelo fue y el error crudo del
+    // proveedor (H16): quien los recoge —el indexado, el planificador— tiene que
+    // poder clasificarlos (`classifyModelFailure`) y apuntar el veredicto, y con
+    // sólo el mensaje no se podía distinguir un «no está en tu plan» de un 429.
+    const deModelo = (err, { stalled = false } = {}) => {
+      if (stalled) err.stalled = true
+      err.rawError = turn.rawError || null
+      err.model = turn.model || null
+      return err
+    }
     if (turn.stalled) {
-      throw new OpencodeError(
-        'El modelo se quedó colgado sin responder. Prueba con otro: no todos son igual de fiables.'
+      throw deModelo(
+        new OpencodeError('El modelo se quedó colgado sin responder. Prueba con otro: no todos son igual de fiables.'),
+        { stalled: true }
       )
     }
     if (turn.aborted) throw new OpencodeError('Cancelado.')
-    if (!turn.ok && turn.error) throw new OpencodeError(turn.error)
+    if (!turn.ok && turn.error) throw deModelo(new OpencodeError(turn.error))
 
     const tool = turn.parts.find((p) => p.type === 'tool' && p.tool === 'StructuredOutput')
     if (!tool) {
-      throw new OpencodeError(
-        'El modelo no devolvió salida estructurada' + (turn.text ? ': ' + turn.text.slice(0, 200) : '.')
+      throw deModelo(
+        new OpencodeError('El modelo no devolvió salida estructurada' + (turn.text ? ': ' + turn.text.slice(0, 200) : '.'))
       )
     }
     if (tool.state?.status !== 'completed' || tool.state?.metadata?.valid !== true) {

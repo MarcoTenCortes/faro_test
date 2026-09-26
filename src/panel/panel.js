@@ -12,7 +12,19 @@
 
 import { OpencodeClient, OpencodeError } from '../opencode/client.js'
 import { suggestsAnotherModel, sortMessages, dropOrphans, toolOutputSize } from '../opencode/turn.js'
-import { pickDefaultModel, pickAlternativeModel, pickPlannerModel, modelKey, parseModelKey } from '../shared/models.js'
+import {
+  pickDefaultModel,
+  pickAlternativeModel,
+  pickPlannerModel,
+  modelKey,
+  parseModelKey,
+  classifyModelFailure,
+  verdictsForFailure,
+  modelVerdict,
+  modelsFingerprint,
+  recommendModel,
+  resolveModel,
+} from '../shared/models.js'
 import {
   parseAtlassianUrl,
   canonicalPagePath,
@@ -43,6 +55,7 @@ import {
   getSettings, saveSettings, getSite, getSites, saveSite, forgetEverythingFor, getSiteBundle,
   getIndex, saveIndex, getProfile, saveProfile, getSessionId, setSessionId, clearSessionId,
   getSessionWeight, setSessionWeight, clearSessionWeight,
+  getModelChecks, recordModelChecks, clearModelChecks,
 } from '../shared/storage.js'
 import { renderMarkdown } from './markdown.js'
 import { SKILLS, DEFAULT_SKILL, skillById } from './skills.js'
@@ -208,6 +221,13 @@ const state = {
   sessionID: null,
   model: null,
   models: [],
+  // Lo que Faro recuerda de qué modelos contestan y cuáles no (H16, §8.25): el
+  // objeto normalizado de `faro:model-checks` o null. Es GLOBAL —de la persona y
+  // de su opencode, no de un sitio—, así que el cambio de host no lo toca; lo
+  // vacía el cambio de servidor en Ajustes y lo relee cada arranque con la lista
+  // de modelos delante, porque sin ella no se sabe si sigue valiendo (un
+  // `opencode auth login` cambia la lista y deja viejo todo lo apuntado).
+  modelChecks: null,
   skill: DEFAULT_SKILL,
   pendingPick: null,
   picking: false,
@@ -779,7 +799,56 @@ async function bootForSite() {
   if (Array.isArray(modelos?.models)) {
     state.models = modelos.models
     state.defaults = modelos.defaults
-    fillModels(modelos.models, saved?.model || pickDefaultModel(modelos.models, modelos.defaults))
+    // El modelo es de la PERSONA, no del sitio (H16, §8.25). Hasta aquí cada
+    // host guardaba el suyo en `saved.model` y, sin él, se elegía solo el primer
+    // predeterminado del mapa de opencode —en la máquina del compañero,
+    // `openai/gpt-5.4`, que su plan rechaza—, y el fallo acababa culpando a las
+    // claves. Ahora: lo que la persona eligió (`settings.model`) si sigue en la
+    // lista y no tiene un fallo apuntado; si no, el del sitio UNA vez, como
+    // migración; y nada más: `resolveModel` nunca elige solo.
+    // Lo apuntado de cada modelo se lee aquí y no en el `Promise.all` de arriba
+    // porque su huella SON los modelos de la lista: sin ella no se sabe si esos
+    // veredictos son de este opencode. Una lectura local más, detrás de la red.
+    const ahora = Date.now()
+    const checks = await getModelChecks({
+      server: state.settings.serverUrl,
+      fingerprint: modelsFingerprint(modelos.models),
+      now: ahora,
+    }).catch(() => null)
+    if (state.bootToken !== testigo) return
+    state.modelChecks = checks
+    const resuelto = resolveModel(modelos.models, {
+      settingsModel: state.settings.model,
+      savedModel: saved?.model,
+      checks,
+      now: ahora,
+    })
+    let elegido = resuelto.model
+    // La migración se escribe UNA vez, y sólo cuando la persona todavía no tiene
+    // modelo propio: `resolveModel` también cae en el del sitio cuando el de la
+    // persona tiene un fallo apuntado, y escribirlo ahí sería cambiarle la
+    // elección por detrás en cada arranque. En ese caso vale como preselección
+    // de esta vez y `settings.model` se queda como está (H17 le enseña la
+    // pantalla). Desde aquí manda `settings.model`; `saved.model` se deja como
+    // está —borrarlo sería otra escritura por sitio para nada— y ya nadie lo
+    // escribe.
+    if (resuelto.migrate && elegido && !state.settings.model) {
+      const model = { providerID: elegido.providerID, modelID: elegido.modelID }
+      await saveSettings({ model })
+      if (state.bootToken !== testigo) return
+      state.settings = { ...state.settings, model }
+    }
+    if (!elegido) {
+      // Sin modelo resuelto H16 todavía no tiene pantalla que enseñar: se
+      // PRESELECCIONA el que tenga más papeletas —el último que contestó, o un
+      // predeterminado de proveedor sin fallo apuntado— y NO se guarda como
+      // elección de la persona. H17 sustituye este respaldo por la pantalla
+      // «Elige el modelo», que va justo aquí, antes de lanzar `checkMcp`.
+      elegido =
+        recommendModel(modelos.models, { configModel: null, defaults: modelos.defaults, checks, now: ahora }) ||
+        pickDefaultModel(modelos.models, modelos.defaults, { checks, now: ahora })
+    }
+    fillModels(modelos.models, elegido)
   } else {
     showNotice('No he podido leer la lista de modelos: ' + (modelos?.error?.message || modelos?.error || 'respuesta vacía'), true)
   }
@@ -1751,8 +1820,43 @@ function setSkill(id) {
   paintSourcesUi()
 }
 
+/**
+ * Lo que se añade al nombre de un modelo con un fallo apuntado y vigente (H16).
+ *
+ * Sólo texto, a propósito: la lista entera con los no disponibles plegados y su
+ * motivo es la pantalla «Elige el modelo» de H17. Hasta entonces, el desplegable
+ * del redactor es el único sitio donde se elige, y elegir a ciegas el modelo que
+ * acaba de fallar era justo el bucle `gpt-5.4 ⇄ claude-sonnet-4.6` del compañero.
+ */
+const NO_DISPONIBLE = ' · no disponible'
+
+/** ¿Tiene este modelo un fallo apuntado que todavía vale? */
+function modelFailing(model, now = Date.now()) {
+  const veredicto = modelVerdict(state.modelChecks, modelKey(model), now)
+  return !!veredicto && !veredicto.ok
+}
+
+/** El texto de una opción del desplegable: el nombre y lo que se sabe de él. */
+function modelOptionText(m, now) {
+  return m.name + (m.free ? ' · gratis' : '') + (modelFailing(m, now) ? NO_DISPONIBLE : '')
+}
+
+/**
+ * Vuelve a escribir los textos del desplegable con los veredictos de ahora, sin
+ * reconstruirlo: tras apuntar un fallo (o un acierto, o tras olvidarlos) lo que
+ * cambia es el sufijo, y rehacer las opciones movería la selección de sitio.
+ */
+function paintModelVerdicts() {
+  const ahora = Date.now()
+  for (const opt of el.model.querySelectorAll('option')) {
+    const m = state.models.find((x) => modelKey(x) === opt.value)
+    if (m) opt.textContent = modelOptionText(m, ahora)
+  }
+}
+
 function fillModels(models, selected) {
   el.model.textContent = ''
+  const ahora = Date.now()
   const byProvider = new Map()
   for (const m of models) {
     if (!byProvider.has(m.providerName)) byProvider.set(m.providerName, [])
@@ -1764,18 +1868,22 @@ function fillModels(models, selected) {
     for (const m of list) {
       const opt = document.createElement('option')
       opt.value = `${m.providerID}/${m.modelID}`
-      opt.textContent = m.name + (m.free ? ' · gratis' : '')
+      opt.textContent = modelOptionText(m, ahora)
       group.appendChild(opt)
     }
     el.model.appendChild(group)
   }
-  if (selected) {
-    el.model.value = `${selected.providerID}/${selected.modelID}`
-    state.model = { providerID: selected.providerID, modelID: selected.modelID }
-  }
-  if (!el.model.value && models[0]) {
-    el.model.value = `${models[0].providerID}/${models[0].modelID}`
-    state.model = { providerID: models[0].providerID, modelID: models[0].modelID }
+  // Un modelo que NO está en la lista no se asigna (H16). Antes se escribía en
+  // `state.model` aunque el `<select>` no pudiera enseñarlo: el desplegable
+  // decía uno y el turno se mandaba con otro que opencode ya no tiene, y el
+  // fallo que volvía no explicaba nada. Se registra y se cae al respaldo, que
+  // salta lo que ya se sabe que no contesta.
+  const enLista = selected ? models.find((m) => modelKey(m) === modelKey(selected)) : null
+  if (selected && !enLista) log.warn('Modelo no disponible', `${modelKey(selected)}: no está en la lista`)
+  const elegido = enLista || pickDefaultModel(models, state.defaults, { checks: state.modelChecks, now: ahora })
+  if (elegido) {
+    el.model.value = modelKey(elegido)
+    state.model = { providerID: elegido.providerID, modelID: elegido.modelID }
   }
 }
 
@@ -2717,8 +2825,15 @@ async function send() {
     const cuerpo = !mismoSitio ? body : body.isConnected ? body : liveBubble(null) || addAssistantMessage('')
     if (!bubble.isConnected) bubble = cuerpo
 
+    // Un fallo por MODELO se apunta gratis antes de pintar nada (H16): así el
+    // aviso de abajo ya no ofrece «Reintentar con» un modelo que acaba de fallar
+    // ni uno de un proveedor que ya se sabe cerrado. Esperarlo aquí no deja
+    // pintar nada encima: el frame pendiente ya se canceló y `runTurn` soltó su
+    // `onUpdate` al terminar. El modelo es el que DE VERDAD se mandó —el de la
+    // petición—, no el del desplegable de ahora.
     if (turn.stalled) {
       log.error('Turno colgado', modelKey(state.model))
+      await noteModelFailure({ model: turn.model || peticion.model, rawError: turn.rawError, stalled: true })
       keepToolsFolded(turn, toolsBox)
       cuerpo.textContent = ''
       const aviso = 'El modelo dejó de responder y no ha terminado nunca. No todos los de la lista son fiables.'
@@ -2741,6 +2856,14 @@ async function send() {
 
     if (!turn.ok) {
       log.error('Turno fallido', turn.error)
+      // Sólo lo que es del proveedor —un rechazo por plan, credenciales caducadas,
+      // un 5xx— dice algo del MODELO. Una conversación que ya no cabe en el
+      // contexto o una respuesta cortada por largo son de ESTA conversación, y
+      // apuntarlas dejaría el modelo «no disponible» una hora para nada: es la
+      // misma frontera que ya decide si se ofrece otro (`suggestsAnotherModel`).
+      if (suggestsAnotherModel(turn.rawError)) {
+        await noteModelFailure({ model: turn.model || peticion.model, rawError: turn.rawError, stalled: false })
+      }
       keepToolsFolded(turn, toolsBox)
       cuerpo.textContent = ''
       cuerpo.appendChild(errorNode(turn.error, tracker, text))
@@ -2802,9 +2925,12 @@ async function send() {
     // umbral se dice una vez, con la salida a mano.
     await trackSessionWeight(salidaTools, bubble)
 
-    // El modelo que acaba de funcionar se recuerda para este sitio: si el
-    // proveedor por defecto está caducado, no hay que volver a tropezar.
-    if (state.site && state.model) await saveSite(state.site.host, { model: state.model })
+    // El modelo que acaba de contestar queda apuntado como que FUNCIONA, gratis
+    // (H16): es lo que `recommendModel` preselecciona y lo único con lo que
+    // «Reintentar con…» se atreve a ofrecer otro. Ya no se escribe en el
+    // registro del sitio (`saved.model`): el modelo es de la persona (§8.25), y
+    // lo que la persona eligió lo escribe el desplegable en `settings.model`.
+    await noteModelOk(peticion.model)
 
     // Y qué páginas base sirvieron para analizar ESTO: es lo único que hace
     // falta para que la próxima incidencia parecida las traiga sugeridas sin
@@ -2831,8 +2957,8 @@ async function send() {
     })
 
     // Lo que cuesta ENSEÑAR la respuesta: el repintado final, el aviso de las
-    // páginas base, apuntar lo que pesa la sesión, guardar el modelo y apuntar
-    // el análisis en el historial. Iba dentro de «índice» y los dos números
+    // páginas base, apuntar lo que pesa la sesión, apuntar que el modelo
+    // contestó y apuntar el análisis en el historial. Iba dentro de «índice» y los dos números
     // salían sumados bajo una etiqueta que era de otra cosa.
     cron.mark('pintar')
 
@@ -3195,8 +3321,22 @@ function errorNode(message, tracker, question) {
 
   if (!suggestsAnotherModel(tracker?.rawError)) return wrap
 
-  const alt = pickAlternativeModel(state.models, state.defaults, tracker?.model?.providerID || state.model?.providerID)
+  // Saltando lo que ya se sabe que falla (H16): sin veredictos, el de otro
+  // proveedor era a ciegas, y con dos predeterminados rechazados por el plan el
+  // botón alternaba entre ellos para siempre (`gpt-5.4 ⇄ claude-sonnet-4.6`, el
+  // bucle del compañero, verificado con los ids reales en el anexo C).
+  const ahora = Date.now()
+  const alt = pickAlternativeModel(state.models, state.defaults, tracker?.model?.providerID || state.model?.providerID, {
+    checks: state.modelChecks,
+    now: ahora,
+  })
   if (!alt) return wrap
+  // Y sólo se OFRECE si se sabe que contesta: un veredicto ok vigente. Un botón
+  // que promete «reintentar» con un modelo del que no se sabe nada es otra vuelta
+  // del mismo bucle, con un clic de por medio. Sin ninguno así, ningún botón:
+  // H17 pone aquí «Elegir otro modelo», que abre la pantalla con el que falló
+  // marcado y su motivo.
+  if (!modelVerdict(state.modelChecks, modelKey(alt), ahora)?.ok) return wrap
 
   const row = document.createElement('div')
   row.className = 'nav-actions'
@@ -3210,7 +3350,9 @@ function errorNode(message, tracker, question) {
     btn.disabled = true
     state.model = { providerID: alt.providerID, modelID: alt.modelID }
     el.model.value = modelKey(state.model)
-    if (state.site) await saveSite(state.site.host, { model: state.model })
+    // Es una elección de la persona, como la del desplegable: va a sus ajustes
+    // (§8.25), no al registro de este sitio.
+    state.settings = await saveSettings({ model: state.model })
     el.input.value = question || state.lastQuestion
     wrap.remove()
     send()
@@ -3224,6 +3366,110 @@ function errorNode(message, tracker, question) {
   row.append(btn, hint)
   wrap.appendChild(row)
   return wrap
+}
+
+// ------------------------------------------------ veredictos de modelos (H16)
+
+/**
+ * El motivo de un fallo por modelo en palabras del usuario, para el aviso.
+ *
+ * Los códigos son los de `MODEL_FAILURE_REASONS` (models.js); el mensaje EXACTO
+ * del proveedor va al Registro y al veredicto, y aquí sólo lo que hay que hacer.
+ * Con `Object.hasOwn`, como en suggestions.js: un código que no está no puede
+ * sacar nada del prototipo.
+ */
+const MOTIVO_MODELO = Object.freeze({
+  plan: 'no está disponible con tu plan',
+  credenciales: 'las credenciales del proveedor no valen; se renuevan con «opencode auth login»',
+  mudo: 'no contesta',
+  transitorio: 'el proveedor no responde ahora mismo',
+  otro: 'el proveedor devolvió un error',
+})
+
+function motivoModelo(reason) {
+  return Object.hasOwn(MOTIVO_MODELO, reason) ? MOTIVO_MODELO[reason] : MOTIVO_MODELO.otro
+}
+
+/** El nombre con el que el desplegable enseña un modelo, o su clave si no está. */
+function nombreModelo(model) {
+  const key = modelKey(model)
+  return state.models.find((m) => modelKey(m) === key)?.name || key || 'sin modelo'
+}
+
+/**
+ * Con qué opencode y con qué lista valen los veredictos: el servidor y la huella
+ * de los modelos conectados. Se captura ANTES de leer o escribir (§8.22): lo que
+ * se aprendió hablando con un servidor no se puede guardar bajo el de después.
+ */
+function modelChecksCtx() {
+  return { server: state.settings.serverUrl, fingerprint: modelsFingerprint(state.models), now: Date.now() }
+}
+
+/**
+ * Apunta —gratis— que un modelo acaba de fallar, y lo dice en el Registro.
+ *
+ * POR QUÉ EXISTE: el compañero tenía un modelo que su plan rechazaba y Faro lo
+ * contaba como fallo de claves, dejaba el sitio a medias y, al pulsar
+ * «Reintentar con…», saltaba a otro que su plan también rechazaba. El rechazo
+ * trae casi siempre el motivo (y Copilot, la lista entera de lo que sí vale), así
+ * que se clasifica sin gastar nada (`verdictsForFailure`) y se recuerda con su
+ * caducidad en `faro:model-checks`, para que ni la preselección ni «Reintentar
+ * con» vuelvan a caer en él. Lo usan las tres cosas que pueden fallar por modelo:
+ * un turno, la verificación de las claves y el indexado.
+ *
+ * Nunca lanza: un almacén lleno no puede tapar el aviso que está a punto de salir.
+ * Devuelve `{key, reason, message}` del modelo que falló, para que quien llama
+ * diga el motivo en su aviso, o null si no hay modelo que apuntar.
+ */
+async function noteModelFailure({ model, rawError = null, stalled = false } = {}) {
+  const elegido = parseModelKey(modelKey(model))
+  if (!elegido) return null
+  const key = modelKey(elegido)
+  const ctx = modelChecksCtx()
+  const verdicts = verdictsForFailure({ model: elegido, rawError, stalled, models: state.models, now: ctx.now })
+  const propio = verdicts.find((v) => v.key === key)
+  const fallo = {
+    key,
+    reason: propio?.reason || classifyModelFailure(rawError, { stalled }),
+    message: propio?.message || '',
+  }
+  log.warn(
+    'Modelo no disponible',
+    `${key}: ${fallo.reason}` + (stalled ? ' · colgado' : fallo.message ? ' · ' + fallo.message.slice(0, 120) : '')
+  )
+  try {
+    const guardado = await recordModelChecks(verdicts, ctx)
+    // Global, pero de UN servidor: si en el hueco se cambió el de Ajustes, lo
+    // guardado es de aquel y el arranque que ya viene relee lo suyo.
+    if (state.settings.serverUrl === ctx.server) {
+      state.modelChecks = guardado
+      paintModelVerdicts()
+    }
+  } catch (err) {
+    console.error('[faro] veredicto sin guardar', err)
+  }
+  return fallo
+}
+
+/**
+ * Apunta que un modelo acaba de contestar bien: el veredicto que vale 7 días y
+ * con el que `recommendModel` preselecciona y «Reintentar con…» se atreve. Es
+ * gratis —el turno ya se hizo— y sustituye a la escritura de `saved.model` que se
+ * hacía aquí después de cada turno (§8.25).
+ */
+async function noteModelOk(model) {
+  const key = modelKey(parseModelKey(modelKey(model)))
+  if (!key) return
+  const ctx = modelChecksCtx()
+  try {
+    const guardado = await recordModelChecks([{ key, ok: true, reason: 'ok', message: '', at: ctx.now }], ctx)
+    if (state.settings.serverUrl === ctx.server) {
+      state.modelChecks = guardado
+      paintModelVerdicts()
+    }
+  } catch (err) {
+    console.error('[faro] veredicto sin guardar', err)
+  }
 }
 
 /**
@@ -3544,7 +3790,9 @@ async function offerNavigation(answer, bubble, skillId = state.skill, parts = []
 
   const { plan, reason, source } = await planNavigation(state.client, {
     model: state.model,
-    plannerModel: pickPlannerModel(state.models, state.model),
+    // El rápido del mismo proveedor, saltando lo que ya falló (H16): sin eso el
+    // planificador caía en `gpt-5.3-codex-spark`, que el plan de Copilot rechaza.
+    plannerModel: pickPlannerModel(state.models, state.model, { checks: state.modelChecks, now: Date.now() }),
     question: state.lastQuestion,
     answer,
     index: state.index,
@@ -6487,6 +6735,26 @@ async function paintPrivacy() {
   const elegidas = normalizeSources(bundle.site?.analysisSources, { host }).pages.length
   add('páginas base elegidas', elegidas ? `${elegidas} páginas` : '(nada)')
 
+  // Y lo que Faro guarda de la PERSONA, no del sitio (H16, §8.25): el modelo que
+  // eligió y lo que recuerda de qué modelos contestan. Van al final, junto al
+  // espacio usado, porque son globales: «Olvidar este sitio» no se los lleva, y
+  // los veredictos tienen su propio botón debajo. El modelo se enseña como
+  // «proveedor/modelo» y reconstruido por `parseModelKey`: es el id que opencode
+  // da a un modelo, no contenido de ningún sitio, igual que la clave del proyecto
+  // del perfil. Los veredictos, sólo su cuenta, y leídos del ALMACÉN como todo lo
+  // de esta lista, con el servidor y la lista de modelos de ahora: lo apuntado
+  // con otro opencode ya no vale y se escribe encima en el primer veredicto.
+  const elegido = parseModelKey(modelKey(state.settings.model))
+  add('modelo elegido', elegido ? modelKey(elegido) : '(ninguno)')
+  try {
+    const guardados = await getModelChecks(modelChecksCtx())
+    if (state.site?.host !== host) return
+    const veredictos = Object.keys(guardados?.checks || {}).length
+    add('veredictos de modelos', veredictos ? `${veredictos} veredictos · todos los sitios` : '(nada)')
+  } catch (err) {
+    add('veredictos de modelos', 'no se pudo leer: ' + err.message)
+  }
+
   try {
     const bytes = await chrome.storage.local.getBytesInUse(null)
     const cuota = chrome.storage.local.QUOTA_BYTES || 10 * 1024 * 1024
@@ -6734,7 +7002,11 @@ function wireEvents() {
     if (!parsed) return
     state.model = parsed
     log.info('Modelo cambiado', modelKey(parsed))
-    if (state.site) await saveSite(state.site.host, { model: state.model })
+    // A los ajustes de la PERSONA y nunca al registro del sitio (H16, §8.25):
+    // el segundo sitio no vuelve a preguntar, y cambiar aquí vale para todos.
+    // No viaja a la página: `pushSettings` del service worker manda sólo lo
+    // suyo, con claves exactas pinadas.
+    state.settings = await saveSettings({ model: parsed })
   })
 
   el.skill.addEventListener('change', async () => {
@@ -6924,6 +7196,9 @@ function wireEvents() {
     // `chrome.storage.onChanged` y le empuja los ajustes. Hasta H6, cerrar
     // Ajustes a mitad de respuesta mataba el turno (pendiente de §4.4).
     const clientChanged = state.settings.serverUrl !== antes.serverUrl || state.settings.password !== antes.password
+    // Los veredictos de modelos son de UN opencode (H16): con otro servidor no
+    // dicen nada, y el arranque de abajo relee los que tocan con su lista.
+    if (clientChanged) state.modelChecks = null
     applySettingsToUi()
     hideScreens()
     if (clientChanged) {
@@ -6938,6 +7213,24 @@ function wireEvents() {
   })
   $('btn-edit-keys').addEventListener('click', () => showSetupScreen())
   $('btn-tree-debug').addEventListener('click', () => treeDebug().catch(console.error))
+  // Lo que Faro recuerda de qué modelos contestan y cuáles no (H16): se ve en
+  // «Qué guarda Faro de mí» y se borra aquí (§8.20). Es de la persona y no de un
+  // sitio, así que «Olvidar este sitio» no lo toca y necesita su propio botón.
+  // El modelo ELEGIDO se queda: olvidar lo aprendido no es cambiar de elección.
+  $('btn-forget-model-checks').addEventListener('click', async () => {
+    try {
+      await clearModelChecks()
+    } catch (err) {
+      $('settings-status').textContent = 'No he podido olvidar los veredictos: ' + (err?.message || err)
+      return
+    }
+    state.modelChecks = null
+    log.info('Veredictos de modelos olvidados', 'el modelo elegido se conserva')
+    // A2: el efecto —una fila que pasa a «(nada)»— no se oye por sí solo.
+    announce('Olvidado lo que Faro recordaba de qué modelos contestan.')
+    paintModelVerdicts()
+    await paintPrivacy()
+  })
   $('btn-forget').addEventListener('click', async () => {
     if (!state.site) return
     const host = state.site.host
@@ -7219,6 +7512,10 @@ async function finishSetup() {
 
   say('Comprobando que las claves valen…')
 
+  // El modelo con el que se comprueba, capturado al empezar (§8.22): son uno o
+  // dos turnos, y el desplegable del redactor se puede tocar mientras tanto.
+  const modelo = state.model
+
   let session = null
   try {
     session = await state.client.createSession({ title: 'Faro · comprobación' })
@@ -7228,10 +7525,30 @@ async function finishSetup() {
       say(`Comprobando las claves de ${etiqueta}…`)
       const check = await verifyCredentials(state.client, {
         sessionID: session.id,
-        model: state.model,
+        model: modelo,
         host: site.host,
         product,
       })
+
+      if (!check.ok && check.reason === 'modelo') {
+        // El MODELO no contestó, así que ningún token se ha llegado a probar
+        // (H16). Era justo el fallo del compañero: su plan rechazaba el modelo,
+        // el aviso decía «Jira: …» como si la clave estuviera mal, y el sitio se
+        // quedaba sin configurar sin saber por qué. Ahora no se culpa a las
+        // claves: se apunta el veredicto gratis, se cierra la pantalla —el sitio
+        // sigue SIN configurar, no se escribe ningún registro— y `pendingMcp` se
+        // CONSERVA, porque «Volver a comprobar» sólo repite esta verificación con
+        // el modelo que se elija en el desplegable, sin volver a escribir nada en
+        // opencode. H17 cambia el aviso por la pantalla «Elige el modelo».
+        const fallo = await noteModelFailure({ model: modelo, rawError: check.rawError, stalled: check.stalled })
+        const texto =
+          `El modelo «${nombreModelo(modelo)}» no ha podido contestar (${motivoModelo(fallo?.reason)}). ` +
+          'No se ha llegado a comprobar ningún token: elige otro modelo en el desplegable y pulsa «Volver a comprobar».'
+        say(texto)
+        hideScreens()
+        attachSetupModelNotice(texto)
+        return
+      }
 
       if (!check.ok) {
         say(
@@ -7278,6 +7595,48 @@ function paintSnippet() {
   $('setup-snippet').textContent = s.mode === 'full' ? s.full : s.block
   $('btn-snippet-full').classList.toggle('on', s.mode === 'full')
   $('btn-snippet-block').classList.toggle('on', s.mode === 'block')
+}
+
+/**
+ * El aviso de que la comprobación de las claves no llegó a hacerse porque el
+ * MODELO no contestó (H16), con la única salida que tiene sentido: elegir otro
+ * en el desplegable del redactor —que en el chat sí se puede usar— y repetir la
+ * verificación.
+ *
+ * «Volver a comprobar» llama a `finishSetup()` otra vez con el `pendingMcp` que
+ * se conservó: no vuelve a escribir la configuración ni a esperar al MCP, sólo
+ * comprueba. Antes vuelve a enseñar la pantalla de claves, que es donde
+ * `finishSetup` dice lo que va pasando («Comprobando las claves de Jira…») y,
+ * si ahora fallara una clave de verdad, por qué: sin ella, ese texto se
+ * escribiría en una pantalla cerrada. Si vuelve a fallar el modelo, la pantalla
+ * se cierra otra vez y sale un aviso nuevo.
+ *
+ * `NEEDS_IDLE`, como los botones que cuelgan de una respuesta: es un turno de
+ * modelo más, y con otro en vuelo no se lanza.
+ */
+function attachSetupModelNotice(texto) {
+  const wrap = document.createElement('div')
+  wrap.appendChild(noticeNode(texto, true))
+  const row = document.createElement('div')
+  row.className = 'nav-actions'
+  const btn = document.createElement('button')
+  btn.className = 'ghost small ' + NEEDS_IDLE
+  btn.type = 'button'
+  btn.textContent = 'Volver a comprobar'
+  btn.disabled = state.streaming
+  btn.addEventListener('click', async () => {
+    if (state.streaming) return
+    btn.disabled = true
+    wrap.remove()
+    showScreen('screen-setup')
+    await finishSetup()
+  })
+  row.appendChild(btn)
+  wrap.appendChild(row)
+  el.chat.appendChild(wrap)
+  announce(texto)
+  scrollChat({ force: true })
+  return wrap
 }
 
 /**
@@ -7411,6 +7770,8 @@ async function generateContext({ keepContext = false } = {}) {
   )
 
   const report = (t) => (el.busyText.textContent = t)
+  // Fuera del `try` para que el `catch` lo alcance.
+  let modeloDelIndexado = state.model
 
   try {
     // Lo que la API del propio sitio da exacto, antes de gastar un turno: el
@@ -7420,6 +7781,10 @@ async function generateContext({ keepContext = false } = {}) {
     const rest = await restIndexFor(scope, { sitio, report, signal: controller.signal })
     if (controller.signal.aborted) throw new DOMException('Cancelado', 'AbortError')
 
+    // El modelo con el que se indexa, para poder nombrarlo si es él el que falla
+    // (H16): el error de la fase de prosa no lo trae y el desplegable puede
+    // cambiar en los minutos que dura esto.
+    modeloDelIndexado = state.model
     const { contextMd, index } = await buildContext(state.client, {
       scope,
       site: sitio,
@@ -7505,12 +7870,64 @@ async function generateContext({ keepContext = false } = {}) {
       return
     }
     log.error('Indexado fallido', `${host} · ${err?.message || String(err)}`)
-    if (sigueAqui() && state.site) showNotice('El indexado falló: ' + (err?.message || err), true)
-    await saveSite(host, { onboarded: true })
-    if (sigueAqui() && state.site) await restoreConversation()
+    // ¿Falló por el MODELO? (H16, dueño de este `catch`.) `buildContext` y
+    // `promptStructured` le cuelgan al error lo que devolvió el proveedor
+    // (`rawError`) o que se quedó colgado (`stalled`); un fallo de Faro, de la
+    // API o del almacén no lleva ninguna de las dos cosas. Por modelo, el sitio
+    // NO se da por configurado: hasta aquí se escribía `onboarded: true` también
+    // en este caso y el sitio se quedaba sin contexto para siempre, sin volver a
+    // ofrecer la pantalla de contexto (el otro fallo del compañero, anexo C).
+    const porModelo = !!(err?.stalled || err?.rawError)
+    let aviso = 'El indexado falló: ' + (err?.message || err)
+    if (porModelo) {
+      const modelo = err?.model || modeloDelIndexado
+      const fallo = await noteModelFailure({ model: modelo, rawError: err?.rawError || null, stalled: !!err?.stalled })
+      aviso =
+        `El indexado falló por el modelo «${nombreModelo(modelo)}» (${motivoModelo(fallo?.reason)}): ` +
+        'elige otro modelo en el desplegable y vuelve a generar el contexto.'
+    }
+    if (!porModelo) await saveSite(host, { onboarded: true })
+    // El aviso va DESPUÉS de repintar el chat: `restoreConversation` lo vacía, y
+    // con el aviso delante se lo llevaba antes de que nadie lo viera (el
+    // pendiente que quedó anotado en la revisión de H2; lo cierra H16).
+    if (sigueAqui() && state.site) {
+      await restoreConversation()
+      if (sigueAqui() && state.site) {
+        showNotice(aviso, true)
+        if (porModelo) attachReindexButton({ keepContext })
+      }
+    }
   } finally {
     state.indexingAbort = null
   }
+}
+
+/**
+ * «Generar el contexto otra vez», debajo del aviso de un indexado que falló por
+ * el modelo (H16). Sin él, la única forma de reintentar era Ajustes →
+ * «Reconstruir el contexto», que nadie encuentra justo después de un fallo; el
+ * sitio además ya no queda `onboarded`, así que la pantalla de contexto volvería
+ * a salir en el próximo arranque. Con el mismo `keepContext` que el indexado que
+ * falló: tras subir un contexto a mano, reintentar sólo reconstruye el índice y
+ * no se lleva el documento. `NEEDS_IDLE`: son turnos de modelo, y con uno del
+ * chat en vuelo no se lanza. H17 lo acompaña con la pantalla «Elige el modelo».
+ */
+function attachReindexButton({ keepContext = false } = {}) {
+  const row = document.createElement('div')
+  row.className = 'nav-actions'
+  const btn = document.createElement('button')
+  btn.className = 'ghost small ' + NEEDS_IDLE
+  btn.type = 'button'
+  btn.textContent = 'Generar el contexto otra vez'
+  btn.disabled = state.streaming
+  btn.addEventListener('click', async () => {
+    if (state.streaming) return
+    row.remove()
+    await generateContext({ keepContext })
+  })
+  row.appendChild(btn)
+  el.chat.appendChild(row)
+  scrollChat({ force: true })
 }
 
 async function uploadContext(ev) {

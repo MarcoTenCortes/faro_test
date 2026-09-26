@@ -280,7 +280,11 @@ test('models: lista plana ordenada por proveedor y nombre, con la marca «free»
       'GET /config/providers': {
         providers: [
           { id: 'opencode', name: 'OpenCode', models: { 'hy3-free': { name: 'HY3' }, 'big-pickle': {} } },
-          { id: 'github-copilot', models: { 'claude-sonnet-4.6': { reasoning: true } } },
+          // EL CAMBIO (H16): en opencode 1.2.25 el razonamiento está en
+          // `capabilities.reasoning`, no en `m.reasoning` —que no existe—, así que
+          // esta prueba pinaba el fallo: se leía siempre false. El `reasoning` de
+          // fuera ya no cuenta.
+          { id: 'github-copilot', models: { 'claude-sonnet-4.6': { reasoning: false, capabilities: { reasoning: true } } } },
         ],
         default: { opencode: 'hy3-free' },
       },
@@ -292,7 +296,18 @@ test('models: lista plana ordenada por proveedor y nombre, con la marca «free»
         r.models.map((m) => m.providerID + '/' + m.modelID),
         ['github-copilot/claude-sonnet-4.6', 'opencode/big-pickle', 'opencode/hy3-free']
       )
-      eq(r.models[2], { providerID: 'opencode', modelID: 'hy3-free', providerName: 'OpenCode', name: 'HY3', free: true, reasoning: false })
+      eq(r.models[2], {
+        providerID: 'opencode',
+        modelID: 'hy3-free',
+        providerName: 'OpenCode',
+        name: 'HY3',
+        free: true,
+        reasoning: false,
+        isDefault: true,
+        toolcall: true,
+        status: 'active',
+        variants: [],
+      })
       eq(r.models[0].reasoning, true)
       eq(r.models[0].providerName, 'github-copilot', 'sin nombre, el id')
       eq(r.models[1].free, false)
@@ -860,6 +875,139 @@ test('promptStructured: sin StructuredOutput, o sin validar, lanza OpencodeError
         err = e
       }
       assert(err instanceof OpencodeError && /validación del esquema/.test(err.message), String(err))
+    }
+  )
+})
+
+// ---- H16: lo que la lista y los errores dicen del modelo ---------------------
+
+import { readFileSync as leerFixture } from 'node:fs'
+
+/**
+ * GET /config/providers de Marco (test/fixtures/models/providers.json), devuelto
+ * a la forma que da opencode: la fixture guarda sólo los NOMBRES de las variantes
+ * (lo demás de cada variante no hace falta y no se guardó), y opencode las manda
+ * como un objeto por nombre.
+ */
+const PROVIDERS_REALES = (() => {
+  const f = JSON.parse(leerFixture(new URL('../fixtures/models/providers.json', import.meta.url), 'utf8'))
+  return {
+    default: f.default,
+    providers: f.providers.map((p) => ({
+      ...p,
+      models: Object.fromEntries(
+        Object.entries(p.models).map(([id, m]) => [id, { ...m, variants: Object.fromEntries(m.variants.map((v) => [v, {}])) }])
+      ),
+    })),
+  }
+})()
+
+test('H16: models() dice de cada modelo si es el predeterminado, si tiene herramientas, su estado y sus variantes', () =>
+  conServidor(
+    {
+      'GET /config/providers': {
+        providers: [
+          ...PROVIDERS_REALES.providers,
+          {
+            id: 'raro',
+            name: 'Raro',
+            models: {
+              viejo: { name: 'Viejo', status: 'deprecated', capabilities: { toolcall: true, reasoning: false } },
+              mudo: { capabilities: { toolcall: false } },
+              pelado: {},
+              lista: { variants: ['low', 'high'], status: '' },
+            },
+          },
+        ],
+        default: PROVIDERS_REALES.default,
+      },
+    },
+    async (client) => {
+      const { models, defaults } = await client.models()
+      eq(defaults, { openai: 'gpt-5.4', 'github-copilot': 'claude-sonnet-4.6', opencode: 'big-pickle' })
+      const reales = models.filter((m) => m.providerID !== 'raro')
+      eq(reales.length, 43, 'los 43 modelos de los tres proveedores conectados de Marco')
+      eq(
+        reales.filter((m) => m.isDefault).map((m) => m.providerID + '/' + m.modelID),
+        ['github-copilot/claude-sonnet-4.6', 'openai/gpt-5.4', 'opencode/big-pickle'],
+        'uno por proveedor, el de su mapa default'
+      )
+      assert(reales.every((m) => m.toolcall === true && m.status === 'active' && m.reasoning === true), 'y ninguno dice si tu plan lo permite')
+      const gpt54 = reales.find((m) => m.providerID === 'openai' && m.modelID === 'gpt-5.4')
+      eq(gpt54.variants, ['none', 'low', 'medium', 'high', 'xhigh'])
+      const raro = Object.fromEntries(models.filter((m) => m.providerID === 'raro').map((m) => [m.modelID, m]))
+      eq([raro.viejo.status, raro.viejo.toolcall, raro.viejo.reasoning], ['deprecated', true, false])
+      eq([raro.mudo.toolcall, raro.mudo.status], [false, 'active'], 'sin herramientas, marcado; sin estado, activo')
+      eq([raro.pelado.toolcall, raro.pelado.reasoning, raro.pelado.variants, raro.pelado.isDefault], [true, false, [], false])
+      eq([raro.lista.variants, raro.lista.status], [[], 'active'], 'unas variantes que no son un objeto no son variantes')
+    }
+  ))
+
+test('H16: promptStructured lanza con el error crudo, el modelo y si se calló, en los tres caminos del modelo', async () => {
+  const MODELO = { providerID: 'github-copilot', modelID: 'claude-sonnet-4.6' }
+  const asistente = (s) => s.sse.push(ev('message.updated', { info: { id: 'msg_a', sessionID: SID, role: 'assistant', model: MODELO } }))
+  const capturar = async (client, control) => {
+    try {
+      await client.promptStructured(SID, { text: 'plan', schema: {} }, control)
+    } catch (e) {
+      return e
+    }
+    return null
+  }
+  const CRUDO = { name: 'APIError', data: { message: 'The requested model is not available for integrator "opencode".', statusCode: 400, isRetryable: false } }
+
+  // 1. El proveedor lo rechaza.
+  await conServidor(
+    {
+      'POST /session/ses_1/prompt_async': (ll, s) => {
+        asistente(s)
+        s.sse.push(ev('session.error', { sessionID: SID, error: CRUDO }))
+        return { id: 'msg_1' }
+      },
+    },
+    async (client) => {
+      const err = await capturar(client)
+      assert(err instanceof OpencodeError, String(err))
+      eq(err.rawError, CRUDO)
+      eq(err.model, MODELO)
+      eq(err.stalled, undefined, 'no se calló: contestó con un error')
+    }
+  )
+
+  // 2. Se calla hasta el plazo del vigilante.
+  await conIntervaloRapido(() =>
+    conServidor(
+      {
+        'POST /session/ses_1/prompt_async': (ll, s) => {
+          asistente(s)
+          return { id: 'msg_1' }
+        },
+        'POST /session/ses_1/abort': {},
+      },
+      async (client) => {
+        const err = await capturar(client, { stallMs: 20 })
+        assert(err instanceof OpencodeError && /colgado/.test(err.message), String(err))
+        eq(err.stalled, true)
+        eq(err.rawError, null, 'callarse no trae error del proveedor')
+        eq(err.model, MODELO)
+      }
+    )
+  )
+
+  // 3. Contesta en prosa en vez de con la salida estructurada.
+  await conServidor(
+    {
+      'POST /session/ses_1/prompt_async': (ll, s) => {
+        asistente(s)
+        s.sse.push(ev('message.part.updated', { part: { id: 'prt_1', sessionID: SID, messageID: 'msg_a', type: 'text', text: 'En prosa.' } }))
+        s.sse.push(ev('session.idle', { sessionID: SID }))
+        return { id: 'msg_1' }
+      },
+    },
+    async (client) => {
+      const err = await capturar(client)
+      assert(err instanceof OpencodeError && /no devolvió salida estructurada/.test(err.message), String(err))
+      eq([err.rawError, err.model, err.stalled], [null, MODELO, undefined])
     }
   )
 })
