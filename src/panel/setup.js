@@ -355,7 +355,7 @@ export function mcpFailureHint(status) {
 
   const plazo = /timed out after (\d+)\s*ms/i.exec(error)
   if (plazo) {
-    const segundos = Math.round(Number(plazo[1]) / 1000)
+    const segundos = Math.max(1, Math.round(Number(plazo[1]) / 1000)) // «más de 0 s» con 400 ms (revisión de H15)
     return {
       kind: 'lento',
       text:

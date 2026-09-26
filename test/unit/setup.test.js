@@ -516,6 +516,10 @@ test('H15: el consejo del MCP caído, con los DOS mensajes reales de opencode 1.
   assert(/más de 30 s/.test(lento.text), 'dice los segundos del plazo que venció: ' + lento.text)
   assert(/107 paquetes/.test(lento.text) && /Reintentar/.test(lento.text), 'y qué hacer')
   eq(mcpFailureHint(fallo('Operation timed out after 60000 ms')).text.includes('más de 60 s'), true, 'con espacio antes de «ms» también')
+  // Revisión adversaria de H15: un plazo por debajo de medio segundo decía «más
+  // de 0 s», que es mentira y además absurdo; se redondea hacia arriba a 1 s.
+  const cortito = mcpFailureHint(fallo('Operation timed out after 400ms')).text
+  assert(/más de 1 s/.test(cortito) && !/más de 0 s/.test(cortito), 'un plazo de 400 ms dice «1 s», nunca «0 s»: ' + cortito)
   // Cualquier otro fallo: el error de opencode, tal cual pero en una línea.
   const otro = mcpFailureHint(fallo('spawn EACCES'))
   eq(otro.kind, 'otro')

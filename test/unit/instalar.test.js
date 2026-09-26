@@ -57,6 +57,33 @@ function entre(src, desde, hasta) {
   return src.slice(a, b)
 }
 
+/**
+ * El cuerpo de la rama que abre `cabecera` (una línea de código, comparada
+ * sin espacios de los bordes), recortado por SANGRÍA: las líneas más
+ * sangradas que ella, hasta la primera con su misma sangría o menos, que es
+ * la que la cierra (`}`, `} else {`, `} elseif (…) {`). Existe por la
+ * revisión adversaria de H15: «la guarda va ANTES que la acción en el texto»
+ * seguía siendo verdad al cerrar el `elseif ($SoloComprobar)` y convertir el
+ * `else` en un `if` suelto, que es justo lo que hace que -SoloComprobar
+ * instale. Mirar el CUERPO de cada rama no se deja engañar por el orden.
+ * Devuelve también la rama que sigue, si el cierre abre otra.
+ */
+function rama(src, cabecera) {
+  const lineas = src.split('\n')
+  const ancho = (l) => l.match(/^ */)[0].length
+  const cerrar = (i) => {
+    const sangria = ancho(lineas[i])
+    let j = i + 1
+    while (j < lineas.length && (lineas[j].trim() === '' || ancho(lineas[j]) > sangria)) j++
+    assert(j < lineas.length, `la rama «${lineas[i].trim()}» no se cierra`)
+    return { cuerpo: lineas.slice(i + 1, j).join('\n'), cierre: lineas[j].trim(), fin: j }
+  }
+  const i = lineas.findIndex((l) => l.trim() === cabecera)
+  assert(i >= 0, `no encuentro la rama «${cabecera}»`)
+  const primera = cerrar(i)
+  return { ...primera, siguiente: primera.cierre.endsWith('{') ? cerrar(primera.fin) : null }
+}
+
 test('H15: la versión de mcp-atlassian del instalador es la MISMA que escribe Faro', () => {
   const asignaciones = [...INSTALAR.matchAll(/^\$MCP_ATLASSIAN_VERSION\s*=\s*'([^']*)'\s*$/gm)]
   eq(asignaciones.length, 1, 'una sola constante de versión en el script')
@@ -94,16 +121,37 @@ test('H15: los dos scripts releen el PATH del registro (usuario y máquina) ante
   assert(tras("EjecutarVisible $npm @('i', '-g', 'opencode-ai')"), 'y tras instalar opencode con npm')
 })
 
+/**
+ * Cualquier forma de escribir en disco desde PowerShell 5.1: los cmdlets que
+ * escriben o crean ficheros (con sus alias `sc`/`ac`), los métodos de .NET, un
+ * `.Save(` y las redirecciones `>`/`>>` que no van a `$null` ni a otro flujo
+ * (`2>&1` es un flujo, y por eso se excluye un dígito delante; `-gt` no lleva
+ * `>`).
+ */
+const ESCRIBE_EN_DISCO =
+  /\b(Set-Content|Add-Content|Out-File|Tee-Object|Export-\w+|Copy-Item|Move-Item|Rename-Item|New-Item|Set-Item|sc|ac)\b|\[(System\.)?IO\.File\]::|WriteAll|\.Save\(|(^|[^-=<\d])>>?(?!\s*(\$null|&))/i
+/**
+ * La ÚNICA escritura en disco que se admite en los dos scripts, casada entera:
+ * crear la carpeta propia y vacía donde arranca opencode (arrancar-opencode.ps1).
+ */
+const ESCRITURA_PERMITIDA = /^\s*if \(-not \(Test-Path \$carpeta\)\) \{ \$null = New-Item -ItemType Directory -Path \$carpeta -Force \}\s*$/
+/** Todo lo que saca texto: a pantalla, a la salida del script o a una cadena. */
+const SACA_TEXTO = /Write-(Host|Output|Verbose|Information|Warning|Error|Debug)|\[(System\.)?Console\]::|\becho\b|Out-String|Out-Host/i
+
 test('H15 SEGURIDAD: ninguno de los dos escribe la configuración de opencode ni la contraseña', () => {
+  // EL CAMBIO (revisión adversaria de H15): hasta aquí era una lista NEGRA
+  // por línea («un Set-Content en una línea que diga opencode»), y cinco
+  // formas la pasaban en verde: la ruta en una variable y el Set-Content en
+  // la línea de abajo, un New-Item -Value, un [Console]::WriteLine de la
+  // contraseña, la contraseña como salida implícita y un Out-File desde otra
+  // variable. Ahora es una lista BLANCA: ninguna línea escribe en disco salvo
+  // la de la carpeta propia, y la contraseña sólo aparece donde se pide.
   for (const [nombre, src] of SCRIPTS) {
     for (const linea of src.split('\n')) {
+      const permitida = nombre === 'tools/arrancar-opencode.ps1' && ESCRITURA_PERMITIDA.test(linea)
+      assert(!ESCRIBE_EN_DISCO.test(linea) || permitida, `${nombre}: escribe en disco: ${linea.trim()}`)
       assert(
-        !/(Set-Content|Out-File|Add-Content|WriteAllText|WriteAllLines|WriteAllBytes)/i.test(linea) || !/opencode/i.test(linea),
-        `${nombre}: escribe algo de opencode: ${linea.trim()}`,
-      )
-      assert(!/>\s*["']?[^\s|&]*opencode/i.test(linea), `${nombre}: redirige a un fichero de opencode: ${linea.trim()}`)
-      assert(
-        !/Write-(Host|Output|Verbose|Information|Warning)|\becho\b/i.test(linea) || !/OPENCODE_SERVER_PASSWORD/i.test(linea),
+        !SACA_TEXTO.test(linea) || !/OPENCODE_SERVER_PASSWORD|\$segura\b|\$puntero\b/i.test(linea),
         `${nombre}: la contraseña (o su nombre) acaba en pantalla: ${linea.trim()}`,
       )
     }
@@ -111,7 +159,21 @@ test('H15 SEGURIDAD: ninguno de los dos escribe la configuración de opencode ni
     assert(!/SetEnvironmentVariable/i.test(src), `${nombre}: nada escrito en las variables del usuario ni de la máquina`)
     assert(!/opencode\.json/i.test(src), `${nombre}: ni siquiera nombra opencode.json`)
   }
+  eq(ARRANCAR.split('\n').filter((l) => ESCRITURA_PERMITIDA.test(l)).length, 1, 'la carpeta propia se crea en UN sitio')
   assert(!/OPENCODE_SERVER_PASSWORD/.test(INSTALAR), 'el instalador no toca la contraseña')
+  // La contraseña, sólo en sus tres formas: las dos preguntas «¿está?» y la
+  // asignación única. Cualquier otra línea que la nombre (mostrarla, copiarla
+  // a otra variable, pasarla a otro programa) es nueva y hay que mirarla.
+  const FORMAS_DE_LA_CONTRASENA = [
+    /^\s*if \(-not \$env:OPENCODE_SERVER_PASSWORD\) \{\s*$/,
+    /^\s*\$env:OPENCODE_SERVER_PASSWORD = \[Runtime\.InteropServices\.Marshal\]::PtrToStringBSTR\(\$puntero\)\s*$/,
+    /^\s*if \(-not \$env:OPENCODE_SERVER_PASSWORD\) \{ Fallar '[^'$]*' \}\s*$/,
+  ]
+  const usos = ARRANCAR.split('\n').filter((l) => /OPENCODE_SERVER_PASSWORD/i.test(l))
+  eq(usos.length, 3, 'la contraseña se nombra en tres líneas y sólo en tres')
+  for (const l of usos) {
+    assert(FORMAS_DE_LA_CONTRASENA.some((f) => f.test(l)), `la contraseña aparece fuera de sus formas: ${l.trim()}`)
+  }
   const pedir = entre(ARRANCAR, 'if (-not $env:OPENCODE_SERVER_PASSWORD) {', "Write-Host \"Faro · arrancando")
   assert(pedir.includes('Read-Host') && pedir.includes('-AsSecureString'), 'se pide sin que se vea al escribirla')
   assert(pedir.includes('ZeroFreeBSTR'), 'y la copia en claro de la memoria se borra')
@@ -202,17 +264,25 @@ test('H15: -SoloComprobar no instala nada, y opencode sólo se ofrece con Node d
   assert(opencode.includes('$aceptar = $Si') && opencode.indexOf('$aceptar = $Si') < pregunta, '-Si responde sin preguntar')
   eq(INSTALAR.split("@('i', '-g', 'opencode-ai')").length - 1, 1, 'y no se instala desde ningún otro sitio')
   assert(!/(winget|choco|scoop|msiexec)[^\n]*(node|OpenJS)/i.test(INSTALAR_CRUDO), 'nunca instala Node')
-  // Lo que instala algo va siempre detrás de un «no es -SoloComprobar»: las
-  // dos marcas tienen que EXISTIR (un indexOf de -1 también es «antes»).
-  const antesQue = (src, guarda, accion, msg) => {
-    const g = src.indexOf(guarda)
-    const a = src.indexOf(accion)
-    assert(g >= 0 && a >= 0 && g < a, msg)
-  }
+  // Lo que instala algo vive DENTRO del else de un «¿es -SoloComprobar?», y
+  // la rama de -SoloComprobar no instala nada. EL CAMBIO (revisión adversaria
+  // de H15): antes se miraba sólo que la guarda fuera ANTES que la acción en
+  // el texto, y cerrar la rama y abrir un `if` suelto conservaba ese orden
+  // con -SoloComprobar instalando. Ahora se miran los CUERPOS (`rama`).
+  const NO_INSTALA = ['irm ', 'EjecutarVisible', "'tool', 'install'", 'winget']
   const uvBloque = entre(INSTALAR, 'if (-not $uvx) {', '$uv = $null')
-  antesQue(uvBloque, "} elseif ($SoloComprobar) {\n    Mal 'uv no está instalado.'", 'irm https://astral.sh/uv/install.ps1 | iex', 'sin uv y con -SoloComprobar, no se instala')
+  const soloUv = rama(uvBloque, '} elseif ($SoloComprobar) {')
+  assert(soloUv.cuerpo.includes("Mal 'uv no está instalado.'"), 'la rama de -SoloComprobar dice que falta uv')
+  for (const p of NO_INSTALA) assert(!soloUv.cuerpo.includes(p), `sin uv y con -SoloComprobar no se hace «${p}»`)
+  eq(soloUv.cierre, '} else {', 'la rama de -SoloComprobar la cierra el else que instala, no un if suelto')
+  assert(soloUv.siguiente.cuerpo.includes("'irm https://astral.sh/uv/install.ps1 | iex'"), 'el instalador oficial, dentro de ese else')
+  assert(soloUv.siguiente.cuerpo.includes("@('install', '--id', 'astral-sh.uv'"), 'y winget también')
   const herramienta = entre(INSTALAR, '$instalado = $false', "Titulo '3.")
-  antesQue(herramienta, "if ($SoloComprobar) {\n    $lista = Ejecutar $uv @('tool', 'list')", "@('tool', 'install'", 'con -SoloComprobar se mira «uv tool list» en vez de instalar')
+  const soloTool = rama(herramienta, 'if ($SoloComprobar) {')
+  assert(soloTool.cuerpo.includes("$lista = Ejecutar $uv @('tool', 'list')"), 'con -SoloComprobar se mira «uv tool list»')
+  for (const p of NO_INSTALA) assert(!soloTool.cuerpo.includes(p), `con -SoloComprobar no se hace «${p}»`)
+  eq(soloTool.cierre, '} else {', 'y la cierra el else que instala')
+  assert(soloTool.siguiente.cuerpo.includes("Ejecutar $uv @('tool', 'install', \"mcp-atlassian==$MCP_ATLASSIAN_VERSION\")"), 'uv tool install, dentro de ese else')
   assert(INSTALAR.includes("if ($SoloComprobar) { $argsUvx = @('--offline') + $argsUvx }"), 'y uvx va sin red')
   assert(/if \(\$faltas\.Count -gt 0\) \{[^}]*exit 1/.test(INSTALAR), 'si falta algo, sale con 1')
 })
@@ -227,4 +297,57 @@ test('H15: uv se instala con el instalador oficial y, si falla, con winget; detr
   }
   assert(!/UV_NO_MODIFY_PATH/.test(INSTALAR_CRUDO), 'no se le quita al instalador de uv que ponga el PATH')
   assert(INSTALAR.includes("Ejecutar $uv @('tool', 'dir', '--bin')"), 'mcp-atlassian --version desde el bin de uv tool')
+})
+
+test('H15 revisión: uvx fuera del PATH se apunta ANTES de anteponer su carpeta, y se arregla o se dice', () => {
+  // Pasó en la revisión adversaria de H15: con uvx en ~/.local/bin y fuera del
+  // PATH, el script anteponía esa carpeta al PATH DEL PROCESO y después
+  // preguntaba «¿está uvx en el PATH?» con Buscar-Uvx, que ya lo encontraba
+  // ahí: nunca corría «uv tool update-shell», -SoloComprobar no apuntaba la
+  // falta y acababa en «Todo listo» con exit 0 habiendo avisado de que opencode
+  // no lo encontraría. La marca se pone antes de tocar el PATH.
+  const local = entre(INSTALAR, 'if (Test-Path $uvxLocal) {', '} elseif ($SoloComprobar) {')
+  const marca = local.indexOf('$uvxFueraDelPath = $true')
+  const antepone = local.indexOf("$env:Path = (Split-Path $uvxLocal) + ';' + $env:Path")
+  assert(marca > -1, 'la rama de ~/.local/bin apunta que uvx está fuera del PATH')
+  assert(antepone > -1, 'y antepone su carpeta al PATH del proceso')
+  assert(marca < antepone, 'la marca va ANTES de tocar el PATH, que después ya no dice la verdad')
+  assert(
+    INSTALAR.includes('if (-not $uvx -and (Test-Path $uvxLocal)) { $uvx = $uvxLocal; $uvxFueraDelPath = $true }'),
+    'y el instalador oficial que deja uvx sin ponerlo en el PATH, también',
+  )
+  const decl = INSTALAR.indexOf('$uvxFueraDelPath = $false')
+  const sinAnteponer = INSTALAR.indexOf('$pathSinAnteponer = $env:Path')
+  assert(decl > -1 && decl < INSTALAR.indexOf('if (-not $uvx) {'), 'la marca nace en falso antes de mirar nada')
+  assert(sinAnteponer > -1 && sinAnteponer < INSTALAR.indexOf('if (-not $uvx) {'), 'y el PATH de antes de anteponer se guarda')
+
+  // Las líneas que abren una rama PREGUNTANDO por la marca (la del instalador
+  // oficial la escribe, no la pregunta, y cierra en la misma línea).
+  const guardas = INSTALAR.split('\n').filter((l) => /^\s*if \(.*\$uvxFueraDelPath.*\{\s*$/.test(l))
+  eq(guardas.map((l) => l.trim()), ['if ($uvxFueraDelPath) {'], 'la guarda de update-shell es la marca, sola')
+  const arreglo = rama(INSTALAR, 'if ($uvxFueraDelPath) {').cuerpo
+  assert(!/^\s*if \(\$uvx -eq \$uvxLocal -and -not \(Buscar-Uvx\)\)/m.test(INSTALAR), 'la guarda vieja, que siempre era falsa, ya no está')
+  const pide = arreglo.indexOf("EjecutarVisible $uv @('tool', 'update-shell')")
+  const restaura = arreglo.indexOf('$env:Path = $pathSinAnteponer')
+  const relee = arreglo.indexOf('Actualizar-Path', restaura)
+  const busca = arreglo.indexOf('Buscar-Uvx', relee)
+  const bien = arreglo.indexOf("Bien 'uvx añadido al PATH de tu usuario.'")
+  assert(pide > -1 && restaura > pide, 'tras update-shell, se vuelve al PATH de antes de anteponer')
+  assert(relee > restaura && busca > relee, 'se relee del registro y se busca uvx DE VERDAD')
+  assert(bien > busca, 'y sólo entonces se dice que está')
+  eq(arreglo.split("$faltas.Add('uvx en el PATH')").length - 1, 2, 'si no se puede arreglar, o no se arregla, es una falta')
+  assert(arreglo.includes('tool update-shell, y abre una terminal nueva.'), 'y el aviso dice el comando')
+})
+
+test('H15 revisión: EjecutarVisible deja ver la salida y devuelve UN número', () => {
+  // Pasó en la revisión adversaria de H15: «& $programa @argumentos» dentro de
+  // una función cuyo resultado se asigna no escribe en la consola; la salida
+  // del programa pasa a ser lo que devuelve la función, $codigo se vuelve un
+  // array [líneas…, 0], los mensajes dicen «(código <toda la salida> 0)» y
+  // «$codigo -ne 0» es verdadero con exit 0 en cuanto el programa escribe algo.
+  const funcion = entre(INSTALAR, 'function EjecutarVisible(', '\n}')
+  assert(funcion.includes('& $programa @argumentos | Out-Host'), 'la salida va a la consola, no al valor de retorno')
+  eq(funcion.split('& $programa').length - 1, 1, 'y no se llama al programa por ningún otro camino')
+  assert(/\n\s*return \[int\]\$codigo$/.test(funcion), 'devuelve el código como un número')
+  eq(INSTALAR.split('$codigo = EjecutarVisible ').length - 1, 4, 'los cuatro llamantes asignan ese número')
 })

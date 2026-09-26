@@ -636,6 +636,13 @@ async function refreshTab() {
   // encadenado con el arranque: es independiente de lo que venga detrás.
   if (!changedHost && otraPagina && !$('screen-sources').classList.contains('hidden')) paintSuggestedSources()
   if (changedHost) await bootForSite()
+  // El MCP acabó de cargar mientras la pestaña estaba fuera, o un arranque se
+  // pidió sin sitio delante: el arranque que no se pudo hacer se hace ahora.
+  // DELANTE de la rama del perfil (revisión adversaria de H15): en un Jira sin el
+  // perfil de ese proyecto, esa rama se ponía primero y se tragaba el arranque,
+  // que no se hacía nunca —un fallo de antes de H15—. Arrancar ya cuenta el
+  // perfil (`refreshProfileSoon` al final de `bootForSite`).
+  else if (state.bootPending === site.host) await bootForSite()
   // Otro PROYECTO del mismo Jira: no hay arranque, pero el perfil que hay en
   // memoria es del de antes. `currentProfile()` ya no lo deja entrar en ningún
   // sitio; aquí se cuenta el del nuevo, en segundo plano y con las mismas
@@ -648,9 +655,6 @@ async function refreshTab() {
   else if (site.product === 'jira' && site.projectKey && !currentProfile(site) && state.profileAsked !== `${site.host}:${site.projectKey}`) {
     refreshProfileSoon(state.bootToken)
   }
-  // El MCP acabó de cargar mientras la pestaña estaba fuera: el arranque que
-  // `finishSetup` no pudo hacer se hace ahora (bootForSite lo da por hecho).
-  else if (state.bootPending === site.host) await bootForSite()
   // Volver de fuera al MISMO sitio no rearranca nada —el cliente, el índice y
   // la sesión siguen siendo suyos—, pero el chat se había quedado con el «Abre
   // Jira o Confluence»: se vuelve a pintar y ya.
@@ -669,6 +673,19 @@ async function refreshTab() {
 
 /** Arranque completo para un sitio: servidor, claves, contexto. */
 async function bootForSite() {
+  // Sin sitio delante no hay arranque posible: todo lo de abajo lee
+  // `state.site.host`. Pasó en la revisión adversaria de H15: «Reintentar»
+  // compara con `lastHost`, así que irse al correo durante los ~12 s de
+  // `connectMcp` no contaba como cambio de sitio y, al volver conectado y sin
+  // turno, `bootForSite()` reventaba en `getSiteBundle(state.site.host)` —sin
+  // catch— con la cabecera clavada en «comprobando…». Vale para cualquier
+  // llamante: el arranque queda PENDIENTE para el sitio del panel y `refreshTab`
+  // lo hace al volver, como el de `finishSetup` (C5). Va ANTES del testigo: un
+  // arranque que no puede empezar no tiene por qué apagar el que hubiera.
+  if (!state.site) {
+    if (state.lastHost) state.bootPending = state.lastHost
+    return
+  }
   // Testigo de arranque: dos arranques solapados —dos cambios de pestaña
   // seguidos, un botón pulsado dos veces— corrían a la vez sobre `state.site`
   // en vivo y pintaban la conversación dos veces (reproducido en la auditoría
@@ -1210,6 +1227,12 @@ function showMcpSetup(status) {
 }
 
 /**
+ * El texto del consejo que hay pintado en la pantalla de claves, o null: lo
+ * vacía `showSetupScreen` junto con la caja (revisión adversaria de H15).
+ */
+let setupHintPintado = null
+
+/**
  * El consejo del MCP caído en la pantalla de claves, DETRÁS de la frase de
  * arriba (que sigue escrita una sola vez): por qué suele pasar, el comando para
  * arreglarlo y «Reintentar» (H15, docs/PLAN2.md §3.1). Sin consejo —conectado,
@@ -1217,8 +1240,16 @@ function showMcpSetup(status) {
  */
 function paintSetupMcpHint(status) {
   const caja = $('setup-mcp-hint')
-  caja.textContent = ''
   const consejo = mcpFailureHint(status)
+  // Lo que hace el paso manual (revisión adversaria de H15): el mismo consejo
+  // no se recrea. Vaciar la caja siempre se llevaba el «Reintentar» que el
+  // usuario acababa de pulsar y el foco caía al <body> —lo que H5 corrigió en
+  // las dos mitades de esta pantalla—; `retryMcp` ya ha reactivado el botón.
+  if (consejo && consejo.text === setupHintPintado && caja.childElementCount) return
+  // Medido ANTES de vaciar: después ya no hay nada dentro que tenga el foco.
+  const teniaFoco = caja.contains(document.activeElement)
+  caja.textContent = ''
+  setupHintPintado = consejo ? consejo.text : null
   caja.classList.toggle('hidden', !consejo)
   if (!consejo) return
   caja.appendChild(
@@ -1236,6 +1267,9 @@ function paintSetupMcpHint(status) {
         }),
     })
   )
+  // Si el foco estaba en la caja (en el «Reintentar» de antes), pasa al nuevo.
+  const nuevo = [...caja.querySelectorAll('button')].find((b) => b.textContent === 'Reintentar')
+  if (teniaFoco) nuevo?.focus()
 }
 
 /**
@@ -1374,7 +1408,8 @@ function mcpHintNode(consejo, { onRetry = null, copiar = true, fila = null } = {
  * pestaña puede irse a otro sitio, y entonces sólo se registra y no se toca ni
  * el estado ni la pantalla. Qué pasa al conectar: desde el paso manual, NADA
  * —su espera (`waitForMcpReady`) lo ve en la vuelta siguiente y sigue sola con
- * `finishSetup`—; desde la pantalla de claves o el chat, sin turno en vuelo se
+ * `finishSetup`, y si la espera ya venció lo sigue el propio botón (revisión
+ * adversaria de H15, en `showManualStep`)—; desde la pantalla de claves o el chat, sin turno en vuelo se
  * rearranca el panel (lo que hace «Guardar y volver» al cambiar el servidor: el
  * arranque reconoce y adopta el MCP), y con un turno en vuelo se da por
  * conectado para la pregunta siguiente y se dice (`avisar`). Si no conectó, se
@@ -1402,11 +1437,24 @@ async function retryMcp(name, { boton, host: hostDado = '', manual = false, repi
   if ((state.site?.host ?? state.lastHost) !== host || state.client !== client) return status
   boton.disabled = false
   boton.textContent = texto
+  // El resultado se DICE (A2, revisión adversaria de H15): el botón vuelve a su
+  // texto y nada más cambia a la vista, así que con un lector de pantalla un
+  // reintento fallido era silencio. Con el motivo, que es el mismo consejo que
+  // se pinta.
   if (!status.connected) {
     repintar?.(status)
+    const consejo = mcpFailureHint(status)
+    const cabeza = status.present ? `El MCP sigue en «${status.status}»` : 'El MCP no está en opencode'
+    announce(consejo ? `${cabeza}: ${consejo.text}` : `${cabeza}.`)
     return status
   }
-  if (manual) return status
+  // El éxito sólo se anuncia aquí: sin turno en vuelo se rearranca el panel (y
+  // eso se ve), y con turno los dos `avisar` —el de la pantalla de claves, por
+  // `showNotice`, y el del chat— ya lo anuncian; duplicarlo sería oírlo dos veces.
+  if (manual) {
+    announce(MCP_RECUPERADO)
+    return status
+  }
   if (!state.streaming) {
     await bootForSite()
     return status
@@ -5961,6 +6009,7 @@ function showSetupScreen() {
   // El consejo del MCP caído es de quien lo pinta (`showMcpSetup`): abierta
   // desde Ajustes, la pantalla no arrastra el de una vez anterior.
   $('setup-mcp-hint').textContent = ''
+  setupHintPintado = null
   $('setup-mcp-hint').classList.add('hidden')
   $('setup-manual').classList.add('hidden')
   $('setup-main').classList.remove('hidden')
@@ -7073,6 +7122,19 @@ async function showManualStep(result) {
   // vuelta se llevaría el botón a mitad de un clic— y se esconde en cuanto deja
   // de estar en «failed». «Reintentar» desde aquí nunca rearranca el panel: la
   // propia espera lo ve conectado en su vuelta siguiente y sigue sola.
+  //
+  // Salvo que la espera ya no exista. Pasó en la revisión adversaria de H15: los
+  // quince minutos vencían con el MCP en «failed», el «Reintentar» seguía a la
+  // vista y, al conectar, `retryMcp` volvía dando por hecho que la espera lo
+  // vería: el MCP quedaba conectado en opencode, el Registro decía «MCP
+  // reintentado · conectado» y el panel se quedaba en «Sigo sin verlo», sin
+  // `finishSetup` ni registros del sitio. `vencida` la pone la espera SÓLO al
+  // acabar sin verlo y sin que la cancelaran; entonces es el botón quien hace lo
+  // que habría hecho ella. Con la espera viva sigue ella (así `finishSetup` no
+  // puede correr dos veces), y cancelada —el usuario volvió a las claves, o se
+  // fue a otro sitio— no se sigue. `manual: true` siempre: desde aquí nunca se
+  // rearranca el panel, lo siga la espera o lo siga el botón.
+  let vencida = false
   const cajaConsejo = $('setup-manual-hint')
   let errorPintado = null
   const pintarConsejo = (s) => {
@@ -7087,7 +7149,17 @@ async function showManualStep(result) {
     errorPintado = consejo.text
     cajaConsejo.replaceChildren(
       mcpHintNode(consejo, {
-        onRetry: (boton) => retryMcp(s.name, { boton, host: site.host, manual: true, repintar: pintarConsejo }),
+        onRetry: async (boton) => {
+          const r = await retryMcp(s.name, { boton, host: site.host, manual: true, repintar: pintarConsejo })
+          // `state.mcpWait`: si hay una espera en marcha —ésta, o la de un paso
+          // manual nuevo—, es ella la que lo verá.
+          if (!vencida || state.mcpWait || !r?.connected) return
+          if ((state.site?.host ?? state.lastHost) !== site.host) return
+          waiting.classList.add('done')
+          $('setup-waiting-text').textContent = 'MCP conectado. Comprobando las claves…'
+          pintarConsejo(null)
+          await finishSetup()
+        },
       })
     )
     cajaConsejo.classList.remove('hidden')
@@ -7111,6 +7183,7 @@ async function showManualStep(result) {
   if (controller.signal.aborted) return
 
   if (!status.connected) {
+    vencida = true
     $('setup-waiting-text').textContent = 'Sigo sin verlo. Comprueba que pegaste el bloque y reiniciaste opencode.'
     return
   }

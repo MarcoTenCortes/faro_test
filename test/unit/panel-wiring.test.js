@@ -2658,7 +2658,11 @@ test('H9 revisión: el perfil sólo vale para el proyecto que hay delante, y la 
   )
   const refresco = sinComentarios(JS.slice(JS.indexOf('async function refreshProfile('), JS.indexOf('async function countProfile')))
   assert(/state\.profileAsked = `\$\{sitio\.host\}:\$\{scope\.key\}`/.test(refresco), 'la tregua se marca al decidir contar')
-  assert(refresco.indexOf('if (vigente) return') < refresco.indexOf('state.profileAsked ='), 'un perfil vigente no gasta tregua')
+  // Los dos índices se exigen > -1 (revisión adversaria de H15): con la
+  // primera cadena ausente, -1 < N daba verde sin vigilar nada.
+  const vigenteIdx = refresco.indexOf('if (vigente) return')
+  const treguaIdx = refresco.indexOf('state.profileAsked =')
+  assert(vigenteIdx > -1 && treguaIdx > -1 && vigenteIdx < treguaIdx, 'un perfil vigente no gasta tregua')
   assert(/profileAsked: ''/.test(limpio))
 
   // La pantalla de contexto pregunta lo mismo que restIndexFor: UN espacio, o UN
@@ -4003,49 +4007,76 @@ test('H15: el MCP caído dice por qué y se puede reintentar sin reiniciar openc
   // `mcpFailureHint` (setup.js, con sus pruebas); aquí, que llega a verse en los
   // tres sitios en los que se ve un MCP caído, y que «Reintentar» respeta §8.22.
   const JS_SIN = sinComentarios(JS)
+  // Cada recorte comprueba que sus DOS marcas existen y van en orden. Pasó
+  // (revisión adversaria de H15): `a.indexOf(x) < a.indexOf(y)` da verde cuando
+  // `x` NO existe (-1 < cualquier cosa), y dos pines de esta prueba lo eran
+  // —quitar lo que vigilaban dejaba todo en verde—; y un `slice` con una marca
+  // que falta se come el fichero entero y cualquier `includes` pasa por vacío.
+  const corte = (src, desde, hasta) => {
+    const i = src.indexOf(desde)
+    assert(i >= 0, 'falta la marca de inicio del recorte: ' + desde)
+    const j = src.indexOf(hasta, i + desde.length)
+    assert(j > i, 'falta la marca de final del recorte (o va antes): ' + hasta)
+    return src.slice(i, j)
+  }
+  // «x va antes que y», con las dos presentes.
+  const antesQue = (src, x, y, msg) => {
+    const i = src.indexOf(x)
+    const j = src.indexOf(y)
+    assert(i >= 0 && j >= 0 && i < j, msg + ` (${x} en ${i}, ${y} en ${j})`)
+  }
 
   // (1) La pantalla de claves: el consejo DETRÁS de la frase de siempre, que
   // sigue escrita una sola vez.
-  const claves = JS_SIN.slice(JS_SIN.indexOf('function showMcpSetup('), JS_SIN.indexOf('function attachMcpNotice('))
+  const claves = corte(JS_SIN, 'function showMcpSetup(', 'function attachMcpNotice(')
   assert(claves.length > 400, 'el trozo de la pantalla de claves existe')
   assert(/const consejo = mcpFailureHint\(status\)/.test(claves), 'la pantalla de claves pregunta a mcpFailureHint')
   // Recortado a `showMcpSetup` SOLA: el nombre de la función que pinta aparece
   // también en su propia declaración, justo debajo.
-  const abreClaves = claves.slice(0, claves.indexOf('function paintSetupMcpHint('))
+  const abreClaves = corte(claves, 'function showMcpSetup(', 'function paintSetupMcpHint(')
   const frase = abreClaves.indexOf('está registrado pero en')
   assert(frase > 0 && abreClaves.indexOf('paintSetupMcpHint(status)') > frase, 'el consejo va detrás de la frase del MCP caído')
   assert(/caja\.classList\.toggle\('hidden', !consejo\)/.test(claves), 'sin consejo, la caja se esconde')
   eq(JS_SIN.split('está registrado pero en').length - 1, 1, 'la frase del MCP caído sigue en un solo sitio')
-  const pantalla = JS_SIN.slice(JS_SIN.indexOf('function showSetupScreen('), JS_SIN.indexOf('function paintSetupProducts('))
+  const pantalla = corte(JS_SIN, 'function showSetupScreen(', 'function paintSetupProducts(')
   assert(/\$\('setup-mcp-hint'\)\.classList\.add\('hidden'\)/.test(pantalla), 'abierta desde Ajustes, la pantalla no arrastra el consejo de otra vez')
 
   // (2) La espera del paso manual: el consejo en cada vuelta, una vez por error.
-  const manual = JS_SIN.slice(JS_SIN.indexOf('async function showManualStep('), JS_SIN.indexOf('async function finishSetup('))
+  const manual = corte(JS_SIN, 'async function showManualStep(', 'async function finishSetup(')
   assert(/const consejo = mcpFailureHint\(s\)/.test(manual), 'la espera pregunta a mcpFailureHint')
-  assert(/pintarConsejo\(s\)/.test(manual.slice(manual.indexOf('onTick:'))), 'en cada vuelta de la espera')
+  assert(/pintarConsejo\(s\)/.test(corte(manual, 'onTick:', 'if (status.connected) pintarConsejo(null)')), 'en cada vuelta de la espera')
   assert(/if \(consejo\.text === errorPintado\) return/.test(manual), 'y no se recrea mientras el error sea el mismo')
   assert(/cajaConsejo\.classList\.add\('hidden'\)/.test(manual), 'y se esconde en cuanto deja de estar en «failed»')
   assert(/retryMcp\(s\.name, \{ boton, host: site\.host, manual: true, repintar: pintarConsejo \}\)/.test(manual), 'reintenta con el host de la espera y avisando de que es el paso manual')
   assert(!/bootForSite\(/.test(manual), 'desde el paso manual nunca se rearranca: la espera sigue sola')
 
   // (3) El aviso del chat: el motivo y «Reintentar» junto a «Cambiar las claves».
-  const aviso = JS_SIN.slice(JS_SIN.indexOf('function attachMcpNotice('), JS_SIN.indexOf('function currentMcpCheck('))
+  const aviso = corte(JS_SIN, 'function attachMcpNotice(', 'function currentMcpCheck(')
   assert(/const consejo = mcpFailureHint\(status\)/.test(aviso), 'el aviso pregunta a mcpFailureHint')
   assert(/copiar: false,\s*\n\s*fila: row,/.test(aviso), 'en la misma fila que «Cambiar las claves», sin el comando')
-  assert(aviso.indexOf('wrap.appendChild(nodo)') < aviso.indexOf('wrap.appendChild(row)'), 'el motivo va debajo del aviso y encima de los botones')
+  // El consejo se cuelga DENTRO del cuerpo de `if (consejo) {` —recortado hasta
+  // su llave, como el botón de precarga de H12—: invertir la condición o quitar
+  // el `appendChild` dejaban el pin viejo en verde (revisión adversaria de H15).
+  const desdeIfConsejo = corte(aviso, 'if (consejo) {', '\n  }')
+  assert(desdeIfConsejo.includes('mcpHintNode(consejo'), 'el cuerpo del if es el del consejo')
+  assert(desdeIfConsejo.includes('wrap.appendChild(nodo)'), 'el motivo se cuelga sólo con consejo, dentro de su if')
+  antesQue(aviso, 'wrap.appendChild(nodo)', 'wrap.appendChild(row)', 'el motivo va debajo del aviso y encima de los botones')
 
   // La pieza, UNA para los tres: texto, comando para copiar y «Reintentar»,
   // sin un solo enlace (S5).
-  const pieza = JS_SIN.slice(JS_SIN.indexOf('function mcpHintNode('), JS_SIN.indexOf('async function retryMcp('))
+  const pieza = corte(JS_SIN, 'function mcpHintNode(', 'async function retryMcp(')
   assert(pieza.length > 300, 'la pieza del consejo existe')
   assert(/texto\.className = 'fine'/.test(pieza) && /cmd\.className = 'cmd'/.test(pieza), 'reutiliza .fine y .cmd, sin clases nuevas')
   assert(/copyToClipboard\(consejo\.copy, copia\)/.test(pieza), 'el comando se copia como el resto de comandos del panel')
   assert(/reintentar\.textContent = 'Reintentar'/.test(pieza), 'y lleva «Reintentar»')
+  // Y el botón HACE algo: quitarle el manejador dejaba el pin en verde con un
+  // «Reintentar» muerto (revisión adversaria de H15).
+  assert(pieza.includes("reintentar.addEventListener('click', () => onRetry(reintentar))"), '«Reintentar» llama a onRetry al pulsarlo')
   assert(!/href/.test(pieza) && !/innerHTML/.test(pieza), 'sin enlaces ni innerHTML: la ayuda es texto y un comando')
   for (const trozo of [claves, manual, aviso]) assert(!/href/.test(trozo), 'ningún cableado del consejo lleva un enlace')
 
   // «Reintentar»: el host ANTES del primer await, el botón apagado mientras.
-  const reintento = JS_SIN.slice(JS_SIN.indexOf('async function retryMcp('), JS_SIN.indexOf('async function loadLinkedContext('))
+  const reintento = corte(JS_SIN, 'async function retryMcp(', 'async function loadLinkedContext(')
   assert(reintento.length > 600, 'el manejador de reintento existe')
   const conectar = reintento.indexOf('await client.connectMcp(name)')
   assert(conectar > 0, 'reintenta con connectMcp')
@@ -4059,7 +4090,10 @@ test('H15: el MCP caído dice por qué y se puede reintentar sin reiniciar openc
   assert(!/log\.\w+\([^)]*(config|environment)/.test(reintento), 'y nunca un cuerpo de configuración')
   const guarda = reintento.indexOf('if ((state.site?.host ?? state.lastHost) !== host || state.client !== client) return status')
   assert(guarda > conectar && guarda < reintento.indexOf('boton.disabled = false'), 'con el panel en otro sitio sólo se registra, no se pinta nada')
-  assert(reintento.indexOf('if (manual) return status') < reintento.indexOf('await bootForSite()'), 'desde el paso manual no se rearranca')
+  // Con las dos marcas presentes: quitar la salida del paso manual dejaba el pin
+  // viejo en verde (-1 < cualquier cosa, revisión adversaria de H15).
+  antesQue(reintento, 'if (manual) {', 'await bootForSite()', 'desde el paso manual no se rearranca')
+  assert(/if \(manual\) \{\s*\n\s*announce\(MCP_RECUPERADO\)\s*\n\s*return status/.test(reintento), 'la salida del paso manual devuelve sin rearrancar')
   assert(/if \(!state\.streaming\) \{\s*\n\s*await bootForSite\(\)/.test(reintento), 'sin turno en vuelo, el arranque normal adopta el MCP')
   assert(
     /state\.mcpConnected = true\s*\n\s*state\.mcpCheck = Promise\.resolve\(true\)\s*\n\s*state\.mcpPending = null/.test(reintento),
@@ -4071,12 +4105,12 @@ test('H15: el MCP caído dice por qué y se puede reintentar sin reiniciar openc
     assert(htmlIds.has(id), 'falta #' + id)
     assert(HTML.includes(`<div class="hidden" id="${id}"></div>`), `#${id} nace vacío y escondido`)
   }
-  const main = HTML.slice(HTML.indexOf('id="setup-main"'), HTML.indexOf('id="setup-manual"'))
-  assert(main.indexOf('id="setup-status"') < main.indexOf('id="setup-mcp-hint"'), 'la caja va debajo de la frase de la pantalla de claves')
-  const paso = HTML.slice(HTML.indexOf('id="setup-manual"'), HTML.indexOf('id="btn-setup-later"'))
-  assert(paso.indexOf('id="setup-waiting"') < paso.indexOf('id="setup-manual-hint"'), 'y la del paso manual, debajo de la espera')
+  const main = corte(HTML, 'id="setup-main"', 'id="setup-manual"')
+  antesQue(main, 'id="setup-status"', 'id="setup-mcp-hint"', 'la caja va debajo de la frase de la pantalla de claves')
+  const paso = corte(HTML, 'id="setup-manual"', 'id="btn-setup-later"')
+  antesQue(paso, 'id="setup-waiting"', 'id="setup-manual-hint"', 'y la del paso manual, debajo de la espera')
   // La pantalla de conexión: qué mirar si opencode arranca y muere al momento.
-  const conexion = HTML.slice(HTML.indexOf('id="screen-connect"'), HTML.indexOf('id="screen-setup"'))
+  const conexion = corte(HTML, 'id="screen-connect"', 'id="screen-setup"')
   assert(/InvalidSymbol/.test(conexion) && /BOM/.test(conexion), 'el opencode.json con BOM')
   assert(/InvalidEscapeCharacter/.test(conexion), 'y las barras sin escapar dentro del JSON')
   assert(!/href/.test(conexion), 'sin enlaces')
@@ -4093,7 +4127,111 @@ test('H15: el MCP caído dice por qué y se puede reintentar sin reiniciar openc
   assert(!/timeout: 30000/.test(espejo) && !/command: \['uvx'/.test(espejo), 'ni un plazo ni un command copiados a mano')
   assert(/mcpFailureHint\(MCP_CAIDO\)/.test(espejo) && espejo.includes("'MCP error -32000: Connection closed'"), 'el consejo sale del mensaje real')
   for (const caja of ["'#setup-mcp-hint'", "'#setup-manual-hint'"]) {
-    assert(espejo.slice(espejo.indexOf('const CAJAS = ['), espejo.indexOf('function check()')).includes(caja), 'check() mide ' + caja + ' a lo ancho')
+    assert(corte(espejo, 'const CAJAS = [', 'function check()').includes(caja), 'check() mide ' + caja + ' a lo ancho')
   }
   assert(espejo.includes('Revisa ese bloque y reinicia opencode') && JS.includes('Revisa ese bloque y reinicia opencode'), 'el espejo y el panel dicen lo mismo del MCP caído')
+})
+
+test('H15 revisión: Reintentar tras vencer la espera sigue solo, un arranque sin sitio queda pendiente, y la pantalla de claves no pierde el foco', () => {
+  const JS_SIN = sinComentarios(JS)
+  const corte = (src, desde, hasta) => {
+    const i = src.indexOf(desde)
+    assert(i >= 0, 'falta la marca de inicio del recorte: ' + desde)
+    const j = src.indexOf(hasta, i + desde.length)
+    assert(j > i, 'falta la marca de final del recorte (o va antes): ' + hasta)
+    return src.slice(i, j)
+  }
+  const orden = (src, marcas, msg) => {
+    const pos = marcas.map((m) => src.indexOf(m))
+    assert(pos.every((p) => p >= 0), msg + ': falta alguna marca ' + JSON.stringify(marcas.filter((m, k) => pos[k] < 0)))
+    for (let k = 1; k < pos.length; k++) assert(pos[k - 1] < pos[k], msg + `: «${marcas[k - 1]}» tiene que ir antes que «${marcas[k]}»`)
+  }
+
+  // (5) El paso manual: pasó en la revisión adversaria de H15. La espera de 15
+  // min vence con el MCP en «failed», el «Reintentar» sigue ahí y, al conectar,
+  // `retryMcp` devolvía dando por hecho que la espera lo vería: la espera ya no
+  // existía, el MCP quedaba conectado en opencode y el panel en «Sigo sin
+  // verlo», sin `finishSetup` ni registros del sitio. Ahora, con la espera ya
+  // vencida (y no cancelada), el propio botón hace lo que habría hecho ella.
+  const manual = corte(JS_SIN, 'async function showManualStep(', 'async function finishSetup(')
+  const alReintentar = corte(manual, 'onRetry: async (boton) => {', '\n        },')
+  orden(
+    alReintentar,
+    [
+      'retryMcp(s.name, { boton, host: site.host, manual: true, repintar: pintarConsejo })',
+      'if (!vencida || state.mcpWait || !r?.connected) return',
+      'if ((state.site?.host ?? state.lastHost) !== site.host) return',
+      "waiting.classList.add('done')",
+      "$('setup-waiting-text').textContent = 'MCP conectado. Comprobando las claves…'",
+      'pintarConsejo(null)',
+      'await finishSetup()',
+    ],
+    'Reintentar con la espera vencida sigue solo, y sólo si conectó y el panel sigue en ese sitio'
+  )
+  // `vencida` sólo la pone la espera al acabar SIN verlo conectado y sin que la
+  // cancelaran: con la espera viva es ella quien sigue (y `finishSetup` no puede
+  // correr dos veces), y cancelada —el usuario volvió a las claves— no se sigue.
+  orden(
+    manual,
+    ['let vencida = false', 'if (controller.signal.aborted) return', 'if (!status.connected) {', 'vencida = true'],
+    'la espera marca que venció sólo cuando acaba sin verlo y sin cancelarla'
+  )
+  assert(!/bootForSite\(/.test(manual), 'y desde el paso manual nunca se rearranca el panel')
+
+  // (6) Un arranque sin sitio delante: `retryMcp` compara con `lastHost`, así
+  // que irse al correo durante los ~12 s de connectMcp no contaba como cambio de
+  // sitio y, al volver conectado, `bootForSite()` reventaba en
+  // `getSiteBundle(state.site.host)` con la cabecera clavada en «comprobando…».
+  // La guarda va ANTES del testigo: un arranque que no puede empezar no apaga
+  // el que hubiera en marcha.
+  const arranque = corte(JS_SIN, 'async function bootForSite() {', 'const cron = startTiming(')
+  orden(
+    arranque,
+    ['if (!state.site) {', 'if (state.lastHost) state.bootPending = state.lastHost', 'return', 'const testigo = {}'],
+    'bootForSite sin sitio deja el arranque pendiente y no toca el testigo'
+  )
+  // Y en `refreshTab` el arranque pendiente va DELANTE del recuento del perfil:
+  // en un Jira sin el perfil de ese proyecto, la rama del perfil se lo tragaba
+  // y el arranque no se hacía nunca (un fallo de antes de H15, visto aquí).
+  const tab = corte(JS_SIN, 'async function refreshTab(', 'async function bootForSite(')
+  orden(
+    tab,
+    [
+      'if (changedHost) await bootForSite()',
+      'else if (state.bootPending === site.host) await bootForSite()',
+      "else if (site.product === 'jira' && site.projectKey && !currentProfile(site)",
+      'else if (volviaDeFuera && !state.streaming) await restoreConversation()',
+    ],
+    'refreshTab: el arranque pendiente antes que el perfil'
+  )
+
+  // (8) La pantalla de claves: repintar el mismo consejo se llevaba el botón
+  // que el usuario acababa de pulsar y el foco caía al <body> (lo que H5
+  // corrigió en las dos mitades de esa pantalla); ahora hace lo que el paso
+  // manual: si el texto es el mismo no toca nada, y si recrea, el foco va al
+  // «Reintentar» nuevo.
+  assert(/\nlet setupHintPintado = null\n/.test(JS_SIN), 'lo último pintado vive a nivel de módulo')
+  const hint = corte(JS_SIN, 'function paintSetupMcpHint(', 'function attachMcpNotice(')
+  orden(
+    hint,
+    [
+      'if (consejo && consejo.text === setupHintPintado && caja.childElementCount) return',
+      'const teniaFoco = caja.contains(document.activeElement)',
+      "caja.textContent = ''",
+      'setupHintPintado = consejo ? consejo.text : null',
+      'if (teniaFoco) nuevo?.focus()',
+    ],
+    'el mismo consejo no se recrea, y el foco sigue en el botón al recrear'
+  )
+  const pantalla = corte(JS_SIN, 'function showSetupScreen(', 'function paintSetupProducts(')
+  orden(pantalla, ["$('setup-mcp-hint').textContent = ''", 'setupHintPintado = null'], 'abrir la pantalla olvida lo pintado junto con la caja')
+
+  // Y el resultado de un reintento se DICE (A2): el fallo con el motivo, y el
+  // éxito del paso manual, que no rearranca ni cuelga ningún aviso que lo
+  // anuncie (los `avisar` de la pantalla y del chat ya lo anuncian).
+  const reintento = corte(JS_SIN, 'async function retryMcp(', 'async function loadLinkedContext(')
+  const sinConectar = corte(reintento, 'if (!status.connected) {', '\n  }')
+  orden(sinConectar, ['repintar?.(status)', 'announce(', 'return status'], 'un reintento fallido se anuncia con su motivo')
+  assert(/mcpFailureHint\(status\)/.test(sinConectar), 'y el motivo es el mismo consejo que se pinta')
+  eq(reintento.split('announce(').length - 1, 2, 'dos anuncios en retryMcp: el fallo y el éxito del paso manual, sin duplicar los de avisar')
 })

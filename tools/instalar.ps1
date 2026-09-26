@@ -116,7 +116,13 @@ function EjecutarVisible([string]$programa, [string[]]$argumentos) {
   $ErrorActionPreference = 'Continue'
   $codigo = 1
   try {
-    & $programa @argumentos
+    # «| Out-Host», y no el programa a secas: dentro de una función cuyo
+    # resultado se asigna, la salida de un programa nativo NO va a la consola,
+    # se vuelve parte de lo que devuelve la función. Pasó en la revisión
+    # adversaria de H15: $codigo acababa siendo [líneas…, 0], los mensajes
+    # decían «(código <toda la salida> 0)» y «$codigo -ne 0» era verdadero con
+    # el programa saliendo bien. Out-Host la pinta y $LASTEXITCODE se conserva.
+    & $programa @argumentos | Out-Host
     $codigo = $LASTEXITCODE
   } catch {
     Write-Host "$_" -ForegroundColor Red
@@ -125,7 +131,7 @@ function EjecutarVisible([string]$programa, [string[]]$argumentos) {
     $ErrorActionPreference = $anterior
   }
   if ($null -eq $codigo) { $codigo = 0 }
-  return $codigo
+  return [int]$codigo
 }
 
 <#
@@ -210,10 +216,21 @@ Titulo '1. uv (uvx)'
 $uvxLocal = Join-Path $HOME '.local\bin\uvx.exe'
 $uvx = Buscar-Uvx
 $uvRecienInstalado = $false
+# ¿Está uvx sólo en ~/.local/bin y fuera del PATH que verá opencode? Se decide
+# AQUÍ, antes de tocar el PATH del proceso, y no preguntándole después a
+# Buscar-Uvx: la rama de abajo antepone esa carpeta al PATH del proceso y a
+# partir de ahí Buscar-Uvx siempre lo encuentra. Pasó en la revisión
+# adversaria de H15: por eso nunca se ejecutaba «uv tool update-shell» y
+# -SoloComprobar acababa en «Todo listo» tras avisar de que opencode no lo
+# encontraría. $pathSinAnteponer es el PATH de antes, para comprobarlo de
+# verdad después de arreglarlo.
+$uvxFueraDelPath = $false
+$pathSinAnteponer = $env:Path
 
 if (-not $uvx) {
   if (Test-Path $uvxLocal) {
     $uvx = $uvxLocal
+    $uvxFueraDelPath = $true
     $env:Path = (Split-Path $uvxLocal) + ';' + $env:Path
     Aviso "uvx está en $uvxLocal pero no en tu PATH: opencode no lo encontrará."
   } elseif ($SoloComprobar) {
@@ -224,7 +241,7 @@ if (-not $uvx) {
     $codigo = EjecutarVisible 'powershell' @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-c', 'irm https://astral.sh/uv/install.ps1 | iex')
     Actualizar-Path
     $uvx = Buscar-Uvx
-    if (-not $uvx -and (Test-Path $uvxLocal)) { $uvx = $uvxLocal }
+    if (-not $uvx -and (Test-Path $uvxLocal)) { $uvx = $uvxLocal; $uvxFueraDelPath = $true }
     if (-not $uvx) {
       Aviso "El instalador oficial no ha dejado uvx (código $codigo). Pruebo con winget."
       $winget = Buscar-Programa 'winget'
@@ -258,7 +275,7 @@ if ($uvx) {
   # al PATH del usuario, así que esto es que alguien lo quitó. «uv tool
   # update-shell» es la forma de uv de volver a ponerlo; sólo se usa si esa
   # carpeta es justo la de las herramientas de uv, para no añadir otra.
-  if ($uvx -eq $uvxLocal -and -not (Buscar-Uvx)) {
+  if ($uvxFueraDelPath) {
     $binUv = UltimaLinea (Ejecutar $uv @('tool', 'dir', '--bin')).Salida
     $mismaCarpeta = $binUv.TrimEnd('\') -ieq (Split-Path $uvxLocal).TrimEnd('\')
     if ($SoloComprobar -or -not $mismaCarpeta) {
@@ -266,8 +283,16 @@ if ($uvx) {
       $faltas.Add('uvx en el PATH')
     } else {
       $codigo = EjecutarVisible $uv @('tool', 'update-shell')
+      # Se comprueba DE VERDAD: con el PATH de antes de anteponer la carpeta y
+      # lo que ahora diga el registro, que es lo que verá una terminal nueva.
+      $env:Path = $pathSinAnteponer
       Actualizar-Path
-      if ($codigo -ne 0) { $faltas.Add('uvx en el PATH') } else { Bien 'uvx añadido al PATH de tu usuario.' }
+      if ($codigo -eq 0 -and (Buscar-Uvx)) {
+        Bien 'uvx añadido al PATH de tu usuario.'
+      } else {
+        Aviso "uv tool update-shell no lo ha dejado en tu PATH (código $codigo). Hazlo a mano: `"$uv`" tool update-shell, y abre una terminal nueva."
+        $faltas.Add('uvx en el PATH')
+      }
     }
   }
 }
