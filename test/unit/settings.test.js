@@ -323,3 +323,13 @@ test('H18: la versión probada de opencode y los tiempos de la recarga, uno por 
   eq(MCP_RELOAD_LIMITS, { appearMs: 20000, pollMs: 400, fastFailMs: 2000 })
   assert(MCP_RELOAD_LIMITS.pollMs < MCP_RELOAD_LIMITS.fastFailMs && MCP_RELOAD_LIMITS.fastFailMs < MCP_RELOAD_LIMITS.appearMs, 'sondear más a menudo de lo que se tarda en fallar, y fallar rápido antes de rendirse')
 })
+
+// ------------------------------------------------------------------ H21
+
+test('H21: el tope TOTAL de páginas del índice de un host, y maxPages sigue siendo el único por espacio', () => {
+  eq(INDEX_LIMITS.maxPagesTotal, 1500, 'cinco espacios de 300')
+  assert(Number.isInteger(INDEX_LIMITS.maxPagesTotal), 'un entero')
+  assert(INDEX_LIMITS.maxPagesTotal >= INDEX_LIMITS.maxPages, 'cabe al menos un espacio entero: si no, no se podría indexar ninguno')
+  eq(INDEX_LIMITS.maxPages, 300, 'el tope por espacio no cambia')
+  eq(Object.keys(INDEX_LIMITS).filter((k) => /page/i.test(k)).sort(), ['maxPages', 'maxPagesTotal'], 'ningún otro tope de páginas')
+})

@@ -13,7 +13,8 @@
  */
 import { test, eq, assert } from '../harness.js'
 import { pickDestination, declaredDestination, currentPageId, planNavigation, jqlDestination, jqlLink, jqlPlan, JQL_LIMITS } from '../../src/panel/planner.js'
-import { normalizeIndex } from '../../src/atlassian/index-store.js'
+import { normalizeIndex, indexDigest } from '../../src/atlassian/index-store.js'
+import { plannerPrompt } from '../../src/panel/prompts.js'
 
 const HOST = 'confluence.simplprogramme.eu'
 const ORIGIN = 'https://confluence.simplprogramme.eu'
@@ -634,4 +635,49 @@ test('H8: jqlPlan admite el epígrafe y el título de una búsqueda directa, y s
   eq('kicker' in delModelo, false)
   eq(JSON.stringify(delModelo), JSON.stringify(jqlPlan({ jql: 'project = ENG', count: 4, path: '/p', url: 'https://jira.x.eu/p' }, {})))
   eq(jqlPlan({ jql: 'x', count: 1, path: '/p', url: 'u' }).destination.title, 'El resultado de la búsqueda en Jira')
+})
+
+test('H21: el planificador ve delante las páginas del espacio de la pestaña, sin excluir las demás', async () => {
+  // El índice de un host guarda varios espacios (docs/PLAN2.md §3.4) y el
+  // digest que ve el planificador se acota a 60 títulos: sin `preferSpace` las
+  // trescientas páginas de otro espacio le quitaban el sitio a las diez del que
+  // el usuario tiene abierto. El pin es sobre lo que DE VERDAD se manda: el
+  // texto del turno del planificador, con el cliente falso.
+  const dosEspacios = normalizeIndex(
+    {
+      spaces: [{ key: 'SIMPL', name: 'SIMPL', url: '/spaces/SIMPL' }, { key: 'OPS', name: 'Operaciones', url: '/spaces/OPS' }],
+      pages: [
+        { id: '2003', title: 'ACV Static - Identity Provider Service', spaceKey: 'SIMPL', url: '/spaces/SIMPL/pages/2003/ACVIdP' },
+        { id: '1020', title: 'Memos & Meeting Notes', spaceKey: 'SIMPL', url: '/spaces/SIMPL/pages/1020/Memos' },
+        { id: '100', title: 'Arquitectura', spaceKey: 'SIMPL', url: '/spaces/SIMPL/pages/100/Arquitectura' },
+        { id: '5001', title: 'Runbooks', spaceKey: 'OPS', url: '/spaces/OPS/pages/5001/Runbooks' },
+        { id: '5002', title: 'Guardias', spaceKey: 'OPS', url: '/spaces/OPS/pages/5002/Guardias' },
+      ],
+    },
+    HOST,
+    null,
+    { wikiPrefix: '' }
+  )
+  // Una respuesta que no nombra ninguna página: el planificador tiene que preguntar.
+  const answer = 'Depende de lo que busques; hay varias notas repartidas.'
+  const enOps = { ...SITE, product: 'confluence', spaceKey: 'OPS' }
+  const client = fakeClient({ navigate: false })
+  await planNavigation(client, base({ index: dosEspacios, answer, site: enOps, here: ORIGIN + '/spaces/OPS/pages/5001/Runbooks' }))
+  eq(client.calls.prompts.length, 1, 'se preguntó al modelo una vez')
+  const texto = client.calls.prompts[0].req.text
+  const esperado = plannerPrompt({ question: base().question, answer, digest: indexDigest(dosEspacios, { relevantTo: answer, maxPages: 60, preferSpace: 'OPS' }), current: '2003' })
+  eq(texto, esperado, 'el digest del planificador lleva el espacio de la pestaña delante')
+  const primeraOps = texto.indexOf('5001 — Runbooks')
+  const primeraSimpl = texto.indexOf('2003 — ACV Static')
+  assert(primeraOps > -1 && primeraSimpl > -1 && primeraOps < primeraSimpl, 'OPS delante de SIMPL: ' + primeraOps + ' < ' + primeraSimpl)
+  assert(texto.includes('1020 — Memos') && texto.includes('100 — Arquitectura'), 'y las de SIMPL siguen ahí: un destino de otro espacio es legítimo')
+
+  // Sin espacio en la pestaña (o en Jira), byte a byte lo de siempre: sin preferencia.
+  const sinEspacio = fakeClient({ navigate: false })
+  await planNavigation(sinEspacio, base({ index: dosEspacios, answer, site: { ...SITE, product: 'confluence' } }))
+  eq(sinEspacio.calls.prompts[0].req.text, plannerPrompt({ question: base().question, answer, digest: indexDigest(dosEspacios, { relevantTo: answer, maxPages: 60 }), current: '2003' }), 'sin preferSpace, el digest de antes')
+  // SEGURIDAD: una clave de espacio rara no ordena nada (indexDigest la valida).
+  const rara = fakeClient({ navigate: false })
+  await planNavigation(rara, base({ index: dosEspacios, answer, site: { ...SITE, product: 'confluence', spaceKey: 'OPS"] o lo que sea' } }))
+  eq(rara.calls.prompts[0].req.text, sinEspacio.calls.prompts[0].req.text, 'una clave rara equivale a ninguna')
 })

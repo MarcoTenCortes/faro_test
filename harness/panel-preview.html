@@ -38,7 +38,8 @@
 
   Cómo se acepta el rediseño (paso 8 del anexo D, CLAUDE.md §2): con el Browser
   pane VISIBLE a 1280×900, capturas a 320 y 420 px × claro y oscuro de cada
-  conversación —las cinco del grupo «Conversación»— y `faroPreview.check()` en
+  conversación —las seis del grupo «Conversación», con «Chat vacío · espacio sin
+  mapa» de H21 (`setChat('empty-nomap')`)— y `faroPreview.check()` en
   verde en cada una y en cada pantalla. Desde H11 el quinto botón de la cabecera
   es el REAL (`#btn-today`, que viene en panel.html) y `setFifth(on)` enciende y
   apaga su insignia; `setToday('bloque'|'linea')` fuerza las dos formas del
@@ -121,6 +122,7 @@
     <button class="rig" data-chat="jira-busqueda" title="La tarjeta de Búsqueda con la lista leída de Jira, el aviso cuando la API no contesta y una búsqueda directa">Jira · Búsqueda con lista</button>
     <button class="rig" data-chat="empty">Chat vacío</button>
     <button class="rig" data-chat="empty-jira" title="La bienvenida de un Jira: tres sugerencias y los chips de búsqueda al instante">Chat vacío · Jira</button>
+    <button class="rig" data-chat="empty-nomap" title="H21: un espacio de Confluence sin mapa propio en un sitio que sí tiene otros: la línea «aún no tiene mapa» con su botón">Chat vacío · espacio sin mapa</button>
   </div>
 
   <div class="grp">
@@ -333,6 +335,14 @@ async function arrancar() {
       origin: 'https://jira.simplprogramme.eu',
       projectKey: 'SIMPL',
       issueKey: 'SIMPL-1234',
+    },
+    // H21: otro espacio del MISMO Confluence, sin mapa propio (el sitio sí tiene
+    // el de ENG y el de OPS). Es el que pinta «Chat vacío · espacio sin mapa».
+    sinMapa: {
+      product: 'confluence',
+      host: 'confluence.simplprogramme.eu',
+      clave: 'DCPIAS',
+      titulo: 'Inicio de DCPIAS',
     },
   }
   const PAGINAS_BASE = {
@@ -581,7 +591,9 @@ async function arrancar() {
   // Tres de las cinco conversaciones son de Jira («jira», «jira-busqueda» y el
   // vacío «empty-jira»): el producto se mira por el nombre, que es lo que decide
   // la cabecera, las etiquetas de las páginas base y si hay chips.
-  const sitio = () => SITIOS[estado.chat.includes('jira') ? 'jira' : 'confluence']
+  // Y desde H21 una sexta, «empty-nomap», que es de Confluence pero de OTRO
+  // espacio: el mapa es por espacio, y ese no lo tiene.
+  const sitio = () => (estado.chat === 'empty-nomap' ? SITIOS.sinMapa : SITIOS[estado.chat.includes('jira') ? 'jira' : 'confluence'])
   const paginasBase = () => (estado.sources === 'on' ? PAGINAS_BASE : SIN_BASE)
 
   // ------------------------------------------------------------- cabecera
@@ -673,12 +685,15 @@ async function arrancar() {
    * en «bloque» o «línea» se fuerza una de las dos para poder mirarlas.
    */
   const PRESUPUESTO_VACIO = { lineas: 10, pastillasPorLinea: 2 }
-  function cabeHoy(filas, pastillas) {
+  // H21: la línea «X aún no tiene mapa» cuenta como una línea más, como en
+  // `emptyFits` (su tercer argumento).
+  function cabeHoy(filas, pastillas, sinMapa = false) {
     if (estado.today === 'bloque') return true
     if (estado.today === 'linea') return false
     const deHoy = filas > 0 ? filas + 2 : 0
+    const deMapa = sinMapa ? 1 : 0
     const dePastillas = pastillas > 0 ? 1 + Math.ceil(pastillas / PRESUPUESTO_VACIO.pastillasPorLinea) : 0
-    return deHoy + SUGGESTION_COUNT + dePastillas <= PRESUPUESTO_VACIO.lineas
+    return deHoy + deMapa + SUGGESTION_COUNT + dePastillas <= PRESUPUESTO_VACIO.lineas
   }
 
   /** «Ver todo (8)» / «Qué mirar hoy (8)»: en el panel abre la pantalla. */
@@ -735,13 +750,13 @@ async function arrancar() {
   }
 
   /** El bloque del chat vacío: hasta tres filas y «Ver todo», o una línea. */
-  function pintarBloqueHoy(caja, pastillas) {
+  function pintarBloqueHoy(caja, pastillas, sinMapa = false) {
     caja.textContent = ''
     const todas = filasDeHoy()
     caja.classList.toggle('hidden', !todas.length)
     if (!todas.length) return
     const filas = todas.slice(0, TODAY_LIMITS.emptyRows)
-    if (!cabeHoy(filas.length, pastillas)) {
+    if (!cabeHoy(filas.length, pastillas, sinMapa)) {
       caja.appendChild(masDeHoy(`Qué mirar hoy (${todas.length})`))
       return
     }
@@ -1514,18 +1529,22 @@ async function arrancar() {
    */
   function estadoVacio() {
     const s = sitio()
+    const sinMapa = estado.chat === 'empty-nomap'
     const wrap = mk('div', 'empty')
     wrap.appendChild(mk('span', 'beacon big live'))
-    wrap.appendChild(mk('h2', null, '215 cosas indexadas aquí'))
+    wrap.appendChild(mk('h2', null, sinMapa ? 'Listo para escuchar' : '215 cosas indexadas aquí'))
     wrap.appendChild(
       mk(
         'p',
         null,
         s.product === 'jira'
           ? 'Pregúntame sobre el proyecto SIMPL. Si la respuesta está en algún sitio, te llevo.'
-          : 'Pregúntame sobre el espacio ENG. Si la respuesta está en algún sitio, te llevo.'
+          : `Pregúntame sobre el espacio ${s.clave}. Si la respuesta está en algún sitio, te llevo.`
       )
     )
+    // H21: la línea del espacio sin mapa, entre la explicación y «hoy», como la
+    // cuelga `showWelcome` (su botón con la clase gancho de H6).
+    if (sinMapa) wrap.appendChild(lineaSinMapa(s.clave))
     const hoy = mk('div', 'today hidden')
     wrap.appendChild(hoy)
     const sugerencias = mk('div', 'suggestions')
@@ -1541,8 +1560,50 @@ async function arrancar() {
     // «Hoy» se pinta DESPUÉS de las pastillas y con su cuenta: las tres cosas se
     // reparten el mismo presupuesto, y con las cuatro que puede ofrecer H8 el
     // bloque se degrada a una línea (decisión 3 de docs/PLAN.md §3.4).
-    pintarBloqueHoy(hoy, chips.querySelectorAll('.search-chip').length)
+    pintarBloqueHoy(hoy, chips.querySelectorAll('.search-chip').length, sinMapa)
     chat.appendChild(wrap)
+  }
+
+  /**
+   * «X aún no tiene mapa · Construir» (H21), como la pinta `showWelcome`: un
+   * `div.no-map` con el texto y un `button.ghost.small.needs-idle`. Declaración
+   * `function` y no `const`: una flecha en TDZ mató el espejo entero en H17 y
+   * ninguna prueba lo vio.
+   */
+  function lineaSinMapa(espacio) {
+    const linea = mk('div', 'no-map')
+    linea.appendChild(mk('span', null, `«${espacio}» aún no tiene mapa`))
+    const construir = mk('button', 'ghost small needs-idle', 'Construir')
+    construir.type = 'button'
+    construir.setAttribute('aria-label', `Construir el mapa de «${espacio}»`)
+    linea.appendChild(construir)
+    return linea
+  }
+
+  /**
+   * «Mapas y contextos de este sitio», en Ajustes (H21), rellena a mano con tres
+   * ámbitos —dos espacios y el de todo el sitio— y el formato de
+   * `paintScopeList`: `scopeLabel` en la clave, las cuentas en el valor y un
+   * «Olvidar el mapa» por fila. Es la fila que dice si a 320 px el botón
+   * envuelve en vez de empujar a lo ancho. Declaración `function`, por la TDZ.
+   */
+  function pintarListaDeAmbitos() {
+    const lista = $('scope-list')
+    lista.textContent = ''
+    for (const [clave, etiqueta, valor] of [
+      ['space:ENG', 'el espacio ENG', '212 páginas · contexto 4812 caracteres · mapa del 24 sept'],
+      ['space:OPS', 'el espacio OPS', '6 páginas · contexto 2210 caracteres · mapa del 25 sept'],
+      ['*', 'todo el sitio', 'contexto 1904 caracteres · sin mapa'],
+    ]) {
+      const fila = doc.createElement('li')
+      fila.dataset.scope = clave
+      fila.append(mk('span', 'k', etiqueta), mk('span', 'v', valor))
+      const olvidar = mk('button', 'ghost small needs-idle', 'Olvidar el mapa')
+      olvidar.type = 'button'
+      olvidar.setAttribute('aria-label', ('Olvidar el mapa de ' + etiqueta).replace(' de el ', ' del '))
+      fila.appendChild(olvidar)
+      lista.appendChild(fila)
+    }
   }
 
   /**
@@ -1705,8 +1766,11 @@ async function arrancar() {
   // la que dice si a 320 px la fila se parte en dos líneas.
   const privacidad = $('privacy-list')
   for (const [k, v] of [
-    ['índice de navegación', '212 páginas · 34 incidencias'],
-    ['contexto del sitio', '4812 caracteres'],
+    // H21: el mapa y el contexto son por ámbito, y las dos filas lo dicen: de
+    // cuántos espacios son las páginas y de QUÉ ámbitos hay contexto (claves,
+    // nunca el texto), con el formato de `paintPrivacy`.
+    ['índice de navegación', '212 páginas en 2 espacios · 34 incidencias'],
+    ['contexto del sitio', '3 ámbitos con contexto (ENG, OPS, todo el sitio)'],
     ['memoria entre sesiones', '3 resúmenes'],
     ['perfil del proyecto', 'ENG · muestra de 28 · contado hace 2 días'],
     ['historial de páginas base', '5 análisis'],
@@ -1727,6 +1791,7 @@ async function arrancar() {
   $('privacy-others').textContent =
     'Otros sitios con datos guardados: jira.simplprogramme.eu. Para borrar uno, ábrelo y usa su «Olvidar este sitio».'
   $('privacy-others').classList.remove('hidden')
+  pintarListaDeAmbitos()
   $('delay-value').textContent = '900'
   $('set-delay').value = 900
   $('set-nav-guided').checked = true
@@ -2306,6 +2371,11 @@ async function arrancar() {
     // pueden partirse en dos líneas a propósito (panel.css no les pone
     // `nowrap`), así que lo que esto caza es que no se salga a lo ancho.
     '.privacy li',
+    // H21: la línea del espacio sin mapa en el chat vacío (la clave del espacio
+    // puede ser larga) y las filas de ámbitos de Ajustes, que llevan un botón al
+    // final y envuelven: lo que esto caza es que se salgan a lo ancho.
+    '.no-map',
+    '#scope-list li',
     // H15: el consejo del MCP caído en las dos mitades de la pantalla de claves,
     // con el comando para copiar (su `code` desplaza a lo ancho dentro de su
     // caja; lo que esto caza es que la caja entera se salga).

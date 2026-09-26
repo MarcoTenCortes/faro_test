@@ -317,3 +317,52 @@ test('mergeIndexKeepingTree: fundir dos veces lo mismo da lo mismo (una escritur
   eq(CON_ARBOL.pages['98830281'].path, '/spaces/SIMPL/pages/98830281/TCVIdP')
   eq(Object.keys(CON_ARBOL.pages).sort(), ['3002', '98830281'])
 })
+
+// ---- H21: varios espacios en el índice de un host -------------------------------
+// El índice de un host guarda desde H21 las páginas de varios espacios (cada una
+// con su spaceKey). Con `preferSpace`, el planificador ve primero las del espacio
+// de la pestaña, sin perder las otras: un destino de otro espacio es legítimo.
+
+const DOS_ESPACIOS = {
+  version: 3,
+  host: HOST,
+  spaces: { ENG: { key: 'ENG', name: 'Ingeniería' }, OPS: { key: 'OPS', name: 'Operaciones' } },
+  pages: {
+    1: { id: '1', title: 'Guía de APIs', spaceKey: 'ENG' },
+    2: { id: '2', title: 'Runbooks', spaceKey: 'OPS' },
+    3: { id: '3', title: 'Convenciones', spaceKey: 'ENG' },
+    4: { id: '4', title: 'Guardias de runbooks', spaceKey: 'OPS' },
+    5: { id: '5', title: 'Suelta', spaceKey: null },
+  },
+  projects: {},
+  issues: {},
+}
+
+test('H21: indexDigest con preferSpace pone delante el espacio de la pestaña, estable y sin excluir los otros', () => {
+  const lineas = (d) => d.split('\n').filter((l) => /^ {2}\d/.test(l)).map((l) => l.trim().split(' ')[0])
+  eq(lineas(indexDigest(DOS_ESPACIOS, { preferSpace: 'OPS' })), ['2', '4', '1', '3', '5'], 'OPS delante en su orden, y las demás detrás')
+  eq(lineas(indexDigest(DOS_ESPACIOS, { preferSpace: 'ENG' })), ['1', '3', '2', '4', '5'])
+  // Dentro de cada grupo manda la relevancia, como antes.
+  eq(lineas(indexDigest(DOS_ESPACIOS, { preferSpace: 'OPS', relevantTo: 'guardias de runbooks' })), ['4', '2', '1', '3', '5'])
+  // Con el tope, lo que se queda fuera son las del OTRO espacio.
+  eq(lineas(indexDigest(DOS_ESPACIOS, { preferSpace: 'OPS', maxPages: 3 })), ['2', '4', '1'])
+  assert(indexDigest(DOS_ESPACIOS, { preferSpace: 'OPS', maxPages: 3 }).includes('PÁGINAS (5, se muestran 3)'), 'y cuenta todas')
+})
+
+test('H21: sin preferSpace (o con uno que no vale) indexDigest es byte a byte el de antes', () => {
+  const antes = [
+    'ESPACIOS DE CONFLUENCE',
+    '  ENG — Ingeniería',
+    '  OPS — Operaciones',
+    'PÁGINAS (5)',
+    '  1 — Guía de APIs [ENG]',
+    '  2 — Runbooks [OPS]',
+    '  3 — Convenciones [ENG]',
+    '  4 — Guardias de runbooks [OPS]',
+    '  5 — Suelta',
+  ].join('\n')
+  eq(indexDigest(DOS_ESPACIOS), antes, 'la salida entera, no un trozo')
+  for (const preferSpace of ['', '~', '_', null, undefined, 7, {}]) eq(indexDigest(DOS_ESPACIOS, { preferSpace }), antes, JSON.stringify(preferSpace))
+  eq(indexDigest(DOS_ESPACIOS, { preferSpace: 'NADA' }), antes, 'un espacio sin páginas no cambia nada')
+  eq(indexDigest(null, { preferSpace: 'ENG' }), '(sin índice)')
+})

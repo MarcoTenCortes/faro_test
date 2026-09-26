@@ -12,7 +12,7 @@
 // v2: la v1 podia contener rutas fabricadas del tipo `/wiki/spaces/~/pages/<id>`
 // que en Server/Data Center llevan a «Page Not Found». Subir la version hace
 // que esos indices se descarten en vez de arrastrar enlaces rotos.
-import { fixWikiPrefix } from './site.js'
+import { fixWikiPrefix, isRealSpaceKey } from './site.js'
 
 // v3: ademas de lo de la v2, ahora el prefijo /wiki se corrige segun lo que se
 // observa en el navegador, no segun lo que el modelo se imagine.
@@ -301,7 +301,7 @@ export function ancestryOf(index, pageId, limit = 50) {
  * Resumen compacto del índice para meterlo en el prompt del planificador.
  * Se acota para no reventar la ventana de contexto.
  */
-export function indexDigest(index, { maxPages = 120, maxIssues = 60, relevantTo = '' } = {}) {
+export function indexDigest(index, { maxPages = 120, maxIssues = 60, relevantTo = '', preferSpace = '' } = {}) {
   if (!index) return '(sin índice)'
   const lines = []
   const spaces = Object.values(index.spaces || {})
@@ -313,7 +313,17 @@ export function indexDigest(index, { maxPages = 120, maxIssues = 60, relevantTo 
   // Con un índice grande, mandar 120 títulos hace el prompt largo y lento. Si
   // se sabe sobre qué va la respuesta, se mandan primero los que tienen que
   // ver con ella; el resto rellena hasta el tope.
-  const pages = rankByRelevance(Object.values(index.pages || {}), relevantTo, (p) => p.title)
+  //
+  // Desde H21 el índice de un host guarda varios espacios (docs/PLAN2.md §3.4),
+  // y con `preferSpace` las páginas del espacio de la pestaña van DELANTE, en el
+  // mismo orden que les dio la relevancia, sin excluir las otras: un destino de
+  // otro espacio sigue siendo legítimo, sólo que ya no le quita el sitio al de
+  // aquí dentro del tope. Sin `preferSpace`, byte a byte lo de antes.
+  const ordenadas = rankByRelevance(Object.values(index.pages || {}), relevantTo, (p) => p.title)
+  const preferido = typeof preferSpace === 'string' && isRealSpaceKey(preferSpace) ? preferSpace : ''
+  const pages = preferido
+    ? [...ordenadas.filter((p) => p?.spaceKey === preferido), ...ordenadas.filter((p) => p?.spaceKey !== preferido)]
+    : ordenadas
   if (pages.length) {
     lines.push(`PÁGINAS (${pages.length}${pages.length > maxPages ? `, se muestran ${maxPages}` : ''})`)
     for (const p of pages.slice(0, maxPages)) {

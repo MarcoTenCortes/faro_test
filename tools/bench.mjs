@@ -33,7 +33,9 @@ import { formatInt } from './last-turn.mjs'
 import { normalizeNumbering } from '../src/panel/notes.js'
 import { matchBlock, blockHint, DIGEST_LIMITS } from '../src/shared/digest.js'
 import { findQuote } from '../src/content/anchor-match.js'
-import { normalizeIndex, mergeIndexKeepingTree } from '../src/atlassian/index-store.js'
+import { normalizeIndex, mergeIndex, mergeIndexKeepingTree } from '../src/atlassian/index-store.js'
+import { normalizeContexts, subIndex, CONTEXTS_VERSION } from '../src/shared/scopes.js'
+import { INDEX_LIMITS } from '../src/shared/config.js'
 import { parseAtlassianUrl } from '../src/atlassian/site.js'
 
 /** Repeticiones de cada caso: la MEDIANA de 20 aguanta un pico del sistema. */
@@ -255,6 +257,46 @@ function indiceDe(n, { desplazamiento = 0 } = {}) {
   return normalizeIndex({ spaces: [{ key: 'ENG', name: 'Ingeniería', url: '/display/ENG' }], pages }, 'confluence.simplprogramme.eu')
 }
 
+/**
+ * H21: un índice de varios espacios de 300 páginas, fundidos como los funde el
+ * panel (`mergeIndex`), para medir lo que pesa el objeto que `persistIndex`
+ * escribe ENTERO en cada turno (P3): es la medida que justifica
+ * `INDEX_LIMITS.maxPagesTotal`. Las páginas llevan títulos y rutas de la
+ * longitud de las de verdad.
+ */
+function indiceDeEspacios(nEspacios) {
+  let fundido = null
+  for (let e = 0; e < nEspacios; e++) {
+    const clave = 'ESP' + e
+    const pages = Array.from({ length: INDEX_LIMITS.maxPages }, (_, i) => {
+      const id = String(10000000 + e * 1000 + i)
+      return {
+        id,
+        title: `Página ${i + 1} del espacio ${clave}: procedimiento de despliegue`,
+        url: `/spaces/${clave}/pages/${id}/Pagina+${i + 1}+del+espacio`,
+        spaceKey: clave,
+        parentId: i > 0 ? String(10000000 + e * 1000 + Math.floor((i - 1) / 8)) : null,
+      }
+    })
+    const uno = normalizeIndex({ spaces: [{ key: clave, name: 'Espacio ' + e, url: '/spaces/' + clave }], pages }, 'confluence.simplprogramme.eu')
+    fundido = mergeIndex(fundido, uno)
+  }
+  return fundido
+}
+
+const INDICES_ESPACIOS = [1, 5, 10].map((n) => ({ espacios: n, indice: indiceDeEspacios(n) }))
+
+/** 20 ámbitos de 24 000 caracteres: lo que cabe de cada uno en el prompt. */
+const CONTEXTOS_20 = {
+  version: CONTEXTS_VERSION,
+  scopes: Object.fromEntries(
+    Array.from({ length: 20 }, (_, i) => [
+      'space:ESP' + i,
+      { text: ['# Espacio ' + i, 'x'.repeat(80), ''].join('\n').repeat(300).slice(0, 24000), at: 1000 + i, indexedAt: 2000 + i, legacy: false },
+    ])
+  ),
+}
+
 /** 2 000 páginas: casi siete veces el tope del indexador (INDEX_LIMITS.maxPages = 300), a propósito. */
 const INDICE_BASE = indiceDe(2000)
 const INDICE_ENTRANTE = indiceDe(2000, { desplazamiento: 1000 })
@@ -308,6 +350,16 @@ const CASOS = [
     fn: () => Object.keys(mergeIndexKeepingTree(INDICE_BASE, INDICE_ENTRANTE).pages).length,
   },
   {
+    nombre: 'normalizeContexts (H21)',
+    detalle: '20 ámbitos de 24 000 caracteres: lo que el arranque lee y normaliza de un host con muchos espacios',
+    fn: () => Object.keys(normalizeContexts(CONTEXTOS_20).scopes).length,
+  },
+  {
+    nombre: 'subIndex (H21)',
+    detalle: 'el índice de UN espacio sacado de uno de 3 000 páginas (10 espacios)',
+    fn: () => Object.keys(subIndex(INDICES_ESPACIOS[2].indice, 'ESP7').pages).length,
+  },
+  {
     nombre: 'parseAtlassianUrl',
     detalle: '6 URLs de Confluence DC, Jira DC y Cloud',
     veces: 1000,
@@ -358,6 +410,24 @@ function medirPuros() {
   }
 }
 
+// ------------------------------------------------------------------ índice (H21)
+
+/**
+ * Lo que pesa el índice de un host según cuántos espacios guarde (H21). No es un
+ * tiempo sino un tamaño: `persistIndex` escribe el objeto ENTERO en cada turno,
+ * y `chrome.storage.local` tiene cuota. Es la medida con la que se eligió
+ * `INDEX_LIMITS.maxPagesTotal`.
+ */
+function medirIndice() {
+  console.log(`\n${BOLD}ÍNDICE DE UN HOST${OFF} ${DIM}· lo que pesa el objeto que se escribe entero en cada turno (H21)${OFF}`)
+  const filas = INDICES_ESPACIOS.map(({ espacios, indice }) => {
+    const bytes = Buffer.byteLength(JSON.stringify(indice), 'utf8')
+    const paginas = Object.keys(indice.pages).length
+    return [`${espacios} × ${INDEX_LIMITS.maxPages}`, formatInt(paginas), formatInt(Math.round(bytes / 1024)) + ' KB', paginas <= INDEX_LIMITS.maxPagesTotal ? 'cabe' : 'pasa del tope']
+  })
+  for (const l of tabla(['espacios', 'páginas', 'JSON', `tope ${formatInt(INDEX_LIMITS.maxPagesTotal)}`], filas, { derecha: [1, 2] })) console.log(l)
+}
+
 // ----------------------------------------------------------------- principal
 
 function main() {
@@ -366,6 +436,7 @@ function main() {
   )
   medirPrompts()
   medirPuros()
+  medirIndice()
   console.log(
     `\n${DIM}Esto no es una prueba: no falla nunca y queda fuera de «npm run check». ` +
       `Compara dos ejecuciones en la MISMA máquina, no con números de otra.${OFF}`

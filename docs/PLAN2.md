@@ -1380,6 +1380,49 @@ Reglas transversales, que salen de los dos juicios y valen para todos:
   SIMPL y DCPIAS como blob.
 - **Riesgo**: medio. Cambia la forma de una clave persistida, con migración
   en la lectura, y hay una carrera entre ámbitos de milisegundos.
+- **Hecho el 2026-09-26** (rama `plan/h21-multi-espacio`): todo lo de «Qué»
+  salvo `linkedSpacesFor` y el selector manual de Ajustes, que §3.4 deja para
+  **H22** (la regla (a) y el selector necesitan el ámbito `project:KEY`; la
+  ficha y §3.4 se contradecían y mandó §3.4). En su lugar, **provisional**,
+  `linkedContextFor` (la regla (c) sola: desde Jira viaja el contexto `'*'` del
+  Confluence enlazado si existe, o el de su ÚNICO espacio con contexto, y con
+  dos ninguno), que H22 sustituye. `src/shared/scopes.js` con el contrato de
+  §3.4 más `scopeKeyFromScope`, `scopeLabel`, `contextScopeFor`,
+  `withoutContext`, `scopeKeys`, `withoutSpace`, `hasMap`,
+  `otherScopesWithMap`, `countPages` y `spaceOverflow`; el contexto como
+  `{version: 2, scopes}` en la misma clave, `contextRaw` en el paquete,
+  `getContexts`/`saveContexts` (borradas `getContextMd`/`saveContextMd`),
+  `changedScope` sin ninguna lectura, `generateContext` y `uploadContext` bajo
+  host y ámbito con relectura antes de escribir, la línea «aún no tiene mapa ·
+  Construir», `sinMapaCard` por espacio detrás del planificador con la guarda
+  `indexSize` intacta, `preferSpace` en `indexDigest` y `suggestFromIndex`,
+  `stampSpace` en `growTreeFromPage`, `INDEX_LIMITS.maxPagesTotal` = 1 500
+  MEDIDO (`npm run bench`: 58 KB con 300 páginas, 288 KB con 1 500 y 576 KB con
+  3 000), el aviso «Mapa lleno» sin desalojar nada y **«Olvidar el mapa de X»**
+  en una lista nueva de Ajustes («Mapas y contextos de este sitio»),
+  `contextScope`/`otherScopes` en `baseSystem` (las 37 instantáneas intactas y
+  dos nuevas), las dos filas de privacidad con `PERMITIDO` ampliado, el espacio
+  OPS en `cql-eval.mjs`, el tramo 63 y su botón. Tres títulos nuevos
+  («Contexto migrado», «Mapa lleno», «Mapa olvidado»); 1469 pruebas (+38);
+  32 + 42 + 19 mutaciones, cazadas todas salvo una equivalente del banco.
+  Desvíos: la migración exige además en `normalizeContexts` que
+  `legacyIndexedAt` sea un instante válido (la regla está dos veces a
+  propósito, en el panel y en la pura); `applyScope` también al VOLVER de fuera
+  al mismo host (con la pestaña en el correo no hay con qué comparar);
+  `sinMapaCard` por espacio sólo si la respuesta apuntaba a algún sitio, como la
+  de sin índice; «Olvidar el mapa» relee antes de escribir y va con su fallo
+  visible; el `preferSpace` del planificador no lo pasaba nadie (su único
+  llamante, `planner.js`, no estaba en el reparto) y lo cableó el orquestador al
+  verificar: `planNavigation` lo deriva del sitio de la pestaña y `askModel` se
+  lo da a `indexDigest`, con su pin en `planner.test.js` sobre el texto REAL del
+  turno del planificador. Verificado por el orquestador en el Browser pane el
+  2026-09-27: el banco entero 1-63 (129/129 con `requestAnimationFrame`
+  sustituido; con frames de verdad 127/129, cayendo sólo las dos que dependen
+  de un frame) con el tramo 63 4/4, y el espejo en verde en 8 combinaciones
+  («espacio sin mapa» y Ajustes con `#scope-list` × 320/420 × claro y oscuro).
+  Sin verificar: nada en la extensión cargada, el espejo con los ojos, y en
+  real, sólo GET, SIMPL y DCPIAS como blob y la migración con el CONTEXT.md de
+  Marco. La bitácora, en CLAUDE.md §12.5.
 
 ### H22 · Jira por proyecto: contexto y perfil byProject (D2)
 

@@ -443,6 +443,51 @@ El índice se enriquece solo: cada vez que una consulta descubre una página que
 no estaba, se añade. Sin coste, porque sale de lo que ya devolvieron las
 herramientas MCP.
 
+### Varios espacios (o varios proyectos) en el mismo sitio
+
+Desde H21, **el contexto y el mapa son de cada espacio**, no del sitio entero.
+Si usas un Confluence con varios espacios —por ejemplo SIMPL y DCPIAS—:
+
+- **Cada espacio tiene su contexto.** Generar el contexto estando en DCPIAS lo
+  guarda para DCPIAS, y el de SIMPL se queda como estaba (antes el segundo
+  pisaba al primero sin avisar). En Jira pasa lo mismo por proyecto. Si un
+  espacio no tiene contexto propio, usa el de «todo el sitio» si lo hay; y si
+  no hay ninguno, el modelo sólo sabe qué otros espacios tienen mapa.
+- **El mapa es uno por sitio, con cada página marcada con su espacio.** Por eso
+  desde SIMPL Faro te sigue pudiendo llevar a una página de DCPIAS: el paso a
+  paso empieza por abrir el espacio («Espacio DCPIAS») y sigue por su árbol.
+  Donde importa, el espacio en el que estás va delante (en las sugerencias de
+  páginas base, sin quitar las de los demás).
+- **Al entrar en un espacio sin mapa no se abre ninguna pantalla.** El chat
+  vacío dice en una línea **«DCPIAS» aún no tiene mapa**, con un botón
+  **Construir** que lo genera (son un par de minutos, y se hace una vez por
+  espacio; con una respuesta en marcha el botón espera). Si el espacio ya tiene
+  páginas en el mapa, el título del chat vacío dice cuántas. Y si le pides que
+  te lleve a una página de un espacio sin mapa, bajo la respuesta sale la
+  tarjeta «Me falta el mapa de este espacio» con el mismo ofrecimiento.
+- **El mapa de un sitio tiene un tope: 1 500 páginas**, cinco espacios de 300.
+  Cuando indexar un espacio más podría pasarse, Faro **no lee nada y no borra
+  ningún espacio por su cuenta**: te avisa en rojo («El mapa de este sitio ya
+  tiene N páginas de M espacios (tope 1500). Olvida el mapa de alguno desde
+  Ajustes para indexar el espacio X.») y tú eliges cuál sobra.
+- **Ajustes → Mapas y contextos de este sitio** es la lista de lo que Faro
+  tiene de cada espacio (o proyecto, o «todo el sitio»): cuántas páginas, cuánto
+  mide su contexto y de cuándo es su mapa, con un botón **Olvidar el mapa** por
+  fila. Olvidar el mapa de un espacio se lleva sus páginas del mapa y su
+  contexto, y **nada más**: los demás espacios, la memoria, el diario y todo lo
+  demás del sitio se quedan. No es «Olvidar este sitio» (§8).
+- **El contexto que ya tenías de antes** (uno solo por sitio) se queda bajo su
+  espacio sólo si se puede afirmar que era suyo —el mapa guardado era de ese
+  espacio y se sabe cuándo se indexó—; en cualquier otro caso sigue valiendo
+  para todo el sitio, como hasta ahora. Faro lo convierte una sola vez, al
+  abrir el panel, y lo apunta en el Registro («Contexto migrado»).
+- **Desde Jira**, del Confluence enlazado viaja UN contexto: el de todo el sitio
+  si lo hay, o el de su único espacio con contexto; con dos o más, ninguno
+  (elegir cuál por proyecto llegará en H22).
+
+La memoria entre sesiones y la conversación de opencode siguen siendo del sitio
+entero, no de cada espacio.
+
 ## 5. Memoria
 
 - **Dentro de la sesión** funciona siempre: una sesión de opencode es un hilo
@@ -946,10 +991,14 @@ que Faro tiene apuntado en tu navegador. Una línea por cosa, con su cuenta o su
 medida y **sin nada de su contenido** —ni un título de página, ni una clave de
 incidencia, ni una línea del contexto—:
 
-- **índice de navegación** — «412 páginas · 37 incidencias»: el mapa que
-  permite llevarte, con rutas del propio sitio.
-- **contexto del sitio** — «8 214 caracteres»: el resumen que el indexador
-  escribió (o el que subiste tú).
+- **índice de navegación** — «412 páginas en 2 espacios · 37 incidencias»: el
+  mapa que permite llevarte, con rutas del propio sitio, y de cuántos espacios
+  son sus páginas.
+- **contexto del sitio** — «3 ámbitos con contexto (SIMPL, DCPIAS, todo el
+  sitio)»: los resúmenes que el indexador escribió (o los que subiste tú), uno
+  por espacio o proyecto. Se dice DE QUÉ son —las claves de los espacios o
+  proyectos, reconstruidas y nunca copiadas, como mucho cuatro y «y N más»—,
+  por lo mismo que se dice el proyecto del perfil; su texto no sale nunca.
 - **memoria entre sesiones** — «3 resúmenes». Si la casilla de la pantalla de
   Memoria está apagada pero hay resúmenes de antes, lo dice así: «3 resúmenes ·
   desactivada» —apagarla no los borra: deja de usarlos y de añadir—. Se borran
@@ -986,8 +1035,11 @@ lee y tus preguntas y respuestas, que viven en la sesión de opencode y se
 cierran con «Sesión nueva».
 
 Y al final, **Olvidar este sitio**: borra de golpe todo lo de la lista y deja
-ese sitio como si Faro no lo hubiera visto nunca. No se puede deshacer, y la
-próxima vez volverá a preguntarte por el contexto. Para borrar sólo el diario,
+ese sitio como si Faro no lo hubiera visto nunca —con los contextos y los
+mapas de TODOS sus espacios—. No se puede deshacer, y la
+próxima vez volverá a preguntarte por el contexto. Para olvidar el mapa y el
+contexto de UN espacio y dejar los demás, **Mapas y contextos de este sitio →
+Olvidar el mapa**, justo encima (§4, «Varios espacios»). Para borrar sólo el diario,
 **Qué mirar hoy → Borrar mi actividad**; para sólo el historial de páginas base,
 **Olvidar el historial**, en la pantalla de páginas base.
 
@@ -1188,11 +1240,22 @@ de modelo.
 
 `npm run harness` levanta en <http://127.0.0.1:5175> una Confluence y un Jira de
 mentira con las piezas reales encima. El botón **Autocomprobación completa**
-recorre hoy **62 tramos numerados (124 comprobaciones)**; hay que correrla con el panel del navegador a
+recorre hoy **63 tramos numerados (129 comprobaciones)**; hay que correrla con el panel del navegador a
 la vista y a 1280×900, porque con la ventana oculta Chrome estrangula los
 temporizadores y no ejecuta los fotogramas.
 
-Los tres últimos (60-62) son **la barra lateral de un Confluence Data Center**,
+El último (63) es **un sitio con DOS espacios** (H21): la Confluence de mentira
+tiene ahora un segundo espacio, OPS, con su portada y su árbol, y el tramo lee
+los dos por la API, los funde en un solo mapa como hace Faro al construir el
+del segundo, y comprueba lo que se saca de ahí POR ESPACIO: que el mapa de ENG
+es, página a página, el mismo que leído solo; que los títulos que se le darían
+al indexador de OPS no llevan ninguna página de ENG; que desde ENG el paso a
+paso hasta una página de OPS empieza por abrir el espacio OPS; y que el árbol
+de la barra lateral se marca con el espacio de la pestaña. El botón **«Dos
+espacios: subíndice, títulos y paso a paso entre espacios»** enseña lo mismo
+paso a paso.
+
+Los tramos 60-62 son **la barra lateral de un Confluence Data Center**,
 la que estaba rota: en un Confluence 9 el árbol de páginas no tiene ninguna de
 las señales que Faro buscaba —no es un `<aside>`, no lleva `role="tree"` y no
 tiene un solo `data-testid`—, así que **no lo encontraba**, y en ese Confluence
@@ -1375,7 +1438,9 @@ corto y un detalle. Todos los títulos, por dónde salen:
   o el MCP ya conectado se reconoce solo. Pasar a una pestaña fuera de
   Atlassian no la corta.
 - «Contexto de Confluence enlazado» — desde Jira, se cargó el contexto del
-  Confluence enlazado: host, caracteres y si tiene índice.
+  Confluence enlazado: host, caracteres, de qué ámbito es el que viaja (desde
+  H21: «espacio X», «*» si es el de todo ese sitio, o «sin contexto» si tiene
+  varios espacios con contexto y ninguno de todo el sitio) y si tiene índice.
 - «Content script inyectado» — con el permiso ya concedido, el content script
   se inyectó en la pestaña abierta sin recargarla.
 - «Permiso concedido» — concediste el permiso sobre el dominio; el content
@@ -1580,7 +1645,11 @@ corto y un detalle. Todos los títulos, por dónde salen:
 - «Búsqueda de Jira como destino» — la tarjeta abre la búsqueda JQL real que
   hizo el modelo, con cuántos resultados dio.
 - «Sin navegación» — no hay índice de este sitio, o no hay dónde ir (con la
-  razón).
+  razón). Desde H21, con el detalle «este espacio no tiene mapa»: estás en un
+  espacio de Confluence que todavía no tiene mapa y la respuesta apuntaba a
+  algún sitio; bajo ella sale la tarjeta «Me falta el mapa de este espacio»
+  con su «Construir». Un destino de OTRO espacio que sí tenga mapa sigue dando
+  su tarjeta de siempre.
 - «Camino leído de Confluence» — la cadena de padres del destino se leyó de
   la API REST del sitio (ramas, versión de la API, milisegundos).
 - «Sin camino» — no se pudo leer (sin acceso a la pestaña, 401/403, login,
@@ -1701,6 +1770,22 @@ en Confluence no hay nada de esto.
   Consultar tu sitio** apagado no sale: apagarlo no es un fallo.
 - «Contexto construido» — el indexado terminó: entradas del índice y
   caracteres del documento de contexto.
+- «Contexto migrado» — (H21, en gris, una sola vez) el contexto que tenías de
+  antes —uno por sitio— se ha guardado ya con su forma nueva, uno por espacio o
+  proyecto. El detalle dice el sitio, bajo qué ámbito quedó (`space:KEY` o
+  `project:KEY` si el mapa guardado era de ese espacio y se sabía cuándo se
+  indexó; `*`, todo el sitio, en cualquier otro caso: sigue valiendo en todos
+  los espacios, como antes) y cuántos caracteres. Si no se pudo escribir no
+  sale, y se vuelve a intentar al abrir el panel.
+- «Mapa lleno» — (H21, en amarillo) pediste construir el mapa de un espacio y
+  el de este sitio ya está cerca de su tope (1 500 páginas): no se ha leído ni
+  escrito nada. El detalle dice cuántas páginas de cuántos espacios hay y qué
+  espacio se quedó sin indexar; en el chat, un aviso rojo te manda a **Ajustes
+  → Mapas y contextos de este sitio** a olvidar el mapa de otro.
+- «Mapa olvidado» — (H21) pulsaste **Olvidar el mapa** de un espacio (o
+  proyecto) en Ajustes: en gris, el sitio, la clave y cuántas páginas y
+  caracteres de contexto se llevó; en amarillo, «no se pudo escribir», y el
+  mapa sigue donde estaba.
 - «Contexto construido en segundo plano» — el indexado terminó cuando el panel
   ya estaba en otro sitio: se guardó bajo el host que se indexó (fundido con
   el índice guardado de ese host) sin tocar el estado ni el chat del sitio
@@ -2171,6 +2256,29 @@ recortado. Si tu Confluence no sabe hacer esa consulta ordenada, Faro se lo dice
 en el registro («por la lista, sin ordenar por fecha») y lee la lista de siempre.
 Lo que quede fuera se completa con el uso: cada vez que Faro te lleva a una
 página, aprende su rama.
+
+**He entrado en otro espacio y no me lleva a ninguna página**
+Desde H21 el mapa es de cada espacio: el de SIMPL no sirve para llevarte por el
+árbol de DCPIAS. Al entrar en un espacio sin mapa, el chat vacío lo dice
+(«DCPIAS» aún no tiene mapa) con un botón **Construir**, y si le pides que te
+lleve a una página de ese espacio, bajo la respuesta sale la tarjeta «Me falta
+el mapa de este espacio» (en el registro, «Sin navegación · este espacio no
+tiene mapa»). Pulsa Construir: son un par de minutos y se hace una vez por
+espacio. Lo que SÍ sigue funcionando sin construir nada es ir a una página de
+un espacio que ya tiene mapa, desde cualquier otro: el paso a paso empieza por
+abrir ese espacio. No se abre sola la pantalla de contexto, a propósito: el
+sitio ya está configurado, y un espacio nuevo no tiene por qué interrumpirte.
+
+**«El mapa de este sitio ya tiene N páginas…» (el mapa está lleno)**
+El mapa de un sitio guarda como mucho 1 500 páginas —cinco espacios de 300—,
+porque Faro lo reescribe entero en el navegador en cada turno que lo amplía. Al pedir el
+mapa de un espacio más, si podría pasarse, Faro no lee nada ni borra ningún
+espacio por su cuenta: te avisa («Mapa lleno» en el registro). Abre **Ajustes →
+Mapas y contextos de este sitio**, pulsa **Olvidar el mapa** en el espacio que
+ya no uses (se lleva sus páginas del mapa y su contexto, y nada más) y vuelve a
+pulsar Construir. Al reconstruir el mapa de un espacio que YA está, sus
+páginas no se cuentan dos veces: se cuenta lo que hay sin él más lo que un
+espacio puede traer (300).
 
 **Sólo me ofrece «Llévame», nunca «Paso a paso»**
 Lo primero: **Ajustes → Cómo te lleva Faro** tiene que estar en *Guiada*. En

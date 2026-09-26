@@ -23,9 +23,24 @@
  * portada de espacio (la 1) por encima de todo, como en el Confluence real,
  * para poder comprobar que se quita del camino.
  *
- * Lo público es lo que usan el servidor y las pruebas: las dos tablas del árbol,
- * `metaDe` (para poder comprobar el orden sin copiarlo aquí) y las tres
- * respuestas. Lo demás es de dentro.
+ * Desde H21 hay un SEGUNDO espacio, OPS («Operaciones», portada 5000), con un
+ * árbol propio pequeño. Hace falta porque el hito es justo eso: un host con
+ * varios espacios indexados, cada uno con su mapa, fundidos en un índice. Con
+ * un solo espacio no se puede comprobar que el subíndice de uno no lleve páginas
+ * del otro, ni que el paso a paso desde ENG hasta una página de OPS empiece por
+ * «Espacio OPS». OPS vive en tablas PROPIAS (`PARENT_OPS`, `PAGE_OPS`) y no
+ * dentro de `PARENT`/`PAGE`: ésas son de ENG, las pruebas y el tramo 47 cuentan
+ * sus páginas con `Object.keys(PAGE).length`, y lo que ENG contesta tiene que
+ * seguir siendo byte a byte lo de antes (comprobado con un script contra el
+ * fichero de HEAD al cerrar H21: 128 casos). OPS sale en las tres respuestas que
+ * son POR ESPACIO (la cadena de una página, la lista y el árbol por fecha); en
+ * las plantillas de H7 y en la búsqueda por título NO, a propósito: no son por
+ * espacio, y meter páginas nuevas ahí cambiaría lo que contestan a los tramos
+ * que ya existían («Runbook*» casaría también con «Runbooks»).
+ *
+ * Lo público es lo que usan el servidor y las pruebas: las tablas de los dos
+ * árboles, `spaceOf`, `metaDe` (para poder comprobar el orden sin copiarlo aquí)
+ * y las tres respuestas. Lo demás es de dentro.
  */
 
 /** hijo -> padre */
@@ -61,15 +76,64 @@ export const PAGE = {
 }
 
 /**
+ * El segundo espacio (H21): hijo -> padre. La portada 5000 está por encima de
+ * todo, como la 1 en ENG, para que se compruebe igual que se quita del camino.
+ */
+export const PARENT_OPS = {
+  5001: '5000', 5010: '5000',
+  5002: '5001', 5003: '5001',
+  5011: '5010',
+}
+
+export const PAGE_OPS = {
+  5000: ['Operaciones', 'Operaciones'],
+  5001: ['Runbooks', 'Runbooks'],
+  5002: ['Guardias', 'Guardias'],
+  5003: ['Incidentes', 'Incidentes'],
+  5010: ['Métricas', 'Metricas'],
+  5011: ['SLO', 'SLO'],
+}
+
+/**
+ * Los espacios que hay, cada uno con su nombre, su portada y sus dos tablas.
+ * Es lo único que decide qué contesta cada respuesta por espacio: una clave que
+ * no esté aquí no tiene páginas (como un espacio que no existe en el sitio).
+ */
+const ESPACIOS = {
+  ENG: { name: 'Ingeniería', home: '1', pages: PAGE, parents: PARENT },
+  OPS: { name: 'Operaciones', home: '5000', pages: PAGE_OPS, parents: PARENT_OPS },
+}
+
+/** El espacio de una clave, o null: con `Object.hasOwn`, porque la clave llega de una URL. */
+function espacio(clave) {
+  return typeof clave === 'string' && Object.hasOwn(ESPACIOS, clave) ? ESPACIOS[clave] : null
+}
+
+/**
+ * De qué espacio es una página: 'ENG', 'OPS' o null si no existe. Con
+ * `Object.hasOwn`, porque el id llega de una URL y `PAGE.constructor` existe.
+ */
+export function spaceOf(id) {
+  const k = String(id)
+  for (const [clave, e] of Object.entries(ESPACIOS)) if (Object.hasOwn(e.pages, k)) return clave
+  return null
+}
+
+/**
  * Cuándo y quién tocó cada página, para las consultas que preguntan «qué ha
  * cambiado» y para ordenar el árbol del espacio. Horas hacia atrás, como la
  * fixture de incidencias: lo que se compara son ids y nombres, no instantes.
+ * Las dos de OPS (H21) están para que su orden por fecha NO sea el de sus ids:
+ * si lo fuera, un servidor que ordenara por id pasaría por uno que ordena por
+ * fecha.
  */
 const PAGE_META = {
   200: { horas: 26, quien: 'Marta Ruiz', version: 7 },
   1086: { horas: 5, quien: 'Marta Ruiz', version: 2 },
   2003: { horas: 2, quien: 'Ana Pérez', version: 3 },
   3003: { horas: 50, quien: 'Luis Gómez', version: 12 },
+  5011: { horas: 3, quien: 'Luis Gómez', version: 4 },
+  5002: { horas: 8, quien: 'Ana Pérez', version: 2 },
 }
 
 /** Lo que devuelve `recentlyViewedContent(N)`: lo último que «viste», en ese orden. */
@@ -85,50 +149,65 @@ function cuando(horas) {
   return new Date(Date.now() - horas * 3600000).toISOString().replace('Z', '+0000')
 }
 
-/** Una página con la forma de la API v1: `_links.webui` relativa a /wiki. */
+/**
+ * Una página con la forma de la API v1: `_links.webui` relativa a /wiki y bajo
+ * SU espacio (desde H21 hay dos). Sólo se llama con ids que existen.
+ */
 function pageNode(id) {
-  const [title, slug] = PAGE[id]
-  return { id: String(id), type: 'page', status: 'current', title, _links: { webui: `/spaces/ENG/pages/${id}/${slug}` } }
+  const clave = spaceOf(id)
+  const [title, slug] = ESPACIOS[clave].pages[id]
+  return { id: String(id), type: 'page', status: 'current', title, _links: { webui: `/spaces/${clave}/pages/${id}/${slug}` } }
 }
 
-/** Los antepasados de una página, de la raíz a su padre, como los da la API. */
+/**
+ * Los antepasados de una página, de la raíz a su padre, como los da la API.
+ * Siempre dentro de su espacio: en Confluence una página no cuelga de otra de
+ * otro espacio.
+ */
 function cadenaDe(id) {
+  const padres = ESPACIOS[spaceOf(id)].parents
   const ancestors = []
   const seen = new Set()
-  let cur = PARENT[id]
+  let cur = padres[id]
   while (cur && !seen.has(cur)) {
     seen.add(cur)
     ancestors.unshift(pageNode(cur))
-    cur = PARENT[cur]
+    cur = padres[cur]
   }
   return ancestors
 }
 
-/** `GET /rest/api/content/<id>?expand=ancestors,space.homepage`, o null si no existe. */
+/**
+ * `GET /rest/api/content/<id>?expand=ancestors,space.homepage`, o null si no
+ * existe. El `space` es el de la página, con SU portada (H21).
+ */
 export function contentWithAncestors(id) {
-  if (!PAGE[id]) return null
+  const clave = spaceOf(id)
+  if (!clave) return null
+  const e = ESPACIOS[clave]
   return {
     ...pageNode(id),
     ancestors: cadenaDe(id),
-    space: { key: 'ENG', name: 'Ingeniería', homepage: pageNode(1) },
+    space: { key: clave, name: e.name, homepage: pageNode(e.home) },
   }
 }
 
 /** Una página con `version` e `history.lastUpdated`, como con `expand=version,history.lastUpdated`. */
 function pageConVersion(id) {
+  const clave = spaceOf(id)
   const meta = metaDe(id)
   const sello = { when: cuando(meta.horas), by: { displayName: meta.quien } }
   return {
     ...pageNode(id),
-    space: { key: 'ENG', name: 'Ingeniería' },
+    space: { key: clave, name: ESPACIOS[clave].name },
     version: { ...sello, number: meta.version },
     history: { lastUpdated: sello },
   }
 }
 
-/** Todas las páginas del espacio, de la más recientemente modificada a la más vieja. */
-function porFecha() {
-  return Object.keys(PAGE)
+/** Todas las páginas de un espacio, de la más recientemente modificada a la más vieja. */
+function porFecha(e) {
+  return Object.keys(e.pages)
     .map(String)
     .sort((a, b) => metaDe(a).horas - metaDe(b).horas || Number(a) - Number(b))
 }
@@ -142,11 +221,14 @@ function entero(v, minimo, maximo, porDefecto) {
  * `GET /rest/api/content?spaceKey=ENG&type=page&expand=ancestors,space.homepage`:
  * la LISTA, paginada como la pagina Confluence (`size` y `_links.next`) y en
  * ORDEN ASCENDENTE DE ID, que es justo lo que la hace inservible como árbol en
- * un espacio grande (H14, F8): las que entran son las más viejas.
+ * un espacio grande (H14, F8): las que entran son las más viejas. De cualquier
+ * espacio de `ESPACIOS` (H21), cada página con SU `space.homepage`; de uno que
+ * no exista, una lista vacía como antes.
  */
 export function spaceContent({ spaceKey, start, limit } = {}) {
-  if (spaceKey !== 'ENG') return { results: [], start: 0, limit: 0, size: 0 }
-  const todas = Object.keys(PAGE).map(Number).sort((a, b) => a - b).map(String)
+  const e = espacio(spaceKey)
+  if (!e) return { results: [], start: 0, limit: 0, size: 0 }
+  const todas = Object.keys(e.pages).map(Number).sort((a, b) => a - b).map(String)
   const desde = Math.max(0, entero(start, 0, 100000, 0))
   const cuantas = entero(limit, 1, 200, 25)
   const trozo = todas.slice(desde, desde + cuantas)
@@ -158,7 +240,7 @@ export function spaceContent({ spaceKey, start, limit } = {}) {
     _links: { base: '/wiki', context: '' },
   }
   if (desde + trozo.length < todas.length) {
-    body._links.next = `/rest/api/content?spaceKey=ENG&type=page&start=${desde + trozo.length}&limit=${cuantas}`
+    body._links.next = `/rest/api/content?spaceKey=${spaceKey}&type=page&start=${desde + trozo.length}&limit=${cuantas}`
   }
   return body
 }
@@ -170,12 +252,15 @@ export function spaceContent({ spaceKey, start, limit } = {}) {
  *
  * La respuesta lleva `totalSize`, que es lo que permite decir «N de TOTAL», y no
  * lleva `space` en cada resultado: con `expand=ancestors` el Confluence real no
- * lo expande, y el cliente sabe de qué espacio es porque es el que pidió.
+ * lo expande, y el cliente sabe de qué espacio es porque es el que pidió. Desde
+ * H21 contesta de cualquier espacio de `ESPACIOS`: `totalSize` es el de ESE
+ * espacio, y las cadenas de sus páginas no salen de él.
  */
 function searchBySpace(cql, { start, limit } = {}) {
   const m = /^type = page AND space = "([^"]*)" ORDER BY lastmodified DESC$/.exec(String(cql))
   if (!m) return null
-  const todas = m[1] === 'ENG' ? porFecha() : []
+  const e = espacio(m[1])
+  const todas = e ? porFecha(e) : []
   const desde = Math.max(0, entero(start, 0, 100000, 0))
   const cuantas = entero(limit, 1, 200, 25)
   const trozo = todas.slice(desde, desde + cuantas)
@@ -195,7 +280,9 @@ function searchBySpace(cql, { start, limit } = {}) {
 
 /**
  * Las tres CQL de PLANTILLA de H7 (lo que viste, lo tuyo, unos ids sueltos).
- * null si no es ninguna de ellas.
+ * null si no es ninguna de ellas. Sólo de ENG (`PAGE`) a propósito: no son por
+ * espacio, y contestar también con OPS cambiaría lo que ya contestaban a los
+ * tramos de H7 y H11 (H21).
  */
 function searchByTemplate(cql, limit) {
   const q = String(cql)
@@ -223,7 +310,8 @@ function fold(s) {
  * detecte que sin comodín no hay prefijo: cada `title~"…"` es un término; sin
  * `*` tiene que coincidir con una palabra ENTERA del título (sin mayúsculas ni
  * acentos) y con `*` al final, con el principio de una palabra. Todos los
- * términos tienen que cumplirse.
+ * términos tienen que cumplirse. Sólo busca en ENG, por lo mismo que las
+ * plantillas: con OPS dentro, «Runbook*» casaría también con «Runbooks» (H21).
  */
 function searchByTitle(cql, limit) {
   const terms = [...String(cql).matchAll(/title~"([^"]*)"/g)].map((m) => m[1]).filter(Boolean)

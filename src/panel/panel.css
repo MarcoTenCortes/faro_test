@@ -574,6 +574,21 @@ hr { border: 0; border-top: 1px solid var(--hairline); margin: 1em 0; }
 }
 .empty h2 { font-size: var(--text-lg); color: var(--ink); margin: var(--s3) 0 var(--s1); font-weight: 600; }
 .empty p { margin: 0 auto; max-width: 30ch; font-size: var(--text-sm); }
+/* H21: «X aún no tiene mapa · Construir», la línea de un espacio sin mapa propio
+   bajo la explicación del chat vacío. Sólo tokens que ya había y ninguna pareja
+   de color nueva (--muted sobre --ground ya está medida). Envuelve, y la clave
+   del espacio —que puede ser larga— se parte en vez de empujar a lo ancho. */
+.no-map {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: baseline;
+  gap: var(--s2);
+  margin: var(--s2) auto 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
 /* Las sugerencias son una lista, no tres cajas: separadores, no bordes. */
 .suggestions {
   display: flex; flex-direction: column;
@@ -997,6 +1012,11 @@ html.faro-still .busy-bar i { animation: none; width: 100%; }
    uno largo se saldría a lo ancho del panel a 320 px, y eso sí lo cazaría el
    `scrollWidth` del documento en `faroPreview.check()`. */
 #privacy-others { overflow-wrap: anywhere; }
+/* H21: la lista de ámbitos reutiliza la fila de la de privacidad, pero lleva un
+   botón al final («Olvidar el mapa»): a 320 px las tres piezas no caben en una
+   línea, así que la fila envuelve y el botón se va a la derecha. */
+#scope-list li { flex-wrap: wrap; }
+#scope-list li button { margin-left: auto; }
 /* H18: la carpeta de configuración de opencode que enseña el consentimiento es una
    ruta de Windows sin espacios (`C:\Users\nombre.apellido\AppData\Roaming\…`), y sin
    esto una ruta real de 80 caracteres empujaba el bloque a 347 px en un panel de

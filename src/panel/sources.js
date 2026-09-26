@@ -330,9 +330,14 @@ function escapeRe(s) {
  * y un id que empieza por lo escrito. Una página de la que sólo se sabe el id
  * («Página 123») sólo sale por su id: por título no dice nada. Pura.
  *
+ * `preferSpace` (H21): desde que el índice de un host guarda varios espacios,
+ * a IGUAL puntuación van delante las del espacio de la pestaña, y después el
+ * título. No excluye las demás: una página base de otro espacio es legítima
+ * (docs/PLAN2.md §3.4). Sin `preferSpace`, el orden de siempre.
+ *
  * @returns {Array<{id:string, title:string, spaceKey:string|null, path:string, source:'index'}>}
  */
-export function suggestFromIndex(index, query, { limit = SOURCE_LIMITS.suggestions, exclude = [] } = {}) {
+export function suggestFromIndex(index, query, { limit = SOURCE_LIMITS.suggestions, exclude = [], preferSpace = '' } = {}) {
   const q = foldText(clean(query, SOURCE_LIMITS.queryMax))
   if (!q) return []
   const fuera = new Set((exclude || []).map((x) => String(x)))
@@ -356,7 +361,9 @@ export function suggestFromIndex(index, query, { limit = SOURCE_LIMITS.suggestio
     out.push({ page: p, score })
   }
 
-  out.sort((a, b) => b.score - a.score || String(a.page.title).localeCompare(String(b.page.title), 'es'))
+  const preferido = typeof preferSpace === 'string' && isRealSpaceKey(preferSpace) ? preferSpace : ''
+  const deAqui = (x) => (preferido && x.page.spaceKey === preferido ? 0 : 1)
+  out.sort((a, b) => b.score - a.score || deAqui(a) - deAqui(b) || String(a.page.title).localeCompare(String(b.page.title), 'es'))
   return out.slice(0, Math.max(1, limit)).map(({ page }) => ({
     id: String(page.id),
     title: String(page.title || `Página ${page.id}`),

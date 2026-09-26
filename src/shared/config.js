@@ -205,9 +205,19 @@ export function migrateSettings(raw) {
  * y es lo que evita que un espacio enorme —o un servidor que siempre dice que
  * hay más— se convierta en decenas de GET. Las páginas siguen teniendo UN solo
  * tope, `maxPages`, que es el mismo para el índice venga de donde venga.
+ *
+ * `maxPagesTotal` (H21) es el tope de páginas del índice ENTERO de un host, que
+ * desde H21 guarda varios espacios (docs/PLAN2.md §3.4): cinco espacios de
+ * `maxPages`. `persistIndex` escribe el objeto entero en cada turno (P3, H6) y
+ * `npm run bench` mide lo que pesa (300, 1 500 y 3 000 páginas). Al alcanzarse
+ * NO se desaloja ningún espacio solo —sería lo contrario de «que se guarde un
+ * árbol u otro»—: indexar uno nuevo por la API se para con un aviso hasta que
+ * se olvide el mapa de otro desde Ajustes (decisión 9). `maxPages` sigue siendo
+ * el ÚNICO tope por espacio.
  */
 export const INDEX_LIMITS = {
   maxPages: 300,
+  maxPagesTotal: 1500,
   maxDepth: 4,
   maxIssues: 120,
   restMaxRequests: 12,

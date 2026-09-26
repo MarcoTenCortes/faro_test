@@ -404,7 +404,11 @@ export async function planNavigation(client, opts) {
   }
 
   if (!raw) {
-    const asked = await askModel(client, { ...opts, current: excludeId })
+    // El espacio de la pestaña va DELANTE en el digest que ve el planificador
+    // (H21, docs/PLAN2.md §3.4): sin excluir los demás, que un destino de otro
+    // espacio del índice sigue siendo legítimo. `indexDigest` valida la clave.
+    const preferSpace = site?.product === 'confluence' && typeof site.spaceKey === 'string' ? site.spaceKey : ''
+    const asked = await askModel(client, { ...opts, current: excludeId, preferSpace })
     if (asked.error) return { reason: asked.error }
     raw = asked.raw
   }
@@ -494,7 +498,7 @@ export function jqlPlan({ jql, count, path, url }, { kicker = '', title = '' } =
  * se llena del JSON del plan ni de sus instrucciones. Sólo se abre si hace
  * falta preguntar.
  */
-async function askModel(client, { question, answer, index, model, plannerModel, current = '' }) {
+async function askModel(client, { question, answer, index, model, plannerModel, current = '', preferSpace = '' }) {
   if (!client) return { error: 'sin cliente de opencode' }
 
   let session = null
@@ -508,7 +512,7 @@ async function askModel(client, { question, answer, index, model, plannerModel, 
     const raw = await client.promptStructured(session.id, {
       // El digest se acota a lo que tiene que ver con la respuesta: con un
       // índice grande, mandarlo entero hacía el turno mucho más lento.
-      text: plannerPrompt({ question, answer, digest: indexDigest(index, { relevantTo: answer, maxPages: 60 }), current }),
+      text: plannerPrompt({ question, answer, digest: indexDigest(index, { relevantTo: answer, maxPages: 60, preferSpace }), current }),
       model: plannerModel || model,
       system: plannerSystemPrompt(),
       schema: NAVIGATION_PLAN_SCHEMA,

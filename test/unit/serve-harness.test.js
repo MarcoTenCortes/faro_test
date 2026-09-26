@@ -25,8 +25,8 @@ import {
   relatedJql,
   sampleQuery,
 } from '../../src/shared/jira-rest.js'
-import { contentSearch, spaceContent, metaDe, PAGE } from '../../tools/cql-eval.mjs'
-import { spaceCql, viewedCql, parseSpaceSearch, parseSpacePages } from '../../src/shared/confluence-rest.js'
+import { contentSearch, contentWithAncestors, spaceContent, metaDe, spaceOf, PAGE, PAGE_OPS, PARENT_OPS } from '../../tools/cql-eval.mjs'
+import { spaceCql, viewedCql, parseSpaceSearch, parseSpacePages, fetchSpacePages } from '../../src/shared/confluence-rest.js'
 
 const ROOT = join(import.meta.dirname, '..', '..')
 const FIXTURE = JSON.parse(readFileSync(join(ROOT, 'harness', 'issues.json'), 'utf8'))
@@ -399,4 +399,121 @@ test('H14: lo que contesta el banco lo entiende parseSpaceSearch, y la lista sig
   const lista = spaceContent({ spaceKey: 'ENG', start: 0, limit: 1 })
   eq(lista.results.length, 1)
   eq(parseSpacePages(lista, '/wiki').homeId, '1')
+})
+
+// ------------------------------------- el segundo espacio del banco (H21)
+//
+// Un host con varios espacios indexados es lo que trae H21: el subíndice de un
+// espacio sin páginas del otro, sus títulos para el indexador, y el paso a paso
+// desde ENG hasta una página de OPS empezando por «Espacio OPS». El tramo 63 del
+// banco lo comprueba en el navegador; aquí se pina que la Confluence de mentira
+// contesta de OPS con la MISMA forma que de ENG, que es lo único que hace que ese
+// tramo pruebe algo.
+
+/**
+ * Un `fetch` de mentira que contesta como `tools/serve-harness.js` las dos rutas
+ * de Confluence que lee `fetchSpacePages`, con las funciones de cql-eval.mjs.
+ * Ese servidor no se puede importar (abre un puerto al cargarse), así que aquí se
+ * reproduce su despacho, que para estas dos rutas es pasar la clave o el CQL.
+ */
+function confluenceFalsa(pedidas) {
+  return async (url) => {
+    pedidas.push(String(url))
+    const u = new URL(url)
+    const p = u.searchParams
+    let body = null
+    if (u.pathname === '/wiki/rest/api/content/search') body = contentSearch(p.get('cql') || '', { start: p.get('start'), limit: p.get('limit') })
+    else if (u.pathname === '/wiki/rest/api/content') body = spaceContent({ spaceKey: p.get('spaceKey'), start: p.get('start'), limit: p.get('limit') })
+    return body ? { ok: true, status: 200, text: async () => JSON.stringify(body) } : { ok: false, status: 404, text: async () => '{}' }
+  }
+}
+
+test('H21: el árbol de OPS se sirve por fecha, con sus antepasados, su totalSize y su portada', () => {
+  const idsOps = Object.keys(PAGE_OPS)
+  assert(idsOps.length >= 5, 'OPS tiene un árbol de verdad, no una página suelta')
+  eq(idsOps.filter((id) => Object.hasOwn(PAGE, id)), [], 'ningún id de OPS es también de ENG')
+  eq(idsOps.map(spaceOf), idsOps.map(() => 'OPS'))
+  eq(Object.keys(PAGE).map(spaceOf), Object.keys(PAGE).map(() => 'ENG'))
+  eq([spaceOf('constructor'), spaceOf('9'), spaceOf('')], [null, null, null], 'lo que no es una página no es de ningún espacio')
+
+  const cql = spaceCql('OPS')
+  const p1 = contentSearch(cql, { start: 0, limit: 4 })
+  eq(p1.results.length, 4)
+  eq(p1.totalSize, idsOps.length, 'el total de OPS, no el de ENG ni el de los dos')
+  assert(!!p1._links.next, 'y dice que hay más')
+  const todas = contentSearch(cql, { start: 0, limit: 20 }).results
+  eq(todas.map((r) => r.id).sort(), [...idsOps].sort(), 'todas las de OPS y ninguna de ENG')
+  const horas = todas.map((r) => metaDe(r.id).horas)
+  eq(horas, [...horas].sort((a, b) => a - b), 'ordenadas por lastmodified DESC')
+  assert(
+    todas.map((r) => r.id).join() !== [...idsOps].sort((a, b) => a - b).join(),
+    'y ese orden no es el de los ids: si lo fuera, ordenar por id pasaría por ordenar por fecha'
+  )
+  for (const r of todas) {
+    assert(r._links.webui.startsWith(`/spaces/OPS/pages/${r.id}/`), r._links.webui)
+    assert(!('space' in r), 'como en ENG: con expand=ancestors no se expande el espacio')
+    // La cadena es la de PARENT_OPS, de la raíz al padre, y no sale de OPS.
+    const esperada = []
+    for (let cur = PARENT_OPS[r.id]; cur; cur = PARENT_OPS[cur]) esperada.unshift(cur)
+    eq(r.ancestors.map((a) => a.id), esperada, 'la cadena de ' + r.id)
+    for (const a of r.ancestors) {
+      eq(spaceOf(a.id), 'OPS')
+      assert(a._links.webui.startsWith('/spaces/OPS/pages/'), a._links.webui)
+    }
+  }
+  eq(todas.find((r) => r.id === '5011').ancestors.map((a) => a.id), ['5000', '5010'])
+
+  // La cadena de una página suelta, con SU espacio y SU portada.
+  const guardias = contentWithAncestors('5002')
+  eq(guardias.ancestors.map((a) => a.id), ['5000', '5001'])
+  eq([guardias.space.key, guardias.space.name, guardias.space.homepage.id], ['OPS', 'Operaciones', '5000'])
+  eq(contentWithAncestors('200').space.key, 'ENG', 'y la de ENG sigue diciendo ENG')
+
+  // La LISTA de OPS, en orden ascendente de id y con su portada: de ahí la lee
+  // `fetchSpacePages` con `limit=1`.
+  const lista = spaceContent({ spaceKey: 'OPS', start: 0, limit: 200 })
+  eq(lista.results.map((r) => r.id), [...idsOps].sort((a, b) => a - b))
+  eq(lista.results.map((r) => r.space.key), idsOps.map(() => 'OPS'), 'cada página de la lista con su espacio')
+  const primera = spaceContent({ spaceKey: 'OPS', start: 0, limit: 1 })
+  eq(parseSpacePages(primera, '/wiki').homeId, '5000')
+  // El `next` de la lista es el de SU espacio, como lo devuelve Confluence: el
+  // cliente no lo sigue (monta su propia ruta, §8.3), pero el banco no miente.
+  assert(primera._links.next.startsWith('/rest/api/content?spaceKey=OPS&'), primera._links.next)
+  eq(parseSpacePages(lista, '/wiki').pages.map((p) => p.spaceKey), idsOps.map(() => 'OPS'))
+  // Y ENG sigue igual: su total es el suyo.
+  eq(contentSearch(spaceCql('ENG'), { limit: 5 }).totalSize, Object.keys(PAGE).length)
+})
+
+test('H21: parseSpaceSearch entiende el árbol de OPS con spaceKey OPS, y fetchSpacePages lo lee entero con su portada', async () => {
+  const idsOps = Object.keys(PAGE_OPS)
+  const p = parseSpaceSearch(contentSearch(spaceCql('OPS'), { start: 0, limit: 20 }), { wikiPrefix: '/wiki', spaceKey: 'OPS' })
+  eq(p.groups.length, idsOps.length)
+  eq(p.total, idsOps.length)
+  eq(p.next, false)
+  const vistas = new Set()
+  for (const grupo of p.groups) {
+    eq(grupo[0].parentId, null, 'cada cadena empieza en una raíz')
+    for (let i = 1; i < grupo.length; i++) eq(grupo[i].parentId, grupo[i - 1].id, 'y cada eslabón cuelga del anterior')
+    for (const pagina of grupo) {
+      eq(pagina.spaceKey, 'OPS')
+      assert(pagina.url.startsWith('/wiki/spaces/OPS/pages/'), pagina.url)
+      vistas.add(pagina.id)
+    }
+  }
+  eq([...vistas].sort(), [...idsOps].sort(), 'las de OPS, y ni una de ENG')
+
+  // Y el camino entero, con la función REAL y la Confluence de mentira detrás:
+  // una petición para la portada y otra para el árbol.
+  const pedidas = []
+  const sitio = { origin: 'http://127.0.0.1:5175', wikiPrefix: '/wiki', cloud: false }
+  const r = await fetchSpacePages(confluenceFalsa(pedidas), sitio, 'OPS', { limit: 8 })
+  eq([r.ok, r.via, r.homeId, r.own, r.total, r.truncated, r.requests], [true, 'busqueda', '5000', idsOps.length, idsOps.length, false, 2])
+  eq(r.pages.map((x) => x.id).sort(), [...idsOps].sort())
+  eq(r.pages.map((x) => x.spaceKey), r.pages.map(() => 'OPS'))
+  eq(r.pages.find((x) => x.id === '5002').parentId, '5001', 'el padre de verdad')
+  assert(pedidas.every((u) => u.startsWith(sitio.origin + '/wiki/rest/api/content')), pedidas.join(' · '))
+  // Y los dos espacios, leídos uno detrás de otro, no comparten ni una página.
+  const eng = await fetchSpacePages(confluenceFalsa([]), sitio, 'ENG', { limit: 8 })
+  eq([eng.ok, eng.homeId, eng.own], [true, '1', Object.keys(PAGE).length])
+  eq(eng.pages.filter((x) => r.pages.some((y) => y.id === x.id)), [], 'ni una página de ENG en OPS')
 })

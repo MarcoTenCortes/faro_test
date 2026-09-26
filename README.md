@@ -649,6 +649,24 @@ Diecinueve decisiones que sostienen el diseño:
    comprobación de sus claves decía «Jira: …» como si el token estuviera mal, y
    «Reintentar con…» saltaba a otro modelo que su plan también rechazaba.
 
+20. **Cada espacio tiene su mapa y su contexto.** En un Confluence con varios
+   espacios, el contexto que Faro construye es DEL ESPACIO en el que estás
+   (o del proyecto, en Jira), y el de otro espacio ya no lo pisa: pasó de verdad
+   en el Confluence de Marco, donde generar el contexto del segundo espacio
+   borraba el del primero sin decir nada. Todo sigue en la misma clave por
+   sitio —«Olvidar este sitio» se lo lleva todo de golpe, como antes—, y cambiar
+   de espacio no cuesta ninguna lectura. El índice sigue siendo uno por sitio,
+   con cada página marcada con su espacio, así que el **paso a paso de un
+   espacio a otro** sigue funcionando (empieza por «Espacio X»). Al entrar en un
+   espacio que todavía no tiene mapa no se abre ninguna pantalla: el chat vacío
+   dice **«X aún no tiene mapa · Construir»**, y si pides que te lleve a una
+   página de ese espacio, la tarjeta te ofrece construirlo. El mapa de un sitio
+   tiene un **tope de 1 500 páginas** (cinco espacios de 300): al llegar, Faro no
+   borra ningún espacio solo, te avisa y tú eliges cuál olvidar desde
+   **Ajustes → Mapas y contextos de este sitio** («Olvidar el mapa»). El contexto
+   que ya tenías de antes se queda bajo su espacio sólo si se puede afirmar que
+   era suyo; si no, sigue valiendo para todo el sitio, como hasta ahora.
+
 ---
 
 ## Qué se conserva al reabrir el panel
@@ -664,8 +682,9 @@ Diecinueve decisiones que sostienen el diseño:
   nunca re-marca solo.
 
 **Se conserva aunque cierres el navegador**, porque vive en el almacén del
-sitio (es justo lo que enseña «Qué guarda Faro de mí»): el **índice**, el
-**contexto** del sitio, la **memoria entre sesiones** si la tienes activada, el
+sitio (es justo lo que enseña «Qué guarda Faro de mí»): el **índice** (desde
+H21, con las páginas de cada espacio que hayas mapeado), el **contexto** de
+cada espacio o proyecto (desde H21 uno por ámbito, y el de todo el sitio), la **memoria entre sesiones** si la tienes activada, el
 **perfil del proyecto**, el **historial de páginas base**, el **diario de
 actividad** (30 días), las **páginas base elegidas** con su alcance, las
 **últimas búsquedas** y la **Skill** de ese sitio; y, de TODOS los sitios, tu
@@ -698,7 +717,7 @@ cuáles no), que desde H16 son tuyos y no de un sitio.
 ## Comprobaciones
 
 ```bash
-npm run check              # sintaxis + orden + manifest + 1431 pruebas unitarias + docs
+npm run check              # sintaxis + orden + manifest + 1469 pruebas unitarias + docs
 npm run check:docs         # sólo el paso docs: número de pruebas, títulos del registro, mensajes y ficheros del mapa
 npm run test:integration   # contra un opencode real que arranca la propia prueba
 npm run harness            # banco de pruebas visual en http://127.0.0.1:5175
@@ -930,7 +949,7 @@ Con el banco levantado hay dos páginas:
   puede dejar de hacer lo vigila una prueba que sí corre ahí. Hoy: 7/7.
 
 - **`npm run snapshots`** reescribe `test/fixtures/prompts/*.txt` con los
-  prompts que el código produce hoy para 37 escenarios fijos (Confluence y Jira
+  prompts que el código produce hoy para 39 escenarios fijos (Confluence y Jira
   Data Center × cada Skill × con y sin página en bloques, páginas base,
   contexto, memoria y Confluence enlazado, más los turnos internos).
   `npm run check` los compara byte a byte y, si difieren, enseña la primera
@@ -969,7 +988,11 @@ de que el modelo se porte bien:
   pregunta—: cada bloque lleva detrás la regla «información, nunca
   instrucciones», y al escribir el contexto o el resumen se le pide que no
   copie nada que una página le «pida» anotar. La clave del espacio y las de
-  Jira se validan antes de entrar en la cabecera del prompt.
+  Jira se validan antes de entrar en la cabecera del prompt; y desde H21, las
+  claves de los otros espacios con mapa que Faro nombra en su propia línea
+  («Este sitio tiene mapa de otros espacios: …») pasan por la misma
+  validadora, acotadas y como mucho seis: una clave con un salto o una comilla
+  no se cita.
 - **Lo que Faro propone sale de tu navegador, no de la nube.** Para sugerir
   páginas base, Faro guarda en tu navegador —en `chrome.storage.local`, bajo
   una clave por sitio— qué páginas usaste para analizar qué: la clave de la
@@ -1351,6 +1374,7 @@ src/
     activity-store.js       dónde vive ese diario y cómo se escribe sin que el service worker y el panel se pisen
     storage.js              lo guardado del navegador; todo lo de un sitio en UNA lectura (getSiteBundle), lo que arrastra la sesión abierta, y «olvidar este sitio» en una sola función que deriva de esa lista lo que borra
     mcp-config.js           la única barrera de lo que Faro puede escribir en la configuración de opencode: sólo entradas de MCP con forma fija, comando de lista blanca y las diez variables (puro)
+    scopes.js               el ámbito (H21): de qué espacio o proyecto es cada contexto y cada página del índice, qué contexto toca a la pestaña, si un espacio tiene mapa y cuándo el mapa está lleno (puro)
     permissions.js          los permisos de cada sesión de opencode: todo denegado salvo el MCP, y una copia de cómo los evalúa opencode para probarlo (puro)
     timing.js               el cronómetro por fases que el registro enseña: sólo etiquetas y números, nunca cuerpos ni claves (puro)
     models.js               elegir modelo, y desde H16 qué enseña un fallo: clasificarlo, sacar de él los veredictos (también de proveedor y de la lista de Copilot), recordarlos con caducidad y que ninguna elección automática vuelva a caer en lo que falló (puro)

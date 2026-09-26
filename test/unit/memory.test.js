@@ -13,9 +13,10 @@
 import { test, eq, assert } from '../harness.js'
 import { STORAGE_KEYS } from '../../src/shared/config.js'
 import { memorySummaryPrompt } from '../../src/panel/prompts.js'
+import { emptyContexts, withContext, contextFor } from '../../src/shared/scopes.js'
 import {
-  getContextMd,
-  saveContextMd,
+  getContexts,
+  saveContexts,
   getMemory,
   saveMemory,
   clearMemory,
@@ -57,23 +58,86 @@ async function conChrome(fn) {
 
 // ---- CONTEXT.md del sitio ---------------------------------------------------
 
-test('memoria: getContextMd sin nada guardado devuelve cadena vacía', () =>
-  conChrome(async () => {
-    eq(await getContextMd(HOST), '')
+// EL CAMBIO (H21): `getContextMd`/`saveContextMd` se borraron. El contexto es
+// por ÁMBITO dentro de la misma clave (`{version: 2, scopes}`, scopes.js), y las
+// dos pruebas de aquellas se sustituyen por estas tres: la migración del texto
+// de antes, que no se guarde nada sin normalizar, y que un ámbito no pise a otro
+// (que es justo lo que pasaba: el CONTEXT.md del espacio A se pisaba con el B).
+
+/** Cuenta las escrituras del `chrome.storage.local` de mentira que haya puesto `conChrome`. */
+function contarEscrituras() {
+  const cuenta = { sets: 0, removes: 0 }
+  const { set, remove } = globalThis.chrome.storage.local
+  globalThis.chrome.storage.local.set = async (o) => {
+    cuenta.sets++
+    return set(o)
+  }
+  globalThis.chrome.storage.local.remove = async (k) => {
+    cuenta.removes++
+    return remove(k)
+  }
+  return cuenta
+}
+
+test('H21: getContexts migra el string de hoy bajo el ámbito del índice, lo repara una vez y otro host no lo ve', () =>
+  conChrome(async (local) => {
+    eq(await getContexts(HOST), emptyContexts(), 'sin nada guardado, vacío')
+    eq(Object.keys(local), [], 'y sin crear la clave')
+
+    const clave = STORAGE_KEYS.context(HOST)
+    eq(clave, 'faro:context:confluence.x.eu', 'la MISMA clave de siempre')
+    local[clave] = '# Contexto\n\nEspacio ENG.'
+    const cuenta = contarEscrituras()
+    const indexado = Date.UTC(2026, 8, 1)
+    const leido = await getContexts(HOST, { legacyScope: 'space:ENG', legacyIndexedAt: indexado })
+    eq(Object.keys(leido.scopes), ['space:ENG'], 'bajo el ámbito del índice, que se sabe cuándo se indexó')
+    eq(leido.scopes['space:ENG'].text, '# Contexto\n\nEspacio ENG.')
+    eq([leido.scopes['space:ENG'].indexedAt, leido.scopes['space:ENG'].legacy], [indexado, true])
+    eq(local[clave], leido, 'lo guardado se repara: ya es el objeto normalizado')
+    eq(cuenta.sets, 1, 'una escritura')
+    eq(await getContexts(HOST, { legacyScope: 'space:OTRO', legacyIndexedAt: indexado }), leido, 'la segunda lectura no migra otra vez')
+    eq(cuenta.sets, 1, 'y no vuelve a escribir')
+
+    eq(await getContexts('jira.x.eu'), emptyContexts(), 'otro host no ve el contexto de éste')
+
+    // Sin fecha de indexado, «*»: un contexto subido a mano no se atribuye a un espacio.
+    local[clave] = 'subido a mano'
+    eq(Object.keys((await getContexts(HOST, { legacyScope: 'space:ENG' })).scopes), ['*'])
   }))
 
-test('memoria: saveContextMd guarda bajo faro:context:<host> y getContextMd lo recupera, por host', () =>
+test('H21: saveContexts nunca guarda nada sin normalizar y con nada guardado quita la clave', () =>
   conChrome(async (local) => {
-    await saveContextMd(HOST, '# Contexto\n\nEspacio ENG.')
-    eq(await getContextMd(HOST), '# Contexto\n\nEspacio ENG.')
-    eq(Object.keys(local), [STORAGE_KEYS.context(HOST)])
-    eq(STORAGE_KEYS.context(HOST), 'faro:context:confluence.x.eu')
-    eq(await getContextMd('jira.x.eu'), '', 'otro host no ve el contexto de éste')
-    // Lo que no es texto se guarda como texto; null/undefined, como vacío.
-    await saveContextMd(HOST, null)
-    eq(await getContextMd(HOST), '')
-    await saveContextMd(HOST, 123)
-    eq(await getContextMd(HOST), '123')
+    const clave = STORAGE_KEYS.context(HOST)
+    const sucio = {
+      version: 2,
+      raro: 1,
+      scopes: { 'space:ENG': { text: '  eng  ', at: 5, onclick: 'x' }, 'space:A"B': { text: 'x', at: 5 }, '*': { text: '' } },
+    }
+    const guardado = await saveContexts(HOST, sucio)
+    eq(local[clave], { version: 2, scopes: { 'space:ENG': { text: 'eng', at: 5, indexedAt: null, legacy: false } } })
+    eq(guardado, local[clave], 'devuelve lo que guardó')
+    // Un texto de antes también se normaliza antes de escribir: nunca un string.
+    await saveContexts(HOST, 'texto suelto')
+    eq(typeof local[clave], 'object')
+    eq(Object.keys(local[clave].scopes), ['*'])
+    // Sin ningún ámbito, la clave se va.
+    await saveContexts(HOST, emptyContexts())
+    eq(clave in local, false, 'sin ámbitos no queda una clave vacía')
+    await saveContexts(HOST, { version: 2, scopes: { '*': { text: '   ' } } })
+    eq(clave in local, false, 'un ámbito sin texto tampoco cuenta')
+  }))
+
+test('H21: un ámbito no pisa a otro (withContext + saveContexts)', () =>
+  conChrome(async (local) => {
+    const a = withContext(await getContexts(HOST), 'space:ENG', { text: '# ENG', indexedAt: 100, now: 100 })
+    await saveContexts(HOST, a)
+    const b = withContext(await getContexts(HOST), 'space:OPS', { text: '# OPS', indexedAt: 200, now: 200 })
+    await saveContexts(HOST, b)
+    const leido = await getContexts(HOST)
+    eq(Object.keys(leido.scopes), ['space:ENG', 'space:OPS'], 'los dos se quedan')
+    eq(contextFor(leido, 'space:ENG'), '# ENG', 'el de ENG no lo pisó el de OPS')
+    eq(contextFor(leido, 'space:OPS'), '# OPS')
+    eq(local[STORAGE_KEYS.context(HOST)], leido)
   }))
 
 // ---- memoria entre sesiones -------------------------------------------------

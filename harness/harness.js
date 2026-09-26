@@ -1097,6 +1097,56 @@ function diarioDeMentira(actividad, ahora) {
   return diario
 }
 
+/**
+ * Los DOS espacios de la Confluence de mentira (ENG y OPS, H21) leídos por la
+ * API como los lee el panel —cada uno con su `fetchSpacePages` y su
+ * `indexFromSpacePages`— y fundidos en UN índice con `mergeIndex`, que es lo que
+ * pasa en un host en el que se han indexado dos espacios. Lo usan la acción
+ * «Dos espacios…» y el tramo 63, para que los dos digan lo mismo.
+ *
+ * Qué páginas tiene cada espacio NO se escribe aquí: se pregunta a la LISTA de
+ * cada espacio (`/rest/api/content?spaceKey=…`), que es otra ruta de la misma
+ * API, y con eso se compara lo que dio la búsqueda por fecha.
+ *
+ * @param {Function} pide el `fetch` con el que se pide (el tramo lo cuenta)
+ * @param {{limitEng?: number, limitOps?: number}} opts el tamaño de página de cada lectura
+ */
+async function leerDosEspacios(pide, { limitEng = 25, limitOps = 8 } = {}) {
+  const confRest = await import('/src/shared/confluence-rest.js')
+  const { indexFromSpacePages } = await import('/src/panel/indexer.js')
+  const { mergeIndex } = await import('/src/atlassian/index-store.js')
+  const sitioConf = { origin: location.origin, wikiPrefix: '/wiki', cloud: false }
+  const site = { host: location.hostname, cloud: false, wikiPrefix: '/wiki' }
+  const leer = async (clave, limit) => {
+    const arbol = await confRest.fetchSpacePages(pide, sitioConf, clave, { limit })
+    const indice = arbol.ok
+      ? indexFromSpacePages(arbol.pages, { site, scope: { kind: 'space', key: clave }, homeId: arbol.homeId })
+      : null
+    const lista = await (await pide(`${location.origin}/wiki/rest/api/content?spaceKey=${clave}&type=page&limit=200`)).json()
+    const ids = (confRest.parseSpacePages(lista, '/wiki')?.pages || []).map((p) => p.id)
+    return { arbol, indice, ids }
+  }
+  const eng = await leer('ENG', limitEng)
+  const ops = await leer('OPS', limitOps)
+  // En el orden en que un usuario los indexaría: primero el que ya tenía, luego
+  // el nuevo. `mergeIndex` es lo mismo que hace `generateContext` al guardar.
+  const fundido = eng.indice && ops.indice ? mergeIndex(eng.indice, ops.indice) : null
+  return { eng, ops, fundido }
+}
+
+/** Una página del índice como la ve el paso a paso: quién es, de quién cuelga, a dónde lleva y de qué espacio es. */
+function firmaDePaginas(indice) {
+  return Object.values(indice?.pages || {})
+    .map((p) => `${p.id}|${p.parentId ?? '-'}|${p.path}|${p.spaceKey ?? '-'}`)
+    .sort()
+    .join(' ')
+}
+
+/** Los ids que nombran unas líneas de `treeTitles` («- «Título» (id N)»). */
+function idsDeTitulos(lineas) {
+  return lineas.map((l) => /\(id (\d+)\)$/.exec(l)?.[1]).filter(Boolean)
+}
+
 const actions = {
   async quote() {
     renderPage('page:200')
@@ -1551,6 +1601,68 @@ const actions = {
       `sin el diario la lista es otra: ${conCambios(filas)} filas «cambió desde que lo miraste» con él, ${conCambios(sinDiario)} sin él`,
       conCambios(filas) > conCambios(sinDiario) ? 'ok' : 'bad'
     )
+  },
+
+  /**
+   * Un host con DOS espacios indexados (H21): ENG y OPS leídos por la API y
+   * fundidos en un índice, y lo que el panel saca de ahí por espacio —el
+   * subíndice de cada uno, sus títulos para el indexador, si tiene mapa— más el
+   * paso a paso desde ENG hasta una página de OPS, que empieza por abrir ese
+   * espacio. Es la acción que enseña por qué el mapa es por espacio: con los dos
+   * fundidos a pelo, los títulos que se le dan al indexador de OPS llevarían
+   * medio árbol de ENG.
+   */
+  async multiSpace() {
+    setSidebar('clasica')
+    renderPage('page:200')
+    await wait(320)
+    const { subIndex, stampSpace, hasMap, emptyContexts, countPages } = await import('/src/shared/scopes.js')
+    const { treeTitles } = await import('/src/panel/prompts.js')
+    const { validatePlan } = await import('/src/nav/validate.js')
+    const { ancestryOf, normalizeIndex } = await import('/src/atlassian/index-store.js')
+    const { snapshotTree } = await import('/src/content/tree-scan.js')
+
+    const { eng, ops, fundido } = await leerDosEspacios((u, o) => fetch(u, o))
+    if (!fundido) return say(`sin índice: ENG ${eng.arbol.reason || 'ok'} · OPS ${ops.arbol.reason || 'ok'}`, 'bad')
+    const cuenta = countPages(fundido)
+    say(`índice fundido: ${cuenta.pages} páginas de ${cuenta.spaces} espacios`, 'ok')
+    for (const [clave, leido] of [['ENG', eng], ['OPS', ops]]) {
+      const sub = subIndex(fundido, clave)
+      say(
+        `  ${clave}: ${leido.arbol.own} de ${leido.arbol.total} por la API en ${leido.arbol.requests} peticiones · ` +
+          `${Object.keys(sub.pages).length} en su subíndice · portada ${leido.arbol.homeId} · mapa ${hasMap(emptyContexts(), fundido, 'space:' + clave)}`,
+        'ok'
+      )
+    }
+    const titulosOps = treeTitles(subIndex(fundido, 'OPS'))
+    say(`títulos para el indexador de OPS (${titulosOps.length}):`)
+    for (const l of titulosOps) say('  ' + l)
+    const ajenos = idsDeTitulos(treeTitles(fundido)).filter((id) => !ops.ids.includes(id))
+    say(`con el índice fundido a pelo irían además ${ajenos.length} páginas de ENG`, ajenos.length ? '' : 'bad')
+
+    const hoja = Object.keys(subIndex(fundido, 'OPS').pages).sort((a, b) => ancestryOf(fundido, b).length - ancestryOf(fundido, a).length)[0]
+    const plan = validatePlan(
+      { navigate: true, mode: 'assisted', destination: { kind: 'confluence-page', id: hoja } },
+      { index: fundido, origin: ORIGIN, here: ORIGIN + PAGES['page:200'].path, site: { product: 'confluence', cloud: false, host: location.hostname } }
+    )
+    say(
+      plan.ok
+        ? `desde ENG hasta la ${hoja} de OPS: ${plan.plan.steps.map((s) => `${s.label} (${s.action})`).join(' → ')}`
+        : `sin plan: ${plan.reason}`,
+      plan.ok ? 'ok' : 'bad'
+    )
+
+    const barra = normalizeIndex({ pages: snapshotTree().pages, updated: Date.now() }, location.hostname, null, { cloud: false, wikiPrefix: '/wiki' })
+    const estampada = stampSpace(barra, 'ENG')
+    const conEspacio = Object.values(estampada.pages).filter((p) => p.spaceKey === 'ENG').length
+    say(`barra lateral: ${Object.keys(barra.pages).length} filas, ${conEspacio} estampadas con ENG`, conEspacio ? 'ok' : 'bad')
+  },
+
+  // El botón se llama por su `data-act` («multi-space», como los demás en
+  // kebab); `multiSpace` es el nombre por el que se llama desde fuera
+  // (`faroHarness.actions.multiSpace()`). Un alias y no dos copias.
+  'multi-space'() {
+    return actions.multiSpace()
   },
 
   unsafe() {
@@ -4011,6 +4123,140 @@ const actions = {
       `${estados62.join(',')} · ${new Set(rutas62).size} rutas · ${location.pathname}`
     )
 
+    // 63. Un host con DOS espacios indexados (H21): ENG y OPS leídos por la API
+    //     cada uno con su `fetchSpacePages`, convertidos con `indexFromSpacePages`
+    //     y fundidos con `mergeIndex`, que es lo que deja `generateContext` tras
+    //     indexar el segundo espacio. Lo que se comprueba es lo que el panel saca
+    //     de ahí POR ESPACIO: el subíndice de uno es el mismo árbol que leído
+    //     solo, sus títulos para el indexador no llevan páginas del otro, el paso
+    //     a paso de un espacio al otro empieza por abrir el espacio, y la barra
+    //     lateral se estampa con el espacio de la pestaña. Nada escrito a mano:
+    //     qué páginas tiene cada espacio lo dice la LISTA de la misma API, y el
+    //     árbol de ENG solo se RECALCULA aquí como en el tramo 51 (limit 8), sin
+    //     depender de él.
+    setSidebar('clasica')
+    renderPage('page:200')
+    await wait(320)
+    runner.clear()
+    const ambitos63 = await import('/src/shared/scopes.js')
+    const { treeTitles: titulos63 } = await import('/src/panel/prompts.js')
+    const { validatePlan: plan63 } = await import('/src/nav/validate.js')
+    const indices63 = await import('/src/atlassian/index-store.js')
+    const { snapshotTree: leerBarra63 } = await import('/src/content/tree-scan.js')
+    const { indexFromSpacePages: aIndice63 } = await import('/src/panel/indexer.js')
+
+    // El árbol de ENG SOLO, recalculado como en el tramo 51.
+    const arbolEng63 = await confRest.fetchSpacePages(pideApi, sitioConf, 'ENG', { limit: 8 })
+    const soloEng63 = aIndice63(arbolEng63.pages, {
+      site: { host: location.hostname, cloud: false, wikiPrefix: '/wiki' },
+      scope: { kind: 'space', key: 'ENG' },
+      homeId: arbolEng63.homeId,
+    })
+    // Y los dos espacios fundidos, con ENG leído con OTRO tamaño de página: que
+    // el subíndice salga igual no depende de cómo se paginó la lectura.
+    const { eng: eng63, ops: ops63, fundido: fundido63 } = await leerDosEspacios(pideApi, { limitEng: 25, limitOps: 8 })
+    const subEng63 = ambitos63.subIndex(fundido63, 'ENG')
+    const subOps63 = ambitos63.subIndex(fundido63, 'OPS')
+    const idsSubOps63 = Object.keys(subOps63?.pages || {}).sort()
+    ok(
+      'dos espacios leídos por separado y fundidos: el subíndice de ENG es, página a página, el árbol de ENG leído solo',
+      !!soloEng63 &&
+        !!fundido63 &&
+        !arbolEng63.truncated &&
+        !ops63.arbol.truncated &&
+        ops63.arbol.via === 'busqueda' &&
+        ops63.arbol.own === ops63.ids.length &&
+        ops63.arbol.total === ops63.ids.length &&
+        ops63.arbol.requests === 1 + Math.ceil(ops63.arbol.own / 8) &&
+        ops63.ids.length >= 5 &&
+        !ops63.ids.some((id) => eng63.ids.includes(id)) &&
+        Object.keys(soloEng63.pages).length > 10 &&
+        firmaDePaginas(subEng63) === firmaDePaginas(soloEng63) &&
+        idsSubOps63.join() === [...ops63.ids].sort().join() &&
+        Object.keys(fundido63.pages).length === Object.keys(soloEng63.pages).length + idsSubOps63.length,
+      `ENG solo ${Object.keys(soloEng63?.pages || {}).length} · subíndice ENG ${Object.keys(subEng63?.pages || {}).length}` +
+        `${firmaDePaginas(subEng63) === firmaDePaginas(soloEng63) ? ' (iguales)' : ' (DISTINTOS)'} · ` +
+        `OPS ${ops63.arbol.own} de ${ops63.arbol.total} en ${ops63.arbol.requests} peticiones, portada ${ops63.arbol.homeId} · ` +
+        `fundido ${Object.keys(fundido63?.pages || {}).length}`
+    )
+
+    // Los títulos que se le darían al indexador de OPS: los de OPS y NINGUNO de
+    // ENG. Con el índice fundido a pelo sí irían los de ENG (el control: es el
+    // subíndice lo que filtra, no que ENG no esté).
+    const idsTitulosOps63 = idsDeTitulos(titulos63(subOps63))
+    const idsTitulosTodo63 = idsDeTitulos(titulos63(fundido63))
+    ok(
+      'los títulos del subíndice de OPS nombran todas sus páginas y ninguna de ENG; los del índice fundido sí llevan las de ENG',
+      idsTitulosOps63.length === ops63.ids.length &&
+        idsTitulosOps63.every((id) => ops63.ids.includes(id)) &&
+        !idsTitulosOps63.some((id) => eng63.ids.includes(id)) &&
+        idsTitulosTodo63.some((id) => eng63.ids.includes(id)),
+      `OPS: ${idsTitulosOps63.join(' ')} · el fundido nombra ${idsTitulosTodo63.filter((id) => eng63.ids.includes(id)).length} de ENG`
+    )
+
+    // Desde una página de ENG, la hoja más honda de OPS: el paso a paso empieza
+    // por abrir el espacio OPS (una carga de página, no un despliegue) y ningún
+    // paso es una página de ENG. Desde dentro de OPS, ese primer paso no está:
+    // es por venir de otro espacio.
+    const hoja63 = Object.keys(subOps63?.pages || {}).sort(
+      (a, b) => indices63.ancestryOf(fundido63, b).length - indices63.ancestryOf(fundido63, a).length
+    )[0]
+    const sitioPlan63 = { product: 'confluence', cloud: false, host: location.hostname }
+    const destino63 = { navigate: true, mode: 'assisted', destination: { kind: 'confluence-page', id: hoja63 } }
+    const desdeEng63 = plan63(destino63, { index: fundido63, origin: ORIGIN, here: ORIGIN + PAGES['page:200'].path, site: sitioPlan63 })
+    const desdeOps63 = plan63(destino63, { index: fundido63, origin: ORIGIN, here: ORIGIN + '/wiki/spaces/OPS/pages/5000/Operaciones', site: sitioPlan63 })
+    const pasos63 = desdeEng63.ok ? desdeEng63.plan.steps : []
+    ok(
+      'desde ENG, el paso a paso hasta una página de OPS empieza por abrir el espacio OPS, y ningún paso es de ENG',
+      desdeEng63.ok &&
+        pasos63.length >= 3 &&
+        pasos63[0].kind === 'confluence-space' &&
+        pasos63[0].id === 'OPS' &&
+        pasos63[0].action === 'open' &&
+        pasos63[0].label.startsWith('Espacio') &&
+        pasos63.slice(1, -1).every((s) => s.kind === 'confluence-page' && s.action === 'expand' && ops63.ids.includes(s.id)) &&
+        pasos63[pasos63.length - 1].id === hoja63 &&
+        pasos63[pasos63.length - 1].action === 'open' &&
+        !pasos63.some((s) => eng63.ids.includes(s.id)) &&
+        desdeOps63.ok &&
+        desdeOps63.plan.steps[0].kind === 'confluence-page',
+      desdeEng63.ok
+        ? `${pasos63.map((s) => `${s.kind === 'confluence-space' ? 'espacio ' : ''}${s.id}:${s.action}`).join(' → ')} · desde OPS empieza por ${desdeOps63.plan?.steps?.[0]?.id}`
+        : `sin plan: ${desdeEng63.reason}`
+    )
+
+    // La barra lateral no sabe de qué espacio es cada fila: el panel la estampa
+    // con el de la pestaña antes de fundirla (`growTreeFromPage`), y sin eso esas
+    // páginas no contarían para su mapa. Lo que ya tiene espacio no se toca, y
+    // una clave rara no estampa nada. Y el mapa de un espacio lo dice el índice.
+    const filasBarra63 = leerBarra63().pages
+    const barra63 = indices63.normalizeIndex({ pages: filasBarra63, updated: Date.now() }, location.hostname, null, {
+      cloud: false,
+      wikiPrefix: '/wiki',
+    })
+    const estampada63 = ambitos63.stampSpace(barra63, 'ENG')
+    const unaDeOps63 = Object.keys(barra63?.pages || {})[0]
+    const mezclada63 = ambitos63.stampSpace(
+      { ...barra63, pages: { ...barra63.pages, [unaDeOps63]: { ...barra63.pages[unaDeOps63], spaceKey: 'OPS' } } },
+      'ENG'
+    )
+    const vacios63 = ambitos63.emptyContexts()
+    ok(
+      'la barra lateral se estampa con el espacio de la pestaña, y el mapa de cada espacio lo dice el índice',
+      filasBarra63.length > 10 &&
+        Object.keys(estampada63.pages).length === new Set(filasBarra63.map((p) => p.id)).size &&
+        Object.values(barra63.pages).every((p) => p.spaceKey === null) &&
+        Object.values(estampada63.pages).every((p) => p.spaceKey === 'ENG') &&
+        mezclada63.pages[unaDeOps63].spaceKey === 'OPS' &&
+        ambitos63.stampSpace(barra63, 'A"B') === barra63 &&
+        ambitos63.hasMap(vacios63, fundido63, 'space:OPS') &&
+        ambitos63.hasMap(vacios63, fundido63, 'space:ENG') &&
+        !ambitos63.hasMap(vacios63, fundido63, 'space:XXX') &&
+        !ambitos63.hasMap(vacios63, subEng63, 'space:OPS'),
+      `${filasBarra63.length} filas de la barra · ${Object.values(estampada63.pages).filter((p) => p.spaceKey === 'ENG').length} con ENG · ` +
+        `mapa OPS ${ambitos63.hasMap(vacios63, fundido63, 'space:OPS')} · XXX ${ambitos63.hasMap(vacios63, fundido63, 'space:XXX')}`
+    )
+
     setSidebar('clasica')
     renderPage('page:200')
     await wait(320)
@@ -4102,5 +4348,9 @@ window.faroHarness = {
   today: () => import('/src/panel/today.js'),
   activity: () => import('/src/atlassian/activity.js'),
   diarioDeEjemplo: async (ahora = Date.now()) => diarioDeMentira(await import('/src/atlassian/activity.js'), ahora),
+  // Y de H21, lo que decide el contexto y el mapa POR ESPACIO (subíndice,
+  // estampar la barra, si un espacio tiene mapa…): a demanda como los demás,
+  // para poder repetir el tramo 63 desde fuera sin pasar por los de antes.
+  scopes: () => import('/src/shared/scopes.js'),
 }
 say('banco listo')

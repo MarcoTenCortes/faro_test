@@ -95,6 +95,22 @@ const CONTEXTO_CONFLUENCE = [
   '- PAT: token personal de acceso a la API.',
 ].join('\n')
 
+/**
+ * H21: otro espacio del MISMO Confluence (DCPIAS, uno de los del usuario), con
+ * su propio CONTEXT.md. Corto a propósito: lo que se pina es la cabecera.
+ */
+const SITE_CONFLUENCE_DCPIAS = parseAtlassianUrl('https://confluence.simplprogramme.eu/spaces/DCPIAS/pages/98830281/Arquitectura+de+referencia')
+const PAGE_CONFLUENCE_DCPIAS = {
+  url: 'https://confluence.simplprogramme.eu/spaces/DCPIAS/pages/98830281/Arquitectura+de+referencia',
+  title: 'Arquitectura de referencia - Data Cooperation - Confluence',
+}
+const CONTEXTO_DCPIAS = [
+  '# Data Cooperation (DCPIAS)',
+  '',
+  'Espacio de la arquitectura de referencia de la cooperación de datos.',
+  '- «Arquitectura de referencia» (id 98830281) es la portada técnica.',
+].join('\n')
+
 /** El CONTEXT.md de un proyecto de Jira (tipos, estados, convenciones de nombre). */
 const CONTEXTO_JIRA = [
   '# Proyecto SIMPL',
@@ -458,7 +474,20 @@ const INDICE_CONFLUENCE = {
  * normalizan contra el host de la pestaña), y las claves van en el mismo
  * orden que allí.
  */
-function sistema({ site, page, skill, contextMd = '', memoryMd = '', digest = null, linkedContext = null, sources = null, profile = null, preloaded = null }) {
+function sistema({
+  site,
+  page,
+  skill,
+  contextMd = '',
+  memoryMd = '',
+  digest = null,
+  linkedContext = null,
+  sources = null,
+  profile = null,
+  preloaded = null,
+  contextScope = '',
+  otherScopes = [],
+}) {
   const analisis = skill === 'analisis'
   return baseSystem({
     site,
@@ -467,6 +496,11 @@ function sistema({ site, page, skill, contextMd = '', memoryMd = '', digest = nu
     page,
     skill,
     digest: analisis ? digest : null,
+    // H21: el ámbito del contexto y los otros espacios con mapa van delante del
+    // enlazado, como en la petición de `send()`. Sin ellos (el '' y la lista
+    // vacía de siempre), el prompt es byte a byte el de antes.
+    contextScope,
+    otherScopes,
     linkedContext,
     sources: analisis && hasSources(sources) ? normalizeSources(sources, { host: site.host }) : null,
     profile,
@@ -594,6 +628,30 @@ export const ESCENARIOS = [
         skill: 'analisis',
         contextMd: CONTEXTO_CONFLUENCE,
         sources: paginasBase('open'),
+      }),
+  },
+  // ---- H21: varios espacios en el mismo Confluence --------------------------
+  {
+    id: 'confluence-general-espacio',
+    que: 'H21: General en otro espacio del mismo Confluence (DCPIAS) con su propio contexto: la cabecera dice de qué espacio es',
+    build: () =>
+      sistema({
+        site: SITE_CONFLUENCE_DCPIAS,
+        page: PAGE_CONFLUENCE_DCPIAS,
+        skill: 'general',
+        contextMd: CONTEXTO_DCPIAS,
+        contextScope: 'space:DCPIAS',
+      }),
+  },
+  {
+    id: 'confluence-general-sin-contexto-propio',
+    que: 'H21: General en un espacio sin contexto propio ni heredado: una línea dice qué otros espacios tienen mapa',
+    build: () =>
+      sistema({
+        site: SITE_CONFLUENCE_DCPIAS,
+        page: PAGE_CONFLUENCE_DCPIAS,
+        skill: 'general',
+        otherScopes: ['SIMPL', 'OPS'],
       }),
   },
 

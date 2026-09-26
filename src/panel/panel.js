@@ -35,8 +35,34 @@ import {
   locationParts,
   samePage,
   validIssueKey,
+  validProjectKey,
+  validSpaceKey,
+  isRealSpaceKey,
   wikiPrefix as wikiPrefixOf,
 } from '../atlassian/site.js'
+// El ámbito —el espacio o el proyecto de la pestaña— dentro de un host (H21,
+// docs/PLAN2.md §3.4): el contexto y el mapa son suyos, y todo lo que decide qué
+// ámbito toca, qué contexto le va y si tiene mapa vive en ese módulo puro.
+import {
+  emptyContexts,
+  normalizeContexts,
+  contextFor,
+  contextScopeFor,
+  withContext,
+  withoutContext,
+  scopeKeyOf,
+  scopeKeyFromScope,
+  scopeLabel,
+  scopeKeys,
+  pagesOfSpace,
+  withoutSpace,
+  stampSpace,
+  hasMap,
+  otherScopesWithMap,
+  countPages,
+  spaceOverflow,
+  linkedContextFor,
+} from '../shared/scopes.js'
 import { mergeIndex, mergeIndexKeepingTree, indexSize, normalizeIndex, ancestryOf, isPlaceholderTitle } from '../atlassian/index-store.js'
 import {
   CORS_ORIGIN,
@@ -237,7 +263,16 @@ const state = {
   lastHost: '',
   tabId: null,
   index: null,
+  // Los contextos del HOST por ámbito (H21, §8.26): `{version: 2, scopes}` de
+  // scopes.js, o `emptyContexts()`. Todos los del host están en memoria a la vez
+  // —cambiar de espacio no cuesta ninguna lectura del almacén—, y de aquí salen
+  // los dos de abajo, que son DERIVADOS: `contextMd` es el texto que toca al
+  // ámbito de la pestaña (el suyo, o el de todo el sitio) y `contextScope` la
+  // clave de ese texto ('' sin contexto). Nadie los escribe a mano: los
+  // recalcula `applyScope()`, salvo el vaciado a '' al cambiar de host.
+  contexts: emptyContexts(),
   contextMd: '',
+  contextScope: '',
   memory: { entries: [] },
   sessionID: null,
   model: null,
@@ -290,8 +325,11 @@ const state = {
   // cuando el panel vuelve al sitio o cuando el chat se repinta.
   mcpPending: null,
   // Desde Jira, el contexto del Confluence enlazado: {host, contextMd, index,
-  // wikiPrefix} o null. El prefijo es el observado al visitarlo, si se
-  // visitó: hace falta para preguntarle a su API desde aquí.
+  // wikiPrefix, contextScope} o null. El prefijo es el observado al visitarlo,
+  // si se visitó: hace falta para preguntarle a su API desde aquí. Y desde H21
+  // `contextScope` dice de qué ámbito de ese Confluence es el texto (el de todo
+  // el sitio, «*», o el de su único espacio con contexto), para que la cabecera
+  // del bloque lo diga.
   linkedContext: null,
   // La búsqueda de páginas base en curso: un testigo para descartar la
   // respuesta tardía de una consulta que el usuario ya ha reescrito.
@@ -649,6 +687,13 @@ async function refreshTab() {
   // o Confluence» y hay que repintarlo, porque sin cambio de sitio ya no hay
   // arranque que lo restaure.
   const volviaDeFuera = !!site && !state.site
+  // Otro ÁMBITO del mismo host (H21, docs/PLAN2.md §3.4): otro espacio de este
+  // Confluence u otro proyecto de este Jira. No hay arranque —el host es el
+  // mismo—, pero el contexto que toca es otro. Se calcula AQUÍ, antes de
+  // reasignar `state.site`, y sólo en el camino sin cambio de host (con él,
+  // `bootForSite` lo recalcula todo). Y SIN leer nada del almacén: todos los
+  // contextos del host ya están en `state.contexts`.
+  const changedScope = !changedHost && !!site && !!state.site && scopeKeyOf(site) !== scopeKeyOf(state.site)
   if (changedHost && state.picking) setPicking(false)
   // Lo que es del sitio no viaja al siguiente: las páginas base, el índice,
   // los caminos leídos y el contexto se vacían hasta que `bootForSite` cargue
@@ -669,7 +714,11 @@ async function refreshTab() {
     state.sources = emptySources()
     state.index = null
     state.ancestryFetched = new Map()
+    // Los contextos por ámbito son del HOST: se vacían todos, y con ellos los
+    // dos derivados (el único sitio, con el olvido, donde se escriben a mano).
+    state.contexts = emptyContexts()
     state.contextMd = ''
+    state.contextScope = ''
     state.linkedContext = null
     // Los tiempos también son del sitio: hablan del arranque y del último turno
     // de ESE host. Dejados puestos, el Registro del sitio nuevo enseñaba las
@@ -720,6 +769,25 @@ async function refreshTab() {
   if (site) state.lastHost = site.host
   state.tabUrl = tab.url || ''
   state.tabTitle = tab.title || ''
+
+  // El ámbito cambió dentro del mismo host: el contexto que toca es el del
+  // ámbito nuevo, sin ninguna lectura (están todos en `state.contexts`). Y al
+  // VOLVER de fuera de Atlassian también, aunque `changedScope` no lo vea —con
+  // la pestaña en el correo `state.site` era null y no hay con qué comparar—:
+  // se pudo salir desde un espacio y volver a otro. Recalcular es barato y
+  // siempre da lo mismo para el mismo ámbito.
+  if (changedScope || (volviaDeFuera && !changedHost)) applyScope()
+  // Y si el chat está vacío, su estado vacío es del ámbito de antes (la línea
+  // «aún no tiene mapa», las páginas del espacio): se repinta, SIN volver a
+  // anunciar «Listo para escuchar» (A2), que cambiar de espacio no es abrir el
+  // panel.
+  if (changedScope && !state.streaming) {
+    const vacio = el.chat.querySelector('.empty')
+    if (vacio) {
+      vacio.remove()
+      showWelcome({ announce: false })
+    }
+  }
 
   paintLocation(site, tab.title)
 
@@ -857,6 +925,9 @@ async function bootForSite() {
 
   // 2. Todo lo que este sitio tiene guardado, la lista de modelos y la sesión
   // abierta: las tres cosas A LA VEZ, y lo de storage en UNA sola lectura.
+  // El host se captura aquí para la reparación del contexto de más abajo
+  // (§8.22): tras el await, con la pestaña en el correo, `state.site` es null.
+  const hostArranque = state.site.host
   // Antes iban en fila y el mismo `getSite` del mismo host se leía cinco veces
   // —cada uno relee el mapa entero de `faro:sites`—, más el contexto, la
   // memoria, el índice y la sesión por su cuenta: trece lecturas encadenadas
@@ -879,7 +950,31 @@ async function bootForSite() {
   let saved = bundle.site
   setSkill(saved?.skill || DEFAULT_SKILL)
   state.sessionID = sessionID
-  state.contextMd = bundle.contextMd
+  // Los contextos del host, por ámbito (H21). Lo guardado sale CRUDO del
+  // paquete: puede ser el texto de antes de H21, y ése migra bajo el ámbito del
+  // índice sólo si se puede afirmar que es suyo (`legacyScopeOf`); si no, bajo
+  // «*», que se enseña en todos los espacios, o sea como hasta hoy.
+  state.contexts = normalizeContexts(bundle.contextRaw, {
+    legacyScope: legacyScopeOf(bundle, saved),
+    legacyIndexedAt: saved?.indexedAt,
+  })
+  applyScope()
+  // La migración se REPARA una vez, como la memoria: el texto viejo se escribe
+  // ya con su forma nueva y el arranque siguiente no vuelve a decidir nada. Con
+  // el host capturado antes de leer y el testigo al volver (§8.22). Si no se
+  // puede escribir, lo normalizado vale igual en memoria y se reintenta en el
+  // próximo arranque: sólo se pierde la reparación.
+  if (typeof bundle.contextRaw === 'string' && bundle.contextRaw.trim()) {
+    const reparado = await memory.saveContexts(hostArranque, state.contexts).then(
+      () => true,
+      () => false
+    )
+    if (state.bootToken !== testigo) return
+    const [clave = '*'] = scopeKeys(state.contexts)
+    if (reparado) {
+      log.info('Contexto migrado', `${hostArranque} · ${clave} · ${state.contexts.scopes[clave]?.text.length || 0} caracteres`)
+    }
+  }
   // La memoria se reconstruye con claves blancas al leerla, como siempre. Lo
   // que aquí NO se hace es repararla en el almacén: esa escritura la sigue
   // haciendo `getMemory`, por donde pasa la pantalla de memoria justo antes de
@@ -1883,7 +1978,18 @@ async function loadLinkedContext(saved) {
   // un Jira con Confluence enlazado nunca tuvo el «un solo await» que P4
   // presumía (revisión adversaria de H6).
   const bundle = await getSiteBundle(host)
-  const contextMd = bundle.contextMd
+  // Su contexto, que desde H21 es por ámbito (los espacios de ese Confluence).
+  // Viaja UNO: el de todo el sitio si existe, o el de su único espacio con
+  // contexto (`linkedContextFor`, regla (c) de docs/PLAN2.md §3.4); con dos
+  // espacios y sin «*», ninguno —elegir por proyecto es de H22—. Se normaliza
+  // aquí con la misma regla de migración que el sitio propio, pero NO se escribe
+  // nada de ese host: la reparación la hace su propio panel al arrancar.
+  const ctxs = normalizeContexts(bundle.contextRaw, {
+    legacyScope: legacyScopeOf(bundle, bundle.site),
+    legacyIndexedAt: bundle.site?.indexedAt,
+  })
+  const { key, text } = linkedContextFor(ctxs)
+  const contextMd = text
   // Su índice: es donde se buscan las páginas base de un análisis desde Jira,
   // que son páginas de ESE Confluence. Nunca se guarda desde aquí, y su
   // `stale` tampoco se anuncia: el índice de ese host lo reconstruye su panel.
@@ -1897,10 +2003,10 @@ async function loadLinkedContext(saved) {
   if (contextMd?.trim() || index) {
     log.info(
       'Contexto de Confluence enlazado',
-      `${host} · ${contextMd?.length || 0} caracteres · ${index ? indexSize(index) + ' entradas' : 'sin índice'}`
+      `${host} · ${contextMd?.length || 0} caracteres · ${key ? (key === '*' ? '*' : scopeLabel(key).replace(/^el /, '')) : 'sin contexto'} · ${index ? indexSize(index) + ' entradas' : 'sin índice'}`
     )
   }
-  return { host, contextMd: contextMd || '', index: index || null, wikiPrefix }
+  return { host, contextMd: contextMd || '', index: index || null, wikiPrefix, contextScope: key }
 }
 
 /**
@@ -2516,7 +2622,14 @@ async function restoreConversation(testigo = state.bootToken, { all = false } = 
   scrollChat({ force: true })
 }
 
-function showWelcome() {
+/**
+ * El chat vacío.
+ *
+ * `announce: false` (H21) repinta sin volver a decir «Listo para escuchar» al
+ * lector de pantalla: cambiar de espacio con el chat vacío lo repinta —la línea
+ * del mapa y las páginas son del espacio— y eso no es abrir el panel (A2).
+ */
+function showWelcome({ announce: anunciar = true } = {}) {
   const scope = defaultScope(state.site)
   const wrap = document.createElement('div')
   wrap.className = 'empty'
@@ -2525,10 +2638,17 @@ function showWelcome() {
   beacon.className = 'beacon big live'
   wrap.appendChild(beacon)
 
+  // El espacio de la pestaña, en Confluence y con clave de verdad (H21). El
+  // mapa es por espacio: el título cuenta las páginas de ÉSTE cuando las tiene,
+  // y lo de siempre si no —o sin espacio, byte a byte lo de antes—.
+  const espacio = state.site?.product === 'confluence' && isRealSpaceKey(state.site.spaceKey) ? state.site.spaceKey : ''
+  const deEspacio = espacio ? pagesOfSpace(state.index, espacio).length : 0
   const h = document.createElement('h2')
-  h.textContent = state.index
-    ? `${indexSize(state.index)} cosas indexadas aquí`
-    : 'Listo para escuchar'
+  h.textContent = deEspacio
+    ? `${deEspacio} páginas de «${espacio}» en el mapa`
+    : state.index
+      ? `${indexSize(state.index)} cosas indexadas aquí`
+      : 'Listo para escuchar'
   wrap.appendChild(h)
 
   const p = document.createElement('p')
@@ -2536,6 +2656,29 @@ function showWelcome() {
     ? `Pregúntame sobre ${scope.label}. Si la respuesta está en algún sitio, te llevo.`
     : 'Pregúntame lo que quieras sobre este sitio.'
   wrap.appendChild(p)
+
+  // Un espacio SIN mapa propio (H21): entrar en él no abre la pantalla de
+  // contexto —el sitio ya pasó la primera configuración—, pero se dice en UNA
+  // línea con su botón. «Construir» son minutos de turnos de modelo, así que
+  // con uno del chat en vuelo nace apagado y `setStreaming` lo enciende (H6).
+  if (espacio && !hasMap(state.contexts, state.index, scopeKeyOf(state.site))) {
+    const linea = document.createElement('div')
+    linea.className = 'no-map'
+    const texto = document.createElement('span')
+    texto.textContent = `«${espacio}» aún no tiene mapa`
+    const construir = document.createElement('button')
+    construir.className = 'ghost small ' + NEEDS_IDLE
+    construir.type = 'button'
+    construir.textContent = 'Construir'
+    construir.setAttribute('aria-label', `Construir el mapa de «${espacio}»`)
+    construir.disabled = state.streaming
+    construir.addEventListener('click', () => {
+      if (state.streaming) return
+      generateContext().catch(console.error)
+    })
+    linea.append(texto, construir)
+    wrap.appendChild(linea)
+  }
 
   // «Qué mirar hoy» (H11): hasta `TODAY_LIMITS.emptyRows` filas de lo que ha
   // cambiado desde que lo miraste, entre la explicación y las sugerencias. Nace
@@ -2572,7 +2715,7 @@ function showWelcome() {
   wrap.appendChild(chips)
 
   el.chat.appendChild(wrap)
-  announce(h.textContent)
+  if (anunciar) announce(h.textContent)
 
   paintSearchChips(chips)
   // Fuera del pintado: leer los campos de la incidencia y los filtros favoritos
@@ -3097,6 +3240,13 @@ async function send() {
         page: { url: state.tabUrl, title: state.tabTitle },
         skill,
         digest,
+        // De qué ámbito es el contexto de arriba (H21): con un espacio o un
+        // proyecto, la cabecera del bloque lo dice; con el de todo el sitio, la
+        // de siempre.
+        contextScope: state.contextScope,
+        // Y, en un espacio sin contexto propio ni de todo el sitio, qué otros
+        // espacios de este host tienen mapa: una línea de Faro, sólo claves.
+        otherScopes: otherScopesWithMap(state.contexts, state.index, scopeKeyOf(state.site)).map((k) => k.slice('space:'.length)),
         // Desde Jira, el contexto del Confluence enlazado; null si no lo hay.
         linkedContext: state.linkedContext,
         // Y lo que la extensión contó del proyecto (H9): sólo lo usa Búsqueda
@@ -4443,10 +4593,17 @@ async function growTreeFromPage() {
   const conPadre = snap.pages.filter((p) => p.parentId)
   if (!conPadre.length) return
 
-  const arbol = normalizeIndex({ pages: snap.pages, updated: Date.now() }, state.site.host, state.index?.scope, {
-    cloud: state.site.cloud,
-    wikiPrefix: state.site.wikiPrefix,
-  })
+  // La barra lateral es SIEMPRE la del espacio de la pestaña, y sus filas llegan
+  // sin espacio: sin estamparlas, esas páginas no contarían para el mapa de este
+  // espacio (`hasMap`) ni para su subíndice (H21). Con una clave que no lo es,
+  // `stampSpace` deja el índice como estaba, que es lo de antes.
+  const arbol = stampSpace(
+    normalizeIndex({ pages: snap.pages, updated: Date.now() }, state.site.host, state.index?.scope, {
+      cloud: state.site.cloud,
+      wikiPrefix: state.site.wikiPrefix,
+    }),
+    state.site.spaceKey
+  )
   const antes = countWithParent(state.index || { pages: {} })
   // La barra lateral no sabe el espacio de cada fila ni ve las ramas plegadas:
   // lo que ya se sabía de padres y espacios se conserva.
@@ -4669,6 +4826,24 @@ async function offerNavigation(answer, bubble, skillId = state.skill, parts = []
   })
 
   if (!plan) {
+    // En un espacio SIN mapa propio (H21): no hay plan porque el árbol de este
+    // espacio no está en el índice, y eso se dice con la tarjeta que ofrece
+    // construirlo, en vez de un «sin navegación» mudo. Sólo detrás del
+    // planificador, sólo en Confluence y sólo si la respuesta apuntaba a algún
+    // sitio (como la tarjeta de sin índice): la guarda de arriba sigue mirando
+    // el índice ENTERO, así que un destino de OTRO espacio del índice sigue
+    // dando su tarjeta con el paso a paso, que empieza por «Espacio X». En Jira
+    // no cambia nada.
+    if (
+      state.site?.product === 'confluence' &&
+      isRealSpaceKey(state.site.spaceKey) &&
+      !hasMap(state.contexts, state.index, scopeKeyOf(state.site)) &&
+      (skill.alwaysPlan || shouldPlan(answer, { pages: { x: { title: 'x' } } }))
+    ) {
+      log.info('Sin navegación', 'este espacio no tiene mapa')
+      attachToBubble(bubble, sinMapaCard({ espacio: state.site.spaceKey }))
+      return
+    }
     if (reason) log.info('Sin navegación', reason)
     return
   }
@@ -5737,8 +5912,14 @@ function forgetNotes({ keepPage = false } = {}) {
   }
 }
 
-/** Sin índice no hay navegación: se dice, y se ofrece construirlo. */
-function sinMapaCard() {
+/**
+ * Sin índice no hay navegación: se dice, y se ofrece construirlo.
+ *
+ * Con `espacio` (H21) es la de un espacio SIN mapa propio en un sitio que sí
+ * tiene índice: el mapa se construye una vez por espacio, y la tarjeta lo dice.
+ * Sin él, la de siempre, letra a letra.
+ */
+function sinMapaCard({ espacio = '' } = {}) {
   const card = document.createElement('div')
   card.className = 'nav-card'
 
@@ -5748,12 +5929,13 @@ function sinMapaCard() {
 
   const title = document.createElement('div')
   title.className = 'nav-title'
-  title.textContent = 'Me falta el mapa de este sitio'
+  title.textContent = espacio ? 'Me falta el mapa de este espacio' : 'Me falta el mapa de este sitio'
 
   const text = document.createElement('div')
   text.className = 'nav-text'
-  text.textContent =
-    'Para llevarte a una página necesito su identificador y el árbol al que pertenece. Construir el contexto tarda un par de minutos y se hace una sola vez.'
+  text.textContent = espacio
+    ? `Para llevarte a una página de «${espacio}» necesito su árbol. Construirlo tarda un par de minutos y se hace una vez por espacio.`
+    : 'Para llevarte a una página necesito su identificador y el árbol al que pertenece. Construir el contexto tarda un par de minutos y se hace una sola vez.'
 
   const actions = document.createElement('div')
   actions.className = 'nav-actions'
@@ -6494,7 +6676,15 @@ function onSourcesInput() {
   }
 
   const exclude = state.sources.pages.map((p) => p.id)
-  const local = suggestFromIndex(indice, q, { limit: SOURCE_LIMITS.suggestions, exclude })
+  // El espacio de la pestaña DELANTE, sin excluir los demás (H21): una página
+  // base de otro espacio es legítima, pero a igual puntuación la del espacio en
+  // el que se está suele ser la que se busca. Desde un Jira no hay espacio y el
+  // orden es el de siempre.
+  const local = suggestFromIndex(indice, q, {
+    limit: SOURCE_LIMITS.suggestions,
+    exclude,
+    preferSpace: state.site?.product === 'confluence' ? state.site.spaceKey || '' : '',
+  })
   paintSuggestions(local)
   setSourcesStatus(local.length ? '' : 'Nada en el índice con ese título.')
   // Sin nadie a quien preguntar (un Jira Data Center sin Confluence enlazado)
@@ -7364,7 +7554,15 @@ async function paintState() {
   add('modelo', state.model ? modelKey(state.model) : '(ninguno)')
   add('sesión', state.sessionID || '(sin sesión)')
   add('índice', state.index ? `${indexSize(state.index)} entradas` : '(sin índice)')
-  add('contexto', state.contextMd ? `${state.contextMd.length} caracteres` : '(sin contexto)')
+  // El contexto es por ámbito (H21): el que va al prompt ahora, con su clave
+  // (la del espacio o el proyecto, o «*» si es el de todo el sitio), y cuántos
+  // más tiene guardados este host. Claves y cuentas, nunca el texto.
+  const otrosAmbitos = scopeKeys(state.contexts).filter((k) => k !== state.contextScope).length
+  add(
+    'contexto',
+    (state.contextMd ? `${state.contextScope || '*'}: ${state.contextMd.length} caracteres` : '(sin contexto)') +
+      (otrosAmbitos ? ` · otros: ${otrosAmbitos}` : '')
+  )
   if (state.linkedContext) add('Confluence enlazado', `${state.linkedContext.host} · ${state.linkedContext.contextMd.length} caracteres`)
   add('memoria', state.settings.crossSessionMemory ? `activa · ${state.memory?.entries?.length || 0} entradas` : 'desactivada')
 
@@ -7474,6 +7672,9 @@ async function showSettingsScreen() {
   $('settings-site-info').textContent = state.site
     ? `${state.site.host} · ${state.index ? indexSize(state.index) + ' entradas indexadas' : 'sin índice'} · ${state.contextMd ? 'con contexto' : 'sin contexto'}`
     : 'sin sitio'
+  // Los mapas y contextos de este sitio, ámbito a ámbito (H21): de lo que el
+  // panel tiene en memoria, sin leer nada, así que va antes de abrir.
+  paintScopeList()
   showScreen('screen-settings')
   // La pantalla se abre YA y la lista se rellena detrás: son dos lecturas del
   // almacén y abrir Ajustes no tiene por qué esperarlas.
@@ -7482,6 +7683,30 @@ async function showSettingsScreen() {
 
 /** Cuántos de los OTROS sitios con datos se nombran antes de contar el resto. */
 const OTHER_HOSTS_SHOWN = 4
+
+/**
+ * Las claves de unos ámbitos, para decir en «Qué guarda Faro de mí» DE QUÉ son
+ * los contextos guardados (H21): «SIMPL, DCPIAS y 2 más». Cada una RECONSTRUIDA
+ * por su validadora (`validSpaceKey`, `validProjectKey`) y no copiada; «*» es
+ * «todo el sitio»; lo que no valide no se nombra. Como mucho
+ * `OTHER_HOSTS_SHOWN`, igual que los otros hosts. Nunca el texto. Pura.
+ */
+function nombresDeAmbitos(claves) {
+  const nombres = []
+  for (const clave of claves) {
+    if (clave === '*') nombres.push('todo el sitio')
+    else if (clave.startsWith('space:')) {
+      const k = validSpaceKey(clave.slice('space:'.length))
+      if (k) nombres.push(k)
+    } else if (clave.startsWith('project:')) {
+      const k = validProjectKey(clave.slice('project:'.length))
+      if (k) nombres.push(k)
+    }
+  }
+  const nombra = nombres.slice(0, OTHER_HOSTS_SHOWN)
+  const resto = nombres.length - nombra.length
+  return nombra.join(', ') + (resto ? ` y ${resto} más` : '')
+}
 
 /**
  * «Qué guarda Faro de mí»: una fila por cosa guardada de ESTE sitio, con su
@@ -7558,8 +7783,21 @@ async function paintPrivacy() {
 
   const paginas = Object.keys(bundle.index?.pages || {}).length
   const incidencias = Object.keys(bundle.index?.issues || {}).length
-  add('índice de navegación', bundle.index ? `${paginas} páginas · ${incidencias} incidencias` : '(nada)')
-  add('contexto del sitio', bundle.contextMd ? `${bundle.contextMd.length} caracteres` : '(nada)')
+  // De cuántos espacios son esas páginas (H21): el mapa es por espacio.
+  const espacios = countPages(bundle.index).spaces
+  add('índice de navegación', bundle.index ? `${paginas} páginas en ${espacios} espacios · ${incidencias} incidencias` : '(nada)')
+  // El contexto es por ámbito (H21): cuántos hay y DE QUÉ son. Las claves se
+  // enseñan —igual que la del proyecto del perfil, §4.11: dicen de qué es lo
+  // guardado, no qué guarda— reconstruidas por las validadoras y nunca el texto.
+  // Lo guardado sale CRUDO del paquete y se normaliza aquí; un texto de antes de
+  // H21 que todavía no se haya reparado cuenta como un ámbito, el que se decida.
+  const contextos = normalizeContexts(bundle.contextRaw, {
+    legacyScope: legacyScopeOf(bundle, bundle.site),
+    legacyIndexedAt: bundle.site?.indexedAt,
+  })
+  const ambitos = scopeKeys(contextos).length
+  const claves = nombresDeAmbitos(scopeKeys(contextos))
+  add('contexto del sitio', ambitos ? `${ambitos} ámbitos con contexto (${claves})` : '(nada)')
 
   const resumenes = memory.normalizeMemory(bundle.memoryRaw).entries.length
   // Apagar la memoria no borra lo que ya hay: la pregunta de esta pantalla es
@@ -8182,7 +8420,11 @@ function wireEvents() {
     // un índice pendiente que el turno siguiente vuelva a escribir (P3).
     state.indexDirty = null
     state.ancestryFetched = new Map()
+    // Los contextos de TODOS los ámbitos del host se van con el sitio (la clave
+    // es una por host), y con ellos los dos derivados.
+    state.contexts = emptyContexts()
     state.contextMd = ''
+    state.contextScope = ''
     state.memory = { entries: [] }
     state.sessionID = null
     state.sources = emptySources()
@@ -9694,6 +9936,9 @@ async function generateContext({ keepContext = false } = {}) {
   if (!sitio) return
   const host = state.site.host
   const scope = defaultScope(sitio)
+  // Y el ÁMBITO (H21): el espacio o el proyecto de la pestaña al empezar. El
+  // contexto que salga de aquí es SUYO, se quede el usuario donde se quede.
+  const scopeKey = scopeKeyOf(sitio)
   const controller = new AbortController()
   state.indexingAbort = controller
   hideScreens()
@@ -9708,6 +9953,22 @@ async function generateContext({ keepContext = false } = {}) {
   let modeloDelIndexado = state.model
 
   try {
+    // El índice del host tiene un tope TOTAL (H21, decisión 9 de docs/PLAN2.md
+    // §8): con varios espacios mapeados, `persistIndex` escribe el objeto entero
+    // en cada turno. Al alcanzarse se PARA con un aviso, ANTES de leer nada, y
+    // no se desaloja ningún espacio solo: sería justo lo contrario de «que se
+    // guarde un árbol u otro». El usuario elige cuál olvidar en Ajustes.
+    if (sitio.product === 'confluence' && scopeKey.startsWith('space:') && spaceOverflow(state.index, sitio.spaceKey)) {
+      hideBusy()
+      const { pages, spaces } = countPages(state.index)
+      log.warn('Mapa lleno', `${host} · ${pages} páginas de ${spaces} espacios · tope ${INDEX_LIMITS.maxPagesTotal} · sin indexar ${scopeKey}`)
+      showNotice(
+        `El mapa de este sitio ya tiene ${pages} páginas de ${spaces} espacios (tope ${INDEX_LIMITS.maxPagesTotal}). ` +
+          `Olvida el mapa de alguno desde Ajustes para indexar el espacio ${sitio.spaceKey}.`,
+        true
+      )
+      return
+    }
     // Lo que la API del propio sitio da exacto, antes de gastar un turno: el
     // árbol del espacio (Confluence) o la muestra contada del proyecto (Jira
     // Data Center). Si no se puede, `rest.index` viene null y `buildContext`
@@ -9742,9 +10003,21 @@ async function generateContext({ keepContext = false } = {}) {
     // (revisión adversaria de H2, 2026-09-14). Y vale el sitio del PANEL: con
     // la pestaña en el correo, `state.site` es null y esto sigue siendo suyo.
     const sigueAqui = () => (state.site?.host ?? state.lastHost) === host
-    if (!keepContext) {
-      await memory.saveContextMd(host, contextMd)
-      if (sigueAqui()) state.contextMd = contextMd
+    // El contexto va bajo el host Y el ámbito capturados al empezar (H21,
+    // §8.22), y la clave es UNA por host con todos los ámbitos dentro: se lee,
+    // se funde el de este ámbito y se escribe, RELEYENDO justo antes de escribir.
+    // Otro indexado del mismo host que terminara en estos minutos (otro espacio,
+    // desde otra pestaña) habría escrito su ámbito, y escribir la copia de
+    // cuando se empezó se lo llevaría: con la relectura, la ventana es de
+    // milisegundos, como la del diario (§4.10). Con `keepContext` se conserva el
+    // texto de este ámbito —el que subió el usuario— y sólo se estampa que tiene
+    // mapa (`indexedAt`).
+    const actuales = await memory.getContexts(host)
+    const nuevos = withContext(actuales, scopeKey, { text: keepContext ? undefined : contextMd, indexedAt: Date.now() })
+    await memory.saveContexts(host, nuevos)
+    if (sigueAqui()) {
+      state.contexts = nuevos
+      applyScope()
     }
     const previo = sigueAqui() ? state.index : (await getIndex(host)).index
     // Y lo que un turno dejara APUNTADO de este host y todavía sin escribir:
@@ -9886,10 +10159,21 @@ function attachReindexButton({ keepContext = false } = {}) {
 async function uploadContext(ev) {
   const file = ev.target.files?.[0]
   if (!file) return
+  // El host y el ámbito se capturan ANTES del primer await (§8.22): leer el
+  // fichero es asíncrono y la pestaña puede cambiar mientras.
+  const host = state.site.host
+  const scopeKey = scopeKeyOf(state.site)
   const text = await file.text()
-  state.contextMd = text
-  await memory.saveContextMd(state.site.host, text)
-  await saveSite(state.site.host, { onboarded: true })
+  // El documento es del ÁMBITO de la pestaña (H21): subirlo en el espacio B no
+  // pisa el contexto del A. Leer-fundir-escribir con relectura, como el
+  // indexado: los demás ámbitos del host se conservan tal cual.
+  const actuales = await memory.getContexts(host)
+  const nuevos = await memory.saveContexts(host, withContext(actuales, scopeKey, { text }))
+  if ((state.site?.host ?? state.lastHost) === host) {
+    state.contexts = nuevos
+    applyScope()
+  }
+  await saveSite(host, { onboarded: true })
   // Escribe el mismo `onboarded` que «Omitir», así que apaga igual el arranque
   // que podría volver a enseñar la pantalla de contexto encima de esto.
   state.bootToken = {}
@@ -9901,6 +10185,167 @@ async function uploadContext(ev) {
   // El índice hace falta igual —sin él no hay navegación—, pero el documento
   // que acabas de traer no se toca.
   generateContext({ keepContext: true }).catch(() => {})
+}
+
+// ------------------------------------------------------- ámbitos (H21)
+
+/**
+ * Recalcula lo que depende del ÁMBITO de la pestaña (H21, docs/PLAN2.md §3.4).
+ *
+ * `state.contexts` guarda los contextos de TODO el host por ámbito; lo que va al
+ * prompt, a las referencias y a la cabecera es el del espacio o el proyecto que
+ * hay delante —el suyo, o el de todo el sitio si no tiene—. Es la ÚNICA función
+ * que asigna `state.contextMd` (salvo el vaciado a '' al cambiar de host o al
+ * olvidar el sitio): si cada llamante lo calculara a su manera, un camino
+ * acabaría metiendo en el prompt el contexto del espacio de antes. Sin ninguna
+ * lectura del almacén, así que cambiar de espacio es instantáneo.
+ *
+ * Sube el testigo de las sugeridas y vacía la memo de las referencias: las dos
+ * se calcularon con el contexto de antes, y una respuesta en vuelo de la pestaña
+ * no puede pintar sugerencias de otro espacio.
+ */
+function applyScope() {
+  const clave = scopeKeyOf(state.site)
+  state.contextMd = contextFor(state.contexts, clave)
+  state.contextScope = contextScopeFor(state.contexts, clave)
+  state.sourcesSuggest.token++
+  state.references = { propio: null, enlazado: null, index: null, items: null }
+}
+
+/**
+ * Bajo qué ámbito migra el contexto de antes de H21, que era UN texto por host.
+ *
+ * Sólo bajo el del índice guardado cuando se puede afirmar que es suyo: hay
+ * índice de esta versión (uno viejo se descarta y no dice nada), su ámbito es UN
+ * espacio o UN proyecto con clave válida, y el sitio dice cuándo se indexó. En
+ * cualquier duda —el índice de todo el sitio, un contexto subido a mano sin
+ * indexar después (`uploadContext` no cambia `index.scope`)— va a «*», que se
+ * enseña en todos los espacios: el comportamiento de antes, sin regresión.
+ * `normalizeContexts` lo vuelve a exigir por su lado. Pura.
+ */
+function legacyScopeOf(bundle, saved) {
+  const scope = bundle?.index?.scope
+  if (!bundle?.index || bundle.stale || !scope) return '*'
+  if (scope.kind !== 'space' && scope.kind !== 'project') return '*'
+  const indexado = saved?.indexedAt
+  if (typeof indexado !== 'number' || !Number.isFinite(indexado) || indexado <= 0) return '*'
+  return scopeKeyFromScope(scope)
+}
+
+/**
+ * «Mapas y contextos de este sitio», en Ajustes: una fila por ámbito con lo que
+ * Faro tiene de él y un «Olvidar el mapa» (H21).
+ *
+ * Los ámbitos son los que tienen contexto y, además, los espacios (Confluence) o
+ * proyectos (Jira) con algo en el índice: un espacio leído de la barra lateral
+ * tiene mapa aunque nunca se le haya generado contexto. Se pinta de lo que el
+ * panel tiene en memoria —son los mismos objetos que el olvido modifica— y con
+ * un solo ámbito se pinta igual: es la vista de lo que hay. Cuentas y claves,
+ * nunca contenido (§8.20): la clave dice DE QUÉ es lo guardado.
+ */
+function paintScopeList() {
+  const box = $('scope-list')
+  box.textContent = ''
+  if (!state.site) return
+  const claves = new Set(scopeKeys(state.contexts))
+  if (state.site.product === 'confluence') {
+    for (const p of Object.values(state.index?.pages || {})) {
+      const clave = scopeKeyOf({ product: 'confluence', spaceKey: p?.spaceKey })
+      if (clave !== '*') claves.add(clave)
+    }
+  } else if (state.site.product === 'jira') {
+    for (const i of Object.values(state.index?.issues || {})) {
+      const clave = scopeKeyOf({ product: 'jira', projectKey: i?.projectKey })
+      if (clave !== '*') claves.add(clave)
+    }
+  }
+  const ordenadas = [...claves].sort((a, b) => a.localeCompare(b, 'es'))
+  if (!ordenadas.length) {
+    const vacio = document.createElement('li')
+    const k = document.createElement('span')
+    k.className = 'k'
+    k.textContent = 'este sitio'
+    const v = document.createElement('span')
+    v.className = 'v'
+    v.textContent = 'sin mapa ni contexto todavía'
+    vacio.append(k, v)
+    box.appendChild(vacio)
+    return
+  }
+  for (const clave of ordenadas) {
+    const entrada = Object.hasOwn(state.contexts.scopes, clave) ? state.contexts.scopes[clave] : null
+    const partes = []
+    if (clave.startsWith('space:')) partes.push(`${pagesOfSpace(state.index, clave.slice('space:'.length)).length} páginas`)
+    if (entrada) partes.push(`contexto ${entrada.text.length} caracteres`)
+    if (entrada?.indexedAt) {
+      partes.push('mapa del ' + new Date(entrada.indexedAt).toLocaleDateString('es', { day: 'numeric', month: 'short' }))
+    } else {
+      partes.push(hasMap(state.contexts, state.index, clave) ? 'con mapa' : 'sin mapa')
+    }
+
+    const fila = document.createElement('li')
+    const k = document.createElement('span')
+    k.className = 'k'
+    k.textContent = scopeLabel(clave)
+    const v = document.createElement('span')
+    v.className = 'v'
+    v.textContent = partes.join(' · ')
+    const olvidar = document.createElement('button')
+    olvidar.className = 'ghost small ' + NEEDS_IDLE
+    olvidar.type = 'button'
+    olvidar.textContent = 'Olvidar el mapa'
+    olvidar.setAttribute('aria-label', ('Olvidar el mapa de ' + scopeLabel(clave)).replace(' de el ', ' del '))
+    olvidar.disabled = state.streaming
+    olvidar.addEventListener('click', () => {
+      if (state.streaming) return
+      forgetScope(clave).catch(console.error)
+    })
+    fila.append(k, v, olvidar)
+    box.appendChild(fila)
+  }
+}
+
+/**
+ * «Olvidar el mapa de X»: las páginas de ese espacio, su entrada de espacios,
+ * su `indexedAt` y su contexto (H21). Es lo que libera sitio cuando el mapa
+ * llega a su tope total («Mapa lleno»), y lo único que toca: los demás ámbitos
+ * del host se quedan como estaban.
+ *
+ * El host se captura antes del primer await y se comprueba al volver (§8.22).
+ * El contexto se relee antes de escribir —leer-fundir-escribir, como el
+ * indexado—: si otro indexado del mismo host escribió su ámbito entretanto, la
+ * copia de memoria se lo llevaría.
+ */
+async function forgetScope(key) {
+  const host = state.site?.host || ''
+  if (!host || state.streaming) return
+  const espacio = key.startsWith('space:') ? key.slice('space:'.length) : ''
+  const paginas = espacio ? pagesOfSpace(state.index, espacio).length : 0
+  const caracteres = contextFor(state.contexts, key, { fallback: '' }).length
+  try {
+    if (espacio && state.index) {
+      state.index = withoutSpace(state.index, espacio)
+      // Un índice apuntado y todavía sin escribir (P3) de este host llevaría el
+      // espacio de vuelta en la escritura del final del turno o al fundirlo un
+      // indexado: se apunta el de ahora, que ya no lo tiene.
+      if (state.indexDirty?.host === host) state.indexDirty = { host, index: state.index }
+      await saveIndex(host, state.index)
+    }
+    const actuales = await memory.getContexts(host)
+    const guardados = await memory.saveContexts(host, withoutContext(actuales, key))
+    if (state.site?.host !== host) return
+    state.contexts = guardados
+    applyScope()
+  } catch (err) {
+    // §8.14: un olvido que no se pudo escribir no puede parecer hecho.
+    log.warn('Mapa olvidado', `${host} · ${key} · no se pudo escribir: ${err?.message || err}`)
+    announce('No he podido olvidar ese mapa.')
+    paintScopeList()
+    return
+  }
+  log.info('Mapa olvidado', `${host} · ${key} · ${paginas} páginas · ${caracteres} caracteres`)
+  announce(`Olvidado el mapa de ${scopeLabel(key)}.`.replace(' de el ', ' del '))
+  paintScopeList()
 }
 
 async function newSession() {
@@ -10646,6 +11091,8 @@ function observationCount(answer, anchors) {
  * 10; las cuatro pastillas que puede llegar a ofrecer H8 lo pasan, y ahí se
  * degrada. Es aritmética, no una medida: queda por confirmar a 320 px en el
  * espejo del banco, que es lo único que mide de verdad (`faroPreview.check()`).
+ * Desde H21 la línea «X aún no tiene mapa» de un espacio sin mapa cuenta como
+ * una línea más: con ella y las tres filas se llega justo a 9.
  */
 const EMPTY_LIMITS = {
   lines: 10,
@@ -10666,12 +11113,15 @@ function todayEnabled() {
  * El criterio no MIDE nada: cuenta piezas, que es lo único que se puede decidir
  * sin tener el panel delante (y el panel puede estar oculto cuando se pinta).
  */
-function emptyFits(rows, chips) {
+function emptyFits(rows, chips, noMap = false) {
   // El rótulo y el «Ver todo» que acompañan a las filas.
   const deHoy = rows > 0 ? rows + 2 : 0
+  // La línea «X aún no tiene mapa» de un espacio sin mapa propio (H21), que va
+  // entre la explicación y las filas: una línea más, como una fila.
+  const deMapa = noMap ? 1 : 0
   // Y el rótulo de las pastillas, más las líneas que ocupen envolviendo.
   const dePastillas = chips > 0 ? 1 + Math.ceil(chips / EMPTY_LIMITS.chipsPerLine) : 0
-  return deHoy + SUGGESTION_COUNT + dePastillas <= EMPTY_LIMITS.lines
+  return deHoy + deMapa + SUGGESTION_COUNT + dePastillas <= EMPTY_LIMITS.lines
 }
 
 /** Lo que se ve de «hoy», de una vez: la insignia, el chat vacío y la pantalla si está abierta. */
@@ -10725,7 +11175,10 @@ function paintTodayBlock(box = null, { chips = null } = {}) {
 
   const filas = todas.slice(0, TODAY_LIMITS.emptyRows)
   const pastillas = Number.isInteger(chips) ? chips : el.chat.querySelectorAll('.empty .search-chip').length
-  if (!emptyFits(filas.length, pastillas)) {
+  // La línea del espacio sin mapa (H21) ya está pintada cuando se llega aquí:
+  // `showWelcome` la cuelga antes de pedir los chips.
+  const sinMapa = !!el.chat.querySelector('.empty .no-map')
+  if (!emptyFits(filas.length, pastillas, sinMapa)) {
     // No cabe: una línea, y lo demás en su pantalla. Quien abre el panel para
     // preguntar algo no puede encontrarse media pantalla de recomendaciones.
     caja.appendChild(todayMoreButton(`Qué mirar hoy (${todas.length})`))

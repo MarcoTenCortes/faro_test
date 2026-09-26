@@ -19,6 +19,7 @@
  */
 
 import { STORAGE_KEYS } from '../shared/config.js'
+import { emptyContexts, normalizeContexts } from '../shared/scopes.js'
 import { memorySummaryPrompt } from './prompts.js'
 
 const MAX_ENTRIES = 40
@@ -88,14 +89,52 @@ export function normalizeMemory(raw, { now = Date.now() } = {}) {
   return { entries }
 }
 
-export async function getContextMd(host) {
+/**
+ * Los contextos del sitio (los CONTEXT.md), uno por ÁMBITO dentro de la misma
+ * clave por host (H21, docs/PLAN2.md §3.4, opción (iii) del anexo 2-D).
+ *
+ * Hasta H21 `faro:context:<host>` era UN texto y generar el contexto de un
+ * segundo espacio pisaba el del primero. Ahora es `{version: 2, scopes}`
+ * (`normalizeContexts`, scopes.js), y sigue siendo la misma clave en la misma
+ * área: el olvido derivado de H13 se la lleva entera sin tocar nada, y el
+ * arranque la sigue leyendo en el paquete del sitio (`contextRaw`).
+ *
+ * Como `getMemory`: lo guardado que no era ya un objeto v2 normalizado —el
+ * texto de antes de H21, o algo editado a mano— se REPARA una vez, escribiendo
+ * lo normalizado; sin eso la migración se repetiría en cada lectura con un
+ * `at` distinto. Sin nada guardado no se crea la clave, y si la reparación no
+ * se puede escribir se lee normalizado igual. `legacyScope`/`legacyIndexedAt`
+ * dicen bajo qué ámbito migra un texto viejo, y los decide quien llama con
+ * prudencia: ante cualquier duda, `'*'`.
+ */
+export async function getContexts(host, { legacyScope = '*', legacyIndexedAt = null } = {}) {
+  const got = await chrome.storage.local.get(STORAGE_KEYS.context(host))
   const key = STORAGE_KEYS.context(host)
-  const got = await chrome.storage.local.get(key)
-  return got[key] || ''
+  if (!(key in got)) return emptyContexts()
+  const contexts = normalizeContexts(got[key], { legacyScope, legacyIndexedAt })
+  if (JSON.stringify(contexts) !== JSON.stringify(got[key])) {
+    try {
+      await saveContexts(host, contexts)
+    } catch {
+      /* se lee normalizado igual; sólo se pierde la reparación */
+    }
+  }
+  return contexts
 }
 
-export async function saveContextMd(host, md) {
-  await chrome.storage.local.set({ [STORAGE_KEYS.context(host)]: String(md || '') })
+/**
+ * Nunca se persiste nada que no pase por `normalizeContexts`. Sin ningún
+ * ámbito se QUITA la clave, como hace `saveProfile`: guardar un objeto vacío
+ * dejaría una clave que «Qué guarda Faro de mí» tendría que explicar.
+ */
+export async function saveContexts(host, ctxs) {
+  const limpio = normalizeContexts(ctxs)
+  if (!Object.keys(limpio.scopes).length) {
+    await chrome.storage.local.remove(STORAGE_KEYS.context(host))
+    return limpio
+  }
+  await chrome.storage.local.set({ [STORAGE_KEYS.context(host)]: limpio })
+  return limpio
 }
 
 /**

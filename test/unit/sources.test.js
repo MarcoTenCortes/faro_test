@@ -562,3 +562,31 @@ test('SEGURIDAD: el Confluence enlazado sólo se acepta como un nombre de host y
   }
   eq(linkedSite({ host: 'confluence.x', wikiPrefix: 7 }).wikiPrefix, '')
 })
+
+// ---- H21: el espacio de la pestaña delante ---------------------------------------
+
+const VARIOS = {
+  version: 3,
+  pages: {
+    10: { id: '10', title: 'Arquitectura de OPS', spaceKey: 'OPS', path: '/spaces/OPS/pages/10' },
+    11: { id: '11', title: 'Arquitectura de ENG', spaceKey: 'ENG', path: '/spaces/ENG/pages/11' },
+    12: { id: '12', title: 'Arquitectura', spaceKey: 'OPS', path: '/spaces/OPS/pages/12' },
+    13: { id: '13', title: 'Arquitectura base', spaceKey: 'ENG', path: '/spaces/ENG/pages/13' },
+  },
+}
+
+test('H21: suggestFromIndex con preferSpace, a igual puntuación, pone delante el espacio de la pestaña', () => {
+  const ids = (o) => suggestFromIndex(VARIOS, 'arquitectura', o).map((s) => s.id)
+  eq(ids(), ['12', '13', '11', '10'], 'sin preferencia: puntuación y título')
+  eq(ids({ preferSpace: 'ENG' }), ['12', '13', '11', '10'], 'la puntuación sigue mandando: la exacta de OPS va primero')
+  eq(ids({ preferSpace: 'OPS' }), ['12', '10', '13', '11'], 'y a igual puntuación, las de OPS delante, cada grupo por título')
+  eq(suggestFromIndex(VARIOS, 'arquitectura de', { preferSpace: 'ENG' }).map((s) => s.id), ['11', '10'], 'no excluye las del otro espacio')
+})
+
+test('H21: sin preferSpace (o con uno que no vale) suggestFromIndex da lo de siempre', () => {
+  for (const q of ['arqui', 'ROTACION', 'runbook', '20', 'a']) {
+    const antes = suggestFromIndex(INDEX, q)
+    for (const preferSpace of ['', '~', null, undefined, 7, 'NADA']) eq(suggestFromIndex(INDEX, q, { preferSpace }), antes, q + ' · ' + JSON.stringify(preferSpace))
+  }
+  eq(suggestFromIndex(VARIOS, 'arquitectura', { preferSpace: '_' }).map((s) => s.id), ['12', '13', '11', '10'])
+})

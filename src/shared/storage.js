@@ -220,7 +220,12 @@ export async function getSiteBundle(host, { extra = BUNDLE_EXTRA_KEYS } = {}) {
     site: sites[host] || null,
     index,
     stale,
-    contextMd: got[STORAGE_KEYS.context(host)] || '',
+    // Desde H21 el contexto es por ámbito (`{version: 2, scopes}`, scopes.js) y
+    // antes era un texto: sale CRUDO, sea lo que sea, como la memoria. Lo
+    // normaliza quien lo usa, porque la migración de un texto viejo necesita
+    // saber bajo qué ámbito va (el del índice guardado, si se puede afirmar), y
+    // eso lo decide el panel con el índice y el registro del sitio delante.
+    contextRaw: got[STORAGE_KEYS.context(host)] ?? null,
     memoryRaw: got[STORAGE_KEYS.memory(host)] ?? null,
     extras,
   }

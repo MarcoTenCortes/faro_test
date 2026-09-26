@@ -149,11 +149,14 @@ test('bundle: todo lo del sitio sale de UNA lectura, con claves exactas', async 
       const bundle = await getSiteBundle(HOST)
       eq(diario.gets.length, 1, 'una sola petición al almacén')
       eq(diario.gets[0], bundleKeys(HOST), 'y con las claves del paquete')
-      eq(Object.keys(bundle).sort(), ['contextMd', 'extras', 'index', 'memoryRaw', 'site', 'stale'])
+      // EL CAMBIO (H21): `contextMd` pasa a `contextRaw`. El contexto es por ámbito
+      // desde H21 y lo guardado puede ser el texto de antes o el objeto nuevo:
+      // sale CRUDO y lo normaliza el panel, que sabe bajo qué ámbito migrarlo.
+      eq(Object.keys(bundle).sort(), ['contextRaw', 'extras', 'index', 'memoryRaw', 'site', 'stale'])
       eq(bundle.site, SITIO)
       eq(bundle.index, INDICE)
       eq(bundle.stale, false)
-      eq(bundle.contextMd, '# Contexto')
+      eq(bundle.contextRaw, '# Contexto', 'el texto de antes de H21 sale tal cual')
       eq(bundle.memoryRaw, { entries: [{ at: 1, text: 'algo' }] }, 'la memoria sale tal cual: la normaliza quien la usa')
       eq(bundle.extras, { profile: null, sourceHistory: null, activity: null })
       eq(diario.sets, [], 'leer no escribe nada')
@@ -161,10 +164,39 @@ test('bundle: todo lo del sitio sale de UNA lectura, con claves exactas', async 
   )
 })
 
+test('H21: el contexto por ámbito sale CRUDO del paquete, sea el objeto nuevo o basura', async () => {
+  const objeto = { version: 2, scopes: { 'space:ENG': { text: 'eng', at: 1, indexedAt: 2, legacy: false }, raro: { onclick: 'x' } } }
+  await conChrome({ [`faro:context:${HOST}`]: objeto }, async (diario) => {
+    const bundle = await getSiteBundle(HOST)
+    eq(bundle.contextRaw, objeto, 'tal cual: aquí no se decide su forma')
+    eq('contextMd' in bundle, false, 'y ya no hay un contextMd suelto al lado')
+    eq(diario.gets.length, 1, 'sigue siendo una sola lectura')
+    eq(diario.sets, [], 'y leer no escribe')
+  })
+  await conChrome({ [`faro:context:${HOST}`]: 0 }, async () => {
+    eq((await getSiteBundle(HOST)).contextRaw, 0, 'un valor falso guardado sale como está, no como null')
+  })
+})
+
+test('H21: «Olvidar este sitio» se lleva el objeto de contextos entero, con todos sus ámbitos', async () => {
+  const ctxs = {
+    version: 2,
+    scopes: {
+      'space:ENG': { text: 'eng', at: 1, indexedAt: 2, legacy: false },
+      'space:OPS': { text: 'ops', at: 3, indexedAt: null, legacy: true },
+    },
+  }
+  await conChrome({ [`faro:context:${HOST}`]: ctxs, [`faro:context:${OTRO}`]: ctxs }, async (diario, local) => {
+    await forgetEverythingFor(HOST)
+    eq(`faro:context:${HOST}` in local, false, 'los dos ámbitos se van con la clave: no hay una clave por espacio que se quede')
+    eq(local[`faro:context:${OTRO}`], ctxs, 'y el del otro host no se toca')
+  })
+})
+
 test('bundle: sin nada guardado no hay sitio, ni índice, ni contexto, ni memoria', async () => {
   await conChrome({}, async (diario) => {
     const bundle = await getSiteBundle(HOST)
-    eq(bundle, { site: null, index: null, stale: false, contextMd: '', memoryRaw: null, extras: { profile: null, sourceHistory: null, activity: null } })
+    eq(bundle, { site: null, index: null, stale: false, contextRaw: null, memoryRaw: null, extras: { profile: null, sourceHistory: null, activity: null } })
     eq(diario.removed, [], 'y no se borra nada')
   })
 })
@@ -175,7 +207,7 @@ test('bundle: el sitio es el de ESTE host, no el mapa entero', async () => {
       site: null,
       index: null,
       stale: false,
-      contextMd: '',
+      contextRaw: null,
       memoryRaw: null,
       extras: { profile: null, sourceHistory: null, activity: null },
     })
@@ -215,7 +247,7 @@ test('bundle: una clave prevista viaja en la MISMA lectura y su valor sale sin t
     eq(diario.gets.length, 1, 'sigue siendo una sola lectura')
     eq(diario.gets[0].length, 5, 'con la clave nueva dentro')
     eq(bundle.extras, { session: guardado }, 'tal cual está guardado: aquí no se decide su forma')
-    eq(Object.keys(bundle).sort(), ['contextMd', 'extras', 'index', 'memoryRaw', 'site', 'stale'], 'y el paquete no gana claves sueltas')
+    eq(Object.keys(bundle).sort(), ['contextRaw', 'extras', 'index', 'memoryRaw', 'site', 'stale'], 'y el paquete no gana claves sueltas (H21: contextRaw en vez de contextMd)')
   })
   await conChrome({}, async () => {
     const bundle = await getSiteBundle(HOST, { extra: ['session'] })
