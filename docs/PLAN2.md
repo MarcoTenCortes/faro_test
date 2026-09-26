@@ -499,7 +499,8 @@ guarda Faro de mí».
   una clave de opencode Zen sí funcionarían); `normalizeModelChecks` y
   `modelVerdict` con reloj inyectado; `recommendModel` sólo PRESELECCIONA en
   la pantalla (último ok → `config.model` de opencode → un default de
-  proveedor sin fallo → nada); `pickAlternativeModel` y `pickPlannerModel`
+  proveedor sin fallo → nada); `pickAlternativeModel` (borrada en H17: sin
+  uso desde que errorNode elige con pickRetryModel) y `pickPlannerModel`
   saltan lo que ya falló (se acaba el bucle `gpt-5.4 ⇄ claude-sonnet-4.6`, y
   el planificador deja de caer en `gpt-5.3-codex-spark`). `fillModels` no
   asigna un modelo que no está en la lista.
@@ -1009,7 +1010,8 @@ Reglas transversales, que salen de los dos juicios y valen para todos:
 - **Qué**: la parte pura y los arreglos que el fallo del compañero exige, sin
   pantalla nueva (§3.3): `classifyModelFailure`, `availableFromError`, el
   veredicto de proveedor, `usableModels`, `recommendModel`,
-  `normalizeModelChecks`, `modelVerdict`; `pickAlternativeModel` y
+  `normalizeModelChecks`, `modelVerdict`; `pickAlternativeModel` (borrada en
+  H17: sin uso desde que errorNode elige con pickRetryModel) y
   `pickPlannerModel` saltando fallos; `client.models()` con `capabilities` e
   `isDefault`; `settings.model` global con migración desde `saved.model` y
   `faro:model-checks` en `STORAGE_KEYS`/`STORAGE_AREAS`;
@@ -1111,6 +1113,35 @@ Reglas transversales, que salen de los dos juicios y valen para todos:
 - **Riesgo**: alto. Es la tercera salida del arranque junto a claves y
   contexto y se cruza con P5 (`mcpPending`, `showMcpPending`,
   `puedeAbrirPantalla`).
+- **Hecho el 2026-09-26** (rama `plan/h17-modelos-ii`): todo lo de «Qué». La
+  pantalla `screen-model` con sus cinco modos (`primera-vez`, `ajustes`,
+  `error`, `setup`, `indexado`), la flecha oculta salvo en `ajustes` y
+  `error`, «Usar este modelo» (gratis) y «Comprobar» (la ÚNICA sonda,
+  `client.probeModel` con `variant` y `MODEL_LIMITS.probeMs`, sólo probada con
+  fetch falso), el modo sin proveedores; en `bootForSite` la pantalla antes de
+  las páginas base y de `checkMcp` con `primeraVez` decidido antes del modelo,
+  `mcpCheck`/`mcpPending` soltados y rearranque real al elegir; las vueltas a
+  ella desde el error de un turno («Elegir otro modelo» siempre, la pregunta
+  al cuadro sin mandarse), la verificación de las claves (repite sólo
+  `finishSetup`) y el indexado (con su `keepContext`), con su aviso en el chat
+  cuando taparía algo; «Cambiar el modelo» en Ajustes; Escape que no pulsa un
+  botón oculto; `state.configModel` (sólo `config.model`); y el espejo con las
+  fixtures reales y «Primer uso (encadenado)». `pickAlternativeModel` borrada
+  con sus pruebas. Dos títulos («Modelo elegido», «Modelo comprobado»); 1377
+  pruebas (+5); las 37 instantáneas intactas; 29 + 27 mutaciones (una viva,
+  equivalente). Desvíos: `state.modelAceptado` (sin él, elegir a sabiendas un
+  modelo con fallo apuntado volvía a sacar la pantalla en bucle);
+  `.icon-btn.back[hidden] { display: none; }` (la flecha «oculta» se veía); un
+  fallo de opencode en la sonda (`OpencodeError`) no se apunta como veredicto;
+  «Elegir otro modelo» también en los errores que no son del proveedor; la
+  variable sigue llamándose `avisoModelo`; y un sitio configurado pero sin
+  `onboarded` sigue sin pantalla del modelo (sólo el Registro). El espejo SÍ
+  está medido (Browser pane, 2026-09-26: `check()` en verde en `screen-model` a
+  320/420 × claro y oscuro, el recorrido del primer uso 4/4 y el modo vacío), y
+  medirlo destapó un TDZ del propio espejo —dos `const` usadas antes de
+  inicializarse tumbaban `arrancar()`— arreglado en el mismo commit. Sin
+  verificar: nada en la extensión, ninguna sonda real. La bitácora, en
+  CLAUDE.md §12.5.
 
 ### H18 · MCP automático: alta por PATCH /global/config, ruta absoluta de uvx y respaldo manual
 
@@ -1550,7 +1581,12 @@ a partirse si en su revisión adversaria salen más de ~15 hallazgos.
   verificado»; «Quitar las claves» y comprobar la entrada deshabilitada sin
   tokens; que el `verified: false` de una adopción aparezca y se vaya; y, con
   permiso de gasto, `openai/gpt-5.4` → `plan` en menos de 1,5 s y
-  `github-copilot/gpt-5.6-luna` → ok en una request.
+  `github-copilot/gpt-5.6-luna` → ok en una request. **Tras H17 sigue
+  pendiente**: la sonda («Comprobar», `client.probeModel`) existe y sólo se
+  ha probado con fetch falso; que opencode 1.2.25 acepte de verdad `variant`
+  en `prompt_async`, que un mudo se corte a los 15 s y que la sesión «Faro ·
+  probando modelo» no quede en opencode (abort + DELETE) se ve la primera vez
+  que alguien pulse «Comprobar» con ese permiso.
 - **Supuestos que sólo se cierran allí**: que un rechazo de Copilot no cuenta
   como request; que la configuración de PROYECTO tapa a la global (por eso se
   relee `GET /config`); ~~que `uvx mcp-atlassian@0.23.1` arranca con esa
@@ -1572,7 +1608,10 @@ a partirse si en su revisión adversaria salen más de ~15 hallazgos.
   CLAUDE.md §12.2): las tres pantallas encadenadas del primer uso con sus
   esperas de hasta 120 s —riesgo ACEPTADO: el panel no corre en el banco y
   el modo del espejo de H17 sólo mide cada pantalla por separado, así que la
-  máquina de estados de §3.3 sólo se recorre entera aquí—, la cabecera «comprobando…» durante el PATCH, el
+  máquina de estados de §3.3 sólo se recorre entera aquí; H17 lo dejó así:
+  «Primer uso (encadenado)» del espejo pasa por conexión → modelo → claves →
+  contexto midiendo cada una, pero no rearranca nada—, la pantalla «Elige el
+  modelo» con su flecha oculta y Escape sin efecto en el primer uso, la cabecera «comprobando…» durante el PATCH, el
   panel de OTRA ventana durante una escritura, «Analizar»/«Dibujar el flujo»
   dejando la pregunta sin mandarla, y el puntero de verdad moviéndose.
 - **Un lector de pantalla** con la lista de 43 modelos y su filtro, la espera

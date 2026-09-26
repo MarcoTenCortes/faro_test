@@ -958,7 +958,11 @@ test('H3: el arranque dice cuánto tardó cada fase, y la del MCP es la que se v
   // contexto y el chat, y la de las claves es justo la que enseña lo que cuesta
   // el MCP— y la de «sin opencode» no mide nada. Se cuenta sobre el fuente SIN
   // comentarios: el pin contaba 4 llamadas y una era la del comentario de encima.
-  eq(arranque.split('medir()').length - 1, 3, 'medir() se llama en las tres salidas que llegan a medir algo')
+  // Desde H17 son CINCO: la pantalla «Elige el modelo» del primer uso es otra
+  // salida del arranque (antes de las claves), con su variante de la lista de
+  // modelos caída y sin ningún modelo guardado; las dos miden lo que costó
+  // llegar hasta ahí, que es lo que se esperó antes de ver la pantalla.
+  eq(arranque.split('medir()').length - 1, 5, 'medir() se llama en las cinco salidas que llegan a medir algo')
   const claves = arranque.slice(arranque.indexOf('if (faltanClaves(r)) {'))
   assert(claves.indexOf('medir()') < claves.indexOf('return'), 'la salida por la pantalla de claves mide antes de volver')
   // La salida «sin opencode» no registra un arranque verde que no hubo, y además
@@ -4276,7 +4280,9 @@ test('H16: el modelo es de la persona, y un fallo por modelo no culpa a las clav
   // (1) El arranque RESUELVE el modelo con la lista delante: los veredictos se
   // leen después de la lista (su huella son los modelos), con el testigo al
   // volver, y `resolveModel` decide antes de pintar el desplegable.
-  const paso3 = corte(JS_SIN, 'async function bootForSite(', 'const primeraVez = !saved?.configured')
+  // Hasta el MCP: desde H17 `primeraVez` se decide ANTES del modelo, así que ya
+  // no marca el final del paso 3.
+  const paso3 = corte(JS_SIN, 'async function bootForSite(', 'const comprobacion = checkMcp(')
   orden(
     paso3,
     [
@@ -4292,7 +4298,10 @@ test('H16: el modelo es de la persona, y un fallo por modelo no culpa a las clav
   )
   assert(paso3.includes('settingsModel: state.settings.model,') && paso3.includes('savedModel: saved?.model,'), 'primero lo de la persona, y el del sitio sólo como migración')
   assert(!/saved\?\.model \|\|/.test(paso3), 'el modelo del sitio ya no manda por delante de todo')
-  eq(paso3.split('fillModels(').length - 1, 1, 'el desplegable se pinta UNA vez, con el modelo ya resuelto')
+  // Dos desde H17, y en caminos que no se cruzan: la salida del primer uso a «Elige
+  // el modelo» (que pinta lo que haya y vuelve) y la de siempre.
+  eq(paso3.split('fillModels(').length - 1, 2, 'el desplegable se pinta una vez por camino, con el modelo ya resuelto')
+  eq(corte(paso3, 'if (primeraVez && sinModelo) {', 'if (!elegido) {').split('fillModels(').length - 1, 1, 'una en la salida a la pantalla del primer uso')
   // Sólo sin modelo propio: `resolveModel` cae en el del sitio también cuando el
   // de la persona tiene un fallo apuntado, y escribir ahí sería cambiarle la
   // elección por detrás en cada arranque.
@@ -4352,7 +4361,7 @@ test('H16: el modelo es de la persona, y un fallo por modelo no culpa a las clav
     apartar,
     [
       'let apartado = null',
-      "if (state.settings.model && resuelto.source !== 'settings') {",
+      "if (state.settings.model && resuelto.source !== 'settings' && !aceptado) {",
       'const veredicto = modelVerdict(checks, state.settings.model, ahora)',
       "'Modelo no disponible',",
       '`${suyo}: fallo apuntado (${veredicto.reason}) · se preselecciona otro esta vez`',
@@ -4363,15 +4372,29 @@ test('H16: el modelo es de la persona, y un fallo por modelo no culpa a las clav
   assert(/log\.warn\(\s*'Modelo no disponible',/.test(apartar), 'como aviso del Registro')
   orden(
     paso3,
-    ['} else if (apartado && state.model) {', 'avisoModelo =', 'elige otro en el desplegable si no te vale.'],
+    ['} else if (apartado && state.model) {', 'avisoModelo =', 'elige otro si no te vale, o pulsa «Comprobar» para volver a probar el tuyo.'],
     'y el aviso se prepara con el modelo que de verdad queda'
   )
   // El aviso, DESPUÉS de restaurar la conversación (que vacía el chat) y con
   // el testigo comprobado.
+  // Desde H17 el motivo abre la pantalla «Elige el modelo» (con la flecha a la
+  // vista: el chat ya vive con la preselección) o, si taparía algo, su aviso con
+  // «Elegir otro modelo». Sigue siendo DESPUÉS de restaurar y con el testigo.
   const tras = corte(JS_SIN, '  await restoreConversation(testigo)\n', 'refreshProfileSoon(testigo)')
-  orden(tras, ['if (state.bootToken !== testigo) return', 'medir()', 'if (avisoModelo) showNotice(avisoModelo, true)'], 'el aviso del modelo sale tras restaurar')
+  orden(
+    tras,
+    [
+      'if (state.bootToken !== testigo) return',
+      'medir()',
+      'if (avisoModelo) {',
+      "if (puedeAbrirPantalla()) showModelScreen({ modo: 'ajustes', motivo: avisoModelo, marcado: state.model })",
+      "else attachModelNotice(avisoModelo, { marcado: state.model, modo: 'ajustes' })",
+    ],
+    'el motivo del modelo sale tras restaurar: pantalla si se puede, aviso si no'
+  )
   const antesDeRestaurar = corte(JS_SIN, 'async function bootForSite(', '  await restoreConversation(testigo)\n')
-  assert(!/showNotice\(avisoModelo/.test(antesDeRestaurar), 'y no antes: restoreConversation se lo llevaría')
+  assert(!/showNotice\(avisoModelo|motivo: avisoModelo|attachModelNotice\(avisoModelo/.test(antesDeRestaurar), 'y no antes: restoreConversation se lo llevaría')
+  assert(!/showNotice\(avisoModelo/.test(JS_SIN), 'ya no es un aviso suelto: es el motivo de la pantalla')
   // Sin lista, lo de siempre: el aviso de P4 y ningún ajuste tocado.
   const sinLista = corte(paso3, '} else {', "showNotice('No he podido leer la lista de modelos: ")
   assert(!/saveSettings\(|getModelChecks\(/.test(sinLista), 'sin lista de modelos no se decide nada del modelo')
@@ -4608,4 +4631,251 @@ test('H16: el modelo es de la persona, y un fallo por modelo no culpa a las clav
   orden(espejo, ["['modelo elegido',", "['veredictos de modelos',", "['espacio usado',"], 'el espejo enseña las dos filas globales donde el panel')
   assert(espejo.includes("' · no disponible'") && JS.includes("' · no disponible'"), 'y el sufijo del desplegable es el mismo: los dos textos se han separado')
   assert(/NO_DISPONIBLES\.has\(n\) \? ' · no disponible' : ''/.test(espejo), 'con alguna opción marcada')
+})
+
+test('H17: el modelo se elige en su pantalla antes de las claves, y todo fallo por modelo vuelve a ella', () => {
+  // docs/PLAN2.md §3.3, la máquina del primer uso: sin modelo resuelto, «Elige el
+  // modelo» ANTES de lanzar `checkMcp`; y la verificación de las claves, el
+  // indexado y un turno que fallan por el modelo vuelven a ella. Todo sobre el
+  // fuente SIN comentarios, recortado por CÓDIGO y con cada marca comprobada
+  // (la lección de la revisión de H15: un indexOf ausente da verde).
+  const JS_SIN = sinComentarios(JS)
+  const corte = (src, desde, hasta) => {
+    const i = src.indexOf(desde)
+    assert(i >= 0, 'falta la marca de inicio del recorte: ' + desde)
+    const j = src.indexOf(hasta, i + desde.length)
+    assert(j > i, 'falta la marca de final del recorte (o va antes): ' + hasta)
+    return src.slice(i, j)
+  }
+  const orden = (src, marcas, msg) => {
+    let desde = 0
+    for (let k = 0; k < marcas.length; k++) {
+      const p = src.indexOf(marcas[k], desde)
+      assert(p >= 0, msg + `: falta «${marcas[k]}»` + (k ? ` detrás de «${marcas[k - 1]}»` : ''))
+      desde = p + marcas[k].length
+    }
+  }
+
+  // (1) El primer uso: la pantalla va ANTES de las páginas base y del MCP, dentro
+  // de su guarda, con lo del MCP soltado delante y un `return` detrás.
+  const arranque = corte(JS_SIN, 'async function bootForSite(', 'function currentProfile(')
+  orden(
+    arranque,
+    [
+      'const primeraVez = !saved?.configured && !saved?.skippedKeys',
+      'if (Array.isArray(modelos?.models)) {',
+      'const sinModelo = !elegido || !!apartado',
+      'if (primeraVez && sinModelo) {',
+      'fillModels(modelos.models, elegido)',
+      'state.mcpCheck = null',
+      'state.mcpPending = null',
+      "showModelScreen({\n        modo: 'primera-vez',",
+      'marcado: elegido,',
+      'medir()',
+      'return',
+      'if (!elegido) {',
+      'paintSourcesUi()',
+      'const comprobacion = checkMcp(client, testigo, saved)',
+    ],
+    'sin modelo en el primer uso, la pantalla antes de todo lo demás'
+  )
+  eq(arranque.split('const primeraVez =').length - 1, 1, 'la primera vez se decide UNA vez, antes del modelo')
+  const guarda = corte(arranque, 'if (primeraVez && sinModelo) {', 'if (!elegido) {')
+  assert(!/checkMcp\(|mcpResultSoon\(|await /.test(guarda), 'en esa salida no se lanza ni se espera nada del MCP')
+  // La lista de modelos caída (P4): el aviso de siempre, y SÓLO sin ningún modelo
+  // guardado, la pantalla en su modo vacío.
+  const sinLista = corte(arranque, "showNotice('No he podido leer la lista de modelos: ", 'const comprobacion = checkMcp(')
+  orden(
+    sinLista,
+    ['if (!state.settings.model && !saved?.model) {', 'state.models = []', 'state.mcpCheck = null', 'state.mcpPending = null', "showModelScreen({ modo: 'primera-vez',", 'medir()', 'return'],
+    'lista caída y ningún modelo guardado: la pantalla vacía con «Reintentar»'
+  )
+
+  // (2) SEGURIDAD de gasto: la sonda sólo existe bajo «Comprobar».
+  eq(JS_SIN.split('probeModel(').length - 1, 1, 'una sola llamada a probeModel en todo el panel')
+  const sondear = corte(JS_SIN, 'async function runModelProbe(', 'function attachModelNotice(')
+  assert(sondear.includes('cliente.probeModel(m, { signal: abortador.signal })'), 'y es la de runModelProbe')
+  assert(!/probeModel\(/.test(arranque), 'ninguna sonda en el arranque')
+  const usar = corte(JS_SIN, 'async function useModel(', 'async function runModelProbe(')
+  assert(!/probeModel\(/.test(usar), 'ni al elegir')
+
+  // (3) Elegir: se guarda como elección de la persona ANTES de decidir qué pasa,
+  // y en el modo 'error' la pregunta vuelve al cuadro sin mandarse (§8.20).
+  orden(
+    usar,
+    ['state.settings = await saveSettings({ model })', 'fillModels(state.models, model)', "log.ok('Modelo elegido', `${key} · desde ${s.modo}`)", 'switch (s.modo) {'],
+    'se guarda, se pinta y se registra antes del cambio de modo'
+  )
+  orden(usar, ["case 'primera-vez':", 'hideScreens()', 'await bootForSite()'], 'el primer uso rearranca de verdad')
+  orden(usar, ["case 'error':", 'hideScreens()', 'el.input.value = s.pregunta || state.lastQuestion', 'el.input.focus()'], 'el error deja la pregunta escrita')
+  assert(!/\bsend\(/.test(usar), 'y nadie la manda')
+  orden(usar, ["case 'setup':", "showScreen('screen-setup')", 'await finishSetup()'], 'la verificación se repite sola')
+  orden(usar, ["case 'indexado':", 'hideScreens()', 'await generateContext({ keepContext: s.keepContext })'], 'y el indexado, con el mismo keepContext')
+  assert(!/pendingMcp/.test(usar), 'lo pendiente del MCP se queda como estaba')
+
+  // (4) Un turno que falla ofrece SIEMPRE «Elegir otro modelo», antes de la
+  // salida que sólo decide «Reintentar con X».
+  const error = corte(JS_SIN, 'function errorNode(', 'const MOTIVO_MODELO')
+  orden(
+    error,
+    [
+      "elegir.className = 'ghost small ' + NEEDS_IDLE",
+      "elegir.textContent = 'Elegir otro modelo'",
+      'elegir.disabled = state.streaming',
+      "modo: 'error',",
+      'marcado: fallido,',
+      'pregunta: question || state.lastQuestion,',
+      'row.appendChild(elegir)',
+      'if (!suggestsAnotherModel(tracker?.rawError)) return wrap',
+      'if (!alt) return wrap',
+      'row.prepend(btn, hint)',
+    ],
+    '«Elegir otro modelo» va siempre; «Reintentar con X», sólo con un ok'
+  )
+
+  // (5) La verificación de las claves que falla por el modelo vuelve a la
+  // pantalla, con lo pendiente conservado.
+  const fin = corte(JS_SIN, 'async function finishSetup(', 'function paintSnippet(')
+  const rama = corte(fin, "if (!check.ok && check.reason === 'modelo') {", 'if (!check.ok) {')
+  orden(rama, ['hideScreens()', 'if (puedeAbrirPantalla()) {', "modo: 'setup',", 'marcado: modelo,', '} else {', 'attachSetupModelNotice(texto)', 'return'], 'por el modelo, la pantalla (o el aviso si taparía algo)')
+  assert(!/pendingMcp/.test(rama), 'sin tocar lo pendiente del MCP')
+
+  // (6) El indexado que falla por el modelo, también, detrás del aviso de H16.
+  const indexar = corte(JS_SIN, 'async function generateContext(', 'function attachReindexButton(')
+  const captura = indexar.slice(indexar.indexOf('} catch (err) {'))
+  orden(
+    captura,
+    [
+      'showNotice(aviso, true)',
+      'if (porModelo) attachReindexButton({ keepContext })',
+      'if (porModelo) {',
+      "if (puedeAbrirPantalla()) showModelScreen({ modo: 'indexado', motivo: motivoPantalla, marcado: modelo, keepContext })",
+      "else attachModelNotice(aviso, { modo: 'indexado', marcado: modelo, keepContext })",
+    ],
+    'por el modelo, la pantalla con el mismo keepContext, o su aviso'
+  )
+
+  // (7) «Comprobar»: el veredicto que devuelve se apunta, con el servidor
+  // capturado antes y comprobado al volver (§8.22).
+  orden(
+    sondear,
+    [
+      'const ctx = modelChecksCtx()',
+      'state.modelProbeAbort = abortador',
+      'cliente.probeModel(',
+      'state.settings.serverUrl !== ctx.server',
+      "if (!r.ok && r.rawError?.name === 'OpencodeError') {",
+      "log.warn('Modelo comprobado', `${key} · sin comprobar · ${detalle}`)",
+      'return',
+      'if (r.ok) {',
+      "await recordModelChecks([{ key, ok: true, reason: 'ok', message: '', at: Date.now() }]",
+      "log.ok('Modelo comprobado', `${key} · ${r.ms} ms`)",
+      '} else {',
+      'const mudo = !!r.stalled || !r.rawError',
+      'await noteModelFailure({ model: m, rawError: r.rawError, stalled: mudo })',
+      "log.warn('Modelo comprobado', `${key} · ${motivo}` + (fallo?.message ? ' · ' + fallo.message.slice(0, 120) : ''))",
+      'setModelStatus(texto)',
+    ],
+    'la sonda apunta lo que dice y lo registra en las dos ramas'
+  )
+  const construir = corte(JS_SIN, 'function buildClient(', 'const client = new OpencodeClient(')
+  orden(construir, ['if (state.modelProbeAbort) {', 'state.modelProbeAbort.abort()', 'state.client?.disconnect()'], 'tirar el cliente cancela la sonda')
+
+  // (8) La flecha: nace oculta en el HTML y sólo se enseña desde Ajustes o desde
+  // un error; Escape no pulsa un botón oculto.
+  assert(/<button class="icon-btn back" id="btn-model-close" type="button" title="Volver" aria-label="Volver" hidden>/.test(HTML), 'la flecha nace oculta')
+  // Y oculta de verdad: el `display: grid` de `.icon-btn` le gana al `display: none`
+  // que el navegador pone a `[hidden]`, y sin esta regla la flecha se veía igual.
+  assert(CSS_LIMPIO.includes('.icon-btn.back[hidden] { display: none; }'), 'una flecha con hidden no se ve')
+  const asignaciones = [...JS_SIN.matchAll(/\$\('btn-model-close'\)\.hidden = ([^\n]+)/g)].map((m) => m[1])
+  eq(asignaciones, ['!cerrable'], 'la flecha se enseña en UN sitio')
+  const abrir = corte(JS_SIN, 'async function showModelScreen(', 'function paintModelList(')
+  assert(abrir.includes("const cerrable = modo === 'ajustes' || modo === 'error'\n"), 'sólo en los modos de los que se sale sin elegir')
+  orden(abrir, ["$('btn-model-close').hidden = !cerrable", "showScreen('screen-model')"], 'antes de abrir la pantalla')
+  const eventos = corte(JS, 'function wireEvents', 'async function saveKeys')
+  const esc = corte(eventos, "document.addEventListener('keydown'", 'el.send.addEventListener')
+  orden(esc, ['const btn = ESCAPE_CLOSES[abierta.id]', 'const boton = $(btn)', "if (!boton || boton.hidden || boton.closest('.hidden')) return", 'ev.preventDefault()', 'boton.click()'], 'Escape mira el botón antes de pulsarlo')
+  assert(!/\$\(btn\)\.click\(\)/.test(esc), 'y ya no lo pulsa a ciegas')
+  eq(ESCAPE_CLOSES['screen-model'], 'btn-model-close', 'Escape cierra la pantalla por su flecha, cuando se ve')
+
+  // (9) P5 se cruza aquí: un resultado tardío del MCP no abre la pantalla de
+  // claves encima de la de modelo, porque `puedeAbrirPantalla` dice que no con
+  // CUALQUIER pantalla abierta, y ésta es una.
+  const puede = corte(JS_SIN, 'function puedeAbrirPantalla(', 'function showMcpSetup(')
+  assert(puede.includes("if (document.querySelector('.screen:not(.hidden)')) return false"), 'otra pantalla abierta: no se abre la de claves')
+  assert(/<section class="screen hidden" id="screen-model" aria-labelledby="model-title">/.test(HTML), 'y la del modelo es una pantalla')
+  const pendiente = corte(JS_SIN, 'function showMcpPending(', 'function faltanClaves(')
+  orden(pendiente, ['if (puedeAbrirPantalla()) showMcpSetup(pendiente.status)', 'else attachMcpNotice(pendiente.status)'], 'lo pendiente del MCP pasa por esa pregunta')
+
+  // (10) El aviso de cuando la pantalla taparía algo abre la pantalla con su modo.
+  const aviso = corte(JS_SIN, 'function attachModelNotice(', 'function paintSettingsModelInfo(')
+  orden(aviso, ['noticeNode(motivo, true)', "btn.textContent = 'Elegir otro modelo'", 'showModelScreen({ modo, motivo, marcado, keepContext, pregunta })', 'announce(motivo)'], 'el aviso abre la pantalla con su modo')
+  assert(!/clearEmpty\(\)/.test(aviso), 'y no se lleva la bienvenida, como el del MCP')
+
+  // (11) La lista: por proveedor, lo que falla plegado y contado, y sólo texto.
+  const pintar = corte(JS_SIN, 'function paintModelList(', 'function modelRow(')
+  orden(pintar, ['usableModels(state.models)', 'modelVerdict(state.modelChecks, key, ahora)', 'const fuera = !m.usable || (veredicto && !veredicto.ok)', "grupo.className = 'model-group'", '`No disponibles (${cuantos})`'], 'lo que falla, plegado y contado')
+  const fila = corte(JS_SIN, 'function modelRow(', 'function paintModelButtons(')
+  orden(fila, ["fila.className = 'check model-row' + (veredicto ? (veredicto.ok ? ' ok' : ' bad') : '')", "radio.name = 'model-choice'", 'nombre.textContent = m.name', "etiqueta('predeterminado de opencode')", "etiqueta('el de tu configuración')", 'why.textContent = porQue'], 'cada fila es un label con su radio')
+  const porque = corte(JS_SIN, 'function modelWhy(', 'function modelScreenChoice(')
+  for (const frase of ['funciona · ', "'no disponible con tu plan'", "'no contesta'", "'credenciales caducadas: opencode auth login'", 'falló ']) {
+    assert(porque.includes(frase), 'el veredicto en palabras: ' + frase)
+  }
+  assert(/const msg = mensajeCorto\(veredicto\.message\)/.test(porque), 'con el mensaje del proveedor acotado')
+  const eleccion = corte(JS_SIN, 'function modelScreenChoice(', 'async function showModelScreen(')
+  orden(eleccion, ['s?.elegido', 's?.marcado', 'recommendModel(state.models, {', 'configModel: state.configModel || null,', 'm.usable && !modelFailing(m, ahora)'], 'la preselección: lo tocado, lo marcado, la recomendada y el primero disponible')
+
+  // (12) El modelo de la configuración de opencode: UN campo, validado, lo pone
+  // `checkMcp` con el cliente comprobado, lo pide la pantalla si llega antes, y
+  // lo vacía el cambio de servidor (no el de host).
+  const comprobar = corte(JS_SIN, 'async function checkMcp(', 'function mcpResultSoon(')
+  assert(comprobar.includes('if (config && state.client === client) state.configModel = configModelOf(config)'), 'checkMcp guarda sólo ese campo')
+  assert(!/state\.\w+ = config\b/.test(JS_SIN), 'la configuración entera no se guarda nunca')
+  orden(
+    abrir,
+    [
+      'if (state.configModel !== undefined || !state.client) return',
+      'const cliente = state.client',
+      'const testigo = state.bootToken',
+      'const host = state.site?.host ?? state.lastHost',
+      'await cliente.config().catch(() => null)',
+      'if (state.client !== cliente || state.bootToken !== testigo',
+      'state.configModel = configModelOf(config)',
+    ],
+    'la pantalla la pide con lo capturado antes (§8.22)'
+  )
+  const cerrar = corte(JS_SIN, "$('btn-settings-close').addEventListener", "$('btn-reindex')")
+  orden(cerrar, ['const clientChanged =', 'if (clientChanged) state.configModel = undefined', 'await bootForSite()'], 'otro servidor, otra configuración')
+  assert(!/state\.configModel =/.test(corte(JS_SIN, 'async function refreshTab(', 'async function bootForSite(')), 'no es del sitio')
+
+  // (13) Ajustes: «Cambiar el modelo», con la flecha, y la línea del modelo.
+  assert(JS_SIN.includes("$('btn-change-model').addEventListener('click', () => showModelScreen({ modo: 'ajustes', marcado: state.model })"), 'Ajustes abre la pantalla en su modo')
+  assert(corte(JS_SIN, 'async function showSettingsScreen(', "showScreen('screen-settings')").includes('paintSettingsModelInfo()'), 'y dice qué modelo es el tuyo')
+  orden(HTML, ['id="settings-model-info"', 'id="btn-change-model"', '<h2>Servidor</h2>'], 'en su sección, encima del servidor')
+
+  // (14) Los ids y las clases, con su REGLA (la trampa de `.older-turns` de H6).
+  for (const id of [
+    'screen-model', 'model-title', 'model-reason', 'model-filter', 'model-list', 'model-unavailable',
+    'model-unavailable-summary', 'model-unavailable-list', 'model-status', 'btn-model-use', 'btn-model-check',
+    'btn-model-retry', 'btn-model-close', 'model-empty', 'btn-change-model', 'settings-model-info',
+  ]) {
+    assert(htmlIds.has(id), 'falta el id ' + id)
+  }
+  assert(/<label for="model-filter">/.test(HTML) && /id="model-filter" type="search"/.test(HTML), 'el filtro tiene su etiqueta')
+  assert(/id="model-list" role="group" aria-labelledby="model-title"/.test(HTML), 'la lista es un grupo con nombre')
+  assert(/title="Un turno corto con este modelo; con un proveedor de pago cuesta una petición">Comprobar</.test(HTML), '«Comprobar» dice lo que cuesta')
+  for (const regla of ['.model-list {', '.model-group {', '.model-group > legend {', '.model-row {', '.model-name {', '.model-tag {', '.model-why {', '.model-row.bad .model-why {', '.model-row.ok .model-why {', '.model-unavailable > summary {']) {
+    assert(CSS_LIMPIO.includes(regla), 'clase sin regla: ' + regla)
+  }
+  assert(/\.model-row\.bad \.model-why \{ color: var\(--danger\); \}/.test(CSS_LIMPIO) && /\.model-row\.ok \.model-why \{ color: var\(--ok\); \}/.test(CSS_LIMPIO), 'el veredicto en rojo o en verde, con los tokens de siempre')
+
+  // (15) El espejo: la pantalla con los módulos y las fixtures de verdad, y el
+  // recorrido encadenado del primer uso.
+  const espejo = readFileSync(join(ROOT, 'harness/panel-preview.html'), 'utf8')
+  assert(espejo.includes('data-screen="screen-model"'), 'la pantalla está en el grupo Pantallas')
+  assert(espejo.includes("import('/src/shared/models.js')"), 'con models.js de verdad')
+  assert(espejo.includes("fetch('/test/fixtures/models/providers.json')") && espejo.includes("fetch('/test/fixtures/models/rechazos.json')"), 'y las dos fixtures reales')
+  assert(/const CAJAS = \[[\s\S]*'\.model-row',[\s\S]*'#model-list',[\s\S]*\]/.test(espejo), 'las filas y la lista se miden a lo ancho')
+  assert(/ultimoRecorrido/.test(espejo) && /'screen-connect', 'screen-model', 'screen-setup', 'screen-context'/.test(espejo), 'el recorrido encadenado del primer uso')
+  assert(espejo.includes("'funciona · '") && espejo.includes("'no disponible con tu plan'") && JS.includes("'no disponible con tu plan'"), 'los mismos textos que el panel')
 })

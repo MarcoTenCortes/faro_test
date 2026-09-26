@@ -24,6 +24,7 @@ import {
   modelsFingerprint,
   recommendModel,
   resolveModel,
+  usableModels,
 } from '../shared/models.js'
 import {
   parseAtlassianUrl,
@@ -228,6 +229,25 @@ const state = {
   // de modelos delante, porque sin ella no se sabe si sigue valiendo (un
   // `opencode auth login` cambia la lista y deja viejo todo lo apuntado).
   modelChecks: null,
+  // El modelo que la configuración de opencode dice por defecto (`config.model`
+  // de GET /config), SÓLO ese campo y ya validado como {providerID, modelID}, o
+  // null si no hay; `undefined` es «todavía no se ha preguntado» (H17). La
+  // configuración entera lleva las claves de los MCP en claro y no se guarda en
+  // ningún sitio: de ella sólo sale esto. Lo pone `checkMcp`, que ya la lee, y
+  // si la pantalla «Elige el modelo» se abre antes (el primer uso), la propia
+  // pantalla la pide. Como `modelChecks`, es del SERVIDOR y no del sitio: lo
+  // vacía el cambio de servidor en Ajustes, no el de host.
+  configModel: undefined,
+  // La pantalla «Elige el modelo» abierta: {modo, motivo, marcado, elegido,
+  // keepContext, pregunta} o null. `marcado` es la clave con la que se abrió y
+  // `elegido` la que el usuario ha tocado; sin ninguna de las dos se
+  // preselecciona (`modelScreenChoice`).
+  modelScreen: null,
+  // La sonda de «Comprobar» en vuelo, para cancelarla si se tira el cliente.
+  modelProbeAbort: null,
+  // El modelo que la persona eligió A SABIENDAS con un fallo apuntado (su clave,
+  // o ''): durante esta sesión del panel el arranque no lo vuelve a apartar.
+  modelAceptado: '',
   skill: DEFAULT_SKILL,
   pendingPick: null,
   picking: false,
@@ -471,6 +491,12 @@ function buildClient() {
   if (state.setupAbort) {
     state.setupAbort.abort()
     state.setupAbort = null
+  }
+  // Y la sonda de «Comprobar» (H17): con el cliente tirado no dice nada del
+  // modelo, y su veredicto sería del servidor de antes.
+  if (state.modelProbeAbort) {
+    state.modelProbeAbort.abort()
+    state.modelProbeAbort = null
   }
   state.client?.disconnect()
   const client = new OpencodeClient({
@@ -806,11 +832,18 @@ async function bootForSite() {
   if (bundle.stale) {
     log.warn('Índice descartado', 'era de una versión anterior de Faro; hay que reconstruir el contexto')
   }
+  // ¿Es la primera vez en este sitio? Ni configurado ni con las claves saltadas a
+  // propósito. Se decide AQUÍ, antes del modelo, porque desde H17 manda dos
+  // cosas del primer uso (docs/PLAN2.md §3.3, la máquina de estados): sin modelo
+  // resuelto se elige ANTES de lanzar nada más (paso 1), y el MCP se espera sólo
+  // entonces (paso 3). Sólo depende de lo guardado, que ya está leído.
+  const primeraVez = !saved?.configured && !saved?.skippedKeys
   // Se pregunta por la LISTA, no por el error: así una respuesta rara (o un
   // rechazo sin motivo) acaba en el aviso y no en un TypeError que se llevaría
   // el arranque entero, que es justo lo que el try/catch de antes evitaba.
   // Lo que haya que decir del modelo de esta vez (su modelo apartado, o todos
-  // marcados) se pinta tras restaurar la conversación, que vacía el chat.
+  // marcados) se enseña tras restaurar la conversación, que vacía el chat: desde
+  // H17 es el MOTIVO de la pantalla «Elige el modelo», o el de su aviso.
   let avisoModelo = ''
   if (Array.isArray(modelos?.models)) {
     state.models = modelos.models
@@ -840,6 +873,17 @@ async function bootForSite() {
       now: ahora,
     })
     let elegido = resuelto.model
+    // Quien marca a sabiendas un modelo con un fallo apuntado sale de la
+    // pantalla «Elige el modelo» con él (H17): el veredicto es información, no
+    // un candado. Sin esto, el rearranque de `useModel` lo volvía a apartar y la
+    // pantalla del primer uso salía otra vez, en bucle. Sólo en memoria y sólo
+    // para ESE modelo: al reabrir el panel, si el fallo sigue apuntado, se vuelve
+    // a decir.
+    const aceptado =
+      state.modelAceptado && modelKey(state.settings.model) === state.modelAceptado
+        ? modelos.models.find((m) => modelKey(m) === state.modelAceptado) || null
+        : null
+    if (aceptado && resuelto.source !== 'settings') elegido = aceptado
     // El modelo de la PERSONA se aparta esta vez —ya no está en la lista de
     // opencode, o tiene un fallo apuntado que todavía vale—, y eso se DICE
     // (§8.14): hasta la revisión adversaria de H16 se preseleccionaba otro en
@@ -848,7 +892,7 @@ async function bootForSite() {
     // se pinta tras restaurar la conversación, que vacía el chat. H17 convierte
     // este aviso en la pantalla «Elige el modelo» con «Elegir otro modelo».
     let apartado = null
-    if (state.settings.model && resuelto.source !== 'settings') {
+    if (state.settings.model && resuelto.source !== 'settings' && !aceptado) {
       const suyo = modelKey(state.settings.model)
       const veredicto = modelVerdict(checks, state.settings.model, ahora)
       const enLaLista = modelos.models.some((m) => modelKey(m) === suyo)
@@ -889,12 +933,36 @@ async function bootForSite() {
       }
       if (state.bootToken !== testigo) return
     }
+    // H17, paso 1 de la máquina del primer uso (docs/PLAN2.md §3.3): sin modelo
+    // resuelto —nada guardado, o el de la persona apartado por un fallo vigente o
+    // porque ya no está en la lista—, la pantalla «Elige el modelo» va AQUÍ,
+    // antes de las páginas base, del MCP y de todo lo demás. Pasó de verdad: Faro
+    // elegía solo el primer predeterminado del mapa de opencode, el plan del
+    // compañero lo rechazaba y el fallo acababa culpando a las claves. Y antes
+    // de `checkMcp` a propósito: una comprobación de 14 s no corre bajo una
+    // pantalla que puede tardar minutos, y su resultado tardío no abre la de
+    // claves encima (por eso se sueltan `mcpCheck` y `mcpPending`: de ESTE
+    // arranque no queda ninguna comprobación que pueda pintar). La salida es un
+    // rearranque de verdad desde `useModel`, que ya encuentra el modelo.
+    const sinModelo = !elegido || !!apartado
+    if (primeraVez && sinModelo) {
+      fillModels(modelos.models, elegido)
+      state.mcpCheck = null
+      state.mcpPending = null
+      showModelScreen({
+        modo: 'primera-vez',
+        motivo: apartado ? `Tu modelo, «${apartado.nombre}», ${apartado.motivo}.` : '',
+        marcado: elegido,
+      }).catch(console.error)
+      medir()
+      return
+    }
     if (!elegido) {
-      // Sin modelo resuelto H16 todavía no tiene pantalla que enseñar: se
-      // PRESELECCIONA el que tenga más papeletas —el último que contestó, o un
-      // predeterminado de proveedor sin fallo apuntado— y NO se guarda como
-      // elección de la persona. H17 sustituye este respaldo por la pantalla
-      // «Elige el modelo», que va justo aquí, antes de lanzar `checkMcp`.
+      // Sin modelo resuelto en un sitio que YA está en marcha no se para el
+      // chat: se PRESELECCIONA el que tenga más papeletas —el último que
+      // contestó, o un predeterminado de proveedor sin fallo apuntado— y NO se
+      // guarda como elección de la persona (quien ya estaba configurado no ve
+      // ninguna pantalla nueva; la del primer uso va justo arriba).
       elegido =
         recommendModel(modelos.models, { configModel: null, defaults: modelos.defaults, checks, now: ahora }) ||
         pickDefaultModel(modelos.models, modelos.defaults, { checks, now: ahora })
@@ -915,17 +983,35 @@ async function bootForSite() {
       }
     }
     fillModels(modelos.models, elegido)
+    // Desde H17 esto es el motivo de la pantalla «Elige el modelo» (o de su aviso,
+    // si la pantalla taparía algo): la pantalla ofrece la lista entera,
+    // «Comprobar» para volver a probar el que falló —un ok apuntado manda sobre
+    // el fallo— y la flecha para seguir con el que Faro usa esta vez.
     if (todosMarcados) {
       avisoModelo =
         `Todos los modelos de tu lista tienen un fallo reciente; esta vez Faro usa «${nombreModelo(state.model)}». ` +
-        'Elige uno en el desplegable, o pulsa «Olvidar los veredictos» en Ajustes para volver a probarlos.'
+        'Elige uno, pulsa «Comprobar» para volver a probarlo, o «Olvidar los veredictos» en Ajustes.'
     } else if (apartado && state.model) {
       avisoModelo =
         `Tu modelo, «${apartado.nombre}», ${apartado.motivo}; esta vez Faro usa «${nombreModelo(state.model)}»: ` +
-        'elige otro en el desplegable si no te vale.'
+        'elige otro si no te vale, o pulsa «Comprobar» para volver a probar el tuyo.'
     }
   } else {
     showNotice('No he podido leer la lista de modelos: ' + (modelos?.error?.message || modelos?.error || 'respuesta vacía'), true)
+    // Sin lista no se decide nada del modelo (P4): quien ya tiene uno guardado
+    // sigue con él sin validarlo, y quien ya estaba configurado no ve ninguna
+    // pantalla nueva. Sólo sin NINGÚN modelo guardado no hay con qué contestar:
+    // la pantalla «Elige el modelo» en su modo vacío, con «Reintentar» (H17). La
+    // lista vieja del panel no vale para elegir —es de otro momento, quizá de
+    // otro opencode—, así que se vacía y la pantalla lo dice.
+    if (!state.settings.model && !saved?.model) {
+      state.models = []
+      state.mcpCheck = null
+      state.mcpPending = null
+      showModelScreen({ modo: 'primera-vez', motivo: 'No he podido leer la lista de modelos de tu opencode.' }).catch(console.error)
+      medir()
+      return
+    }
   }
 
   // Las páginas base de ESTE sitio. Salen del paquete que ya está leído, así
@@ -960,8 +1046,8 @@ async function bootForSite() {
   // La espera sólo el sitio que todavía no está en marcha —ni configurado ni con
   // las claves saltadas a propósito—: ahí no hay conversación que pintar, sin MCP
   // no se puede hacer nada y la pantalla de claves es justo lo primero que hay
-  // que ver. El caso diario, el sitio ya configurado, no espera nada.
-  const primeraVez = !saved?.configured && !saved?.skippedKeys
+  // que ver. El caso diario, el sitio ya configurado, no espera nada. (`primeraVez`
+  // se decide más arriba, antes del modelo, desde H17.)
   const comprobacion = checkMcp(client, testigo, saved)
   // Lo que `send()` captura al mandar: siempre un booleano y nunca un rechazo,
   // porque de esto depende un aviso que el usuario lee («Páginas base sin leer»).
@@ -1033,7 +1119,14 @@ async function bootForSite() {
   medir()
   // Aquí y no en el paso 3: `restoreConversation` vacía el chat y se llevaba
   // cualquier aviso anterior. Con el testigo ya comprobado justo arriba.
-  if (avisoModelo) showNotice(avisoModelo, true)
+  // Desde H17 el motivo abre la pantalla «Elige el modelo» —con la flecha a la
+  // vista: el chat ya vive con la preselección, así que de aquí SÍ se sale sin
+  // elegir— o, si la pantalla taparía algo (un turno, algo escrito, otra
+  // pantalla), un aviso en el chat con «Elegir otro modelo», como el del MCP.
+  if (avisoModelo) {
+    if (puedeAbrirPantalla()) showModelScreen({ modo: 'ajustes', motivo: avisoModelo, marcado: state.model }).catch(console.error)
+    else attachModelNotice(avisoModelo, { marcado: state.model, modo: 'ajustes' })
+  }
 
   // Sin ruido: si falta el permiso, se avisa cuando de verdad hace falta
   // (al ofrecer navegación), no nada más abrir el panel.
@@ -1195,6 +1288,12 @@ async function checkMcp(client, testigo, previo) {
   const cron = startTiming(() => performance.now())
   const [mcp, config] = await Promise.all([client.listMcp().catch(() => ({})), client.config().catch(() => null)])
   cron.mark('MCP')
+  // De la configuración, además de los hosts, UN campo (H17): el modelo que
+  // opencode tiene por defecto, que «Elige el modelo» enseña como «el de tu
+  // configuración» y `recommendModel` usa para preseleccionar. Validado y en su
+  // forma, nunca el objeto entero; y sólo si el cliente sigue siendo el que
+  // preguntó (§8.22): es del servidor, no del sitio.
+  if (config && state.client === client) state.configModel = configModelOf(config)
 
   const found = mcpForHost(config, host, { status: mcp })
   // Se adopta sólo lo que está conectado: apuntar un MCP caído pisaba lo que
@@ -3415,6 +3514,34 @@ function errorNode(message, tracker, question, { stalled = false } = {}) {
   const wrap = document.createElement('div')
   wrap.appendChild(noticeNode(message, true))
 
+  const row = document.createElement('div')
+  row.className = 'nav-actions'
+  row.style.marginTop = '8px'
+  wrap.appendChild(row)
+
+  // «Elegir otro modelo», SIEMPRE (H17, docs/PLAN2.md §3.3): abre la pantalla
+  // con el modelo que falló marcado y el motivo arriba, y al elegir la pregunta
+  // vuelve al cuadro SIN mandarse (§8.20: Faro nunca manda nada por su cuenta).
+  // También cuando el error no es del proveedor —un contexto desbordado se
+  // arregla a veces con un modelo de ventana más grande—. `NEEDS_IDLE`: el aviso
+  // se pinta con el turno todavía «en vuelo» y `setStreaming(false)` lo enciende.
+  const fallido = tracker?.model || state.model
+  const elegir = document.createElement('button')
+  elegir.className = 'ghost small ' + NEEDS_IDLE
+  elegir.type = 'button'
+  elegir.textContent = 'Elegir otro modelo'
+  elegir.disabled = state.streaming
+  elegir.addEventListener('click', () => {
+    if (state.streaming) return
+    showModelScreen({
+      modo: 'error',
+      motivo: `El modelo «${nombreModelo(fallido)}» no ha podido contestar: ${String(message || '').slice(0, 200)}`,
+      marcado: fallido,
+      pregunta: question || state.lastQuestion,
+    }).catch(console.error)
+  })
+  row.appendChild(elegir)
+
   if (!suggestsAnotherModel(tracker?.rawError)) return wrap
 
   // Sólo se OFRECE lo que se sabe que contesta: el modelo con un veredicto ok
@@ -3427,9 +3554,9 @@ function errorNode(message, tracker, question, { stalled = false } = {}) {
   // otro modelo que sí contestaba no salía ningún botón: ahora se elige ya
   // entre los que tienen ok (`pickRetryModel`). Con las credenciales del
   // proveedor caducadas hay que cambiar de PROVEEDOR —cualquier modelo suyo
-  // fallará igual—; en los demás casos basta otro modelo. Sin ninguno así,
-  // ningún botón: H17 pone aquí «Elegir otro modelo», que abre la pantalla con
-  // el que falló marcado y su motivo.
+  // fallará igual—; en los demás casos basta otro modelo. Sin ninguno así, sólo
+  // queda «Elegir otro modelo» (H17), que abre la pantalla con el que falló
+  // marcado y su motivo.
   const ahora = Date.now()
   const alt = pickRetryModel(state.models, modelKey(tracker?.model || state.model), {
     checks: state.modelChecks,
@@ -3437,10 +3564,6 @@ function errorNode(message, tracker, question, { stalled = false } = {}) {
     otherProvider: classifyModelFailure(tracker?.rawError, { stalled }) === 'credenciales',
   })
   if (!alt) return wrap
-
-  const row = document.createElement('div')
-  row.className = 'nav-actions'
-  row.style.marginTop = '8px'
 
   const btn = document.createElement('button')
   btn.className = 'primary'
@@ -3463,8 +3586,9 @@ function errorNode(message, tracker, question, { stalled = false } = {}) {
   hint.style.alignSelf = 'center'
   hint.textContent = `proveedor ${alt.providerName}`
 
-  row.append(btn, hint)
-  wrap.appendChild(row)
+  // Delante de «Elegir otro modelo»: es la salida de un clic, con un modelo que
+  // ya se sabe que contesta.
+  row.prepend(btn, hint)
   return wrap
 }
 
@@ -3570,6 +3694,443 @@ async function noteModelOk(model) {
   } catch (err) {
     console.error('[faro] veredicto sin guardar', err)
   }
+}
+
+// ------------------------------------------------ «Elige el modelo» (H17)
+
+/**
+ * El modelo que la configuración de opencode dice por defecto (`config.model`),
+ * validado y en su forma, o null.
+ *
+ * De GET /config sólo sale ESTO: la configuración entera lleva los `environment`
+ * de los MCP con las claves en claro, y no puede acabar en el estado ni en el
+ * Registro (§7). Lo que se guarda es `{providerID, modelID}` reconstruido por
+ * `parseModelKey`, y sólo se usa para compararlo con la lista: ni se pinta tal
+ * cual ni viaja a ningún sitio.
+ */
+function configModelOf(config) {
+  const clave = typeof config?.model === 'string' ? config.model.trim() : ''
+  if (!clave || clave.length > 240 || /\s/.test(clave)) return null
+  return parseModelKey(clave)
+}
+
+/** Cuánto hace de algo, por TIEMPO TRANSCURRIDO (como el porqué de «hoy»). */
+function haceCuanto(ms) {
+  const min = Math.floor(Math.max(0, Number(ms) || 0) / 60000)
+  if (min < 1) return 'hace un momento'
+  if (min < 60) return `hace ${min} min`
+  const h = Math.floor(min / 60)
+  if (h < 48) return `hace ${h} h`
+  return `hace ${Math.floor(h / 24)} días`
+}
+
+/** El mensaje del proveedor acotado para una fila: el de Copilot trae la lista entera. */
+function mensajeCorto(texto, max = 120) {
+  const t = String(texto || '')
+  return t.length > max ? t.slice(0, max - 1) + '…' : t
+}
+
+/**
+ * Lo que se sabe de un modelo, en palabras, para su fila: por qué no se puede
+ * usar (retirado, sin herramientas) o qué dijo la última vez (el veredicto
+ * vigente). Sin nada que decir, ''. El mensaje del proveedor ya viene en una
+ * línea y sin invisibles (`normalizeModelChecks`) y aquí se acota otra vez para
+ * la fila: a 320 px, mil caracteres de «Available models» no se leen.
+ */
+function modelWhy(m, veredicto, ahora) {
+  if (!m.usable) {
+    return m.unusableReason === 'deprecated'
+      ? 'opencode lo va a retirar'
+      : 'sin herramientas: no podría leer Jira ni Confluence'
+  }
+  if (!veredicto) return ''
+  if (veredicto.ok) return `funciona · ${haceCuanto(ahora - veredicto.at)}`
+  const msg = mensajeCorto(veredicto.message)
+  switch (veredicto.reason) {
+    case 'plan':
+      return 'no disponible con tu plan' + (msg ? ': ' + msg : '')
+    case 'mudo':
+      return 'no contesta'
+    case 'credenciales':
+      return 'credenciales caducadas: opencode auth login'
+    default:
+      return `falló ${haceCuanto(ahora - veredicto.at)}` + (msg ? ': ' + msg : '')
+  }
+}
+
+/**
+ * Qué modelo está marcado en la pantalla: lo que el usuario ha tocado; si no, el
+ * que se pidió marcar al abrirla (el que falló, el de ahora); si no, la
+ * preselección de `recommendModel` —el último que contestó, el de la
+ * configuración de opencode, un predeterminado sin fallo—, y si no, el primero
+ * DISPONIBLE (utilizable y sin fallo vigente). Con todos marcados, nada: la
+ * pantalla no elige por nadie un modelo que se sabe que falla.
+ */
+function modelScreenChoice(ahora = Date.now()) {
+  const s = state.modelScreen
+  const enLista = (key) => (key && state.models.some((m) => modelKey(m) === key) ? key : '')
+  if (enLista(s?.elegido)) return s.elegido
+  if (enLista(s?.marcado)) return s.marcado
+  const rec = recommendModel(state.models, {
+    configModel: state.configModel || null,
+    defaults: state.defaults,
+    checks: state.modelChecks,
+    now: ahora,
+  })
+  if (rec) return modelKey(rec)
+  const libre = usableModels(state.models).find((m) => m.usable && !modelFailing(m, ahora))
+  return libre ? modelKey(libre) : ''
+}
+
+/**
+ * «Elige el modelo» (H17, docs/PLAN2.md §3.3).
+ *
+ * POR QUÉ EXISTE: Faro elegía solo el primer predeterminado del mapa de opencode
+ * —en la máquina del compañero de Marco, `openai/gpt-5.4`, que su plan
+ * rechaza—, la verificación de las claves fallaba por el MODELO y el aviso
+ * culpaba a las claves. El modelo es de la persona (§8.25) y se elige aquí:
+ * antes de las claves en el primer uso, y otra vez cuando uno falla.
+ *
+ * Cinco modos, que deciden de dónde se sale y qué pasa al elegir (`useModel`):
+ * 'primera-vez' (rearranque), 'ajustes' (volver), 'error' (la pregunta vuelve
+ * al cuadro SIN mandarse), 'setup' (se repite SÓLO la verificación de las
+ * claves) e 'indexado' (se repite el indexado). La flecha de volver sólo se ve
+ * en 'ajustes' y 'error': en los otros tres no se sale sin elegir, y el
+ * manejador de Escape no pulsa un botón oculto.
+ *
+ * Ninguna sonda al abrir ni al elegir (decisión 6 de PLAN2 §8): en el primer uso
+ * la verificación de las claves ya es un turno real con ese modelo. La sonda es
+ * «Comprobar», a mano y avisando de que cuesta una petición.
+ *
+ * En el primer uso la pantalla se abre ANTES de `checkMcp`, así que la
+ * configuración de opencode todavía no se ha leído: se pide aquí, con el
+ * cliente, el testigo y el host capturados antes del await (§8.22), y la lista
+ * se repinta al llegar. Nunca lanza por eso: sin configuración no hay etiqueta.
+ */
+async function showModelScreen({ modo = 'ajustes', motivo = '', marcado = null, keepContext = false, pregunta = '' } = {}) {
+  state.modelScreen = {
+    modo,
+    motivo: String(motivo || ''),
+    marcado: modelKey(marcado) || '',
+    elegido: '',
+    keepContext: !!keepContext,
+    pregunta: String(pregunta || ''),
+  }
+  const razon = $('model-reason')
+  razon.textContent = state.modelScreen.motivo
+  razon.classList.toggle('hidden', !state.modelScreen.motivo)
+  $('model-filter').value = ''
+  $('model-status').textContent = ''
+  $('model-unavailable').open = false
+  // De aquí sólo se sale sin elegir desde Ajustes o desde el error de un turno:
+  // el chat ya vive con un modelo. En el primer uso, en la verificación de las
+  // claves y en el indexado, no hay con qué seguir si no se elige.
+  const cerrable = modo === 'ajustes' || modo === 'error'
+  $('btn-model-close').hidden = !cerrable
+  paintModelList('')
+  showScreen('screen-model')
+
+  if (state.configModel !== undefined || !state.client) return
+  const cliente = state.client
+  const testigo = state.bootToken
+  const host = state.site?.host ?? state.lastHost
+  const abierta = state.modelScreen
+  const config = await cliente.config().catch(() => null)
+  if (state.client !== cliente || state.bootToken !== testigo || (state.site?.host ?? state.lastHost) !== host) return
+  if (state.configModel === undefined) state.configModel = configModelOf(config)
+  if (state.modelScreen === abierta && !$('screen-model').classList.contains('hidden')) paintModelList($('model-filter').value)
+}
+
+/**
+ * La lista de la pantalla: un `fieldset` por proveedor, en el orden de
+ * `state.models`, y una fila por modelo (un `label` con su radio). Lo que tiene
+ * un fallo vigente, y lo retirado o sin herramientas, va DENTRO de «No
+ * disponibles (N)», plegado —la lista entera, decisión 7 de PLAN2 §8: los siete
+ * `opencode/*` caen ahí de golpe con el primer 403—, y sigue siendo elegible. El
+ * filtro casa por nombre, id y proveedor sin distinguir mayúsculas y un grupo
+ * que se queda sin filas no se pinta. Todo con `textContent`: el nombre y el
+ * mensaje del proveedor son datos, no marcado.
+ */
+function paintModelList(filtro = '') {
+  const lista = $('model-list')
+  const plegada = $('model-unavailable-list')
+  const detalles = $('model-unavailable')
+  lista.textContent = ''
+  plegada.textContent = ''
+  // Sin proveedores conectados no hay lista que pintar: sólo el modo vacío, con
+  // lo que hay que hacer y «Reintentar».
+  const vacia = !state.models.length
+  $('model-empty').classList.toggle('hidden', !vacia)
+  lista.classList.toggle('hidden', vacia)
+  $('model-filter').closest('.field').classList.toggle('hidden', vacia)
+  $('btn-model-use').closest('.row').classList.toggle('hidden', vacia)
+  detalles.classList.toggle('hidden', vacia)
+  if (vacia) {
+    paintModelButtons()
+    return
+  }
+
+  const ahora = Date.now()
+  const eleccion = modelScreenChoice(ahora)
+  const deConfig = state.configModel ? modelKey(state.configModel) : ''
+  const f = String(filtro || '').trim().toLowerCase()
+  const disponibles = new Map()
+  const noDisponibles = new Map()
+  for (const m of usableModels(state.models)) {
+    const key = modelKey(m)
+    if (f && !`${m.name} ${m.modelID} ${m.providerID} ${m.providerName}`.toLowerCase().includes(f)) continue
+    const veredicto = modelVerdict(state.modelChecks, key, ahora)
+    const fuera = !m.usable || (veredicto && !veredicto.ok)
+    const grupos = fuera ? noDisponibles : disponibles
+    if (!grupos.has(m.providerName)) grupos.set(m.providerName, [])
+    grupos.get(m.providerName).push(modelRow(m, veredicto, { key, eleccion, deConfig, ahora }))
+  }
+  const pintar = (caja, grupos) => {
+    for (const [proveedor, filas] of grupos) {
+      const grupo = document.createElement('fieldset')
+      grupo.className = 'model-group'
+      const titulo = document.createElement('legend')
+      titulo.textContent = proveedor
+      grupo.append(titulo, ...filas)
+      caja.appendChild(grupo)
+    }
+  }
+  pintar(lista, disponibles)
+  pintar(plegada, noDisponibles)
+  const cuantos = [...noDisponibles.values()].reduce((n, filas) => n + filas.length, 0)
+  $('model-unavailable-summary').textContent = `No disponibles (${cuantos})`
+  detalles.classList.toggle('hidden', !cuantos)
+  // Si lo marcado está plegado (el modelo que acaba de fallar, casi siempre), se
+  // despliega: un radio marcado que no se ve es una elección que nadie ve.
+  if (plegada.querySelector('input:checked')) detalles.open = true
+  if (!disponibles.size && !cuantos) {
+    const nada = document.createElement('p')
+    nada.className = 'fine'
+    nada.textContent = 'Ningún modelo casa con ese filtro.'
+    lista.appendChild(nada)
+  }
+  paintModelButtons()
+}
+
+/** Una fila: el radio, el nombre, sus etiquetas y lo que se sabe de él. */
+function modelRow(m, veredicto, { key, eleccion, deConfig, ahora }) {
+  const fila = document.createElement('label')
+  fila.className = 'check model-row' + (veredicto ? (veredicto.ok ? ' ok' : ' bad') : '')
+  const radio = document.createElement('input')
+  radio.type = 'radio'
+  radio.name = 'model-choice'
+  radio.value = key
+  radio.checked = key === eleccion
+  const nombre = document.createElement('span')
+  nombre.className = 'model-name'
+  nombre.textContent = m.name
+  fila.append(radio, nombre)
+  const etiqueta = (texto) => {
+    const t = document.createElement('span')
+    t.className = 'model-tag'
+    t.textContent = texto
+    fila.appendChild(t)
+  }
+  if (m.isDefault) etiqueta('predeterminado de opencode')
+  if (key === deConfig) etiqueta('el de tu configuración')
+  const porQue = modelWhy(m, veredicto, ahora)
+  if (porQue) {
+    const why = document.createElement('span')
+    why.className = 'model-why'
+    why.textContent = porQue
+    fila.appendChild(why)
+  }
+  return fila
+}
+
+/** «Usar este modelo» y «Comprobar» sólo con algo marcado y ninguna sonda en vuelo. */
+function paintModelButtons() {
+  const hay = !!modelScreenChoice()
+  const probando = !!state.modelProbeAbort
+  $('btn-model-use').disabled = !hay || probando
+  $('btn-model-check').disabled = !hay || probando
+}
+
+/** Lo que pasa en la pantalla, escrito y dicho al lector de pantalla (A2). */
+function setModelStatus(texto, { anunciar = true } = {}) {
+  $('model-status').textContent = texto
+  if (anunciar && texto) announce(texto)
+}
+
+/**
+ * «Usar este modelo»: se guarda como elección de la PERSONA (§8.25) y después
+ * pasa lo que toque por modo. Ninguna sonda aquí (decisión 6 de PLAN2 §8), y
+ * ninguna pregunta se manda sola: en el modo 'error' la que falló vuelve al
+ * cuadro y la manda el usuario (§8.20).
+ */
+async function useModel() {
+  const s = state.modelScreen
+  if (!s || $('screen-model').classList.contains('hidden')) return
+  const key = modelScreenChoice()
+  const m = state.models.find((x) => modelKey(x) === key)
+  if (!m) {
+    setModelStatus('Marca un modelo de la lista.')
+    return
+  }
+  // Repetir la verificación de las claves o el indexado es otro turno del
+  // modelo: con uno del chat en vuelo, no.
+  if ((s.modo === 'setup' || s.modo === 'indexado') && state.streaming) {
+    setModelStatus('Espera a que termine la respuesta: lo siguiente es otro turno del modelo.')
+    return
+  }
+  const model = { providerID: m.providerID, modelID: m.modelID }
+  $('btn-model-use').disabled = true
+  state.settings = await saveSettings({ model })
+  if (state.modelScreen !== s) return
+  state.modelScreen = null
+  // Elegido A SABIENDAS con un fallo apuntado: el arranque no lo vuelve a
+  // apartar en esta sesión del panel (el veredicto es información, no un candado).
+  state.modelAceptado = modelFailing(m) ? key : ''
+  fillModels(state.models, model)
+  paintSettingsModelInfo()
+  log.ok('Modelo elegido', `${key} · desde ${s.modo}`)
+  switch (s.modo) {
+    case 'primera-vez':
+      // Un rearranque de VERDAD, con testigo nuevo: es lo que hace que `checkMcp`
+      // corra ya con modelo, y que las claves se comprueben con él.
+      hideScreens()
+      await bootForSite()
+      break
+    case 'error':
+      hideScreens()
+      el.input.value = s.pregunta || state.lastQuestion
+      autoGrow()
+      el.input.focus()
+      break
+    case 'setup':
+      // Sólo la verificación: `pendingMcp` sigue con lo que se pidió, y nada se
+      // vuelve a escribir en opencode. Su pantalla dice lo que va pasando.
+      showScreen('screen-setup')
+      await finishSetup()
+      break
+    case 'indexado':
+      hideScreens()
+      await generateContext({ keepContext: s.keepContext })
+      break
+    default:
+      hideScreens()
+  }
+}
+
+/**
+ * «Comprobar»: UN turno corto con el modelo marcado (`client.probeModel`), a mano
+ * y avisando de que con un proveedor de pago cuesta una petición. Es la ÚNICA
+ * sonda de todo el panel: ni el arranque ni «Usar este modelo» la lanzan.
+ *
+ * Lo que diga se apunta como cualquier otro veredicto: un ok manda sobre el fallo
+ * de antes (es la salida del bucle «mi modelo tiene un fallo apuntado y la
+ * pantalla vuelve a salir») y un fallo pasa por `noteModelFailure`, que lo
+ * clasifica gratis. §8.22: el servidor y el cliente se capturan antes, y si
+ * cambian —o `buildClient` cancela la sonda— no se escribe nada.
+ */
+async function runModelProbe() {
+  const s = state.modelScreen
+  if (!s || state.modelProbeAbort) return
+  const key = modelScreenChoice()
+  const m = state.models.find((x) => modelKey(x) === key)
+  const cliente = state.client
+  if (!m || !cliente) {
+    setModelStatus('Marca un modelo de la lista.')
+    return
+  }
+  const ctx = modelChecksCtx()
+  const abortador = new AbortController()
+  state.modelProbeAbort = abortador
+  paintModelButtons()
+  setModelStatus(`Comprobando «${m.name}»…`)
+  let r = null
+  try {
+    r = await cliente.probeModel(m, { signal: abortador.signal })
+  } catch (err) {
+    // `probeModel` no lanza: si algo revienta es de Faro y no dice nada del modelo.
+    console.error('[faro] sonda', err)
+  } finally {
+    if (state.modelProbeAbort === abortador) state.modelProbeAbort = null
+  }
+  const vigente = state.modelScreen === s && !$('screen-model').classList.contains('hidden')
+  if (abortador.signal.aborted || state.client !== cliente || state.settings.serverUrl !== ctx.server || !r) {
+    if (vigente) {
+      paintModelButtons()
+      setModelStatus(r ? 'Comprobación cancelada.' : 'No he podido hacer la comprobación.')
+    }
+    return
+  }
+  let texto
+  // Un fallo de opencode o de Faro (sin sesión, sin red) no dice nada del
+  // MODELO: no se apunta como suyo, que lo dejaría «no disponible» una hora por
+  // algo que no es del proveedor. Se dice y se registra, y nada más.
+  if (!r.ok && r.rawError?.name === 'OpencodeError') {
+    const detalle = mensajeCorto(r.rawError.message)
+    log.warn('Modelo comprobado', `${key} · sin comprobar · ${detalle}`)
+    if (state.modelScreen === s && !$('screen-model').classList.contains('hidden')) {
+      paintModelButtons()
+      setModelStatus('No he podido hacer la comprobación: ' + detalle)
+    }
+    return
+  }
+  if (r.ok) {
+    try {
+      const guardado = await recordModelChecks([{ key, ok: true, reason: 'ok', message: '', at: Date.now() }], { ...ctx, now: Date.now() })
+      if (state.settings.serverUrl === ctx.server) {
+        state.modelChecks = guardado
+        paintModelVerdicts()
+      }
+    } catch (err) {
+      console.error('[faro] veredicto sin guardar', err)
+    }
+    log.ok('Modelo comprobado', `${key} · ${r.ms} ms`)
+    texto = `«${m.name}» contesta (${r.ms} ms).`
+  } else {
+    // Sin error del proveedor y sin texto, el modelo se ha callado: es «mudo»
+    // (docs/PLAN2.md §3.3: «stalled o sin texto»), como en un turno del chat.
+    const mudo = !!r.stalled || !r.rawError
+    const fallo = await noteModelFailure({ model: m, rawError: r.rawError, stalled: mudo })
+    const motivo = fallo?.reason || classifyModelFailure(r.rawError, { stalled: mudo })
+    log.warn('Modelo comprobado', `${key} · ${motivo}` + (fallo?.message ? ' · ' + fallo.message.slice(0, 120) : ''))
+    texto = `«${m.name}» no ha contestado: ${motivoModelo(motivo)}.`
+  }
+  if (state.modelScreen === s && !$('screen-model').classList.contains('hidden')) {
+    paintModelList($('model-filter').value)
+    setModelStatus(texto)
+  }
+}
+
+/**
+ * El aviso en el chat cuando la pantalla «Elige el modelo» taparía algo (un turno
+ * en vuelo, algo escrito, otra pantalla): el motivo y «Elegir otro modelo», que
+ * la abre cuando el usuario quiera. El patrón de `attachMcpNotice`, y como él sin
+ * `clearEmpty()`: llega solo, tras restaurar la conversación, y no se lleva la
+ * bienvenida.
+ */
+function attachModelNotice(motivo, { marcado = null, modo = 'ajustes', keepContext = false, pregunta = '' } = {}) {
+  const wrap = document.createElement('div')
+  wrap.appendChild(noticeNode(motivo, true))
+  const row = document.createElement('div')
+  row.className = 'nav-actions'
+  const btn = document.createElement('button')
+  btn.className = 'ghost small'
+  btn.type = 'button'
+  btn.textContent = 'Elegir otro modelo'
+  btn.addEventListener('click', () => showModelScreen({ modo, motivo, marcado, keepContext, pregunta }).catch(console.error))
+  row.appendChild(btn)
+  wrap.appendChild(row)
+  el.chat.appendChild(wrap)
+  announce(motivo)
+  scrollChat()
+  return wrap
+}
+
+/** La línea de Ajustes que dice qué modelo es el tuyo. */
+function paintSettingsModelInfo() {
+  const suyo = state.settings.model
+  $('settings-model-info').textContent = suyo
+    ? `Usas «${nombreModelo(suyo)}» (${modelKey(parseModelKey(modelKey(suyo)))}) en todos los sitios.`
+    : 'Todavía no has elegido modelo: esta vez Faro usa el que tenga más papeletas.'
 }
 
 /**
@@ -6705,6 +7266,7 @@ async function showSettingsScreen() {
   $('set-rest-tools').checked = state.settings.restTools
   $('set-today').checked = state.settings.todaySuggestions
   paintTodaySetting()
+  paintSettingsModelInfo()
   $('set-url').value = state.settings.serverUrl
   $('set-pass').value = state.settings.password
   $('settings-status').textContent = ''
@@ -7086,8 +7648,14 @@ function wireEvents() {
     }
     const btn = ESCAPE_CLOSES[abierta.id]
     if (!btn) return
+    // Un botón que falta o está oculto NO se pulsa (H17): la flecha de «Elige el
+    // modelo» nace oculta en el primer uso, en la verificación de las claves y
+    // en el indexado —de ahí no se sale sin elegir—, y `click()` sobre un botón
+    // oculto lo pulsa igual. Escape es el atajo de un botón que se ve.
+    const boton = $(btn)
+    if (!boton || boton.hidden || boton.closest('.hidden')) return
     ev.preventDefault()
-    $(btn).click()
+    boton.click()
   })
   el.send.addEventListener('click', send)
   el.stop.addEventListener('click', async () => {
@@ -7159,6 +7727,27 @@ function wireEvents() {
   // --- qué mirar hoy
   $('btn-today').addEventListener('click', () => showTodayScreen().catch(console.error))
   $('btn-today-close').addEventListener('click', () => hideScreens())
+
+  // --- elige el modelo (H17)
+  $('btn-model-use').addEventListener('click', () => useModel().catch(console.error))
+  $('btn-model-check').addEventListener('click', () => runModelProbe().catch(console.error))
+  $('btn-model-retry').addEventListener('click', () => bootForSite().catch(console.error))
+  // La flecha sólo se ve en los modos de los que se puede salir sin elegir
+  // (Ajustes, el error de un turno): cerrar es volver con el modelo de antes.
+  $('btn-model-close').addEventListener('click', () => {
+    state.modelScreen = null
+    hideScreens()
+  })
+  $('model-filter').addEventListener('input', () => paintModelList($('model-filter').value))
+  // Un solo oyente para las dos listas (la de los disponibles y la plegada):
+  // lo que el usuario marca es lo que se usa o se comprueba.
+  for (const lista of [$('model-list'), $('model-unavailable-list')]) {
+    lista.addEventListener('change', (ev) => {
+      if (ev.target?.name !== 'model-choice' || !state.modelScreen) return
+      state.modelScreen.elegido = ev.target.value
+      paintModelButtons()
+    })
+  }
   $('btn-today-refresh').addEventListener('click', () => refreshToday().catch(console.error))
   $('btn-today-forget').addEventListener('click', () => forgetTodayActivity().catch(console.error))
   $('today-off').addEventListener('change', () => setTodayOff($('today-off').checked).catch(console.error))
@@ -7299,6 +7888,9 @@ function wireEvents() {
     // Los veredictos de modelos son de UN opencode (H16): con otro servidor no
     // dicen nada, y el arranque de abajo relee los que tocan con su lista.
     if (clientChanged) state.modelChecks = null
+    // Y el modelo de la configuración de opencode (H17), por lo mismo: es de
+    // aquel servidor; `undefined` hace que se vuelva a preguntar.
+    if (clientChanged) state.configModel = undefined
     applySettingsToUi()
     hideScreens()
     if (clientChanged) {
@@ -7312,6 +7904,9 @@ function wireEvents() {
     await generateContext()
   })
   $('btn-edit-keys').addEventListener('click', () => showSetupScreen())
+  // Desde Ajustes, con la flecha a la vista: aquí se viene a mirar y quizá a
+  // cambiar, y volver sin elegir deja el modelo como estaba.
+  $('btn-change-model').addEventListener('click', () => showModelScreen({ modo: 'ajustes', marcado: state.model }).catch(console.error))
   $('btn-tree-debug').addEventListener('click', () => treeDebug().catch(console.error))
   // Lo que Faro recuerda de qué modelos contestan y cuáles no (H16): se ve en
   // «Qué guarda Faro de mí» y se borra aquí (§8.20). Es de la persona y no de un
@@ -7664,7 +8259,22 @@ async function finishSetup() {
           'No se ha llegado a comprobar ningún token: elige otro modelo en el desplegable y pulsa «Volver a comprobar».'
         say(texto)
         hideScreens()
-        attachSetupModelNotice(texto)
+        // Desde H17, el paso 4 de la máquina del primer uso: se vuelve a «Elige
+        // el modelo» con el que falló marcado, y al elegir se repite SÓLO esta
+        // verificación —`pendingMcp` sigue ahí, sin volver a escribir nada en
+        // opencode—. El aviso con «Volver a comprobar» queda para cuando la
+        // pantalla taparía algo (un turno en vuelo, algo escrito en el cuadro).
+        if (puedeAbrirPantalla()) {
+          showModelScreen({
+            modo: 'setup',
+            motivo:
+              `El modelo «${nombreModelo(modelo)}» no ha podido contestar (${motivoModelo(fallo?.reason)}). ` +
+              'No se ha llegado a comprobar ningún token: elige otro y se repetirá la comprobación.',
+            marcado: modelo,
+          }).catch(console.error)
+        } else {
+          attachSetupModelNotice(texto)
+        }
         return
       }
 
@@ -8004,12 +8614,17 @@ async function generateContext({ keepContext = false } = {}) {
     // ofrecer la pantalla de contexto (el otro fallo del compañero, anexo C).
     const porModelo = !!(err?.stalled || err?.rawError)
     let aviso = 'El indexado falló: ' + (err?.message || err)
+    const modelo = err?.model || modeloDelIndexado
+    let motivoPantalla = ''
     if (porModelo) {
-      const modelo = err?.model || modeloDelIndexado
       const fallo = await noteModelFailure({ model: modelo, rawError: err?.rawError || null, stalled: !!err?.stalled })
       aviso =
         `El indexado falló por el modelo «${nombreModelo(modelo)}» (${motivoModelo(fallo?.reason)}): ` +
         'elige otro modelo en el desplegable y vuelve a generar el contexto.'
+      // En la pantalla el motivo no habla del desplegable: la lista está debajo.
+      motivoPantalla =
+        `El indexado falló por el modelo «${nombreModelo(modelo)}» (${motivoModelo(fallo?.reason)}): ` +
+        'elige otro y se volverá a generar el contexto.'
     }
     if (!porModelo) await saveSite(host, { onboarded: true })
     // El aviso va DESPUÉS de repintar el chat: `restoreConversation` lo vacía, y
@@ -8020,6 +8635,14 @@ async function generateContext({ keepContext = false } = {}) {
       if (sigueAqui() && state.site) {
         showNotice(aviso, true)
         if (porModelo) attachReindexButton({ keepContext })
+        // H17, paso 5 de la máquina del primer uso: por modelo se vuelve a «Elige
+        // el modelo», y al elegir se repite el indexado con el mismo
+        // `keepContext`. Detrás del aviso y del botón, que se quedan: si la
+        // pantalla taparía algo, el aviso lleva su «Elegir otro modelo».
+        if (porModelo) {
+          if (puedeAbrirPantalla()) showModelScreen({ modo: 'indexado', motivo: motivoPantalla, marcado: modelo, keepContext }).catch(console.error)
+          else attachModelNotice(aviso, { modo: 'indexado', marcado: modelo, keepContext })
+        }
       }
     }
   } finally {

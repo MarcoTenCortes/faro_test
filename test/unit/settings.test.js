@@ -236,6 +236,7 @@ test('H15: la versión fijada de mcp-atlassian es una cadena de tres números', 
 // ---- H16: el modelo es de la persona, y lo que Faro sabe de cada modelo ------
 
 import { MODEL_LIMITS, STORAGE_AREAS } from '../../src/shared/config.js'
+import { readFileSync } from 'node:fs'
 
 test('H16: el modelo es de la persona y nace sin elegir: ningún modelo se elige solo', () => {
   eq(DEFAULT_SETTINGS.model, null)
@@ -286,5 +287,16 @@ test('H16: cada motivo de fallo caduca a su ritmo, y hay uno para cada motivo', 
   const H = 60 * 60 * 1000
   eq(MODEL_LIMITS.ttlMs, { ok: 7 * 24 * H, plan: 7 * 24 * H, credenciales: H, mudo: 24 * H, transitorio: 15 * 60 * 1000, otro: H })
   eq([MODEL_LIMITS.maxEntries, MODEL_LIMITS.messageMax], [100, 200])
-  eq(Object.keys(MODEL_LIMITS).sort(), ['maxEntries', 'messageMax', 'ttlMs'])
+  eq(Object.keys(MODEL_LIMITS).sort(), ['maxEntries', 'messageMax', 'probeMs', 'ttlMs'], 'y H17 añade el plazo de la sonda, nada más')
+})
+
+test('H17: el plazo de la sonda de «Comprobar» es un entero de al menos 5 s, y el mismo que usa la integración', () => {
+  // Un plazo corto daría por mudo a un modelo que sólo es lento en frío; y es el
+  // mismo número con el que la integración decide si un modelo está vivo.
+  assert(Number.isInteger(MODEL_LIMITS.probeMs) && MODEL_LIMITS.probeMs >= 5000, 'entero y ≥ 5000: ' + MODEL_LIMITS.probeMs)
+  eq(MODEL_LIMITS.probeMs, 15000)
+  const integracion = readFileSync(new URL('../integration/opencode.test.js', import.meta.url), 'utf8')
+  const m = /const PROBE_MS = (\d+)/.exec(integracion)
+  assert(m, 'la integración declara PROBE_MS')
+  eq(Number(m[1]), MODEL_LIMITS.probeMs, 'la sonda del panel y la de la integración esperan lo mismo')
 })

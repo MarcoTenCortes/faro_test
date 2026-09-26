@@ -1011,3 +1011,214 @@ test('H16: promptStructured lanza con el error crudo, el modelo y si se calló, 
     }
   )
 })
+
+// ---- H17: la sonda de «Comprobar» ------------------------------------------
+// Un turno corto con ese modelo, en su propia sesión desechable, SÓLO cuando el
+// usuario pulsa «Comprobar» (docs/PLAN2.md §3.3). Todo con el servidor falso:
+// ninguna prueba manda un turno a un modelo de verdad.
+
+const SONDA = 'ses_sonda'
+const LUNA = { providerID: 'github-copilot', modelID: 'gpt-5.6-luna' }
+
+/** Las rutas de una sesión de sonda: crearla, abortarla y borrarla. */
+function rutasDeSonda(promptAsync) {
+  return {
+    'POST /session': { id: SONDA },
+    [`POST /session/${SONDA}/prompt_async`]: promptAsync,
+    [`POST /session/${SONDA}/abort`]: true,
+    [`DELETE /session/${SONDA}`]: true,
+  }
+}
+
+/** Las llamadas a la sesión de sonda, sin el stream: método y ruta. */
+const pasosDeSonda = (s) => s.calls.filter((c) => c.path !== '/event').map((c) => c.method + ' ' + c.path)
+
+test('H17: probeModel — un turno corto en su sesión desechable, con el nivel de razonamiento más barato, y la borra al acabar', async () => {
+  const contesta = (ll, s) => {
+    s.sse.push(ev('message.updated', { info: { id: 'msg_a', sessionID: SONDA, role: 'assistant', model: LUNA } }))
+    s.sse.push(ev('message.part.updated', { part: { id: 'prt_1', sessionID: SONDA, messageID: 'msg_a', type: 'text', text: 'ok' } }))
+    s.sse.push(ev('session.idle', { sessionID: SONDA }))
+    return { id: 'msg_1' }
+  }
+  await conServidor(rutasDeSonda(contesta), async (client, s) => {
+    const r = await client.probeModel({ ...LUNA, variants: ['none', 'low', 'high'] })
+    eq(Object.keys(r).sort(), ['model', 'ms', 'ok', 'rawError', 'stalled', 'text'], 'claves exactas')
+    eq([r.ok, r.text, r.rawError, r.stalled], [true, 'ok', null, false])
+    eq(r.model, LUNA, 'el modelo que se comprobó, sin las variantes')
+    assert(typeof r.ms === 'number' && r.ms >= 0 && Number.isFinite(r.ms), 'ms: ' + r.ms)
+    // SEGURIDAD: la sesión de la sonda lleva SAFE_PERMISSIONS (la primera regla lo deniega todo).
+    const crear = s.calls.find((c) => c.method === 'POST' && c.path === '/session')
+    eq(crear.body, { title: 'Faro · probando modelo', permission: SAFE_PERMISSIONS })
+    eq(crear.body.permission[0], { permission: '*', pattern: '**', action: 'deny' })
+    const turno = s.calls.find((c) => c.path === `/session/${SONDA}/prompt_async`)
+    eq(turno.body, {
+      model: LUNA,
+      system: 'Es una comprobación de disponibilidad. Contesta sólo «ok». No uses herramientas.',
+      variant: 'none',
+      parts: [{ type: 'text', text: 'Responde sólo: ok' }],
+    })
+    // Acabó bien: se borra la sesión y NO se aborta nada.
+    eq(pasosDeSonda(s), ['POST /session', `POST /session/${SONDA}/prompt_async`, `DELETE /session/${SONDA}`])
+  })
+
+  // Sin ninguna variante barata declarada, el cuerpo no lleva la clave `variant`.
+  for (const variants of [undefined, [], ['medium', 'high'], 'none']) {
+    await conServidor(rutasDeSonda(contesta), async (client, s) => {
+      const r = await client.probeModel({ ...LUNA, variants })
+      eq(r.ok, true)
+      const turno = s.calls.find((c) => c.path === `/session/${SONDA}/prompt_async`)
+      eq('variant' in turno.body, false, 'sin variante barata no hay variant: ' + JSON.stringify(variants))
+    })
+  }
+  // Y el orden de preferencia es none → minimal → low, nunca una más cara.
+  for (const [variants, esperada] of [[['high', 'low', 'minimal'], 'minimal'], [['xhigh', 'low'], 'low']]) {
+    await conServidor(rutasDeSonda(contesta), async (client, s) => {
+      await client.probeModel({ ...LUNA, variants })
+      eq(s.calls.find((c) => c.path === `/session/${SONDA}/prompt_async`).body.variant, esperada)
+    })
+  }
+})
+
+test('H17: probeModel — un rechazo del proveedor es ok:false con el error crudo; no se aborta (ya acabó) y se borra', () =>
+  conServidor(
+    rutasDeSonda((ll, s) => {
+      s.sse.push(ev('message.updated', { info: { id: 'msg_a', sessionID: SONDA, role: 'assistant', model: LUNA } }))
+      s.sse.push(ev('session.error', { sessionID: SONDA, error: { name: 'APIError', data: { message: 'The requested model is not available for integrator "opencode".', statusCode: 400 } } }))
+      return { id: 'msg_1' }
+    }),
+    async (client, s) => {
+      const r = await client.probeModel(LUNA)
+      eq([r.ok, r.stalled, r.text], [false, false, ''])
+      eq(r.rawError, { name: 'APIError', data: { message: 'The requested model is not available for integrator "opencode".', statusCode: 400 } })
+      eq(pasosDeSonda(s), ['POST /session', `POST /session/${SONDA}/prompt_async`, `DELETE /session/${SONDA}`], 'quien falló ya acabó: ningún abort')
+    }
+  ))
+
+test('H17: probeModel — un modelo mudo se da por colgado al plazo, y se aborta ANTES de borrar la sesión', () =>
+  conIntervaloRapido(() =>
+    conServidor(
+      rutasDeSonda((ll, s) => {
+        s.sse.push(ev('session.status', { sessionID: SONDA, status: 'busy' }))
+        return { id: 'msg_1' }
+      }),
+      async (client, s) => {
+        const t0 = Date.now()
+        const r = await client.probeModel(LUNA, { timeoutMs: 20 })
+        eq([r.ok, r.stalled, r.rawError, r.text], [false, true, null, ''])
+        const pasos = pasosDeSonda(s)
+        const abortar = pasos.indexOf(`POST /session/${SONDA}/abort`)
+        const borrar = pasos.indexOf(`DELETE /session/${SONDA}`)
+        assert(abortar > -1, 'el turno se aborta: DELETE no lo cancela')
+        assert(borrar > -1, 'y la sesión se borra')
+        assert(abortar < borrar, 'primero abortar, después borrar: ' + pasos.join(' · '))
+        eq(pasos[pasos.length - 1], `DELETE /session/${SONDA}`)
+        assert(Date.now() - t0 < 1000, 'el plazo es el que se le da, no el del chat')
+      }
+    )
+  ))
+
+test('H17: probeModel — un modelo que razona sin fin también se corta al plazo, y uno que acaba sin decir nada no cuenta como «ok»', async () => {
+  // Razonar es estar vivo para el vigilante (H6 P2): sin el `maxMs` de la sonda,
+  // un modelo que sólo piensa tendría a la persona mirando «Comprobando…» quince
+  // minutos. Aquí piensa sin parar y la sonda lo corta a su plazo igual.
+  await conIntervaloRapido(() =>
+    conServidor(
+      {
+        ...rutasDeSonda((ll, s) => {
+          s.sse.push(ev('message.updated', { info: { id: 'msg_a', sessionID: SONDA, role: 'assistant', model: LUNA } }))
+          s.pensando = setInterval(() => {
+            s.sse.push(ev('message.part.delta', { sessionID: SONDA, messageID: 'msg_a', partID: 'prt_r', field: 'reasoning', delta: 'hmm ' }))
+          }, 2)
+          return { id: 'msg_1' }
+        }),
+        [`DELETE /session/${SONDA}`]: (ll, s) => {
+          clearInterval(s.pensando)
+          return true
+        },
+      },
+      async (client, s) => {
+        try {
+          const t0 = Date.now()
+          const r = await client.probeModel(LUNA, { timeoutMs: 40 })
+          eq([r.ok, r.stalled, r.text], [false, true, ''])
+          assert(Date.now() - t0 < 1000, 'cortado a su plazo aunque no deje de dar señales')
+          const pasos = pasosDeSonda(s)
+          assert(pasos.indexOf(`POST /session/${SONDA}/abort`) > -1, 'y abortado: ' + pasos.join(' · '))
+          eq(pasos[pasos.length - 1], `DELETE /session/${SONDA}`)
+        } finally {
+          clearInterval(s.pensando)
+        }
+      }
+    )
+  )
+
+  // Acabar «bien» sin una palabra (session.idle sin texto) no es contestar.
+  await conServidor(
+    rutasDeSonda((ll, s) => {
+      s.sse.push(ev('message.updated', { info: { id: 'msg_a', sessionID: SONDA, role: 'assistant', model: LUNA } }))
+      s.sse.push(ev('message.part.updated', { part: { id: 'prt_1', sessionID: SONDA, messageID: 'msg_a', type: 'text', text: '   ' } }))
+      s.sse.push(ev('session.idle', { sessionID: SONDA }))
+      return { id: 'msg_1' }
+    }),
+    async (client, s) => {
+      const r = await client.probeModel(LUNA)
+      eq([r.ok, r.stalled, r.text, r.rawError], [false, false, '', null], 'mudo aunque el turno acabara')
+      eq(pasosDeSonda(s), ['POST /session', `POST /session/${SONDA}/prompt_async`, `DELETE /session/${SONDA}`], 'acabó solo: no hay nada que abortar')
+    }
+  )
+})
+
+test('H17: probeModel — cancelada por la señal, aborta ella misma una sola vez y borra', async () => {
+  const quieto = () => ({ id: 'msg_1' })
+  await conServidor(rutasDeSonda(quieto), async (client, s) => {
+    const ctrl = new AbortController()
+    const promesa = client.probeModel(LUNA, { signal: ctrl.signal })
+    await esperar(() => s.calls.some((c) => c.path === `/session/${SONDA}/prompt_async`))
+    ctrl.abort()
+    const r = await promesa
+    eq([r.ok, r.stalled], [false, false])
+    eq(pasosDeSonda(s), ['POST /session', `POST /session/${SONDA}/prompt_async`, `POST /session/${SONDA}/abort`, `DELETE /session/${SONDA}`], 'un abort, no dos')
+  })
+})
+
+test('H17: probeModel nunca lanza — opencode caído, una sesión que no se crea, un prompt que revienta o un modelo sin forma', async () => {
+  // Sin servidor: fetch revienta.
+  const fetchReal = globalThis.fetch
+  globalThis.fetch = async () => {
+    throw new TypeError('fetch failed')
+  }
+  const suelto = new OpencodeClient({ baseUrl: BASE, password: 'secreta' })
+  try {
+    const r = await suelto.probeModel(LUNA)
+    eq([r.ok, r.stalled, r.text], [false, false, ''])
+    eq(r.rawError.name, 'OpencodeError', 'distinguible de un rechazo del proveedor')
+    eq(Object.keys(r.rawError).sort(), ['message', 'name', 'status'], 'sin el cuerpo de opencode')
+    eq(r.model, LUNA)
+  } finally {
+    suelto.disconnect()
+    globalThis.fetch = fetchReal
+  }
+
+  // La sesión no se crea (500): nada que abortar ni borrar.
+  await conServidor({ 'POST /session': { status: 500, body: 'no' } }, async (client, s) => {
+    const r = await client.probeModel(LUNA)
+    eq([r.ok, r.rawError.name, r.rawError.status], [false, 'OpencodeError', 500])
+    eq(pasosDeSonda(s), ['POST /session'])
+  })
+
+  // El prompt revienta a medias: se aborta por si acaso y se borra.
+  await conServidor(rutasDeSonda({ status: 500, body: 'sin modelo' }), async (client, s) => {
+    const r = await client.probeModel(LUNA)
+    eq([r.ok, r.rawError.status], [false, 500])
+    eq(pasosDeSonda(s), ['POST /session', `POST /session/${SONDA}/prompt_async`, `POST /session/${SONDA}/abort`, `DELETE /session/${SONDA}`])
+  })
+
+  // Un modelo sin forma no crea ninguna sesión.
+  await conServidor(rutasDeSonda(() => ({})), async (client, s) => {
+    for (const malo of [null, undefined, 'github-copilot/gpt-5.6-luna', {}, { providerID: 'x' }]) {
+      const r = await client.probeModel(malo)
+      eq([r.ok, r.model], [false, null], JSON.stringify(malo))
+    }
+    eq(pasosDeSonda(s), [], 'ni una petición')
+  })
+})

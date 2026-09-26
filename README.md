@@ -216,7 +216,14 @@ $env:OPENCODE_SERVER_PASSWORD = "algo-largo-y-tuyo"; opencode serve --port 4096 
 
 ### 3. Abre Jira o Confluence y pulsa el icono
 
-La primera vez en cada sitio, Faro te pedirá las claves de cada producto:
+La primera vez, el orden es **conexión → modelo → claves → contexto**. Si no
+tienes todavía un modelo elegido (es tuyo y vale para todos los sitios), Faro
+te enseña la pantalla **«Elige el modelo»** con los modelos que tu opencode
+tiene conectados, antes de las claves: la comprobación de las claves es ya un
+turno con ese modelo, y así un modelo que tu plan rechaza no parece un token
+malo. Elegir no cuesta nada.
+
+Después, la primera vez en cada sitio, Faro te pedirá las claves de cada producto:
 dirección, correo (en Cloud) y API token de Jira, y los de Confluence
 (`id.atlassian.com` → Security → API tokens en Cloud; *Personal Access Tokens*
 de cada producto en Data Center). Si tu Jira y tu Confluence viven en hosts
@@ -651,7 +658,7 @@ cuáles no), que desde H16 son tuyos y no de un sitio.
 ## Comprobaciones
 
 ```bash
-npm run check              # sintaxis + orden + manifest + 1372 pruebas unitarias + docs
+npm run check              # sintaxis + orden + manifest + 1377 pruebas unitarias + docs
 npm run check:docs         # sólo el paso docs: número de pruebas, títulos del registro, mensajes y ficheros del mapa
 npm run test:integration   # contra un opencode real que arranca la propia prueba
 npm run harness            # banco de pruebas visual en http://127.0.0.1:5175
@@ -1023,7 +1030,9 @@ Chrome que la ignoraba.
   panel. En Ajustes cierra **sin guardar**: lo que hayas tecleado y no
   guardado se pierde, porque su flecha de volver guarda todos los campos —la
   contraseña y la dirección del servidor incluidas—, y por eso se llama
-  «Guardar y volver». En la
+  «Guardar y volver». En «Elige el modelo» cierra sólo cuando su flecha está
+  a la vista (abierta desde Ajustes o desde un error): la primera vez no hay
+  flecha y Escape no hace nada, porque hay que elegir. En la
   página, Escape es de Faro sólo mientras tiene algo
   en marcha —el foco de un recorrido, el cartel, la barra de señalar— o
   mientras el único subrayado es el de una llegada por cita, que sí quita; con
@@ -1100,9 +1109,25 @@ Por eso Faro trae un vigilante: si un turno deja de producir contenido durante
 sitio**: el que eliges en el desplegable vale para todos tus Jira y Confluence
 (el segundo sitio ya no pregunta), y lo que una versión anterior guardaba por
 sitio se copia como tuyo una sola vez. Faro no elige un modelo por ti como si
-fuera tuyo: sin ninguno guardado, preselecciona el último que contestó o un
-predeterminado que no haya fallado, sin guardarlo (una versión próxima trae la
-pantalla «Elige el modelo»).
+fuera tuyo: la primera vez te lo pregunta, y en un sitio ya en marcha sin
+ninguno guardado preselecciona el último que contestó o un predeterminado que
+no haya fallado, sin guardarlo.
+
+**La pantalla «Elige el modelo»** (desde H17) enseña todos los modelos que tu
+opencode tiene conectados, agrupados por proveedor, con «predeterminado de
+opencode», «el de tu configuración» y lo que Faro sabe de cada uno («funciona ·
+hace 2 h», «no disponible con tu plan: …»); los que fallaron hace poco van
+plegados en «No disponibles (N)», pero se pueden elegir. Tiene un filtro por
+nombre. Sale sola la primera vez (antes de las claves), cuando tu modelo acaba
+de fallar o ya no está, con **Elegir otro modelo** bajo cualquier error de un
+turno (tu pregunta queda escrita en el cuadro, sin mandar), y desde **Ajustes →
+Cambiar el modelo**. **«Usar este modelo» es gratis**; **«Comprobar» manda un
+turno corto** («Responde sólo: ok», en una sesión aparte que se borra) para
+saber si contesta, y **con un proveedor de pago eso cuesta una petición**: por
+eso Faro no lo hace nunca solo. Si opencode no tiene ningún proveedor
+conectado, la pantalla lo dice (`opencode auth login`) con un «Reintentar».
+`Esc` y la flecha de volver sólo están cuando se abre desde Ajustes o desde un
+error: la primera vez, hay que elegir.
 
 **Cuando un modelo falla, Faro se acuerda.** opencode no sabe qué modelos
 permite tu plan (los 43 de la máquina de Marco dicen todos «activo» y «con
@@ -1114,11 +1139,12 @@ los que faltan en la lista de Copilot y todos los `opencode/*` tras un 403 de
 free tier caen de golpe. «Reintentar con X» sólo aparece si X ya ha contestado
 bien: se acabó el ir y venir entre dos modelos que tu plan rechaza. Si el
 modelo que elegiste ya no está en tu opencode o acaba de fallar, el panel te lo
-dice al abrirse y te dice con cuál va esta vez, en vez de cambiarlo en silencio;
-y si fallan todos, usa el predeterminado y te lo avisa. Un modelo
-que falla al comprobar las claves **no se cuenta como un fallo de las claves**
-(«Volver a comprobar» repite sólo la comprobación con otro modelo), y un
-indexado que falla por el modelo no da el sitio por configurado. Todo eso se ve
+dice al abrirse —con la pantalla del modelo— y te dice con cuál va esta vez, en
+vez de cambiarlo en silencio; y si fallan todos, usa el predeterminado y te lo
+avisa. Un modelo que falla al comprobar las claves **no se cuenta como un fallo
+de las claves** (vuelves a la pantalla del modelo, y al elegir se repite sólo
+la comprobación), y un indexado que falla por el modelo no da el sitio por
+configurado (vuelves a la pantalla, y al elegir se vuelve a generar). Todo eso se ve
 y se borra en **Ajustes → Qué guarda Faro de mí** («modelo elegido»,
 «veredictos de modelos» y el botón **Olvidar los veredictos**), y nunca viaja a
 la página ni entra en ninguna pregunta.
@@ -1188,10 +1214,11 @@ la página ni entra en ninguna pregunta.
 manifest.json               MV3 · key fija el id · sidePanel
 src/
   panel/
-    panel.js                chat, ajustes, memoria, indexador, planificador
+    panel.js                chat, ajustes, memoria, indexador, planificador; desde H17 la pantalla «Elige el modelo» y el orden del primer uso (conexión → modelo → claves → contexto)
     chat-scroll.js          ¿está el chat pegado al fondo? (puro)
     screens.js              qué pantalla cierra Escape, y con qué botón o sin
-                            guardar (Ajustes) (puro)
+                            guardar (Ajustes); la del modelo sólo cuando su
+                            flecha está a la vista (puro)
     links.js                qué enlaces del chat se abren: el sitio, su Confluence enlazado, id.atlassian.com (puro)
     skills.js               General · Búsqueda · Resumen · Análisis; Búsqueda habla distinto en Jira (JQL) y en Confluence (árbol) (puro)
     setup.js                claves por producto → bloque MCP (versión fijada, todas las herramientas, un minuto para arrancar); hosts enlazados; y por qué un MCP está en «failed» y qué hacer (puro salvo las llamadas a opencode)
@@ -1221,7 +1248,7 @@ src/
     picker.js               modo de selección: subrayar texto, elegir imágenes
     pick-payload.js         lo que viaja de esa selección (puro)
     runner.js               ejecutor de un paso
-  opencode/                 cliente HTTP + SSE, reconstrucción de turnos
+  opencode/                 cliente HTTP + SSE, reconstrucción de turnos; desde H17 la sonda de «Comprobar» (un turno corto en una sesión que se borra)
   atlassian/                detección de sitio, índice de contenido
     activity.js             el diario local de lo que has visto y analizado: sólo ids, títulos y rutas relativas (puro)
   nav/                      esquema NavigationPlan y su validación
@@ -1230,13 +1257,13 @@ src/
     jira-rest.js            lo que la API del propio Jira da exacto: consultas de plantilla, filas con claves blancas, el perfil contado de un proyecto y las búsquedas sugeridas; en Jira Cloud no pide nada (puro)
     confluence-rest.js      el árbol y la búsqueda de páginas por la API REST del sitio, con tu sesión; lo último que viste y el árbol entero de un espacio, paginado (puro)
     digest.js               cómo se enseñan los bloques y cómo se reconoce uno después (puro)
-    config.js               ajustes por defecto y su migración; NAV_TIMING, el único sitio con los tiempos de la navegación; los topes de la eficiencia (cuántos mensajes se piden al restaurar, cuándo se avisa de una conversación pesada); y la lista de lo que Faro guarda, con el área del navegador en la que vive cada cosa
+    config.js               ajustes por defecto y su migración (el modelo es de la persona); el plazo de la sonda de «Comprobar»; NAV_TIMING, el único sitio con los tiempos de la navegación; los topes de la eficiencia (cuántos mensajes se piden al restaurar, cuándo se avisa de una conversación pesada); y la lista de lo que Faro guarda, con el área del navegador en la que vive cada cosa
     activity-store.js       dónde vive ese diario y cómo se escribe sin que el service worker y el panel se pisen
     storage.js              lo guardado del navegador; todo lo de un sitio en UNA lectura (getSiteBundle), lo que arrastra la sesión abierta, y «olvidar este sitio» en una sola función que deriva de esa lista lo que borra
     permissions.js          los permisos de cada sesión de opencode: todo denegado salvo el MCP, y una copia de cómo los evalúa opencode para probarlo (puro)
     timing.js               el cronómetro por fases que el registro enseña: sólo etiquetas y números, nunca cuerpos ni claves (puro)
     models.js               elegir modelo, y desde H16 qué enseña un fallo: clasificarlo, sacar de él los veredictos (también de proveedor y de la lista de Copilot), recordarlos con caducidad y que ninguna elección automática vuelva a caer en lo que falló (puro)
-harness/                    Confluence y Jira de mentira para pruebas visuales; issues.json es la fixture de la Jira falsa
+harness/                    Confluence y Jira de mentira para pruebas visuales; issues.json es la fixture de la Jira falsa; panel-preview.html, el espejo del panel (desde H17 con «Elige el modelo» sobre la lista real de modelos y el recorrido del primer uso)
 test/                       arnés propio, sin dependencias; test/fixtures/prompts/ son las instantáneas de los prompts, y test/fixtures/models/ los rechazos REALES de tres proveedores y la lista de modelos de opencode
 tools/                      generación de iconos, clave del manifest, servidor del banco
   check-docs.mjs            el paso «docs» de npm run check (npm run check:docs suelto)

@@ -337,6 +337,10 @@ body {
 .icon-btn svg { width: 15px; height: 15px; }
 /* El cierre de una pantalla, arriba a la izquierda de su cabecera. */
 .icon-btn.back { flex: none; }
+/* Una flecha con `hidden` NO se ve (H17: la de «Elige el modelo» nace oculta en
+   el primer uso). Sin esta regla, el `display: grid` de `.icon-btn` gana al
+   `display: none` que el navegador pone a `[hidden]`, y la flecha salía igual. */
+.icon-btn.back[hidden] { display: none; }
 
 /* El punto de estado que había aquí (`.dot`, con su gris de 1,57:1 cuando no
    había conexión) ya no existe: el estado de opencode lo cuenta el faro de la
@@ -718,7 +722,7 @@ textarea::placeholder { color: var(--muted); }
 
 .field { margin-bottom: var(--s3); border: 0; padding: 0; }
 .field label, .field legend { display: block; font-size: var(--text-xs); font-weight: 600; color: var(--ink-2); margin-bottom: var(--s1); padding: 0; }
-.field input[type="text"], .field input[type="password"], .field input[type="email"] {
+.field input[type="text"], .field input[type="password"], .field input[type="email"], .field input[type="search"] {
   width: 100%;
   font: inherit;
   font-size: var(--text-sm);
@@ -993,6 +997,49 @@ html.faro-still .busy-bar i { animation: none; width: 100%; }
    uno largo se saldría a lo ancho del panel a 320 px, y eso sí lo cazaría el
    `scrollWidth` del documento en `faroPreview.check()`. */
 #privacy-others { overflow-wrap: anywhere; }
+
+/* ------------------------------------------------ «Elige el modelo» (H17) */
+
+/* Una lista por proveedor (un `fieldset` con su `legend`) y una fila por modelo:
+   un `label.check` con su radio, el nombre, sus etiquetas y lo que se sabe de él
+   (`.model-why`) en una segunda línea. Hay 43 modelos y a 320 px no caben en una
+   línea con su veredicto: por eso la fila ENVUELVE y el nombre y el porqué se
+   parten (`overflow-wrap`), nunca empujan a lo ancho —el mensaje de Copilot trae
+   la lista entera de lo que sí vale y, sin acotar, eran mil caracteres—.
+   Sin colores nuevos: `--ink`, `--muted`, `--ink-2`, `--danger` y `--ok` sobre
+   `--ground` ya están declarados en test/contrast-pairs.js, y el filete entre
+   filas es el `--hairline` decorativo de siempre. */
+.model-list { margin: 0 0 var(--s3); }
+.model-group { border: 0; padding: 0; margin: 0 0 var(--s3); min-width: 0; }
+.model-group > legend {
+  padding: 0;
+  margin: 0 0 var(--s1);
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.model-row {
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 var(--s2);
+  margin: 0;
+  padding: var(--s1) 0;
+  border-bottom: 1px solid var(--hairline);
+}
+.model-row:last-child { border-bottom: 0; }
+.model-row input { align-self: center; flex: none; }
+.model-name { color: var(--ink); min-width: 0; overflow-wrap: anywhere; }
+.model-tag { font-size: var(--text-2xs); color: var(--muted); }
+.model-why { flex-basis: 100%; min-width: 0; padding-left: var(--s5); font-size: var(--text-xs); color: var(--muted); overflow-wrap: anywhere; }
+/* El veredicto dice si el modelo contesta: en rojo el fallo apuntado y vigente,
+   en verde el que ya contestó. El color no es lo único que lo dice: el texto
+   («no disponible con tu plan…», «funciona · hace 2 h») va siempre escrito. */
+.model-row.bad .model-why { color: var(--danger); }
+.model-row.ok .model-why { color: var(--ok); }
+.model-unavailable { margin: 0 0 var(--s3); }
+.model-unavailable > summary { cursor: pointer; font-size: var(--text-xs); font-weight: 600; color: var(--ink-2); margin-bottom: var(--s2); }
 
 /* --------------------------------------------- Skill y selección de página */
 

@@ -157,6 +157,11 @@ No hay paso de compilación: son módulos ES que Chrome carga tal cual.
 Jira y Confluence son dos productos, y cada uno lleva **su dirección y su
 token**. Un solo servidor MCP sirve a los dos.
 
+Antes de esta pantalla, la primera vez, Faro te pide **el modelo** (la pantalla
+«Elige el modelo», apartado 6 → «Elegir modelo»): la comprobación de tus claves
+es ya un turno con ese modelo, y así un modelo que tu plan no permite no se
+confunde con un token malo. Si ya tienes uno elegido de otro sitio, no la ves.
+
 1. Consigue los tokens:
    - **Cloud** -> [id.atlassian.com -> Security -> API tokens](https://id.atlassian.com/manage-profile/security/api-tokens).
      El mismo token vale para Jira y para Confluence: pégalo en los dos bloques.
@@ -625,10 +630,51 @@ Junto al selector de modelo, abajo, hay otras dos cosas:
   sitio, el primer sitio que abras copia el suyo como tuyo **una sola vez** (y
   sólo si todavía no tenías uno); los demás modelos por sitio ya no se usan, y
   para cambiar basta el desplegable. Faro no elige un modelo por ti como si lo
-  hubieras elegido tú: si no tienes ninguno guardado, **preselecciona** el
-  último que contestó bien o un predeterminado de tus proveedores que no haya
-  fallado, sin guardarlo como tuyo (en una versión próxima eso será una
-  pantalla «Elige el modelo»).
+  hubieras elegido tú: en un sitio que ya está en marcha y sin ningún modelo
+  guardado, **preselecciona** el último que contestó bien o un predeterminado
+  de tus proveedores que no haya fallado, sin guardarlo como tuyo; y en el
+  **primer uso** te lo pregunta en su pantalla, abajo.
+
+  **La pantalla «Elige el modelo».** Sale sola **la primera vez** en un sitio
+  —antes de las claves y del contexto: el orden es conexión → modelo → claves →
+  contexto—, si no tienes modelo guardado o el tuyo ya no vale; **desde
+  Ajustes**, con «Cambiar el modelo» (en su sección «Modelo», que también dice
+  cuál es el tuyo); **desde un error**, con el botón «Elegir otro modelo» que
+  lleva todo aviso de un turno que falla, y también cuando fallan por el modelo
+  la comprobación de las claves o el indexado; y en un sitio ya en marcha,
+  cuando tu modelo tiene un fallo reciente o ha desaparecido de la lista (si en
+  ese momento la pantalla taparía algo —estás escribiendo, llega una
+  respuesta— sale un aviso en el chat con «Elegir otro modelo»). Enseña todos
+  los modelos que tu opencode tiene conectados, **agrupados por proveedor**,
+  con «predeterminado de opencode» junto al predeterminado de cada proveedor,
+  «el de tu configuración» junto al `model` de tu `opencode.json`, y lo que
+  Faro sabe de cada uno en palabras: «funciona · hace 2 h», «no disponible con
+  tu plan: …», «no contesta», «credenciales caducadas: opencode auth login»,
+  «falló hace 10 min: …». Los que tienen un fallo reciente —y los que opencode
+  va a retirar o no tienen herramientas— van plegados bajo **«No disponibles
+  (N)»**, pero se pueden elegir igual: es información, no un candado. Arriba
+  hay un **filtro** que busca por nombre, id o proveedor.
+
+  **«Usar este modelo» es gratis**: lo guarda como tuyo y sigue —la primera vez
+  arranca de nuevo el panel con él, tras un error deja la pregunta que falló
+  escrita en el cuadro **sin mandarla**, tras la comprobación de las claves
+  repite sólo esa comprobación, y tras el indexado lo repite—. **«Comprobar»
+  cuesta un turno**: manda al modelo marcado una pregunta de dos palabras
+  («Responde sólo: ok») en una sesión aparte que se borra al acabar, con el
+  nivel de razonamiento más bajo que el modelo tenga y un plazo de 15 s; con un
+  proveedor de pago **eso es una petición**, y por eso Faro no lo hace nunca
+  por su cuenta (tampoco al elegir: la comprobación de las claves ya es un
+  turno de verdad con ese modelo). Lo que diga se apunta como cualquier otro
+  resultado, así que un «contesta» borra el «no disponible» de antes: es la
+  salida si tu modelo tiene un fallo apuntado que ya no es verdad (la otra,
+  «Olvidar los veredictos» en Ajustes). Si opencode **no tiene ningún
+  proveedor conectado**, la pantalla lo dice: ejecuta `opencode auth login`,
+  reinicia opencode y pulsa «Reintentar».
+
+  **`Esc` sólo cierra esta pantalla cuando se abrió desde Ajustes o desde un
+  error** (la flecha de arriba a la izquierda está a la vista): la primera vez,
+  tras la comprobación de las claves y tras el indexado no hay con qué seguir
+  sin elegir, la flecha no está y `Esc` no hace nada.
 
   **Cuando un modelo falla**, Faro se lo apunta, gratis y sin preguntar nada
   más, con el motivo: *no disponible con tu plan* (el proveedor lo rechaza:
@@ -648,18 +694,22 @@ Junto al selector de modelo, abajo, hay otras dos cosas:
   Nada de esto viaja a la página ni entra en ninguna pregunta.
 
   **En el primer uso** (la comprobación de las claves) un modelo que no contesta
-  **no se cuenta como un fallo de tus claves**: la pantalla de claves se cierra,
-  el sitio se queda sin configurar y el chat dice «El modelo «X» no ha podido
-  contestar (…). No se ha llegado a comprobar ningún token: elige otro modelo en
-  el desplegable y pulsa «Volver a comprobar».». Ese botón repite sólo la
-  comprobación, con el modelo que elijas, sin volver a escribir nada en
-  opencode. Y **un indexado que falla por el modelo no da el sitio por hecho**:
-  el aviso sale después de repintar el chat —antes se perdía— con un botón
-  «Generar el contexto otra vez», y la pantalla de contexto vuelve a ofrecerse
-  en el siguiente arranque.
+  **no se cuenta como un fallo de tus claves**: el sitio se queda sin
+  configurar y vuelves a «Elige el modelo» con el que falló marcado y el
+  motivo arriba («… No se ha llegado a comprobar ningún token: elige otro y se
+  repetirá la comprobación.»). Al elegir se repite sólo la comprobación, sin
+  volver a escribir nada en opencode. Si en ese momento la pantalla taparía
+  algo, en su lugar sale en el chat el aviso con «Volver a comprobar», que hace
+  lo mismo con el modelo del desplegable. Y **un indexado que falla por el
+  modelo no da el sitio por hecho**: el aviso sale después de repintar el chat
+  —antes se perdía— con un botón «Generar el contexto otra vez», se abre la
+  pantalla del modelo (o, si taparía algo, un aviso con «Elegir otro modelo») y
+  al elegir se vuelve a generar el contexto; la pantalla de contexto vuelve a
+  ofrecerse en el siguiente arranque.
 
 - **Teclado y lector de pantalla** — `Esc` cierra Ajustes, Memoria, Registro,
-  Páginas base (donde primero vacía las sugerencias) y Qué mirar hoy y cancela el
+  Páginas base (donde primero vacía las sugerencias), Qué mirar hoy y «Elige el
+  modelo» (ésta sólo si su flecha está a la vista) y cancela el
   velo «Trabajando…»; con una pantalla abierta el resto del panel queda inerte
   y el foco va a su título, y al cerrarla vuelve a donde estaba. Mientras llega
   una respuesta el chat lleva `aria-busy`; lo que se anuncia al lector de
@@ -1159,13 +1209,32 @@ corto y un detalle. Todos los títulos, por dónde salen:
   «proveedor/modelo: no está en la lista» si el modelo que tenías elegido ya no
   está entre los que tu opencode tiene conectados, o con «proveedor/modelo: fallo
   apuntado (<motivo>) · se preselecciona otro esta vez» si tiene un fallo
-  reciente: lo dice el arranque del panel, se preselecciona otro esta vez y un
-  aviso en el chat te dice cuál y que puedes elegir otro en el desplegable. Y con
+  reciente: lo dice el arranque del panel, se preselecciona otro esta vez y se
+  abre la pantalla «Elige el modelo» con el motivo (o, si taparía algo, un aviso
+  en el chat con «Elegir otro modelo»); la primera vez en un sitio, la pantalla
+  sale antes de las claves. Y con
   «todos los modelos de la lista tienen un fallo apuntado · se usa
   proveedor/modelo» si no queda ninguno sin marcar: se usa el predeterminado y
-  el aviso te propone elegir uno o pulsar «Olvidar los veredictos» en Ajustes.
+  la pantalla te propone elegir uno, «Comprobar» alguno o pulsar «Olvidar los
+  veredictos» en Ajustes.
   Un turno que termina sin ninguna palabra también se apunta, como *mudo*. En un turno sólo sale si el error es del proveedor: uno de la
   conversación, como un contexto desbordado, no dice nada del modelo.
+- «Modelo elegido» — pulsaste **Usar este modelo** en la pantalla «Elige el
+  modelo» y quedó guardado como el tuyo, para todos los sitios. El detalle es
+  «proveedor/modelo · desde <dónde>»: *primera-vez* (el primer uso de un sitio,
+  y a continuación el panel arranca de nuevo con él), *ajustes* (desde «Cambiar
+  el modelo», o porque tu modelo tenía un fallo reciente), *error* (desde
+  «Elegir otro modelo» bajo un error; la pregunta queda escrita en el cuadro,
+  sin mandar), *setup* (falló la comprobación de las claves por el modelo, y se
+  repite) o *indexado* (falló el indexado por el modelo, y se repite).
+- «Modelo comprobado» — pulsaste **Comprobar** en la pantalla «Elige el modelo»
+  y volvió la respuesta de ese turno corto. En verde, «proveedor/modelo · N ms»:
+  contestó, y queda apuntado que funciona. En amarillo, «proveedor/modelo ·
+  <motivo> · <mensaje del proveedor>»: no contestó, con el mismo motivo que
+  «Modelo no disponible» (que sale también). Y en amarillo con «· sin comprobar ·
+  <mensaje de opencode>»: la comprobación no llegó al proveedor —opencode no
+  creó la sesión, o no hubo red— y no se apunta nada del modelo. Si cambias de
+  servidor o de sitio mientras se comprueba, no se registra nada.
 - «Veredictos de modelos olvidados» — pulsaste **Olvidar los veredictos** en
   Ajustes: Faro olvida qué modelos contestan y cuáles no; «el modelo elegido se
   conserva».
@@ -1679,10 +1748,12 @@ llega al modelo. La lista entera, fila por fila, y qué se conserva al reabrir e
 panel están en el apartado **«Qué guarda Faro de mí»** de esta guía.
 
 **«El modelo no aceptó la petición» o el turno se queda pensando**
-Es el modelo, no Faro. Cambia de modelo en el desplegable: el propio mensaje
-trae un botón para reintentar con otro proveedor **si hay otro que ya haya
-contestado bien** (si no, no hay botón, para no mandarte a ciegas a otro que
-también falle). Ver la tabla de modelos del README y la entrada siguiente.
+Es el modelo, no Faro. El propio mensaje trae **Elegir otro modelo**, que abre
+la pantalla con el que falló marcado y, al elegir, deja tu pregunta escrita en
+el cuadro para que la mandes tú; y además un botón para reintentar con otro
+**si hay otro que ya haya contestado bien** (si no, ese no sale, para no
+mandarte a ciegas a otro que también falle). Ver la tabla de modelos del README
+y la entrada siguiente.
 
 **El modelo que elegí no contesta, o «no está disponible con mi plan»**
 opencode lista todos los modelos de los proveedores que tienes conectados, pero
@@ -1695,13 +1766,31 @@ días (una hora si es de credenciales, un día si no contestó, un cuarto de hor
 si fue un 429 o un 5xx). Con GitHub Copilot, el rechazo trae además la lista de
 lo que tu plan sí permite, y los que faltan se marcan a la vez; con el nivel
 gratuito de opencode se marcan todos sus modelos. Qué hacer: **elige otro
-modelo en el desplegable** (vale para todos tus sitios). Si pasó al comprobar
-las claves, el chat lo dice sin culpar a tus tokens y trae **Volver a
-comprobar**, que repite sólo la comprobación con el modelo nuevo; si pasó al
-generar el contexto, el sitio NO se da por configurado y el aviso trae
-**Generar el contexto otra vez**. Si el motivo es *credenciales*, ejecuta
+modelo** en la pantalla «Elige el modelo» o en el desplegable (vale para todos
+tus sitios). Si pasó al comprobar las claves, Faro no culpa a tus tokens:
+vuelve a esa pantalla y, al elegir, repite sólo la comprobación con el modelo
+nuevo (si la pantalla taparía algo, el aviso del chat trae **Volver a
+comprobar**); si pasó al generar el contexto, el sitio NO se da por
+configurado, el aviso trae **Generar el contexto otra vez** y la pantalla, al
+elegir, lo vuelve a generar. Si crees que el rechazo ya no es verdad, marca el
+modelo y pulsa **Comprobar**: un turno corto (con un proveedor de pago, una
+petición) que, si contesta, borra el «no disponible». Si el motivo es *credenciales*, ejecuta
 `opencode auth login` y reinicia opencode. Si cambiaste de plan y un modelo
 sigue marcado, **Ajustes → Olvidar los veredictos** lo deja probar otra vez.
+
+**Faro me pide elegir modelo cada vez, o no me deja salir de esa pantalla**
+Las dos cosas son a propósito. La pantalla sale en cada arranque mientras **tu
+modelo tenga un fallo reciente apuntado** (o ya no esté entre los de tu
+opencode): el motivo va arriba. Para que deje de salir, elige otro, o marca el
+tuyo y pulsa **Comprobar** —si contesta, el fallo deja de valer—, o **Ajustes →
+Olvidar los veredictos** si cambiaste de plan. Si eliges a sabiendas uno de «No
+disponibles», Faro lo respeta hasta que cierres el panel. Y la pantalla **no
+tiene flecha de volver** (ni `Esc` la cierra) la primera vez en un sitio, tras
+una comprobación de claves que falló por el modelo y tras un indexado que falló
+por el modelo, porque ahí no hay con qué seguir sin elegir: elige uno y
+«Usar este modelo», que no cuesta nada. Desde Ajustes o desde un error sí se
+sale sin elegir. Si la lista está vacía, tu opencode no tiene ningún proveedor
+conectado: `opencode auth login`, reinicia opencode y **Reintentar**.
 
 **Quiero ver qué está pasando por dentro**
 El icono de las líneas, en la cabecera del panel, abre el **registro**: cada

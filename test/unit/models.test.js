@@ -1,5 +1,5 @@
 import { test, eq, assert } from '../harness.js'
-import { pickDefaultModel, pickAlternativeModel, modelKey, parseModelKey } from '../../src/shared/models.js'
+import { pickDefaultModel, modelKey, parseModelKey } from '../../src/shared/models.js'
 
 const MODELS = [
   { providerID: 'openai', modelID: 'gpt-5.4', providerName: 'openai', name: 'gpt-5.4', free: false },
@@ -15,31 +15,6 @@ test('modelo por defecto: el primero de defaults que exista', () => {
   eq(pickDefaultModel(MODELS, DEFAULTS).modelID, 'gpt-5.4')
   eq(pickDefaultModel(MODELS, { inexistente: 'x' }).modelID, 'gpt-5.4')
   eq(pickDefaultModel([], DEFAULTS), null)
-})
-
-test('alternativa: cambia de PROVEEDOR, no solo de modelo', () => {
-  // El caso real: la sesion OAuth de openai caduco.
-  const alt = pickAlternativeModel(MODELS, DEFAULTS, 'openai')
-  assert(alt, 'deberia haber alternativa')
-  assert(alt.providerID !== 'openai', 'no vale otro modelo del mismo proveedor caido')
-  eq(alt.modelID, 'claude-sonnet-4.6')
-})
-
-test('alternativa: respeta el orden de defaults', () => {
-  const alt = pickAlternativeModel(MODELS, DEFAULTS, 'github-copilot')
-  eq(alt.providerID, 'openai')
-})
-
-test('alternativa: si ningun defaults sirve, prefiere lo gratuito', () => {
-  const alt = pickAlternativeModel(MODELS, { openai: 'gpt-5.4' }, 'openai')
-  eq(alt.free, true)
-  eq(alt.modelID, 'hy3-free')
-})
-
-test('alternativa: con un solo proveedor no hay salida', () => {
-  const solo = MODELS.filter((m) => m.providerID === 'openai')
-  eq(pickAlternativeModel(solo, DEFAULTS, 'openai'), null)
-  eq(pickAlternativeModel([], DEFAULTS, 'openai'), null)
 })
 
 test('claves de modelo: ida y vuelta', () => {
@@ -84,8 +59,9 @@ test('sin modelo no inventa nada', () => {
 //
 // La función vive en src/opencode/turn.js, junto a describeError, porque
 // decide sobre el error crudo del turno (`turn.rawError`); se prueba aquí
-// porque gobierna la elección de modelo del panel: `pickAlternativeModel`
-// sólo se ofrece cuando ésta dice que sí.
+// porque gobierna la elección de modelo del panel: «Reintentar con X»
+// (`pickRetryModel` desde la revisión de H16; antes `pickAlternativeModel`,
+// que H17 borró) sólo se ofrece cuando ésta dice que sí.
 // ---------------------------------------------------------------------------
 import { suggestsAnotherModel } from '../../src/opencode/turn.js'
 
@@ -381,25 +357,30 @@ test('H16: resolveModel — manda el de la persona, el del sitio se migra una ve
 })
 
 test('H16: EL BUCLE ROTO — «Reintentar con X» ya no alterna entre gpt-5.4 y claude-sonnet-4.6', () => {
-  // Hoy, sin veredictos, alterna entre los dos defaults rotos (anexo C, ejecutado).
-  eq(CLAVE(pickAlternativeModel(REALES, DEFAULTS_REALES, 'openai')), 'github-copilot/claude-sonnet-4.6')
-  eq(CLAVE(pickAlternativeModel(REALES, DEFAULTS_REALES, 'github-copilot')), 'openai/gpt-5.4')
-  const rotos = { checks: marcados('openai/gpt-5.4', 'github-copilot/claude-sonnet-4.6'), now: AHORA }
-  const trasOpenai = pickAlternativeModel(REALES, DEFAULTS_REALES, 'openai', rotos)
-  const trasCopilot = pickAlternativeModel(REALES, DEFAULTS_REALES, 'github-copilot', rotos)
-  for (const alt of [trasOpenai, trasCopilot]) {
-    assert(!['openai/gpt-5.4', 'github-copilot/claude-sonnet-4.6'].includes(CLAVE(alt)), 'ninguno de los dos rotos: ' + CLAVE(alt))
-  }
-  // Con los veredictos que dan los tres rechazos reales, ni siquiera un opencode/*.
+  // El bucle del compañero: tras fallar gpt-5.4 se proponía claude-sonnet-4.6, y
+  // tras fallar ése, gpt-5.4 otra vez (los dos defaults de sus proveedores y los
+  // dos rotos para Marco). Desde H17 «Reintentar con X» sólo sale de
+  // pickRetryModel, que elige entre lo que YA contestó. Con los veredictos que
+  // dan los tres rechazos REALES no hay ningún «sí»: no se propone NADA.
   const todo = [
     ...verdictsForFailure({ model: 'openai/gpt-5.4', rawError: OPENAI, models: REALES, now: AHORA }),
     ...verdictsForFailure({ model: 'github-copilot/claude-sonnet-4.6', rawError: COPILOT, models: REALES, now: AHORA }),
     ...verdictsForFailure({ model: 'opencode/big-pickle', rawError: FREE_TIER, models: REALES, now: AHORA }),
   ]
-  const checks = recordVerdicts({}, todo)
-  const alt = pickAlternativeModel(REALES, DEFAULTS_REALES, 'openai', { checks, now: AHORA })
-  eq(alt.providerID, 'github-copilot')
-  eq(modelVerdict(checks, alt, AHORA), null, 'y de lo que no se sabe nada malo')
+  const rotos = recordVerdicts({}, todo)
+  eq(pickRetryModel(REALES, 'openai/gpt-5.4', { checks: rotos, now: AHORA }), null, 'tras gpt-5.4, sin ningún ok: nada')
+  eq(pickRetryModel(REALES, 'github-copilot/claude-sonnet-4.6', { checks: rotos, now: AHORA }), null, 'tras claude-sonnet-4.6, sin ningún ok: nada')
+  // Aunque uno de los dos rotos hubiera contestado ANTES de fallar, el fallo es
+  // más reciente y manda: el bucle no vuelve por un ok viejo.
+  const okViejo = recordVerdicts({ 'openai/gpt-5.4': { ok: true, reason: 'ok', message: '', at: AHORA - 60000 } }, todo)
+  eq(pickRetryModel(REALES, 'github-copilot/claude-sonnet-4.6', { checks: okViejo, now: AHORA }), null, 'un ok anterior al fallo no resucita gpt-5.4')
+  // Y en cuanto algo contesta de verdad, es eso lo que se propone desde los dos rotos.
+  const conLuna = recordVerdicts(rotos, [{ key: 'github-copilot/gpt-5.6-luna', ok: true, reason: 'ok', message: '', at: AHORA - 1000 }])
+  for (const fallo of ['openai/gpt-5.4', 'github-copilot/claude-sonnet-4.6']) {
+    const alt = pickRetryModel(REALES, fallo, { checks: conLuna, now: AHORA })
+    eq(CLAVE(alt), 'github-copilot/gpt-5.6-luna', 'tras ' + fallo)
+    assert(!['openai/gpt-5.4', 'github-copilot/claude-sonnet-4.6'].includes(CLAVE(alt)), 'ninguno de los dos rotos: ' + CLAVE(alt))
+  }
 })
 
 test('H16: el planificador no cae en gpt-5.3-codex-spark si ya falló', () => {
@@ -419,14 +400,17 @@ test('H16: pickDefaultModel salta lo marcado, y con todo marcado no elige', () =
   eq(CLAVE(pickDefaultModel(REALES, DEFAULTS_REALES, { checks: marcados('openai/gpt-5.4'), now: AHORA + MODEL_LIMITS.ttlMs.plan })), 'openai/gpt-5.4')
 })
 
-test('H16: sin veredictos, las tres elecciones dan byte a byte lo de siempre', () => {
+test('H16: sin veredictos, las dos elecciones que quedan dan byte a byte lo de siempre', () => {
+  // pickDefaultModel y pickPlannerModel (pickAlternativeModel, la tercera, se
+  // borró en H17: ya no la llamaba nadie). Un mapa de veredictos vacío es lo
+  // mismo que no tenerlo.
   for (const [lista, defaults] of [[REALES, DEFAULTS_REALES], [MODELS, DEFAULTS], [[], {}]]) {
     eq(pickDefaultModel(lista, defaults, {}), pickDefaultModel(lista, defaults))
     eq(pickDefaultModel(lista, defaults, { checks: {}, now: AHORA }), pickDefaultModel(lista, defaults), 'un mapa vacío tampoco cambia nada')
-    for (const p of ['openai', 'github-copilot', 'opencode']) {
-      eq(pickAlternativeModel(lista, defaults, p, { checks: {} }), pickAlternativeModel(lista, defaults, p))
+    for (const m of lista) {
+      eq(pickPlannerModel(lista, m, { checks: {} }), pickPlannerModel(lista, m))
+      eq(pickPlannerModel(lista, m, { checks: {}, now: AHORA }), pickPlannerModel(lista, m), 'tampoco en el planificador')
     }
-    for (const m of lista) eq(pickPlannerModel(lista, m, { checks: {} }), pickPlannerModel(lista, m))
   }
 })
 

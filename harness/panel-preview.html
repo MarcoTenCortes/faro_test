@@ -139,6 +139,8 @@
     <button class="rig" data-screen="screen-setup">Configurar claves</button>
     <button class="rig" data-screen="setup-manual">Claves · paso manual</button>
     <button class="rig" data-screen="screen-context">Primera vez · contexto</button>
+    <button class="rig" data-screen="screen-model" title="H17: la lista real de la fixture, con una fila de cada veredicto y el mensaje largo de Copilot">Elige el modelo</button>
+    <button class="rig" data-screen="model-empty" title="H17: opencode sin ningún proveedor conectado">Elige el modelo · sin proveedores</button>
     <button class="rig" data-screen="screen-settings">Ajustes</button>
     <button class="rig" data-screen="screen-memory">Memoria</button>
     <button class="rig" data-screen="screen-sources">Páginas base del análisis</button>
@@ -184,6 +186,12 @@
   <div class="grp">
     <div class="grp-title">Cabecera</div>
     <button class="rig on" data-fifth="1" title="La insignia de «Qué mirar hoy» con sus novedades; el botón es el real de panel.html">Insignia de «Qué mirar hoy»</button>
+  </div>
+
+  <div class="grp">
+    <div class="grp-title">Primer uso</div>
+    <button class="rig" id="btn-primer-uso" title="H17: conexión → modelo → claves → contexto, 400 ms cada una, midiendo cada pantalla">Primer uso (encadenado)</button>
+    <div class="medidas" id="recorrido"></div>
   </div>
 
   <div class="grp">
@@ -553,7 +561,7 @@ async function arrancar() {
    */
   const HOY_VISTO = AHORA - 12 * HORA
 
-  const estado = { chat: 'confluence', pantalla: '', status: 'ok', pick: 'off', sources: 'off', ancho: 360, tema: 'dark', quinto: true, today: 'auto' }
+  const estado = { chat: 'confluence', pantalla: '', status: 'ok', pick: 'off', sources: 'off', ancho: 360, tema: 'dark', quinto: true, today: 'auto', primerUso: false }
   // Tres de las cinco conversaciones son de Jira («jira», «jira-busqueda» y el
   // vacío «empty-jira»): el producto se mira por el nombre, que es lo que decide
   // la cabecera, las etiquetas de las páginas base y si hay chips.
@@ -1584,6 +1592,19 @@ async function arrancar() {
   $('set-today').disabled = false
   $('set-today-hint').classList.add('hidden')
   $('settings-site-info').textContent = 'acme.atlassian.net · 212 entradas indexadas · con contexto'
+  // H17: la línea del modelo de Ajustes, con el formato de `paintSettingsModelInfo`.
+  $('settings-model-info').textContent = 'Usas «GPT-5.6 Luna» (github-copilot/gpt-5.6-luna) en todos los sitios.'
+
+  // H17: «Elige el modelo», con los módulos y las fixtures de VERDAD. La lista es
+  // la de `GET /config/providers` del opencode de Marco (43 modelos, pasados por
+  // el mismo `models()` del cliente que usa el panel) y los veredictos salen de
+  // `verdictsForFailure` sobre los tres rechazos REALES de rechazos.json —el de
+  // Copilot trae la lista entera de «Available models», mil caracteres: es el
+  // caso que desborda a 320 px si la fila no lo acota— más uno de cada clase que
+  // falta (ok, mudo, credenciales, transitorio), y se leen con `modelVerdict`
+  // como en el panel. El panel no se puede importar desde aquí, así que la fila
+  // es una copia mínima con los MISMOS textos (el test lo pina).
+  await pintarPantallaModelo()
   // «Qué guarda Faro de mí» (H13): la lista que `paintPrivacy` compone leyendo el
   // almacén. Aquí va a mano —no hay `chrome.storage` en el iframe— con una fila
   // de cada clase: dos vacías, una desactivada y el total, que es la más larga y
@@ -1765,6 +1786,182 @@ async function arrancar() {
     stateBox.appendChild(row)
   }
 
+  // --------------------------------------------- «Elige el modelo» (H17)
+
+  // Los mismos textos que `modelWhy`/`haceCuanto`/`mensajeCorto` de panel.js
+  // (el test exige que los dos digan «funciona · » y «no disponible con tu
+  // plan»): si uno cambia sin el otro, la captura enseñaría algo que no pasa.
+  // Las tres son DECLARACIONES `function`, no `const`, a propósito: se usan
+  // desde `await pintarPantallaModelo()`, más arriba en este mismo `arrancar()`,
+  // y una `const` de aquí abajo estaría todavía en su TDZ («Cannot access
+  // 'mensajeCorto' before initialization»), lo que tumbaba `arrancar()` entero
+  // y con él `faroPreview` —justo el fallo que test/tdz.js caza en src/ y que
+  // este HTML no tenía quien lo mirara (lo vio el orquestador al medir H17).
+  function haceCuanto(ms) {
+    const min = Math.floor(Math.max(0, Number(ms) || 0) / 60000)
+    if (min < 1) return 'hace un momento'
+    if (min < 60) return `hace ${min} min`
+    const h = Math.floor(min / 60)
+    if (h < 48) return `hace ${h} h`
+    return `hace ${Math.floor(h / 24)} días`
+  }
+  function mensajeCorto(t, max = 120) {
+    return String(t || '').length > max ? String(t).slice(0, max - 1) + '…' : String(t || '')
+  }
+  function porQueModelo(m, v, ahora) {
+    if (!m.usable) return m.unusableReason === 'deprecated' ? 'opencode lo va a retirar' : 'sin herramientas: no podría leer Jira ni Confluence'
+    if (!v) return ''
+    if (v.ok) return 'funciona · ' + haceCuanto(ahora - v.at)
+    const msg = mensajeCorto(v.message)
+    if (v.reason === 'plan') return 'no disponible con tu plan' + (msg ? ': ' + msg : '')
+    if (v.reason === 'mudo') return 'no contesta'
+    if (v.reason === 'credenciales') return 'credenciales caducadas: opencode auth login'
+    return `falló ${haceCuanto(ahora - v.at)}` + (msg ? ': ' + msg : '')
+  }
+
+  /**
+   * Pinta la lista con los módulos de verdad. Sin las fixtures (el servidor del
+   * banco no sirve la raíz, o se abrió el fichero a pelo) se queda vacía y lo
+   * dice en la consola: el resto del espejo sigue.
+   */
+  async function pintarPantallaModelo() {
+    const leer = (peticion) => peticion.then((r) => (r.ok ? r.json() : null)).catch(() => null)
+    const [modulo, { OpencodeClient }, PROVEEDORES, RECHAZOS] = await Promise.all([
+      import('/src/shared/models.js'),
+      import('/src/opencode/client.js'),
+      leer(fetch('/test/fixtures/models/providers.json')),
+      leer(fetch('/test/fixtures/models/rechazos.json')),
+    ])
+    const { verdictsForFailure, normalizeModelChecks, modelVerdict, modelsFingerprint, usableModels, MODEL_CHECKS_VERSION } = modulo
+    if (!PROVEEDORES || !RECHAZOS) return console.warn('[faroPreview] sin las fixtures de modelos: «Elige el modelo» se queda vacía')
+    const { models: MODELOS } = await OpencodeClient.prototype.models.call({
+      providers: async () => ({
+        default: PROVEEDORES.default,
+        providers: PROVEEDORES.providers.map((p) => ({
+          ...p,
+          models: Object.fromEntries(
+            Object.entries(p.models).map(([id, m]) => [id, { ...m, variants: Object.fromEntries((m.variants || []).map((v) => [v, {}])) }])
+          ),
+        })),
+      }),
+    })
+    const ahora = Date.now()
+    const H = 60 * 60 * 1000
+    const veredictos = []
+    for (const r of RECHAZOS.rechazos) veredictos.push(...verdictsForFailure({ model: r.model, rawError: r.rawError, models: MODELOS, now: ahora - 3 * H }))
+    veredictos.push(
+      ...verdictsForFailure({ model: 'github-copilot/grok-4.7', stalled: true, models: MODELOS, now: ahora - H }),
+      ...verdictsForFailure({ model: 'openai/gpt-5.2', rawError: { name: 'ProviderAuthError', data: { message: 'Token refresh failed: 401' } }, models: MODELOS, now: ahora - 20 * 60000 }),
+      ...verdictsForFailure({ model: 'github-copilot/kimi-k3', rawError: { name: 'APIError', data: { message: 'Rate limit exceeded', statusCode: 429 } }, models: MODELOS, now: ahora - 5 * 60000 }),
+      { key: 'github-copilot/gpt-5.6-luna', ok: true, reason: 'ok', message: '', at: ahora - 2 * H }
+    )
+    const SERVIDOR = 'http://127.0.0.1:4096'
+    const huella = modelsFingerprint(MODELOS)
+    const checks = normalizeModelChecks(
+      {
+        version: MODEL_CHECKS_VERSION,
+        server: SERVIDOR,
+        fingerprint: huella,
+        checks: Object.fromEntries(veredictos.map((v) => [v.key, { ok: v.ok, reason: v.reason, message: v.message, at: v.at }])),
+      },
+      { server: SERVIDOR, fingerprint: huella, now: ahora }
+    )
+    const DE_CONFIG = 'openai/gpt-5.3-codex'
+    const MARCADO = 'github-copilot/claude-sonnet-4.6'
+
+    const lista = $('model-list')
+    const plegada = $('model-unavailable-list')
+    lista.textContent = ''
+    plegada.textContent = ''
+    const disponibles = new Map()
+    const noDisponibles = new Map()
+    for (const m of usableModels(MODELOS)) {
+      const key = `${m.providerID}/${m.modelID}`
+      const v = modelVerdict(checks, key, ahora)
+      const grupos = !m.usable || (v && !v.ok) ? noDisponibles : disponibles
+      if (!grupos.has(m.providerName)) grupos.set(m.providerName, [])
+      const fila = mk('label', 'check model-row' + (v ? (v.ok ? ' ok' : ' bad') : ''))
+      const radio = doc.createElement('input')
+      radio.type = 'radio'
+      radio.name = 'model-choice'
+      radio.value = key
+      radio.checked = key === MARCADO
+      fila.append(radio, mk('span', 'model-name', m.name))
+      if (m.isDefault) fila.appendChild(mk('span', 'model-tag', 'predeterminado de opencode'))
+      if (key === DE_CONFIG) fila.appendChild(mk('span', 'model-tag', 'el de tu configuración'))
+      const porQue = porQueModelo(m, v, ahora)
+      if (porQue) fila.appendChild(mk('span', 'model-why', porQue))
+      grupos.get(m.providerName).push(fila)
+    }
+    for (const [caja, grupos] of [[lista, disponibles], [plegada, noDisponibles]]) {
+      for (const [proveedor, filas] of grupos) {
+        const g = mk('fieldset', 'model-group')
+        g.append(mk('legend', null, proveedor), ...filas)
+        caja.appendChild(g)
+      }
+    }
+    const cuantos = [...noDisponibles.values()].reduce((n, f) => n + f.length, 0)
+    $('model-unavailable-summary').textContent = `No disponibles (${cuantos})`
+    // Abierto: lo que hay que mirar a 320 px son justo esas filas, con el
+    // mensaje de Copilot (y la marcada, que es la que falló, vive ahí).
+    $('model-unavailable').open = true
+    $('model-reason').textContent =
+      'El modelo «Claude Sonnet 4.6» no ha podido contestar (no está disponible con tu plan). ' +
+      'No se ha llegado a comprobar ningún token: elige otro y se repetirá la comprobación.'
+    $('model-status').textContent = '«GPT-5.6 Luna» contesta (812 ms).'
+  }
+
+  /** La cara de la pantalla de modelo: la lista, o el modo sin proveedores. */
+  function modoModelo(vacia) {
+    $('model-empty').classList.toggle('hidden', !vacia)
+    $('model-list').classList.toggle('hidden', vacia)
+    $('model-unavailable').classList.toggle('hidden', vacia)
+    $('model-filter').closest('.field').classList.toggle('hidden', vacia)
+    $('btn-model-use').closest('.row').classList.toggle('hidden', vacia)
+    $('model-reason').classList.toggle('hidden', vacia)
+    // Desde Ajustes (el mando «Elige el modelo») la flecha se ve; en el primer
+    // uso y sin proveedores, no: de ahí no se sale sin elegir.
+    $('btn-model-close').hidden = vacia || estado.primerUso
+  }
+
+  /**
+   * El primer uso ENCADENADO (ficha de H17): conexión → modelo → claves →
+   * contexto, 400 ms cada una y `check()` en cada paso. El panel no corre en el
+   * banco (`init()` muere en `getSettings`), así que la máquina de estados de
+   * docs/PLAN2.md §3.3 sólo se ve entera en la extensión; esto mide cada pantalla
+   * por separado en el orden en que el usuario las verá.
+   */
+  async function recorrerPrimerUso() {
+    const resultado = []
+    estado.primerUso = true
+    for (const id of ['screen-connect', 'screen-model', 'screen-setup', 'screen-context']) {
+      marcar('screen', id)
+      mostrarPantalla(id)
+      await new Promise((r) => setTimeout(r, 400))
+      const r = check()
+      resultado.push({ pantalla: id, ok: r.ok, motivo: r.motivo || (r.ok ? '' : 'algo falla: mira las medidas') })
+    }
+    estado.primerUso = false
+    window.faroPreview.ultimoRecorrido = resultado
+    const caja = document.getElementById('recorrido')
+    caja.textContent = ''
+    for (const paso of resultado) {
+      const row = document.createElement('div')
+      row.className = 'state-row'
+      const k = document.createElement('span')
+      k.className = 'k'
+      k.textContent = paso.pantalla
+      const v = document.createElement('span')
+      v.className = 'v ' + (paso.ok ? 'ok' : 'bad')
+      v.textContent = (paso.ok ? 'ok' : 'falla') + (paso.motivo ? ' · ' + paso.motivo : '')
+      row.append(k, v)
+      caja.appendChild(row)
+    }
+    pintarMedidas()
+    return resultado
+  }
+  document.getElementById('btn-primer-uso').addEventListener('click', () => recorrerPrimerUso())
+
   // ----------------------------------------------------------- los mandos
 
   function mostrarPantalla(id) {
@@ -1773,6 +1970,12 @@ async function arrancar() {
     $('busy').classList.add('hidden')
     $('setup-main').classList.remove('hidden')
     $('setup-manual').classList.add('hidden')
+    // H17: la de modelo tiene dos caras —la lista y el modo sin proveedores— y
+    // dos flechas —visible desde Ajustes o un error, oculta en el primer uso—.
+    if (id === 'screen-model' || id === 'model-empty') {
+      modoModelo(id === 'model-empty')
+      id = 'screen-model'
+    }
     if (id === 'busy') $('busy').classList.remove('hidden')
     else if (id === 'setup-manual') {
       $('screen-setup').classList.remove('hidden')
@@ -1984,6 +2187,10 @@ async function arrancar() {
     '#setup-mcp-hint .cmd',
     '#setup-manual-hint',
     '#setup-manual-hint .cmd',
+    // H17: la fila de un modelo (nombre, etiquetas y el porqué, que con el
+    // mensaje de Copilot son mil caracteres sin acotar) y la lista entera.
+    '.model-row',
+    '#model-list',
   ]
 
   function check() {
@@ -2137,6 +2344,10 @@ async function arrancar() {
   window.faroPreview = {
     check,
     estado,
+    // H17: el primer uso encadenado y lo que dio la última vez (cuatro líneas:
+    // pantalla · ok · motivo), para que el orquestador lo mida sin pulsar.
+    ultimoRecorrido: null,
+    recorrerPrimerUso,
     setTheme(t) {
       estado.tema = t
       marcar('theme', t)

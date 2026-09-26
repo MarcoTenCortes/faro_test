@@ -16,8 +16,8 @@ const HTML = readFileSync(join(ROOT, 'src/panel/panel.html'), 'utf8')
 const htmlIds = new Set([...HTML.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]))
 const pantallas = new Set([...HTML.matchAll(/class="screen hidden" id="([^"]+)"/g)].map((m) => m[1]))
 
-test('ESCAPE_CLOSES: sólo las pantallas de consulta, cada una con su botón de cerrar', () => {
-  eq(Object.keys(ESCAPE_CLOSES).sort(), ['screen-log', 'screen-memory', 'screen-sources', 'screen-today'])
+test('ESCAPE_CLOSES: las cinco pantallas cuya flecha es volver, cada una con su botón de cerrar', () => {
+  eq(Object.keys(ESCAPE_CLOSES).sort(), ['screen-log', 'screen-memory', 'screen-model', 'screen-sources', 'screen-today'])
   eq(ESCAPE_CLOSES['screen-memory'], 'btn-memory-close')
   eq(ESCAPE_CLOSES['screen-log'], 'btn-log-close')
   eq(ESCAPE_CLOSES['screen-sources'], 'btn-sources-close')
@@ -25,6 +25,30 @@ test('ESCAPE_CLOSES: sólo las pantallas de consulta, cada una con su botón de 
   // al chat y no decide nada. Lo que sí decide —apagar el sitio, borrar el
   // diario— son controles suyos, y Escape no los pulsa.
   eq(ESCAPE_CLOSES['screen-today'], 'btn-today-close')
+})
+
+test('H17: la pantalla del modelo se cierra con su flecha, y la cabecera de screens.js ya no dice «sólo las de consulta»', () => {
+  // La del modelo (H17) está en el mapa, pero su flecha sólo se ve cuando de ahí
+  // se puede salir sin elegir: el panel no pulsa un botón oculto, así que en el
+  // primer uso Escape no la cierra. Aquí se pina que el mapa la nombre y que la
+  // cabecera del módulo cuente esa verdad en vez de la de antes.
+  eq(ESCAPE_CLOSES['screen-model'], 'btn-model-close')
+  const FUENTE = readFileSync(join(ROOT, 'src/panel/screens.js'), 'utf8')
+  const cabecera = FUENTE.slice(0, FUENTE.indexOf('export const ESCAPE_CLOSES'))
+  assert(cabecera.length > 200, 'la cabecera existe')
+  assert(!cabecera.includes('Sólo las pantallas de CONSULTA'), 'la cabecera ya no dice que sólo están las de consulta')
+  assert(cabecera.includes('la del modelo'), 'nombra la pantalla del modelo')
+  assert(cabecera.includes('no pulsa un botón oculto'), 'y dice por qué Escape no la cierra siempre')
+  // En el HTML la flecha NACE oculta: sólo el panel la enseña, en los modos de
+  // los que se puede salir sin elegir (Ajustes, o un error con el chat vivo).
+  const desde = HTML.indexOf('id="screen-model"')
+  assert(desde > -1, 'la pantalla del modelo está en panel.html')
+  const hasta = HTML.indexOf('</section>', desde)
+  assert(hasta > desde, 'y se cierra')
+  const flecha = /<button\b[^>]*\bid="btn-model-close"[^>]*>/.exec(HTML.slice(desde, hasta))
+  assert(flecha, 'su flecha está dentro de ella')
+  assert(/\shidden(?=[\s>=])/.test(flecha[0]), 'y nace oculta: ' + (flecha && flecha[0]))
+  assert(Object.isFrozen(ESCAPE_CLOSES))
 })
 
 test('ESCAPE_DISMISSES: Ajustes se cierra sin pulsar su botón, porque «Listo» guarda', () => {

@@ -15,7 +15,7 @@
  */
 
 import { TurnTracker, structuredOutputOf } from './turn.js'
-import { SAFE_PERMISSIONS } from '../shared/config.js'
+import { SAFE_PERMISSIONS, MODEL_LIMITS } from '../shared/config.js'
 
 export class OpencodeError extends Error {
   constructor(message, { status = 0, body = '' } = {}) {
@@ -47,6 +47,15 @@ function b64(str) {
  * El aviso no cambia el plazo ni aborta nada; sólo se dice.
  */
 const STALL_WARN_AT = 0.5
+
+/**
+ * Los niveles de razonamiento que la sonda de «Comprobar» acepta, del más
+ * barato al menos (H17). Cada modelo declara los suyos por nombre (anexo 2-C:
+ * `gpt-5.4` trae none · low · medium · high · xhigh); se usa el primero de
+ * éstos que declare, y ninguno si no declara ninguno: comprobar que un modelo
+ * contesta no necesita que piense.
+ */
+const VARIANTES_BARATAS = Object.freeze(['none', 'minimal', 'low'])
 
 export class OpencodeClient {
   /**
@@ -250,16 +259,21 @@ export class OpencodeClient {
   /**
    * Lanza un turno sin bloquear: la respuesta llega por el stream de eventos.
    * @param {string} id
+   * `variant` (H17) es el nivel de razonamiento con nombre que declara el modelo
+   * («none», «low»…): `POST /session/{id}/prompt_async` lo acepta en opencode
+   * 1.2.25 (anexo 2-C). Sólo viaja si viene, para que el cuerpo de todos los
+   * demás turnos siga siendo byte a byte el de antes.
    * @param {{text: string, model?: object, agent?: string, system?: string,
-   *          format?: object, files?: Array}} opts
+   *          format?: object, files?: Array, variant?: string}} opts
    */
-  promptAsync(id, { text, model, agent, system, format, files } = {}) {
+  promptAsync(id, { text, model, agent, system, format, files, variant } = {}) {
     return this.request('POST', `/session/${id}/prompt_async`, {
       body: {
         model,
         agent,
         system,
         format,
+        ...(variant ? { variant } : {}),
         parts: messageParts(text, files),
       },
     })
@@ -469,6 +483,94 @@ export class OpencodeClient {
       throw new OpencodeError('La salida estructurada no pasó la validación del esquema.')
     }
     return tool.state.input
+  }
+
+  /**
+   * La sonda de «Comprobar» (H17, docs/PLAN2.md §3.3 «Sonda»): UN turno corto
+   * con ese modelo, en su propia sesión desechable, para saber si contesta.
+   *
+   * Existe SÓLO para el botón «Comprobar» de la pantalla del modelo, que el
+   * usuario pulsa a sabiendas (su `title` dice que con un proveedor de pago
+   * cuesta una petición). Elegir un modelo en el primer uso NO la lanza, ni el
+   * arranque, ni «Usar este modelo» (decisión 6 de PLAN2 §8): la verificación
+   * de las claves ya es un turno real con ese modelo, y un rechazo se clasifica
+   * gratis. Por eso es lo más barata posible: una pregunta de dos palabras, el
+   * nivel de razonamiento más bajo que el modelo declare (`variant`, de
+   * `none` → `minimal` → `low`; sin ninguno de ésos, sin `variant`), el plazo de
+   * `MODEL_LIMITS.probeMs` como `stallMs` y `maxMs` a la vez, y la sesión con
+   * `SAFE_PERMISSIONS` (la primera regla lo deniega todo): no puede leer ni
+   * tocar nada aunque el modelo lo intente.
+   *
+   * Al acabar SIEMPRE se borra la sesión, y antes se aborta si el turno no
+   * terminó solo: `DELETE /session/:id` sólo borra filas y NO cancela el turno
+   * (CLAUDE.md §7), así que un modelo que siguiera pensando gastaría en una
+   * sesión que ya no existe. Un turno colgado ya lo aborta `runTurn`; uno
+   * cancelado por la señal, o uno que revienta a medias, lo aborta esto.
+   *
+   * Nunca lanza: un fallo de red o de opencode es `{ok: false, rawError}` con un
+   * `rawError` de nombre `OpencodeError` (sin cuerpo: el cuerpo de un error de
+   * opencode puede traer su configuración), para que quien llama lo distinga
+   * de un rechazo del proveedor.
+   *
+   * @param {{providerID: string, modelID: string, variants?: string[]}} model
+   * @returns {Promise<{ok: boolean, ms: number, rawError: object|null,
+   *          stalled: boolean, text: string, model: object|null}>}
+   */
+  async probeModel(model, { timeoutMs = MODEL_LIMITS.probeMs, signal } = {}) {
+    const reloj = () => (typeof performance !== 'undefined' ? performance.now() : Date.now())
+    const t0 = reloj()
+    const modelo = model?.providerID && model?.modelID ? { providerID: model.providerID, modelID: model.modelID } : null
+    const salida = (extra) => ({
+      ok: false,
+      ms: Math.round(reloj() - t0),
+      rawError: null,
+      stalled: false,
+      text: '',
+      model: modelo,
+      ...extra,
+    })
+    if (!modelo) return salida({ rawError: { name: 'OpencodeError', message: 'Falta el modelo que comprobar.', status: 0 } })
+
+    const declaradas = Array.isArray(model.variants) ? model.variants : []
+    const variant = VARIANTES_BARATAS.find((v) => declaradas.includes(v))
+    let sid = ''
+    let turno = null
+    try {
+      const sesion = await this.createSession({ title: 'Faro · probando modelo' })
+      sid = sesion?.id || ''
+      if (!sid) return salida({ rawError: { name: 'OpencodeError', message: 'opencode no devolvió la sesión.', status: 0 } })
+      turno = await this.runTurn(
+        sid,
+        {
+          text: 'Responde sólo: ok',
+          model: modelo,
+          system: 'Es una comprobación de disponibilidad. Contesta sólo «ok». No uses herramientas.',
+          ...(variant ? { variant } : {}),
+        },
+        { stallMs: timeoutMs, maxMs: timeoutMs, signal }
+      )
+      const texto = String(turno.text || '').trim()
+      return salida({
+        ok: !!turno.ok && !!texto,
+        rawError: turno.rawError || null,
+        stalled: !!turno.stalled,
+        text: texto,
+      })
+    } catch (err) {
+      return salida({ rawError: { name: 'OpencodeError', message: String(err?.message || err), status: err?.status || 0 } })
+    } finally {
+      if (sid) {
+        // Terminó solo (bien, o con el error del proveedor) o colgado (runTurn
+        // ya lo abortó): no hay nada que abortar. Si no, se aborta aquí, y la
+        // marca de «abandonado» se quita para que `deleteSession` no lo repita.
+        const terminado = !!turno && (turno.ok || !!turno.error || !!turno.stalled)
+        if (!terminado) {
+          this._abandoned.delete(sid)
+          await this.abort(sid).catch(() => {})
+        }
+        await this.deleteSession(sid).catch(() => {})
+      }
+    }
   }
 
   // ------------------------------------------------------------------- MCP

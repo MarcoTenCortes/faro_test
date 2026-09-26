@@ -8,10 +8,19 @@
  * nivel de documento en panel.js, y este mapa —puro, sin DOM— dice qué botón
  * pulsa según qué pantalla esté abierta.
  *
- * Sólo las pantallas de CONSULTA: cerrarlas es volver al chat. Las de
- * conexión, claves y contexto quedan fuera a propósito, porque «cerrarlas» es
- * decidir algo —saltar las claves, empezar sin contexto— que no debe
- * dispararse por un Escape distraído.
+ * Qué entra en el mapa: las pantallas cuya flecha es «volver al chat» y no
+ * decide nada —Memoria, Registro, Páginas base y «Qué mirar hoy»— y, desde
+ * H17, la del modelo. Las de conexión, claves y contexto quedan fuera a
+ * propósito, porque «cerrarlas» es decidir algo —saltar las claves, empezar
+ * sin contexto— que no debe dispararse por un Escape distraído.
+ *
+ * La del modelo (H17, docs/PLAN2.md §3.3) está en el mapa pero NO siempre se
+ * cierra: su flecha sólo se enseña cuando de ahí se puede salir sin elegir
+ * (abierta desde Ajustes, o tras un error con el chat ya en marcha). En el
+ * primer uso, tras una verificación de claves o un indexado que fallaron por
+ * el modelo, la flecha nace oculta —no hay modelo con el que seguir— y el
+ * manejador de teclado del panel no pulsa un botón oculto: Escape no hace
+ * nada. Aquí sólo se dice qué botón es; si está a la vista lo decide el panel.
  */
 
 /** id de la pantalla → id del botón que la cierra (desde H5, la flecha de su cabecera). */
@@ -20,6 +29,7 @@ export const ESCAPE_CLOSES = Object.freeze({
   'screen-log': 'btn-log-close',
   'screen-sources': 'btn-sources-close',
   'screen-today': 'btn-today-close',
+  'screen-model': 'btn-model-close',
 })
 
 /**

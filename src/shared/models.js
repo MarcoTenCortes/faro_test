@@ -74,33 +74,6 @@ export function pickDefaultModel(models, defaults, { checks = null, now = Date.n
   return lista.find(vale) || null
 }
 
-/**
- * Alternativa cuando el proveedor actual no responde: se cambia de proveedor,
- * no sólo de modelo, porque el problema es de credenciales del proveedor.
- *
- * Con `checks` (H16) no propone nada con veredicto de fallo vigente: era el
- * bucle «Reintentar con X» entre `openai/gpt-5.4` y
- * `github-copilot/claude-sonnet-4.6`, los dos defaults de sus proveedores y los
- * dos rotos para Marco. Sin `checks`, lo de siempre.
- */
-export function pickAlternativeModel(models, defaults, currentProviderID, { checks = null, now = Date.now() } = {}) {
-  const others = (models || []).filter(
-    (m) => m.providerID !== currentProviderID && (!checks || !falloVigente(checks, m, now))
-  )
-  if (!others.length) return null
-
-  // Primero, el modelo por defecto de otro proveedor: es el que el usuario ya
-  // tenía elegido en opencode.
-  for (const [providerID, modelID] of Object.entries(defaults || {})) {
-    if (providerID === currentProviderID) continue
-    const hit = others.find((m) => m.providerID === providerID && m.modelID === modelID)
-    if (hit) return hit
-  }
-
-  // Si no, uno gratuito antes que uno de pago.
-  return others.find((m) => m.free) || others[0]
-}
-
 export function modelKey(model) {
   return model ? `${model.providerID}/${model.modelID}` : ''
 }
@@ -453,7 +426,8 @@ export function recommendModel(models, { configModel = null, defaults = {}, chec
  * H16). Pura.
  *
  * Existe por el bucle del compañero de Marco: el panel elegía la alternativa a
- * CIEGAS con `pickAlternativeModel` (el default de otro proveedor) y DESPUÉS
+ * CIEGAS con `pickAlternativeModel` (el default de otro proveedor; se borró en
+ * H17, cuando ya no la llamaba nadie) y DESPUÉS
  * exigía que tuviera veredicto `ok`. Con los dos defaults rechazados y
  * `github-copilot/gpt-5.6-luna` contestando de verdad, la alternativa ciega era
  * un default sin veredicto y el botón no salía NUNCA. Aquí se elige al revés:

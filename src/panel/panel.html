@@ -286,6 +286,47 @@
   </div>
 </section>
 
+<!-- «Elige el modelo» (H17, docs/PLAN2.md §3.3): el modelo es de la PERSONA y
+     se elige aquí, ANTES de las claves y del contexto en el primer uso, y otra
+     vez cuando uno falla. Los que tienen un fallo reciente van plegados bajo
+     «No disponibles (N)» con su motivo, pero siguen siendo elegibles: el
+     veredicto es información, no un candado. La flecha nace oculta: sólo se
+     enseña desde Ajustes o desde el error de un turno, porque en el primer uso,
+     en la verificación de las claves y en el indexado no se sale sin elegir. -->
+<section class="screen hidden" id="screen-model" aria-labelledby="model-title">
+  <div class="screen-inner">
+    <div class="screen-head">
+      <button class="icon-btn back" id="btn-model-close" type="button" title="Volver" aria-label="Volver" hidden>
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M9.5 3.5L5 8l4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <h1 id="model-title">Elige el modelo</h1>
+    </div>
+    <p>Estos son los modelos que tu opencode tiene conectados. Faro los usa para todo: contestar, comprobar tus claves y escribir el contexto.</p>
+    <p class="fine" id="model-reason"></p>
+
+    <div class="field">
+      <label for="model-filter">Buscar un modelo</label>
+      <input id="model-filter" type="search" spellcheck="false" autocomplete="off" placeholder="Filtrar por nombre…">
+    </div>
+    <div class="model-list" id="model-list" role="group" aria-labelledby="model-title"></div>
+    <details class="model-unavailable" id="model-unavailable">
+      <summary id="model-unavailable-summary">No disponibles (0)</summary>
+      <div class="model-list" id="model-unavailable-list"></div>
+    </details>
+
+    <p class="fine" id="model-status"></p>
+    <div class="row wrap">
+      <button class="primary" id="btn-model-use" type="button">Usar este modelo</button>
+      <button class="ghost" id="btn-model-check" type="button" title="Un turno corto con este modelo; con un proveedor de pago cuesta una petición">Comprobar</button>
+    </div>
+
+    <div class="hidden" id="model-empty">
+      <p>Tu opencode no tiene ningún proveedor de modelos conectado. Ejecuta <code>opencode auth login</code> en una terminal, reinicia opencode y pulsa Reintentar.</p>
+      <button class="ghost" id="btn-model-retry" type="button">Reintentar</button>
+    </div>
+  </div>
+</section>
+
 <section class="screen hidden" id="screen-settings" aria-labelledby="settings-title">
   <div class="screen-inner">
     <!-- El cierre GUARDA (contraseña y dirección del servidor incluidas) y
@@ -328,6 +369,14 @@
          toque la API de su sitio tampoco quiere un diario de lo que abre. -->
     <label class="check"><input type="checkbox" id="set-today"> Qué mirar hoy — al abrir el panel mira qué ha cambiado desde que lo miraste y apunta en este navegador lo que abres y analizas aquí. Ninguna sugerencia pasa por el modelo ni gasta tokens.</label>
     <p class="fine hidden" id="set-today-hint">Necesita la casilla de arriba: sin consultar la API no hay con qué comparar lo que ya habías visto.</p>
+
+    <!-- H17: el modelo es de la persona y vale para todos los sitios (§8.25);
+         aquí se ve cuál es y se cambia en su pantalla, con la flecha a la vista. -->
+    <h2>Modelo</h2>
+    <p class="fine" id="settings-model-info"></p>
+    <div class="row wrap">
+      <button class="ghost" id="btn-change-model" type="button">Cambiar el modelo</button>
+    </div>
 
     <h2>Servidor</h2>
     <div class="field">

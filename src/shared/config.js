@@ -255,6 +255,13 @@ const DIA = 24 * HORA
  * la máquina de Marco); con 100 caben todos y los de un cambio de proveedor.
  * `messageMax` 200: el mensaje del proveedor se guarda para enseñarlo, y el de
  * Copilot con su lista de 57 modelos mide más de mil caracteres.
+ *
+ * `probeMs` 15 s (H17): el plazo de la sonda de «Comprobar» (`probeModel` del
+ * cliente), que es a la vez su `stallMs` y su `maxMs`. Es el mismo `PROBE_MS`
+ * con el que la integración ya decide si un modelo está vivo: un rechazo llega
+ * en 0,2-1,3 s en caliente (anexo 2-C), y un modelo que en quince segundos no
+ * dice «ok» a una pregunta de dos palabras no va a contestar un análisis. Más
+ * largo sería tener al usuario mirando «Comprobando…» por un modelo mudo.
  */
 export const MODEL_LIMITS = {
   ttlMs: {
@@ -267,6 +274,7 @@ export const MODEL_LIMITS = {
   },
   maxEntries: 100,
   messageMax: 200,
+  probeMs: 15000,
 }
 
 export const STORAGE_KEYS = {
