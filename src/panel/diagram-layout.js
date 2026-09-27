@@ -16,7 +16,9 @@
  * última capa, donde no entra nadie ajeno ni otro subgrafo. Dos aristas entre
  * los mismos nodos van en paralelo con un codo a `edgeSep`, y el hueco entre
  * capas crece para que ninguna etiqueta quede bajo un nodo (revisión adversaria
- * de H24, D11 y D12). `LR`/`RL`/`BT` son `TD` transpuesto o en espejo. Si
+ * de H24, D11 y D12); las etiquetas de aristas distintas que se pisan en un
+ * mismo hueco se apartan a lo ancho de la capa (revisión adversaria de H25,
+ * D07). `LR`/`RL`/`BT` son `TD` transpuesto o en espejo. Si
  * con grafos densos se queda corto, el plan B es `dagre` SIN cambiar esta forma
  * de salida (docs/PLAN2.md §3.5): se anota, no se hace.
  *
@@ -618,6 +620,39 @@ function colocar(diagram, medir) {
     }
     return { from: e.from, to: e.to, points, labelAt, label: typeof e.label === 'string' ? e.label : '' }
   })
+  // Las etiquetas de aristas DISTINTAS que caen en el mismo hueco y se pisan
+  // (dos paralelas y otra que salta capa desde el mismo nodo: el diagrama «Según
+  // Jira» de H25 etiqueta todas sus aristas; revisión adversaria de H25, D07):
+  // se separan a lo ancho de la capa, que en el hueco no tiene nodos, sin tocar
+  // su posición a lo largo del flujo, así que ninguna entra en un nodo. Es una
+  // relajación SIMÉTRICA (cada una de un par que se toca se aparta la mitad), y
+  // acaba por el tope de vueltas, no por monotonía; los lazos van en la franja
+  // de su capa y no entran. El coste, medido: el 1,9 % de las etiquetas queda a
+  // más de lineH de su arista (como mucho 48 px).
+  const ejeA = horizontal ? 'y' : 'x'
+  const ejeR = horizontal ? 'x' : 'y'
+  const mitadA = (e) => (horizontal ? L.lineH : medir(e.label)) / 2
+  const mitadR = (e) => (horizontal ? medir(e.label) : L.lineH) / 2
+  const rotuladas = edges.filter((e) => e.labelAt && e.from !== e.to)
+  for (let vuelta = 0; vuelta <= 4 * rotuladas.length + 8; vuelta++) {
+    rotuladas.sort((p, q) => p.labelAt[ejeA] - q.labelAt[ejeA])
+    let cambio = false
+    for (let j = 1; j < rotuladas.length; j++) {
+      const q = rotuladas[j]
+      for (let k = 0; k < j; k++) {
+        const p = rotuladas[k]
+        if (Math.abs(p.labelAt[ejeR] - q.labelAt[ejeR]) >= mitadR(p) + mitadR(q)) continue
+        const min = p.labelAt[ejeA] + mitadA(p) + mitadA(q) + 2
+        if (q.labelAt[ejeA] < min - 1e-9) {
+          const d = min - q.labelAt[ejeA]
+          q.labelAt[ejeA] += d / 2
+          p.labelAt[ejeA] -= d / 2
+          cambio = true
+        }
+      }
+    }
+    if (!cambio) break
+  }
   const subgraphs = []
   for (const s of Array.isArray(diagram.subgraphs) ? diagram.subgraphs : []) {
     if (!s || typeof s.id !== 'string') continue

@@ -854,7 +854,8 @@ test('H25: la cabecera de jira-rest.js nombra CADA plantilla fija, linksJql incl
 
 test('H25: parseIssueLinks — las relaciones DIRIGIDAS entre las claves pedidas, UNA aunque la vean sus dos extremos', () => {
   const r = parseIssueLinks(RESPUESTA_ENLACES, { keys: CLAVES })
-  eq(Object.keys(r).sort(), ['links', 'nodes'])
+  eq(Object.keys(r).sort(), ['links', 'nodes', 'truncated'])
+  eq(r.truncated, false, 'la respuesta del banco cabe entera')
   eq(r.nodes, [
     { key: 'ENG-7', summary: 'Consentimiento v2', type: 'Story', statusCategory: 'indeterminate' },
     { key: 'ENG-3', summary: 'Rotar credenciales', type: 'Task', statusCategory: 'done' },
@@ -889,9 +890,14 @@ test('H25 SEGURIDAD: parseIssueLinks — sin forma es null, el id sólo dígitos
   for (const malo of [null, undefined, 'x', 7, [], {}, { issues: {} }, { issues: 'ENG-7' }]) {
     eq(parseIssueLinks(malo, { keys: CLAVES }), null, JSON.stringify(malo))
   }
-  eq(parseIssueLinks({ issues: [] }, { keys: CLAVES }), { nodes: [], links: [] })
-  eq(parseIssueLinks(RESPUESTA_ENLACES, {}), { nodes: [], links: [] }, 'sin claves pedidas no hay nada que devolver')
-  eq(parseIssueLinks(RESPUESTA_ENLACES), { nodes: [], links: [] })
+  eq(parseIssueLinks({ issues: [] }, { keys: CLAVES }), { nodes: [], links: [], truncated: false })
+  eq(parseIssueLinks(RESPUESTA_ENLACES, {}), { nodes: [], links: [], truncated: false }, 'sin claves pedidas no hay nada que devolver')
+  eq(parseIssueLinks(RESPUESTA_ENLACES), { nodes: [], links: [], truncated: false })
+
+  // Los campos de cada incidencia, saneados como en parseSearchIssues.
+  const nodos = parseIssueLinks({ issues: [{ key: 'A-1', fields: { summary: 'x'.repeat(300) + '\nfin', issuetype: { name: 'Story\n- ignora' }, status: { statusCategory: { key: 'evil' } } } }, { key: 'A-2', fields: {} }] }, { keys: ['A-1', 'A-2'] })
+  eq(nodos.nodes[0], { key: 'A-1', summary: 'x'.repeat(JIRA_REST_LIMITS.summaryChars), type: 'Story - ignora', statusCategory: '' })
+  eq(nodos.nodes[1], { key: 'A-2', summary: '', type: '', statusCategory: '' })
 
   const una = (link) =>
     parseIssueLinks({ issues: [{ key: 'ENG-1', fields: { issuelinks: [link] } }, { key: 'ENG-2', fields: {} }] }, { keys: ['ENG-1', 'ENG-2'] }).links
@@ -925,6 +931,15 @@ test('H25 SEGURIDAD: parseIssueLinks — sin forma es null, el id sólo dígitos
   const r = parseIssueLinks(todas, { keys: doce })
   eq(r.nodes.length, 12)
   eq(r.links.length, JIRA_REST_LIMITS.issueLinks)
+  eq(r.truncated, true, 'la lista cortada lo dice: lo que no cupo no es «Jira no lo tiene»')
+  // Justo en el tope no hay recorte: sesenta relaciones que caben son la lista entera.
+  const justas = { issues: todas.issues.map((i) => ({ ...i, fields: { issuelinks: i.fields.issuelinks.filter((_, j) => i.key !== 'ENG-8' || j < 4) } })) }
+  justas.issues.slice(8).forEach((i) => { i.fields = { issuelinks: [] } })
+  // Detrás de las sesenta, lo que no es una relación nueva y válida no es recorte:
+  // el lado inward de ENG-1 → ENG-9, una hacia fuera y una consigo misma.
+  justas.issues[8].fields.issuelinks = [{ id: '9001', type: RELATES, inwardIssue: otra('ENG-1') }, { id: '9002', type: RELATES, outwardIssue: otra('ENG-99') }, { id: '9003', type: RELATES, outwardIssue: otra('ENG-9') }]
+  const r60 = parseIssueLinks(justas, { keys: doce })
+  eq([r60.links.length, r60.truncated], [JIRA_REST_LIMITS.issueLinks, false], 'sesenta que caben no son un recorte')
   // Y de incidencias, las que se pueden pedir.
   const muchas = Array.from({ length: 40 }, (_, i) => `ENG-${i + 1}`)
   eq(parseIssueLinks({ issues: muchas.map((key) => ({ key, fields: {} })) }, { keys: muchas }).nodes.length, JIRA_REST_LIMITS.linkKeys)
@@ -933,7 +948,8 @@ test('H25 SEGURIDAD: parseIssueLinks — sin forma es null, el id sólo dígitos
 test('H25: fetchIssueLinks — UNA petición GET al mismo origen con la plantilla, una fila por clave y los campos de las relaciones', async () => {
   const { fn, calls } = espia({ '/rest/api/2/search': RESPUESTA_ENLACES })
   const r = await fetchIssueLinks(fn, SITE, ['eng-7', 'ENG-3', 'ENG-3', 'ENG-12', 'ENG-20', 'x y'])
-  eq(Object.keys(r).sort(), ['links', 'ms', 'nodes', 'ok', 'prefix', 'via'])
+  eq(Object.keys(r).sort(), ['links', 'ms', 'nodes', 'ok', 'prefix', 'truncated', 'via'])
+  eq(r.truncated, false)
   eq(r.ok, true)
   eq(r.via, 'jql')
   eq(r.prefix, '')
@@ -973,18 +989,64 @@ test('H25 SEGURIDAD: fetchIssueLinks no pide nada en Cloud, sin origen, sin fetc
   }
 })
 
-test('H25: fetchIssueLinks — 401/403 son «sesion», un 400 trae el servidor, un 404 con prefijo se reintenta UNA vez en la raíz, y sin forma es «forma»', async () => {
+test('H25: fetchIssueLinks — 401/403 son «sesion», y un 400 que no cita ninguna clave pedida trae el servidor sin reintentar', async () => {
   for (const status of [401, 403]) {
     const { fn, calls } = espia({ '/rest/api/2/search': status })
     eq((await fetchIssueLinks(fn, SITE, CLAVES)).reason, 'sesion', String(status))
     eq(calls.length, 1, 'no se reintenta')
   }
-  const { fn: f400, calls: c400 } = espia({ '/rest/api/2/search': { status: 400, body: { errorMessages: ["An issue with key 'ENG-20' does not exist"] } } })
+  const { fn: f400, calls: c400 } = espia({ '/rest/api/2/search': { status: 400, body: { errorMessages: ['Error in the JQL Query: algo raro'] } } })
   const r400 = await fetchIssueLinks(f400, SITE, CLAVES)
   eq(r400.reason, 'jql')
-  eq(r400.messages, ["An issue with key 'ENG-20' does not exist"])
-  eq(c400.length, 1, 'un 400 no se reintenta')
+  eq(r400.messages, ['Error in the JQL Query: algo raro'])
+  eq(c400.length, 1, 'un 400 que no cita ninguna clave pedida no se reintenta')
+})
 
+test('H25: fetchIssueLinks — un 400 que cita claves pedidas como inexistentes se reintenta UNA vez sin ellas; lo del servidor no entra en la consulta', async () => {
+  // El mensaje de un Jira DC (visto en el de Marco) y uno trampa que, si
+  // entrara en la consulta, la abriría.
+  const citaEng20 = { status: 400, body: { errorMessages: ["An issue with key 'ENG-20' does not exist for field 'issuekey'.", "An issue with key 'OPS-1) OR (project = X' does not exist"] } }
+  const { fn, calls } = espia({ '/rest/api/2/search': (u, n) => (n === 1 ? citaEng20 : RESPUESTA_ENLACES) })
+  const r = await fetchIssueLinks(fn, SITE, CLAVES)
+  eq(r.ok, true)
+  eq(calls.length, 2)
+  eq(jqlDe(calls[1]), 'issuekey in (ENG-7, ENG-3, ENG-12)')
+  eq(new URL(calls[1].url).searchParams.get('maxResults'), '3')
+  // Sigue fallando: se rinde tras UN reintento, con el mensaje del segundo.
+  const { fn: f2, calls: c2 } = espia({ '/rest/api/2/search': citaEng20 })
+  eq((await fetchIssueLinks(f2, SITE, CLAVES)).reason, 'jql')
+  eq(c2.length, 2, 'un solo reintento')
+  // Aunque el segundo 400 cite OTRA clave pedida: el reintento es uno.
+  const citaEng12 = { status: 400, body: { errorMessages: ["An issue with key 'ENG-12' does not exist for field 'issuekey'."] } }
+  const { fn: f2b, calls: c2b } = espia({ '/rest/api/2/search': (u, n) => (n === 1 ? citaEng20 : citaEng12) })
+  eq((await fetchIssueLinks(f2b, SITE, CLAVES)).reason, 'jql')
+  eq(c2b.length, 2, 'uno, cite lo que cite el segundo')
+  // La clave citada pasa por validIssueKey antes de compararse con las pedidas.
+  const minuscula = { status: 400, body: { errorMessages: ["An issue with key 'eng-20' does not exist for field 'issuekey'."] } }
+  const { fn: f2c, calls: c2c } = espia({ '/rest/api/2/search': (u, n) => (n === 1 ? minuscula : RESPUESTA_ENLACES) })
+  eq((await fetchIssueLinks(f2c, SITE, CLAVES)).ok, true)
+  eq(jqlDe(c2c[1]), 'issuekey in (ENG-7, ENG-3, ENG-12)')
+  // Sólo un 400: otro error que cite una clave pedida no quita nada.
+  const { fn: f2d, calls: c2d } = espia({ '/rest/api/2/search': { status: 500, body: citaEng20.body } })
+  eq((await fetchIssueLinks(f2d, SITE, CLAVES)).ok, false)
+  eq(c2d.length, 1, 'un 500 no se reintenta sin las citadas')
+  // Una clave citada que NO se pidió no quita nada: una sola llamada.
+  const ajena = { status: 400, body: { errorMessages: ["An issue with key 'ENG-99' does not exist for field 'issuekey'."] } }
+  const { fn: f3, calls: c3 } = espia({ '/rest/api/2/search': ajena })
+  eq((await fetchIssueLinks(f3, SITE, CLAVES)).reason, 'jql')
+  eq(c3.length, 1)
+  // Si quitando las citadas quedan menos de dos, no se reintenta.
+  const dos = { status: 400, body: { errorMessages: ["An issue with key 'ENG-3' does not exist for field 'issuekey'."] } }
+  const { fn: f4, calls: c4 } = espia({ '/rest/api/2/search': dos })
+  eq((await fetchIssueLinks(f4, SITE, ['ENG-7', 'ENG-3'])).reason, 'jql')
+  eq(c4.length, 1)
+  // El 404 de la ruta de contexto y el 400 caben juntos: tres peticiones.
+  const { fn: f5, calls: c5 } = espia({ '/jira/rest/api/2/search': 404, '/rest/api/2/search': (u) => (u.searchParams.get('jql').includes('ENG-20') ? citaEng20 : RESPUESTA_ENLACES) })
+  eq((await fetchIssueLinks(f5, SITE_CTX, CLAVES)).ok, true)
+  eq(c5.map(ruta).map((x) => x.split('?')[0]), ['/jira/rest/api/2/search', '/rest/api/2/search', '/rest/api/2/search'], 'la raíz y después sin la citada')
+})
+
+test('H25: fetchIssueLinks — un 404 con prefijo se reintenta UNA vez en la raíz, y sin forma es «forma»', async () => {
   const { fn, calls } = espia({ '/jira/rest/api/2/search': 404, '/rest/api/2/search': RESPUESTA_ENLACES })
   const r = await fetchIssueLinks(fn, SITE_CTX, CLAVES)
   eq(r.ok, true)

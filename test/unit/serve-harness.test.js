@@ -393,7 +393,16 @@ test('H25: issueLinks de la fixture es dirigido y tipado, sus claves existen y c
 
 test('H25: «issuekey in (K1, K2, …)» con una lista de claves, y una lista vacía o con basura es 400', () => {
   eq(claves('issuekey in (ENG-7, ENG-3)'), ['ENG-3', 'ENG-7'], 'las dos, en el orden de la fixture')
-  eq(claves('issuekey in (ENG-7, ENG-999)'), ['ENG-7'], 'una clave que no existe no es un error: no viene')
+  // EL CAMBIO (revisión de H25, D01): antes «una clave que no existe no es un
+  // error: no viene». Como un Jira DC (visto en el de Marco): una clave que no
+  // existe tumba la consulta ENTERA, con un mensaje por clave.
+  const inexistente = searchResponse(FIXTURE, { jql: 'issuekey in (ENG-7, ENG-998, ENG-999)', maxResults: 5 })
+  eq(inexistente.status, 400, 'una clave que no existe es un 400')
+  eq(inexistente.body.errorMessages, [
+    "An issue with key 'ENG-998' does not exist for field 'issuekey'.",
+    "An issue with key 'ENG-999' does not exist for field 'issuekey'.",
+  ])
+  eq(searchResponse(FIXTURE, { jql: 'project = ENG AND key in (ENG-7, ENG-999)', maxResults: 5 }).body.errorMessages, ["An issue with key 'ENG-999' does not exist for field 'key'."], 'también dentro de un AND, con el nombre del campo')
   eq(claves('key in (eng-12)'), ['ENG-12'], 'sin distinguir mayúsculas, y también con key')
   eq(claves('issue in (ENG-20, OPS-2) ORDER BY key ASC'), ['ENG-20', 'OPS-2'], 'y con issue, con su ORDER BY')
   eq(claves('project = ENG AND issuekey in (ENG-7, OPS-2)'), ['ENG-7'], 'dentro de un AND')

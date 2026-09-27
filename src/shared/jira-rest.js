@@ -206,9 +206,11 @@ export const SEARCH_FIELDS = [
 export const SAMPLE_FIELDS = ['summary', 'issuetype', 'status', 'priority', 'labels', 'components']
 
 /**
- * Lo que se pide para contrastar un diagrama con Jira (H25): las relaciones y lo
- * justo para nombrar cada incidencia. Sin personas: lo leído se pinta al lado del
- * diagrama y no hace falta saber de quién es nada.
+ * Lo que se pide para contrastar un diagrama con Jira (H25): las relaciones y, de
+ * cada incidencia, su resumen, tipo y categoría de estado, saneados como en
+ * `parseSearchIssues`; hoy no los pinta nadie: el diagrama «Según Jira» lleva la
+ * etiqueta del modelo (`jiraDiagram` sólo mira la clave). Sin personas: lo leído
+ * se pinta al lado del diagrama y no hace falta saber de quién es nada.
  */
 export const LINK_FIELDS = ['issuelinks', 'summary', 'issuetype', 'status']
 
@@ -664,12 +666,16 @@ function hostDe(url) {
  * en el sentido de `outward` (`from` → `to`, «blocks») y se funden en UNA por
  * `from|to|name`. Sólo cuentan las que unen dos claves DEL CONJUNTO pedido que
  * además vinieron en la respuesta: una relación con un extremo fuera no se
- * puede dibujar entre los nodos del diagrama y se descarta sin gastar tope. Nada de personas: ni `assignee` ni
+ * puede dibujar entre los nodos del diagrama y se descarta sin gastar tope. El
+ * tope `issueLinks` se mira DESPUÉS de fundir: al llegar no se para, y
+ * `truncated` dice si quedó fuera alguna relación válida y nueva (sesenta justas
+ * no son un recorte, ni el lado inward de una ya contada), porque una lista
+ * cortada no permite decir «Jira no lo tiene». Nada de personas: ni `assignee` ni
  * `reporter`, aunque vinieran.
  *
  * @param {{keys: Array<string>}} opts las claves que se pidieron
  * @returns {{nodes: Array<{key, summary, type, statusCategory}>,
- *            links: Array<{from, to, type, name, id}>}|null} null sin `issues`
+ *            links: Array<{from, to, type, name, id}>, truncated: boolean}|null} null sin `issues`
  */
 export function parseIssueLinks(json, { keys } = {}) {
   if (!json || typeof json !== 'object' || !Array.isArray(json.issues)) return null
@@ -699,9 +705,9 @@ export function parseIssueLinks(json, { keys } = {}) {
 
   const links = []
   const vistas = new Set()
+  let truncated = false
   for (const [key, f] of porClave) {
     for (const raw of Array.isArray(f.issuelinks) ? f.issuelinks : []) {
-      if (links.length >= JIRA_REST_LIMITS.issueLinks) break
       if (!raw || typeof raw !== 'object') continue
       let from = ''
       let to = ''
@@ -719,11 +725,15 @@ export function parseIssueLinks(json, { keys } = {}) {
       const clave = `${from}|${to}|${name}`
       if (vistas.has(clave)) continue
       vistas.add(clave)
+      if (links.length >= JIRA_REST_LIMITS.issueLinks) {
+        truncated = true
+        continue
+      }
       // El id sólo dígitos, como los de un tipo o un estado (`fieldId`).
       links.push({ from, to, type: linea(raw.type?.outward, JIRA_REST_LIMITS.linkTypeChars), name, id: fieldId(raw.id) })
     }
   }
-  return { nodes, links }
+  return { nodes, links, truncated }
 }
 
 // ------------------------------------------------------------------- fetch
@@ -894,10 +904,16 @@ export async function fetchRemoteLinks(
  * plantilla `linksJql`, con una fila por clave (`maxResults` = n.º de claves) y
  * los campos `LINK_FIELDS`. Un 404 con ruta de contexto se reintenta UNA vez en
  * la raíz, como en `searchIssues`; la degradación de `lastViewed` no aplica,
- * porque la consulta no lo menciona.
+ * porque la consulta no lo menciona. Un Data Center contesta 400 a
+ * `issuekey in (…)` con UNA clave que no existe («An issue with key 'K' does not
+ * exist for field 'issuekey'.», un mensaje por clave: visto en el de Marco el
+ * 2026-09-27), y el índice puede tener una cosechada de un texto: ante un 400,
+ * UNA vez, se quitan las claves PEDIDAS que el mensaje cita y se reintenta si
+ * quedan dos. Del texto del servidor no entra nada en la consulta: sólo sale lo
+ * que ya estaba, y lo quitado acaba en `fuera` del contraste porque no vuelve.
  *
  * @param {Array<string>} keys claves del ÍNDICE del panel, revalidadas aquí
- * @returns {Promise<{ok:true, nodes:Array, links:Array, via:'jql', prefix:string, ms:number}
+ * @returns {Promise<{ok:true, nodes:Array, links:Array, truncated:boolean, via:'jql', prefix:string, ms:number}
  *          |{ok:false, reason:string, detail?:string, status?:number, messages?:string[]}>}
  */
 export async function fetchIssueLinks(
@@ -912,24 +928,43 @@ export async function fetchIssueLinks(
   const base = origenDe(site)
   if (!base) return { ok: false, reason: 'origen', detail: 'origen desconocido' }
   if (typeof fetchFn !== 'function') return { ok: false, reason: 'sin-fetch', detail: 'sin fetch' }
-  const jql = linksJql(keys)
-  if (!jql) return { ok: false, reason: 'claves', detail: 'hacen falta al menos dos claves de incidencia válidas' }
-  const claves = clavesDeEnlaces(keys)
+  if (!linksJql(keys)) return { ok: false, reason: 'claves', detail: 'hacen falta al menos dos claves de incidencia válidas' }
+  let claves = clavesDeEnlaces(keys)
 
   const opts = { timeoutMs, credentials, base, errorBody: true }
   let prefijo = cleanPrefix(prefix ?? site?.jiraPrefix)
-  // Como mucho dos peticiones: la buena y la de la raíz.
-  for (let intento = 0; intento < 2; intento++) {
+  let sinCitadas = false
+  // Como mucho tres peticiones: la buena, la de la raíz y UNA sin las claves
+  // que el 400 del Data Center cita como inexistentes.
+  for (let intento = 0; intento < 3; intento++) {
+    const jql = linksJql(claves)
     const ruta = searchPath(site, jql, { limit: claves.length, fields: LINK_FIELDS, prefix: prefijo })
     const r = await getJson(fetchFn, base + ruta, opts)
     if (r.ok) {
       const leido = parseIssueLinks(r.json, { keys: claves })
       if (!leido) return { ok: false, reason: 'forma', detail: 'la respuesta de la API no tiene la forma esperada', status: r.status }
-      return { ok: true, nodes: leido.nodes, links: leido.links, via: 'jql', prefix: prefijo, ms: Math.round(nowMs() - t0) }
+      return { ok: true, nodes: leido.nodes, links: leido.links, truncated: leido.truncated, via: 'jql', prefix: prefijo, ms: Math.round(nowMs() - t0) }
     }
     if (r.status === 404 && prefijo) {
       prefijo = ''
       continue
+    }
+    // Se quitan SÓLO claves pedidas que el servidor cita; de su texto no entra
+    // nada en la consulta.
+    if (r.status === 400 && !sinCitadas) {
+      sinCitadas = true
+      const citadas = new Set()
+      for (const m of Array.isArray(r.errors) ? r.errors : []) {
+        for (const x of String(m).matchAll(/'([A-Za-z][A-Za-z0-9_]*-\d+)'/g)) {
+          const k = validIssueKey(x[1])
+          if (k && claves.includes(k)) citadas.add(k)
+        }
+      }
+      const quedan = claves.filter((k) => !citadas.has(k))
+      if (citadas.size && quedan.length >= 2) {
+        claves = quedan
+        continue
+      }
     }
     return fallo(r)
   }

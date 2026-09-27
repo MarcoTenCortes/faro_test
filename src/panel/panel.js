@@ -104,7 +104,7 @@ import { renderMarkdown } from './markdown.js'
 import { readFlowchart, toMermaid, offerDiagramKeys, DIAGRAM_LIMITS } from './diagram-parse.js'
 import { layoutDiagram } from './diagram-layout.js'
 import { diagramNode, textMeasurer } from './diagram-view.js'
-import { jiraDiagram, resumenJira } from './diagram-links.js'
+import { jiraDiagram, resumenJira, clavesDelIndice } from './diagram-links.js'
 import { SKILLS, DEFAULT_SKILL, skillById } from './skills.js'
 import { pickLabel } from '../content/pick-payload.js'
 import { prettyTool, clockTime, formatBytes } from '../shared/format.js'
@@ -5494,12 +5494,14 @@ function medirTextoDelPanel() {
  * índice de ahora, el aviso en la figura si no está, `runPlan('direct')`). Ni
  * una URL aquí. `runPlan` apaga todos los botones de la tarjeta —aquí, la
  * figura— y un salto directo no los vuelve a encender: «Copiar como Mermaid» se
- * quedaba muerto tras abrir un nodo.
+ * quedaba muerto tras abrir un nodo. Menos el que tiene una lectura en vuelo
+ * (`dataset.leyendo`, «Contrastar con Jira»): encenderlo dejaba mandar una
+ * segunda petición con la primera sin volver (revisión de H25, D08).
  */
 async function abrirNodoDelDiagrama(ref, figure) {
   if (ref?.kind !== 'jira-issue' || !state.site) return
   await openIssueFromResults(ref.id, { site: state.site, card: figure })
-  for (const b of figure.querySelectorAll('.dg-actions button')) b.disabled = false
+  for (const b of figure.querySelectorAll('.dg-actions button')) b.disabled = b.dataset.leyendo === '1'
 }
 
 /** «Copiar como Mermaid»: al portapapeles, y al Registro sólo si de verdad se copió. */
@@ -5516,17 +5518,13 @@ async function copiarMermaid(texto, boton) {
  * sin repetir, en el orden del diagrama y con el tope de una consulta
  * (`JIRA_REST_LIMITS.linkKeys`). Una clave que el modelo escribió y el índice
  * no tiene no sale del panel: nada del diagrama se vuelve consulta (§8.27).
- * Pura: el índice se pasa, no se lee del estado.
+ * Pura: el índice se pasa, no se lee del estado. La regla es `clavesDelIndice`
+ * de diagram-links.js, la MISMA que usa el tramo 66 del banco (antes el banco
+ * filtraba por su cuenta y su comprobación de SEGURIDAD no vigilaba nada del
+ * panel: revisión de H25, D06); el tope, que tiene dueño, lo pone aquí.
  */
 function clavesParaContrastar(diagrama, indice) {
-  const claves = []
-  for (const n of Array.isArray(diagrama?.nodes) ? diagrama.nodes : []) {
-    const clave = n?.ref?.kind === 'jira-issue' ? n.ref.id : ''
-    if (!clave || claves.includes(clave) || !indice?.issues?.[clave]) continue
-    claves.push(clave)
-    if (claves.length >= JIRA_REST_LIMITS.linkKeys) break
-  }
-  return claves
+  return clavesDelIndice(diagrama, indice, JIRA_REST_LIMITS.linkKeys)
 }
 
 /**
@@ -5569,6 +5567,24 @@ function filasDeLaComparacion(comparacion) {
 }
 
 /**
+ * El aviso de «Contrastar con Jira» en su figura (revisión de H25, D02): UNO
+ * por figura —el de antes se quita, así tres clics con el mismo 400 no apilan
+ * tres avisos iguales— y anunciado siempre (A2), porque responde a un clic del
+ * usuario. NO pasa por la tregua de `restFailureDue`: su clave es host·sesión·
+ * motivo y la gastan también `readToday` (que corre sola al arrancar) y la
+ * lista de Jira, así que con una sesión caducada el PRIMER clic se quedaba
+ * mudo (§8.14). La clase `dg-aviso` es sólo una marca: quita el suyo y deja
+ * el aviso ajeno de la figura (el de `openIssueFromResults` al abrir un nodo).
+ */
+function avisoEnLaFigura(figura, texto, bad = false) {
+  figura.querySelector(':scope > .dg-aviso')?.remove()
+  const aviso = noticeNode(texto, bad)
+  aviso.classList.add('dg-aviso')
+  figura.appendChild(aviso)
+  announce(texto)
+}
+
+/**
  * Lee las relaciones REALES de Jira entre las incidencias de un diagrama y las
  * dibuja como un segundo diagrama, «Según Jira», debajo del del modelo, con lo
  * que coincide y lo que no (H25b; §8.19, §8.27).
@@ -5586,9 +5602,15 @@ function filasDeLaComparacion(comparacion) {
  * panel está en otro sitio u otra sesión, no se pinta nada. El botón nació con
  * el sitio de ENTONCES: con las lecturas apagadas después en Ajustes, o la
  * pestaña fuera de un Jira DC, no sale ninguna petición. Cada fallo se ve
- * (§8.14), con la tregua de rest-notice.js, como la lista de Jira.
+ * (§8.14) y queda en el Registro: uno por figura, sustituido y anunciado
+ * (`avisoEnLaFigura`), sin la tregua de la lista y de «hoy», porque el clic es
+ * del usuario (D02). Si Jira devuelve menos de dos de las pedidas, se dice
+ * cuántas y cuáles no volvieron ('devueltas', D03) y la figura «Según Jira»
+ * de antes se conserva, como con cualquier fallo. Mientras la lectura vuela,
+ * el botón lleva `dataset.leyendo` y otro clic no pide nada (D08).
  */
 async function contrastarConJira(diagrama, figura, boton) {
+  if (boton.dataset.leyendo) return
   const sitio = state.site
   const host = sitio?.host || state.lastHost
   const sessionID = state.sessionID
@@ -5598,10 +5620,7 @@ async function contrastarConJira(diagrama, figura, boton) {
   const avisar = (fallo) => {
     const texto = linksFailText(fallo, host)
     log.warn('Relaciones de Jira', `${fallo?.reason || 'sin respuesta'} · ${texto}`)
-    if (restFailureDue(state.restWarned, fallo?.reason, host, sessionID)) {
-      figura.appendChild(noticeNode(texto, true))
-      announce(texto)
-    }
+    avisoEnLaFigura(figura, texto, true)
   }
   if (!sitio || sitio.product !== 'jira' || sitio.cloud || !state.settings.restTools) {
     const detail = state.settings.restTools ? 'la pestaña no es de un Jira Data Center' : 'las lecturas por la API están apagadas en Ajustes'
@@ -5610,14 +5629,16 @@ async function contrastarConJira(diagrama, figura, boton) {
   }
   const claves = clavesParaContrastar(diagrama, indice)
   if (claves.length < 2) {
-    figura.appendChild(noticeNode(linksFailText({ reason: 'claves' }, host)))
+    avisar({ reason: 'claves' })
     return
   }
   boton.disabled = true
+  boton.dataset.leyendo = '1'
   const acceso = tabId != null && (await ensureContentAccess({ announce: false }))
   const r = acceso
     ? await chrome.tabs.sendMessage(tabId, { type: MSG.ISSUE_LINKS, keys: claves, cloud: sitio.cloud }).catch(() => null)
     : { ok: false, reason: 'permiso' }
+  delete boton.dataset.leyendo
   boton.disabled = false
   if (!figura.isConnected || (state.site?.host ?? state.lastHost) !== host || state.sessionID !== sessionID) {
     log.info('Relaciones de Jira', `lo leído de ${host} llegó con el diagrama repintado o el panel en otro sitio`)
@@ -5628,11 +5649,11 @@ async function contrastarConJira(diagrama, figura, boton) {
     return
   }
   const { diagram, comparacion } = jiraDiagram(diagrama, r)
-  if (figura.nextElementSibling?.classList.contains('dg-jira')) figura.nextElementSibling.remove()
   if (!diagram) {
-    figura.appendChild(noticeNode(linksFailText({ reason: 'claves' }, host)))
+    avisar({ reason: 'devueltas', devueltas: comparacion.nodos, pedidas: claves.length, fuera: comparacion.fuera.filter((k) => claves.includes(k)) })
     return
   }
+  if (figura.nextElementSibling?.classList.contains('dg-jira')) figura.nextElementSibling.remove()
   const resumen = resumenJira(comparacion)
   const layout = layoutDiagram(diagram, { measure: medirTextoDelPanel() })
   const figuraJira = diagramNode(diagram, layout, {
@@ -5655,6 +5676,7 @@ async function contrastarConJira(diagrama, figura, boton) {
     diferencias.appendChild(fila)
   }
   figuraJira.appendChild(diferencias)
+  figura.querySelector(':scope > .dg-aviso')?.remove()
   figura.after(figuraJira)
   announce(resumen)
   log.ok('Relaciones de Jira', `${resumen} · ${Math.round(performance.now() - t0)} ms`)

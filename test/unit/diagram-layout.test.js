@@ -438,6 +438,21 @@ function cajasDeEtiqueta(d, L) {
   return out
 }
 
+/** La distancia de un punto a la polilínea más cercana de sus tramos. */
+function distanciaAPolilinea(p, puntos) {
+  let mejor = Infinity
+  for (let k = 1; k < puntos.length; k++) {
+    const a = puntos[k - 1]
+    const b = puntos[k]
+    const dx = b.x - a.x
+    const dy = b.y - a.y
+    const l2 = dx * dx + dy * dy
+    const t = l2 ? Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2)) : 0
+    mejor = Math.min(mejor, Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy)))
+  }
+  return mejor
+}
+
 const LARGAS = ['flowchart TD', '  A --> B --> C --> D', '  A --> D', '  A --> E', '  E --> F --> D', '  B --> G'].join('\n')
 /** B, fino, comparte capa con T, grueso: en LR/RL la diagonal de B→Z salía por la franja de T. */
 const GRUESO = 'flowchart TD\n  A[palabra palabra] --> Z\n  T[palabra palabra palabra palabra] --> Z\n  T --> Z\n  B --> Z'
@@ -494,6 +509,12 @@ test('layout: ninguna etiqueta de arista queda debajo de un nodo ni de otra etiq
     'flowchart TD\n  X --> A\n  X --> B\n  A -->|otra vez| A\n  A -->|y otra| A',
     // En LR/RL la etiqueta de un lazo, más ancha que su capa, tapaba a X en la capa de antes.
     'flowchart TD\n  X --> A --> C\n  X --> B\n  A -->|revisar el contrato de la API| A',
+    // H25 (D07): «Según Jira» etiqueta TODAS sus aristas: un par paralelo y otra que salta capa desde el mismo nodo.
+    'flowchart TD\n  A -->|blocks| B\n  B -->|relates to| A\n  B -->|blocks| C\n  A -->|blocks| C',
+    // Y tres que llegan al mismo nodo: una sola vuelta de la relajación no basta.
+    'flowchart TD\n  D -->|relates to| B\n  A -->|relates to| B\n  C -->|relates to| B',
+    // Y un ciclo con un par paralelo: empujar sólo una de las dos la aleja más de 3·lineH de su arista.
+    'flowchart TD\n  B -->|duplicates| A\n  C -->|blocks| B\n  C -->|relates to| B\n  A -->|relates to| C',
   ]
   for (const src of casos) {
     for (const dir of ['TD', 'BT', 'LR', 'RL']) {
@@ -505,6 +526,11 @@ test('layout: ninguna etiqueta de arista queda debajo de un nodo ni de otra etiq
       cajas.forEach((c, k) => {
         for (const n of L.nodes) assert(!solapan(c, n), `${dir}: «${c.label}» queda debajo de ${n.id}`)
         for (const o of cajas.slice(k + 1)) assert(!solapan(c, o), `${dir}: «${c.label}» y «${o.label}» se pisan`)
+        // Apartarla no la despega de su arista: el coste de D07 (revisión de H25),
+        // vigilado. Un lazo lleva la etiqueta en la franja de su capa y no se aparta.
+        const e = L.edges[c.i]
+        const lejos = e.from === e.to ? 0 : distanciaAPolilinea(e.labelAt, e.points)
+        assert(lejos <= 3 * LAYOUT_LIMITS.lineH, `${dir}: «${c.label}» queda a ${lejos} px de su arista`)
       })
     }
   }

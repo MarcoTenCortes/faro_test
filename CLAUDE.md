@@ -46,7 +46,7 @@ Cinco piezas: la página (Jira/Confluence) · la extensión · opencode · el LL
 ## 2. Arrancar y comprobar
 
 ```bash
-npm run check              # sintaxis + TDZ + manifest + 1635 pruebas unitarias + docs (sólo si las unitarias pasan)
+npm run check              # sintaxis + TDZ + manifest + 1642 pruebas unitarias + docs (sólo si las unitarias pasan)
 npm run check:docs         # sólo el paso docs, informe entero; sale con 1 si hay errores
 npm run test:integration   # su propio opencode serve (4123) y el cliente real; GASTA turnos de pago
 npm run harness            # Confluence de mentira en http://127.0.0.1:5175 (preview_start "harness")
@@ -71,8 +71,8 @@ npm run snapshots          # regenera test/fixtures/prompts/*.txt; sólo con un 
   `tools/instalar.ps1` deja uv y mcp-atlassian y `tools/arrancar-opencode.ps1` lo arranca.
 - Banco: `http://127.0.0.1:5175/`, botón **Autocomprobación completa** (o
   `await faroHarness.actions.selfcheck()`), con el Browser pane VISIBLE a
-  1280×900: oculto no hay frames y caen la 27 y la 41. Hoy 66 tramos, 149 `ok(`,
-  148 resultados. Con el pane oculto se sustituye `window.requestAnimationFrame`
+  1280×900: oculto no hay frames y caen la 27 y la 41. Hoy 66 tramos, 150 `ok(`,
+  149 resultados. Con el pane oculto se sustituye `window.requestAnimationFrame`
   por un `setTimeout` de 16 ms, y se dice.
 - Espejo del panel: `harness/panel-preview.html` (el `panel.html` real en un
   iframe; seis conversaciones, diez pantallas). `window.faroPreview.check()` a
@@ -127,7 +127,7 @@ src/panel/markdown.js  markdown → DOM sin innerHTML; allowHref; H24 closed y o
 src/panel/diagram-parse.js  H24: el Mermaid flowchart leído con claves blancas; toMermaid (docs/FLUJOS.md §4.4)
 src/panel/diagram-layout.js  H24: layoutDiagram, capas y baricentro (docs/REFERENCIA.md §6)
 src/panel/diagram-view.js  H24: diagramNode, el SVG sin innerHTML; un solo import, LAYOUT_LIMITS (docs/FLUJOS.md §4.4)
-src/panel/diagram-links.js  H25: jiraDiagram, la comparación con Jira (docs/FLUJOS.md §4.4)
+src/panel/diagram-links.js  H25: jiraDiagram, clavesDelIndice, la comparación con Jira (docs/FLUJOS.md §4.4)
 src/background/service-worker.js  paso a paso, permisos, «visto» (docs/FLUJOS.md §4.3)
 src/content/bootstrap.js  content script: switch de mensajes (docs/FLUJOS.md §4.9)
 src/content/runner.js  NavRunner: executeStep, applyNotes (docs/FLUJOS.md §4.4)
@@ -284,7 +284,7 @@ Cada contrato con su porqué y sus bordes, en docs/REFERENCIA.md §6; aquí, la 
 - **Chip de búsqueda** (`searchChips`): `['jql','kind','label','run','title']`.
 - **Búsqueda precargada** (`state.pendingPreload`).
 - **Diagrama** (H24): `readFlowchart` → `{ok, direction, nodes, edges, subgraphs, errores}`, nodo `{id, label, shape, kind, ref, note, sub}`, arista `{from, to, label, style, arrow}`; `layoutDiagram` → `{width, height, nodes, edges, subgraphs}` 1:1 con el diagrama, `LAYOUT_LIMITS.edgeSep` entre paralelas; `diagramNode(…, { kinds })` → `figure.dg-wrap`; `offerDiagramKeys`/`knownProjectsFor` sólo deciden la oferta; `state.pendingDiagram` `{host}` o null, sólo memoria.
-- **Relación de Jira** (H25, `parseIssueLinks`): `{from, to, type, name, id}`, sentido de `outward`; `linksJql` de 2 a 30 claves; `fetchIssueLinks` → `{ok, nodes, links, via, prefix, ms}`; `jiraDiagram` → `{diagram, comparacion:{comunes, soloModelo, soloJira, nodos, fuera}}`; `figure.dg-wrap.dg-jira` sin guardar nada.
+- **Relación de Jira** (H25, `parseIssueLinks`): `{from, to, type, name, id}`, sentido de `outward`, → `{nodes, links, truncated}`; `linksJql` de 2 a 30 claves, las de `clavesDelIndice`; `fetchIssueLinks` → `{ok, nodes, links, truncated, via, prefix, ms}`, con un reintento sin las claves que cita un 400; `jiraDiagram` → `{diagram, comparacion:{comunes, soloModelo, soloJira, nodos, fuera, recortada}}`; motivos `'claves'`/`'devueltas'` por `avisoEnLaFigura` (`.dg-aviso`); `figure.dg-wrap.dg-jira` sin guardar nada.
 - **Últimas consultas** (`normalizeRecentJql`): 5.
 - **Avisos REST ya dados** (`state.restWarned`).
 - **Filtro favorito** (`parseFilters`).
@@ -362,7 +362,7 @@ Sólo el enunciado; el porqué, el incidente que la motivó y sus matices están
 - Prompts como funciones puras (`[...].join('\n')`); todo cambio hace fallar `prompt-snapshots.test.js`: si es intencionado, `npm run snapshots` y revisar el diff en el mismo commit; regenerar es aceptar.
 - Turnos internos: sesión desechable «Faro · <cosa>» + `promptStructured` + `deleteSession` en `finally`. Todo `chrome.tabs.sendMessage` con `.catch(() => null)`. Un turno real se mira con `npm run turn`, nunca con un script ad hoc sobre opencode.db.
 - Registro: `log.ok/info/warn/error('Título corto', 'detalle · detalle')`. Cada título nuevo va entre «» en docs/INSTALL.md (el paso «docs» lo exige, `STRICT.titles`); la lista de los 107 con su significado vive allí y en docs/REFERENCIA.md §9.
-- UI sólo con `createElement`/`textContent`, nunca `innerHTML`. Familias: `nav-card`, `note-row`, `suggest-row`, `source-row`, `result-*`, `search-chip`, `today-*`, `model-*`, `dg-*` (H24; H25 `.dg-jira`/`.dg-caption`/`.dg-diff`), `.privacy`, `.screen-head` + `.icon-btn.back`, `.loc`. Cabecera: sólo cede el chip; `.top-actions` `flex: none`. Accesibilidad: todo anuncio por `announce()`, pantalla abierta = `#app` inerte + foco a su `h1`.
+- UI sólo con `createElement`/`textContent`, nunca `innerHTML`. Familias: `nav-card`, `note-row`, `suggest-row`, `source-row`, `result-*`, `search-chip`, `today-*`, `model-*`, `dg-*` (H24; H25 `.dg-jira`/`.dg-caption`/`.dg-diff`, marca `.dg-aviso`), `.privacy`, `.screen-head` + `.icon-btn.back`, `.loc`. Cabecera: sólo cede el chip; `.top-actions` `flex: none`. Accesibilidad: todo anuncio por `announce()`, pantalla abierta = `#app` inerte + foco a su `h1`.
 - Tokens del CSS: px de la escala de `:root` (a mano sólo 0, 1 y 2); medidas de pieza en `EXCEPCIONES` y duraciones en `DURACIONES_PROPIAS`, cada una con su motivo (`panel-css.test.js` falla en las dos direcciones). Color nuevo con su pareja en `test/contrast-pairs.js`; un token de borde nunca es tinta. `--mark` es relleno con `--on-mark` encima, `--gold` acento de texto; `outline: none` prohibido; sin sombras salvo `.busy-card`. Overlay (H23): la tinta `--faro-tinta*` en sus cuatro `:host`; el relleno, literal en `highlightCss` y leído de ahí por `TINTAS` (texto ≥4,5; enlace y trazo anotados).
 - Tests: `test/unit/<módulo>.test.js`, nombres en español, `SEGURIDAD:` para barreras, `EL CAMBIO:` para un rediseño. `panel.js`, `overlay.js` y `runner.js` por regex sobre su fuente (`panel-wiring`, `overlay-wiring` y `runner-wiring.test.js`), con `sinComentarios`, `funcion`, `una`, `orden` y `eq` sobre cuerpos enteros. `chrome`, `fetch`, `document` o `setInterval` se instalan DENTRO de cada prueba y se restauran en `finally`. Un pin de §10/PINES se copia del código, no se resume.
 

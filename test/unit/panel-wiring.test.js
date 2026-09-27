@@ -25,7 +25,7 @@ import { readFlowchart } from '../../src/panel/diagram-parse.js'
 import { TEXTO, CONTROL } from '../contrast-pairs.js'
 // H25: «Contrastar con Jira» se EJECUTA con la comparación, los textos, la
 // tregua y el tope reales; lo único fingido es el DOM, chrome y la vista.
-import { jiraDiagram, resumenJira } from '../../src/panel/diagram-links.js'
+import { jiraDiagram, resumenJira, clavesDelIndice } from '../../src/panel/diagram-links.js'
 import { restFailureDue, linksFailText } from '../../src/panel/rest-notice.js'
 import { JIRA_REST_LIMITS } from '../../src/shared/jira-rest.js'
 // H23: los colores que el panel ofrece son los que config.js acepta, y lo que
@@ -7840,13 +7840,15 @@ test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibu
   // índice, noticeNode en la figura si no está, runPlan 'direct'—; y la fila de
   // «Copiar como Mermaid», que runPlan apaga con todos los botones de la tarjeta,
   // vuelve a encenderse. SEGURIDAD: ni una URL ni una ruta REST en el panel.
+  // EL CAMBIO (revisión de H25, D08): menos el botón con una lectura en vuelo
+  // (`dataset.leyendo`, «Contrastar con Jira»), que antes se encendía también.
   eq(
     funcion('async function abrirNodoDelDiagrama('),
     lineas(
       'async function abrirNodoDelDiagrama(ref, figure) {',
       "  if (ref?.kind !== 'jira-issue' || !state.site) return",
       '  await openIssueFromResults(ref.id, { site: state.site, card: figure })',
-      "  for (const b of figure.querySelectorAll('.dg-actions button')) b.disabled = false",
+      "  for (const b of figure.querySelectorAll('.dg-actions button')) b.disabled = b.dataset.leyendo === '1'",
       '}'
     ),
     'un nodo navega por el camino de las filas de la lista'
@@ -8147,27 +8149,23 @@ test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibu
   // de esta prueba y no en una nueva: es el mismo diagrama, y cada línea de
   // docs/PINES.md que dice cuántas registra el fichero sigue siendo verdad.
   // Cuerpos ENTEROS con `eq`, y después EJECUTADOS con un DOM mínimo, chrome
-  // fingido y la comparación, los textos, la tregua y el tope reales.
+  // fingido y la comparación, los textos y el tope reales.
 
   // (12) Los imports: la comparación y el texto de sus fallos.
-  una(LIMPIO, "\nimport { jiraDiagram, resumenJira } from './diagram-links.js'\n", 'H25: la comparación con Jira')
-  una(LIMPIO, "\nimport { diagramNode, textMeasurer } from './diagram-view.js'\nimport { jiraDiagram, resumenJira } from './diagram-links.js'\n", 'H25: justo detrás de la vista')
+  una(LIMPIO, "\nimport { jiraDiagram, resumenJira, clavesDelIndice } from './diagram-links.js'\n", 'H25: la comparación con Jira')
+  una(LIMPIO, "\nimport { diagramNode, textMeasurer } from './diagram-view.js'\nimport { jiraDiagram, resumenJira, clavesDelIndice } from './diagram-links.js'\n", 'H25: justo detrás de la vista')
   una(LIMPIO, "\nimport { restFailureDue, jqlFailText, linksFailText } from './rest-notice.js'\n", 'H25: el texto de un fallo, de rest-notice.js')
 
   // (13) Las claves: sólo las del índice, sin repetir y con el tope de una
   // consulta, que tiene dueño (JIRA_REST_LIMITS.linkKeys).
+  // EL CAMBIO (revisión de H25, D06): la regla es `clavesDelIndice` de
+  // diagram-links.js, la que usa también el tramo 66 del banco; el panel sólo
+  // le pone el tope. Sus casos se ejecutan abajo con la función real.
   eq(
     funcion('function clavesParaContrastar('),
     lineas(
       'function clavesParaContrastar(diagrama, indice) {',
-      '  const claves = []',
-      '  for (const n of Array.isArray(diagrama?.nodes) ? diagrama.nodes : []) {',
-      "    const clave = n?.ref?.kind === 'jira-issue' ? n.ref.id : ''",
-      '    if (!clave || claves.includes(clave) || !indice?.issues?.[clave]) continue',
-      '    claves.push(clave)',
-      '    if (claves.length >= JIRA_REST_LIMITS.linkKeys) break',
-      '  }',
-      '  return claves',
+      '  return clavesDelIndice(diagrama, indice, JIRA_REST_LIMITS.linkKeys)',
       '}'
     ),
     'H25: las claves que se contrastan son las del índice, sin repetir y con tope'
@@ -8215,12 +8213,18 @@ test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibu
 
   // (16) contrastarConJira, ENTERA: se captura al pedir (§8.22), el mensaje
   // lleva SÓLO claves del índice, al volver se comprueba antes de pintar, y
-  // cada fallo se ve con la tregua de rest-notice.js (§8.14).
+  // cada fallo se ve (§8.14).
+  // EL CAMBIO (revisión de H25): D02, el aviso por `avisoEnLaFigura` (uno por
+  // figura, sustituido y anunciado) y SIN la tregua, que gastaban también
+  // `readToday` y la lista; D03, las dos ramas de pocas claves por `avisar` (al
+  // Registro con su código) y 'devueltas' con la figura previa conservada; D08,
+  // `dataset.leyendo` mientras la lectura vuela.
   const contraste = funcion('async function contrastarConJira(')
   eq(
     contraste,
     lineas(
       'async function contrastarConJira(diagrama, figura, boton) {',
+      '  if (boton.dataset.leyendo) return',
       '  const sitio = state.site',
       '  const host = sitio?.host || state.lastHost',
       '  const sessionID = state.sessionID',
@@ -8230,10 +8234,7 @@ test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibu
       '  const avisar = (fallo) => {',
       '    const texto = linksFailText(fallo, host)',
       "    log.warn('Relaciones de Jira', `${fallo?.reason || 'sin respuesta'} · ${texto}`)",
-      '    if (restFailureDue(state.restWarned, fallo?.reason, host, sessionID)) {',
-      '      figura.appendChild(noticeNode(texto, true))',
-      '      announce(texto)',
-      '    }',
+      '    avisoEnLaFigura(figura, texto, true)',
       '  }',
       "  if (!sitio || sitio.product !== 'jira' || sitio.cloud || !state.settings.restTools) {",
       "    const detail = state.settings.restTools ? 'la pestaña no es de un Jira Data Center' : 'las lecturas por la API están apagadas en Ajustes'",
@@ -8242,14 +8243,16 @@ test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibu
       '  }',
       '  const claves = clavesParaContrastar(diagrama, indice)',
       '  if (claves.length < 2) {',
-      "    figura.appendChild(noticeNode(linksFailText({ reason: 'claves' }, host)))",
+      "    avisar({ reason: 'claves' })",
       '    return',
       '  }',
       '  boton.disabled = true',
+      "  boton.dataset.leyendo = '1'",
       '  const acceso = tabId != null && (await ensureContentAccess({ announce: false }))',
       '  const r = acceso',
       '    ? await chrome.tabs.sendMessage(tabId, { type: MSG.ISSUE_LINKS, keys: claves, cloud: sitio.cloud }).catch(() => null)',
       "    : { ok: false, reason: 'permiso' }",
+      '  delete boton.dataset.leyendo',
       '  boton.disabled = false',
       '  if (!figura.isConnected || (state.site?.host ?? state.lastHost) !== host || state.sessionID !== sessionID) {',
       "    log.info('Relaciones de Jira', `lo leído de ${host} llegó con el diagrama repintado o el panel en otro sitio`)",
@@ -8260,11 +8263,11 @@ test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibu
       '    return',
       '  }',
       '  const { diagram, comparacion } = jiraDiagram(diagrama, r)',
-      "  if (figura.nextElementSibling?.classList.contains('dg-jira')) figura.nextElementSibling.remove()",
       '  if (!diagram) {',
-      "    figura.appendChild(noticeNode(linksFailText({ reason: 'claves' }, host)))",
+      "    avisar({ reason: 'devueltas', devueltas: comparacion.nodos, pedidas: claves.length, fuera: comparacion.fuera.filter((k) => claves.includes(k)) })",
       '    return',
       '  }',
+      "  if (figura.nextElementSibling?.classList.contains('dg-jira')) figura.nextElementSibling.remove()",
       '  const resumen = resumenJira(comparacion)',
       '  const layout = layoutDiagram(diagram, { measure: medirTextoDelPanel() })',
       '  const figuraJira = diagramNode(diagram, layout, {',
@@ -8287,6 +8290,7 @@ test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibu
       '    diferencias.appendChild(fila)',
       '  }',
       '  figuraJira.appendChild(diferencias)',
+      "  figura.querySelector(':scope > .dg-aviso')?.remove()",
       '  figura.after(figuraJira)',
       '  announce(resumen)',
       "  log.ok('Relaciones de Jira', `${resumen} · ${Math.round(performance.now() - t0)} ms`)",
@@ -8294,6 +8298,26 @@ test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibu
     ),
     'H25: contrastar captura al pedir, manda sólo claves del índice, comprueba al volver y pinta «Según Jira» debajo'
   )
+  // El pintor de los avisos del contraste, ENTERO (revisión de H25, D02): quita
+  // SU aviso anterior (la marca `dg-aviso`, no cualquier `.notice`: el de abrir
+  // un nodo se queda), pinta el nuevo y lo anuncia; sin tregua.
+  eq(
+    funcion('function avisoEnLaFigura('),
+    lineas(
+      'function avisoEnLaFigura(figura, texto, bad = false) {',
+      "  figura.querySelector(':scope > .dg-aviso')?.remove()",
+      '  const aviso = noticeNode(texto, bad)',
+      "  aviso.classList.add('dg-aviso')",
+      '  figura.appendChild(aviso)',
+      '  announce(texto)',
+      '}'
+    ),
+    'H25: el aviso del contraste, uno por figura y anunciado, sin la tregua compartida'
+  )
+  assert(!contraste.includes('restFailureDue'), 'H25 (§8.14): un clic en «Contrastar con Jira» no gasta ni mira la tregua de la lista y de «hoy»')
+  eq(contraste.split('noticeNode(').length - 1, 0, 'H25: todo aviso del contraste pasa por avisoEnLaFigura')
+  eq(JS_SIN.split('avisoEnLaFigura(').length - 1, 2, 'H25: avisoEnLaFigura, la declaración y avisar')
+  eq(JS_SIN.split('clavesDelIndice(').length - 1, 1, 'H25: clavesDelIndice, sólo en clavesParaContrastar')
   // Lo que no se puede escapar entre líneas: UN solo emisor del mensaje en todo
   // panel.js (comentarios incluidos), con claves y nada más; la captura antes
   // del primer await; y la comprobación al volver antes de leer la respuesta.
@@ -8332,6 +8356,7 @@ test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibu
       this.padre = null
       this.oyentes = {}
       this.disabled = false
+      this.dataset = {}
       const yo = this
       this.classList = {
         add: (c) => {
@@ -8373,15 +8398,30 @@ test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibu
     addEventListener(tipo, fn) {
       ;(this.oyentes[tipo] ||= []).push(fn)
     }
+    querySelector(sel) {
+      const m = /^:scope > \.([\w-]+)$/.exec(sel)
+      if (!m) throw new Error('selector no previsto: ' + sel)
+      return this.hijos.find((h) => h.classList.contains(m[1])) || null
+    }
+    querySelectorAll(sel) {
+      const casa = (n, p) => (p.startsWith('.') ? n.classList.contains(p.slice(1)) : n.tagName === p)
+      const bajo = (n, out = []) => {
+        for (const h of n.hijos) out.push(h), bajo(h, out)
+        return out
+      }
+      let actuales = [this]
+      for (const p of sel.trim().split(/\s+/)) actuales = [...new Set(actuales.flatMap((n) => bajo(n).filter((d) => casa(d, p))))]
+      return actuales
+    }
   }
   const documento = { createElement: (tag) => new Nodo(tag) }
   const noticeNode25 = new Function('document', funcion('function noticeNode(') + '\nreturn noticeNode')(documento)
   const hacer25 = new Function(
     'state', 'performance', 'linksFailText', 'log', 'restFailureDue', 'noticeNode', 'announce', 'ensureContentAccess', 'chrome', 'MSG',
     'jiraDiagram', 'resumenJira', 'layoutDiagram', 'medirTextoDelPanel', 'diagramNode', 'abrirNodoDelDiagrama', 'copiarMermaid', 'toMermaid',
-    'KIND_LABELS', 'document', 'JIRA_REST_LIMITS',
+    'KIND_LABELS', 'document', 'JIRA_REST_LIMITS', 'clavesDelIndice',
     'let contadorDiagramas = 0\n' +
-      [funcion('function clavesParaContrastar('), funcion('function linksButton('), filasDelPanel, contraste].join('\n') +
+      [funcion('function avisoEnLaFigura('), funcion('function clavesParaContrastar('), funcion('function linksButton('), filasDelPanel, contraste].join('\n') +
       '\nreturn { clavesParaContrastar, linksButton, filasDeLaComparacion, contrastarConJira }'
   )
   const ABRIR = () => {}
@@ -8441,7 +8481,7 @@ test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibu
     env.api = hacer25(
       env.state, { now: () => 0 }, linksFailText, { ok: apunta('ok'), info: apunta('info'), warn: apunta('warn') }, restFailureDue, noticeNode25,
       (t) => env.anuncios.push(t), async () => acceso, chrome, { ISSUE_LINKS: 'faro:issue-links' },
-      jiraDiagram, resumenJira, () => ({}), () => null, vista, ABRIR, COPIAR, () => 'flowchart LR', KIND, documento, JIRA_REST_LIMITS
+      jiraDiagram, resumenJira, () => ({}), () => null, vista, ABRIR, COPIAR, () => 'flowchart LR', KIND, documento, JIRA_REST_LIMITS, clavesDelIndice
     )
     env.contrastar = () => env.api.contrastarConJira(DIAGRAMA, env.figura, env.boton)
     return env
@@ -8481,7 +8521,10 @@ test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibu
     env.boton = boton
     await boton.oyentes.click[0]()
     eq(env.enviados.length, 0, 'las claves se recalculan al hacer clic: con el índice de ahora no hay dos, no se pide')
-    eq(avisos(env), ['notice: Hacen falta al menos dos incidencias del índice para contrastar.'], 'y se dice en la figura')
+    eq(avisos(env), ['notice bad dg-aviso: Hacen falta al menos dos incidencias del índice para contrastar.'], 'y se dice en la figura')
+    eq(env.anuncios, ['Hacen falta al menos dos incidencias del índice para contrastar.'], 'y se anuncia (A2)')
+    eq(titulos(env), ['warn Relaciones de Jira'], 'y queda en el Registro con su código')
+    assert(env.registros[0][2].startsWith('claves · '), 'el código claves, el que dice INSTALL')
     env.state.index = INDICE
     await boton.oyentes.click[0]()
     eq(env.enviados.map(([, m]) => m.keys), [DEL_INDICE], 'con el índice de ahora, el clic manda las claves de ahora')
@@ -8534,16 +8577,29 @@ test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibu
     }
   }
   {
-    // §8.14: cada fallo se ve, en la figura y anunciado, con la tregua.
+    // §8.14: cada fallo se ve, en la figura y anunciado, cada vez que se pulsa
+    // y sin apilarse (revisión de H25, D02).
     const env = montar({ respuesta: { ok: false, reason: 'sesion' } })
     await env.contrastar()
-    eq(avisos(env), ['notice bad: ' + linksFailText({ reason: 'sesion' }, 'jira.example.com')], 'la sesión que no vale, en la figura')
+    eq(avisos(env), ['notice bad dg-aviso: ' + linksFailText({ reason: 'sesion' }, 'jira.example.com')], 'la sesión que no vale, en la figura')
     eq([env.anuncios.length, titulos(env)], [1, ['warn Relaciones de Jira']], 'anunciado y registrado')
     await env.contrastar()
-    eq([avisos(env).length, env.anuncios.length, titulos(env).length], [1, 1, 2], 'el mismo motivo en la misma sesión: se registra, no se repite el aviso')
+    eq([avisos(env).length, env.anuncios.length, titulos(env).length], [1, 2, 2], 'otro clic con el mismo fallo: el aviso se sustituye, no se apila, y se vuelve a anunciar')
+    // La tregua de la lista y de «Qué mirar hoy» no deja mudo el clic (§8.14).
+    const ajena = montar({ respuesta: { ok: false, reason: 'sesion' } })
+    restFailureDue(ajena.state.restWarned, 'sesion', 'jira.example.com', 'ses-1')
+    await ajena.contrastar()
+    eq([avisos(ajena).length, ajena.anuncios.length], [1, 1], 'con la sesión ya avisada por readToday o la lista, el clic lo dice igual')
+    const jql = montar({ respuesta: { ok: false, reason: 'jql', messages: ["An issue with key 'ENG-20' does not exist for field 'issuekey'."] } })
+    for (let i = 0; i < 3; i++) await jql.contrastar()
+    eq(avisos(jql).length, 1, 'un 400 repetido no apila avisos idénticos')
+    const ajeno = montar({ respuesta: { ok: false, reason: 'red' } })
+    ajeno.figura.appendChild(noticeNode25('la incidencia no está en el mapa', true))
+    await ajeno.contrastar()
+    eq(avisos(ajeno).length, 2, 'el aviso de abrir un nodo no lo quita el del contraste')
     const nulo = montar({ respuesta: new Error('sin pestaña') })
     await nulo.contrastar()
-    eq(avisos(nulo), ['notice bad: No he podido leer las relaciones de Jira (sin respuesta).'], 'la pestaña que no contesta')
+    eq(avisos(nulo), ['notice bad dg-aviso: No he podido leer las relaciones de Jira (sin respuesta).'], 'la pestaña que no contesta')
     for (const [caso, opciones, texto] of [
       ['sin pestaña', { tabId: null }, 'Sin acceso a la pestaña de Jira.'],
       ['sin content script', { acceso: false }, 'Sin acceso a la pestaña de Jira.'],
@@ -8554,11 +8610,60 @@ test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibu
       const e = montar(opciones)
       await e.contrastar()
       eq(e.enviados.length, 0, caso + ': no sale ninguna petición')
-      eq(avisos(e), ['notice bad: ' + texto], caso + ': y se dice')
+      eq(avisos(e), ['notice bad dg-aviso: ' + texto], caso + ': y se dice')
     }
     const pocas = montar({ respuesta: { ...RESPUESTA, nodes: RESPUESTA.nodes.slice(0, 1) } })
     await pocas.contrastar()
-    eq([pocas.raiz.hijos.length, avisos(pocas)], [1, ['notice: Hacen falta al menos dos incidencias del índice para contrastar.']], 'si Jira devuelve menos de dos, no hay figura y se dice')
+    // Revisión de H25, D03: no culpa al índice (las claves ya eran dos o más), dice
+    // cuáles no volvieron, queda en el Registro con su código y no borra la figura
+    // «Según Jira» de antes. Dos clics: un aviso, dos anuncios, dos registros.
+    await pocas.contrastar()
+    const DEVUELTAS = 'Jira sólo ha devuelto 1 de las 4 incidencias pedidas (sin contrastar: ENG-12, ENG-20, ENG-3): una incidencia movida de proyecto vuelve con otra clave.'
+    eq([pocas.raiz.hijos.length, avisos(pocas)], [1, ['notice bad dg-aviso: ' + DEVUELTAS]], 'si Jira devuelve menos de dos, no hay figura y se dice cuáles no volvieron (dos clics, un aviso)')
+    eq([pocas.anuncios, titulos(pocas)], [[DEVUELTAS, DEVUELTAS], ['warn Relaciones de Jira', 'warn Relaciones de Jira']], 'anunciado y registrado cada vez')
+    eq(pocas.registros.map(([, , d]) => d.split(' · ')[0]), ['devueltas', 'devueltas'], 'con su código')
+    const resp = { ...RESPUESTA, nodes: [...RESPUESTA.nodes] }
+    const antes = montar({ respuesta: resp })
+    await antes.contrastar()
+    resp.nodes = resp.nodes.slice(0, 1)
+    await antes.contrastar()
+    eq(antes.raiz.hijos.filter((h) => h.classList.contains('dg-jira')).length, 1, 'la figura buena de antes sigue ahí')
+    eq(avisos(antes).length, 1, 'con el aviso de lo que no volvió')
+    // Un fallo y después el éxito: el aviso viejo no se queda encima de «Según Jira» (D02).
+    const luego = montar({ respuesta: { ok: false, reason: 'red' } })
+    await luego.contrastar()
+    const sano = montar()
+    await sano.api.contrastarConJira(DIAGRAMA, luego.figura, sano.boton)
+    eq([avisos(luego).length, luego.raiz.hijos.length], [0, 2], 'el éxito quita el aviso del fallo anterior de esa figura')
+  }
+  {
+    // Revisión de H25, D08: un nodo abierto con la lectura en vuelo (runPlan apaga
+    // toda la figura y abrirNodoDelDiagrama la vuelve a encender) no enciende
+    // «Contrastar», y un segundo contraste con el primero sin volver no pide nada.
+    const hacerAbrir = new Function('openIssueFromResults', 'state', funcion('async function abrirNodoDelDiagrama(') + '\nreturn abrirNodoDelDiagrama')
+    let soltar
+    const pendiente = new Promise((r) => (soltar = r))
+    const env = montar({ respuesta: pendiente })
+    const acciones = env.figura.appendChild(new Nodo('div'))
+    acciones.className = 'dg-actions nav-actions'
+    const copiar = acciones.appendChild(new Nodo('button'))
+    acciones.appendChild(env.boton)
+    const abrir = hacerAbrir(async (key, { card }) => { for (const b of card.querySelectorAll('button')) b.disabled = true }, env.state)
+    const primera = env.contrastar()
+    await new Promise((r) => setTimeout(r, 0))
+    eq([env.enviados.length, env.boton.disabled], [1, true], 'D08: la primera lectura, en vuelo')
+    await abrir({ kind: 'jira-issue', id: 'ENG-7' }, env.figura)
+    const encendido = !env.boton.disabled
+    const segunda = env.contrastar()
+    await new Promise((r) => setTimeout(r, 0))
+    soltar(RESPUESTA)
+    await primera
+    await segunda
+    eq(
+      [encendido, copiar.disabled, env.enviados.length, env.boton.disabled, env.raiz.hijos.filter((h) => h.classList.contains('dg-jira')).length],
+      [false, false, 1, false, 1],
+      'D08: abrir un nodo enciende «Copiar» y no «Contrastar»; una sola petición, y el botón vuelve al terminar'
+    )
   }
   {
     // Las filas, en los casos que el camino bueno no pasa.
@@ -8614,13 +8719,20 @@ test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibu
 
   // (19) Y el banco: el tramo 66 hace cinco comprobaciones con los módulos
   // reales, y la de SEGURIDAD mira que ENG-999 no llegue a ninguna petición.
+  // EL CAMBIO (revisión de H25, D06): las claves las elige `clavesDelIndice`, la
+  // función del panel, sobre un índice hecho con la fixture (antes el tramo
+  // filtraba por su cuenta y esa comprobación no vigilaba nada de src/), y una
+  // arista común va al revés que en Jira para ejercitar la comparación sin orden.
   const banco = readFileSync(join(ROOT, 'harness/harness.js'), 'utf8')
   const t66 = sinComentarios(corte(banco, '\n    // 66. ', "\n    setSidebar('clasica')\n    renderPage('page:200')"))
   eq((t66.match(/\bok\(/g) || []).length, 5, 'H25: el tramo 66 hace cinco comprobaciones')
   for (const m of ["import('/src/panel/diagram-parse.js'),", "import('/src/panel/diagram-links.js'),", "import('/src/panel/diagram-layout.js'),", "import('/src/panel/diagram-view.js'),"]) {
     una(t66, m, 'H25: el 66 carga los módulos reales')
   }
-  una(t66, 'const claves66 = modelo66.nodes.map((n) => n.ref?.id).filter((k) => k && enLaFixture66.has(k))', 'H25: el 66 manda sólo las claves «del índice» (las de la fixture)')
+  una(t66, 'const indice66 = { issues: Object.fromEntries(FIX.issues.map((i) => [i.key, { key: i.key }])) }', 'H25: el índice del 66, hecho con la fixture')
+  una(t66, 'const claves66 = dgLinks66.clavesDelIndice(modelo66, indice66, jiraRest.JIRA_REST_LIMITS.linkKeys)', 'H25: SEGURIDAD, el 66 deja fuera a ENG-999 con la misma función que el panel, no con un filtro suyo')
+  una(t66, "'  C[ENG-12 Backend de rotación]:::riesgo --> A',", 'H25: una arista común va al revés que en Jira, para que la comparación sin orden se ejercite')
+  assert(!t66.includes('enLaFixture66'), 'H25: sin el filtro propio del banco')
   una(t66, 'const r66 = await jiraRest.fetchIssueLinks(pideApi, sitioJira, claves66)', 'H25: por la API de mentira, con la plantilla fija')
   una(t66, 'dgLinks66.jiraDiagram(modelo66, r66)', 'H25: la comparación real')
   una(t66, "!urls66.some((u) => decodeURIComponent(u).includes('ENG-999')) &&", 'H25: SEGURIDAD, ENG-999 no llega a ninguna petición')

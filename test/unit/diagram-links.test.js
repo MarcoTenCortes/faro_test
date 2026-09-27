@@ -14,7 +14,7 @@
 import { test, eq, assert } from '../harness.js'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { jiraDiagram, resumenJira } from '../../src/panel/diagram-links.js'
+import { jiraDiagram, resumenJira, clavesDelIndice } from '../../src/panel/diagram-links.js'
 import { readFlowchart, toMermaid, validateDiagram, DIAGRAM_LIMITS } from '../../src/panel/diagram-parse.js'
 
 const ROOT = join(import.meta.dirname, '..', '..')
@@ -74,7 +74,7 @@ test('diagrama de Jira: un solo import (la barrera y sus topes) y nada del DOM n
   assert(!/innerHTML|insertAdjacentHTML|outerHTML/.test(codigo), 'y no escribe HTML')
   eq(
     [...codigo.matchAll(/^export (?:function|const) (\w+)/gm)].map((m) => m[1]),
-    ['jiraDiagram', 'resumenJira']
+    ['jiraDiagram', 'clavesDelIndice', 'resumenJira']
   )
   eq(typeof globalThis.document, 'undefined', 'importarlo en Node no ha necesitado un document')
 })
@@ -83,11 +83,11 @@ test('diagrama de Jira: claves EXACTAS del resultado, de la comparación y de ca
   const r = jiraDiagram(modelo(), RESULTADO)
   eq(Object.keys(r), ['diagram', 'comparacion'])
   eq(Object.keys(r.diagram), ['ok', 'direction', 'nodes', 'edges', 'subgraphs', 'errores'])
-  eq(Object.keys(r.comparacion), ['comunes', 'soloModelo', 'soloJira', 'nodos', 'fuera'])
+  eq(Object.keys(r.comparacion), ['comunes', 'soloModelo', 'soloJira', 'nodos', 'fuera', 'recortada'])
   for (const f of [...r.comparacion.comunes, ...r.comparacion.soloJira]) eq(Object.keys(f), ['from', 'to', 'type'])
   for (const f of r.comparacion.soloModelo) eq(Object.keys(f), ['from', 'to', 'label'])
   eq(Object.keys(jiraDiagram(null, null)), ['diagram', 'comparacion'])
-  eq(Object.keys(jiraDiagram(null, null).comparacion), ['comunes', 'soloModelo', 'soloJira', 'nodos', 'fuera'])
+  eq(Object.keys(jiraDiagram(null, null).comparacion), ['comunes', 'soloModelo', 'soloJira', 'nodos', 'fuera', 'recortada'])
 })
 
 test('diagrama de Jira: los nodos son los del modelo en su orden, con su id y su etiqueta, kind vacío y ref recalculado', () => {
@@ -206,10 +206,10 @@ test('diagrama de Jira: con menos de dos incidencias no hay diagrama, pero sí c
   const una = { ...RESULTADO, nodes: [nodo('ENG-7')] }
   const r = jiraDiagram(modelo(), una)
   eq(r.diagram, null)
-  eq(r.comparacion, { comunes: [], soloModelo: [], soloJira: [], nodos: 1, fuera: ['ENG-3', 'ENG-12', 'ENG-20', 'ENG-999'] })
+  eq(r.comparacion, { comunes: [], soloModelo: [], soloJira: [], nodos: 1, fuera: ['ENG-3', 'ENG-12', 'ENG-20', 'ENG-999'], recortada: false })
   eq(jiraDiagram(modelo(), null), {
     diagram: null,
-    comparacion: { comunes: [], soloModelo: [], soloJira: [], nodos: 0, fuera: ['ENG-7', 'ENG-3', 'ENG-12', 'ENG-20', 'ENG-999'] },
+    comparacion: { comunes: [], soloModelo: [], soloJira: [], nodos: 0, fuera: ['ENG-7', 'ENG-3', 'ENG-12', 'ENG-20', 'ENG-999'], recortada: false },
   }, 'sin respuesta, todas fuera')
   eq(jiraDiagram({ ok: false, errores: ['roto'] }, RESULTADO).diagram, null, 'un diagrama del modelo que no vale no da diagrama de Jira')
   for (const basura of [undefined, 'flowchart TD', 7, [], { nodes: 'x' }]) {
@@ -261,6 +261,19 @@ test('diagrama de Jira: nunca más aristas que el tope del diagrama', () => {
   eq(conFuera.diagram.edges.map((e) => `${e.from}>${e.to}:${e.label}`), ['A>B:blocks'], 'las sesenta hacia ENG-25 no se comen el tope')
 })
 
+test('SEGURIDAD: las claves que se contrastan son las del índice: ENG-999 no está y no sale, sin repetir, sólo refs de incidencia y con el tope', () => {
+  const d = modelo(MODELO + '\n  C --> X[ENG-999 No existe]')
+  const indice = { issues: Object.fromEntries(['ENG-7', 'ENG-3', 'ENG-12', 'ENG-20'].map((k) => [k, { key: k }])) }
+  eq(clavesDelIndice(d, indice, 30), ['ENG-7', 'ENG-3', 'ENG-12', 'ENG-20'], 'ENG-999 no está en el índice y no sale')
+  const repetidas = { nodes: [...d.nodes, ...d.nodes, { ref: { kind: 'confluence-page', id: 'ENG-7' } }, { ref: null }, null] }
+  eq(clavesDelIndice(repetidas, indice, 30), ['ENG-7', 'ENG-3', 'ENG-12', 'ENG-20'], 'sin repetir y sólo refs de incidencia')
+  eq(clavesDelIndice({ nodes: [{ ref: { kind: 'confluence-page', id: 'ENG-7' } }] }, indice, 30), [], 'un ref de página no es una incidencia, aunque su id esté en el índice')
+  eq(clavesDelIndice(d, indice, 2), ['ENG-7', 'ENG-3'], 'con el tope, las primeras')
+  eq(clavesDelIndice(d, null, 30), [], 'sin índice, ninguna')
+  eq(clavesDelIndice(null, indice, 30), [], 'sin diagrama, ninguna')
+  eq(clavesDelIndice(d, indice, undefined), [], 'sin tope, ninguna: el tope lo pone quien llama')
+})
+
 test('SEGURIDAD: diagrama de Jira: una clave de la prosa del modelo que Jira no devolvió NO entra, y una que devolvió Jira sin que el modelo la dibujara tampoco', () => {
   const r = {
     ...RESULTADO,
@@ -290,4 +303,45 @@ test('SEGURIDAD: diagrama de Jira: una clave de la prosa del modelo que Jira no 
     errores: [],
   }
   eq(jiraDiagram(aMano, RESULTADO).diagram, null, 'un ref que la etiqueta no respalda no se contrasta')
+})
+
+test('diagrama de Jira: con la lista de Jira RECORTADA no se afirma «Jira no lo tiene», y el resumen dice «al menos»', () => {
+  // B→C lo dibujó el modelo y no está en RESULTADO: entera, es «sólo el modelo».
+  eq(jiraDiagram(modelo(), RESULTADO).comparacion.soloModelo.map((a) => `${a.from}>${a.to}`), ['ENG-3>ENG-12'])
+  // Con `truncated` (fetchIssueLinks), la misma arista queda sin afirmar.
+  const { comparacion } = jiraDiagram(modelo(), { ...RESULTADO, truncated: true })
+  eq(comparacion.soloModelo, [], 'lo que no cupo en la lista de Jira no es «Jira no lo tiene»')
+  eq(comparacion.recortada, true)
+  eq(comparacion.comunes.length + comparacion.soloJira.length, 4, 'lo leído se sigue pintando y comparando')
+  eq(resumenJira(comparacion), 'Según Jira: al menos 4 relaciones entre 4 incidencias · coinciden 3 · sólo Jira 1')
+  // Y el propio tope del diagrama cuenta como recorte.
+  const muchas = Array.from({ length: DIAGRAM_LIMITS.edges + 1 }, (_, i) => rel('ENG-7', 'ENG-3', 'tipo ' + i, 'T' + i, String(i)))
+  const r = jiraDiagram(modelo(), { ...RESULTADO, links: muchas })
+  eq([r.comparacion.recortada, r.comparacion.soloModelo.length], [true, 0])
+  const justas = jiraDiagram(modelo(), { ...RESULTADO, links: muchas.slice(0, DIAGRAM_LIMITS.edges) })
+  eq(justas.comparacion.recortada, false, 'sesenta que caben no son un recorte')
+  // El tope va detrás del dedupe y del conjunto: una repetida o una hacia fuera, después de las sesenta, no lo son.
+  const conSobras = [...muchas.slice(0, DIAGRAM_LIMITS.edges), muchas[0], rel('ENG-7', 'ENG-25', 'blocks', 'Blocks', '99')]
+  eq(jiraDiagram(modelo(), { ...RESULTADO, links: conSobras }).comparacion.recortada, false, 'una repetida o una que sale del conjunto no es un recorte')
+})
+
+test('diagrama de Jira: dos nodos del modelo con la misma clave unidos entre sí no son una diferencia', () => {
+  const { comparacion } = jiraDiagram(modelo(MODELO + '\n  A --> G[ENG-7 otra vez la misma]'), RESULTADO)
+  eq(comparacion.soloModelo, [{ from: 'ENG-3', to: 'ENG-12', label: '' }], 'A→G es ENG-7→ENG-7: un bucle, no una relación entre dos')
+})
+
+test('diagrama de Jira: dos flechas del modelo del mismo par con etiquetas distintas son dos diferencias', () => {
+  const src = 'flowchart LR\n  A[ENG-7 uno] -->|bloquea| B[ENG-3 dos]\n  A -->|depende de| B'
+  const { comparacion } = jiraDiagram(modelo(src), { ...RESULTADO, links: [] })
+  eq(comparacion.soloModelo, [
+    { from: 'ENG-7', to: 'ENG-3', label: 'bloquea' },
+    { from: 'ENG-7', to: 'ENG-3', label: 'depende de' },
+  ], 'la misma diferencia dos veces se dice una; dos distintas, dos')
+})
+
+test('diagrama de Jira: A blocks B y B blocks A son dos aristas, una en cada sentido', () => {
+  const ciclo = { ...RESULTADO, links: [rel('ENG-7', 'ENG-3', 'blocks', 'Blocks', '1'), rel('ENG-3', 'ENG-7', 'blocks', 'Blocks', '2')] }
+  const { diagram, comparacion } = jiraDiagram(modelo(), ciclo)
+  eq(diagram.edges.map((e) => `${e.from}>${e.to}:${e.label}`), ['A>B:blocks', 'B>A:blocks'], 'un ciclo de Jira no se funde: el sentido es de Jira')
+  eq(comparacion.comunes.length, 2)
 })

@@ -856,7 +856,11 @@ Junto al selector de modelo, abajo, hay otras dos cosas:
   dibujó ENG-20 → ENG-3 y Jira no lo tiene», «Jira tiene ENG-7 blocks ENG-3 y
   el modelo no lo dibujó», o «Coinciden todas»; si alguna incidencia no se pudo
   contrastar, «Sin contrastar: ENG-1». La comparación no mira el sentido de
-  la flecha (el modelo no lo distingue y Jira sí). **Qué lee y qué no**: sólo
+  la flecha: una flecha del flujo no dice qué sentido de la relación quiere
+  decir (ENG-7 → ENG-3 puede ser «bloquea a» o «depende de»); el de Jira se
+  ve en su diagrama. Si Jira tiene más relaciones de las que caben en una
+  lectura (60), el resumen dice «Según Jira: al menos N relaciones…» y no se
+  afirma que Jira no tenga lo que el modelo dibujó. **Qué lee y qué no**: sólo
   las claves del diagrama que ya estaban en el mapa (las que salieron de una
   búsqueda o de una lectura de Jira, nunca las que el modelo escribió sin
   más), y de cada una sus relaciones, su resumen, su tipo y su estado; nada de
@@ -864,10 +868,17 @@ Junto al selector de modelo, abajo, hay otras dos cosas:
   el panel el segundo diagrama ya no está, y se vuelve a contrastar a demanda.
   **Cuándo no sale el botón**: en Jira Cloud (allí no hay API de Jira, todo va
   por el MCP), en Confluence, con esa casilla de Ajustes apagada o con menos de dos
-  incidencias del mapa. Si algo falla, lo dice bajo el diagrama («Sin acceso a
-  la pestaña de Jira», «Hacen falta al menos dos incidencias del índice para
-  contrastar», la sesión caducada o lo que respondió Jira) y queda en el
-  registro como «Relaciones de Jira».
+  incidencias del mapa. Si algo falla, lo dice bajo el diagrama cada vez que
+  lo pulses, sustituyendo el aviso anterior («Sin acceso a la pestaña de
+  Jira», «Hacen falta al menos dos incidencias del índice para contrastar»,
+  «Jira sólo ha devuelto 1 de las 3 incidencias pedidas (sin contrastar:
+  ENG-3, ENG-12): una incidencia movida de proyecto vuelve con otra clave.»,
+  la sesión caducada o lo que respondió Jira), deja el diagrama «Según Jira»
+  anterior donde estaba y queda en el registro como «Relaciones de Jira»; si
+  luego sale bien, el aviso se quita. Una incidencia del mapa que ya no existe
+  en Jira no tumba el contraste: Jira DC rechaza la consulta entera, Faro la
+  repite UNA vez sin esa clave (si quedan dos o más) y la deja en «Sin
+  contrastar».
 
 - **Búsquedas al instante** — en un **Jira propio (Data Center)**, con el chat
   vacío, bajo las tres sugerencias hay hasta cuatro pastillas: «Misma épica
@@ -1375,7 +1386,7 @@ de modelo.
 
 `npm run harness` levanta en <http://127.0.0.1:5175> una Confluence y un Jira de
 mentira con las piezas reales encima. El botón **Autocomprobación completa**
-recorre hoy **66 tramos numerados (148 comprobaciones)**; hay que correrla con el panel del navegador a
+recorre hoy **66 tramos numerados (149 comprobaciones)**; hay que correrla con el panel del navegador a
 la vista y a 1280×900, porque con la ventana oculta Chrome estrangula los
 temporizadores y no ejecuta los fotogramas.
 
@@ -1385,14 +1396,19 @@ mentira tiene ahora relaciones de verdad entre incidencias (`issueLinks` de
 «relates to» ENG-12, ENG-12 «blocks» ENG-20, más dos que salen del conjunto,
 ENG-20 → ENG-25 y OPS-2 → ENG-12), y la API falsa entiende `issuekey in (ENG-7,
 ENG-3, …)` con una lista de claves y devuelve `fields=issuelinks` con la forma
-de la API v2 (`outwardIssue` en un extremo, `inwardIssue` en el otro). El 65
-(seis comprobaciones) lee esas relaciones con el módulo real: las exactas de la
-fixture en UNA petición de plantilla, las claves validadas y sin repetir, nada
-pedido con menos de dos claves o en Cloud, la sesión caducada dicha como tal, y
-la relación con un extremo que no se pidió, fuera. El 66 (cinco) hace lo que
-hace el panel al pulsar el botón, con los módulos reales del diagrama: un
-diagrama del modelo con cuatro incidencias y una que no existe (ENG-999), la
-lectura con sólo las claves conocidas, el diagrama «Según Jira» con los nodos
+de la API v2 (`outwardIssue` en un extremo, `inwardIssue` en el otro); una
+clave que no está en la fixture es un 400 con un mensaje por clave, como
+contesta un Jira Data Center. El 65 (siete comprobaciones) lee esas relaciones
+con el módulo real: las exactas de la fixture en UNA petición de plantilla, las
+claves validadas y sin repetir, nada pedido con menos de dos claves o en Cloud,
+la sesión caducada dicha como tal, la relación con un extremo que no se pidió,
+fuera, y (desde la revisión adversaria de H25) una clave que Jira no tiene: el
+400, UN reintento sin ella y las relaciones de las demás. El 66 (cinco) hace lo
+que hace el panel al pulsar el botón, con los módulos reales del diagrama: un
+diagrama del modelo con cuatro incidencias y una que no existe (ENG-999), las
+claves que deja pasar la misma función que el panel (`clavesDelIndice`) sobre
+un índice hecho con la fixture, una arista dibujada al revés que en Jira (que
+la comparación sin orden cuenta como común), el diagrama «Según Jira» con los nodos
 del modelo y las flechas de Jira, su ida y vuelta por Mermaid, la figura con
 tantas cajas como claves y tantas flechas como relaciones, y que ENG-999 no
 llega a ninguna petición.
@@ -1788,11 +1804,15 @@ corto y un detalle. Todos los títulos, por dónde salen:
   pie de la figura «Según Jira» («Según Jira: 3 relaciones entre 4 incidencias
   · coinciden 2 · sólo el modelo 1 · sólo Jira 1», o «sin relaciones en Jira
   entre N incidencias») y lo que tardó, en ms. **No leídas** (en amarillo):
-  «<motivo> · <frase>», el código del fallo (`cloud`, `claves`, `sesion`,
-  `jql`, `permiso`, `red`, `api`, `forma`, `apagado`…) y la misma frase que
-  sale bajo el diagrama («Hacen falta al menos dos incidencias del índice para
-  contrastar», «Sin acceso a la pestaña de Jira», lo que dijo Jira de la
-  consulta…); si el mismo motivo ya se dijo en esta sesión, sólo queda aquí.
+  «<motivo> · <frase>», el código del fallo (`cloud`, `claves`, `devueltas`,
+  `sesion`, `jql`, `permiso`, `red`, `api`, `forma`, `apagado`…) y la misma
+  frase que sale bajo el diagrama («Hacen falta al menos dos incidencias del
+  índice para contrastar», «Jira sólo ha devuelto 1 de las 3 incidencias
+  pedidas (sin contrastar: ENG-3, ENG-12): una incidencia movida de proyecto
+  vuelve con otra clave.», «Sin acceso a la pestaña de Jira», lo que dijo Jira
+  de la consulta…); bajo el diagrama sale cada vez que lo pulsas, sustituyendo
+  al anterior (desde la revisión adversaria de H25 no hay tregua: el clic es
+  tuyo).
   **Descartadas** (en gris): «lo leído de <host> llegó con el diagrama
   repintado o el panel en otro sitio», la respuesta llegó cuando la figura ya
   no estaba (el chat se repintó) o el panel había cambiado de sitio o de

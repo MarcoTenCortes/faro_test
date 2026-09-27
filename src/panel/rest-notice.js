@@ -68,19 +68,29 @@ export function jqlFailText(r, host) {
 /**
  * Por qué no se pudieron contrastar las relaciones de un diagrama con Jira (H25),
  * en palabras del usuario. Mismo contrato que `jqlFailText`: el `reason` es un
- * código de `jira-rest.js` (o `'permiso'`/`'claves'`, que pone el panel antes de
- * pedir) y `messages` son del servidor, que se enseñan y no se interpretan.
+ * código de `jira-rest.js` (o `'permiso'`/`'claves'`/`'devueltas'`, que pone el
+ * panel: los dos primeros antes de pedir; `devueltas`, con `devueltas`,
+ * `pedidas` y `fuera`, cuando Jira devuelve menos de dos de las pedidas) y
+ * `messages` son del servidor, que se enseñan y no se interpretan.
  *
  * Un 400 aquí no es una consulta escrita por nadie —es la plantilla
  * `linksJql`—, así que lo que diga el servidor es lo único que explica qué pasó
  * (en un Jira Data Center, una clave que ya no existe hace fallar la consulta
- * entera): se enseña tal cual.
+ * entera, y `fetchIssueLinks` reintenta UNA vez sin las claves pedidas que el
+ * servidor cite: aquí sólo se llega si el reintento no basta): se enseña tal
+ * cual. Un 200 con menos incidencias de las pedidas no es una clave borrada
+ * (eso es este 400) sino, en la práctica, una movida de proyecto, que vuelve
+ * con su clave nueva: lo dice 'devueltas' (revisión de H25, D03).
  */
 export function linksFailText(r, host) {
   const reason = String(r?.reason || '')
   if (!r || reason === 'red') return `No he podido leer las relaciones de Jira (${r?.detail || 'sin respuesta'}).`
   if (reason === 'cloud') return 'En Jira Cloud no leo relaciones por la API (todo va por el MCP).'
   if (reason === 'claves') return 'Hacen falta al menos dos incidencias del índice para contrastar.'
+  if (reason === 'devueltas') {
+    const sin = (Array.isArray(r.fuera) ? r.fuera : []).filter((k) => typeof k === 'string' && k).join(', ')
+    return `Jira sólo ha devuelto ${Number(r.devueltas) || 0} de las ${Number(r.pedidas) || 0} incidencias pedidas${sin ? ` (sin contrastar: ${sin})` : ''}: una incidencia movida de proyecto vuelve con otra clave.`
+  }
   // La sesión se arregla igual la lea quien la lea: la misma frase que la lista.
   if (reason === 'sesion') return jqlFailText(r, host)
   if (reason === 'permiso') return 'Sin acceso a la pestaña de Jira.'

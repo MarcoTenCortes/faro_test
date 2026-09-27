@@ -4774,12 +4774,38 @@ const actions = {
       `la API trae ENG-20 → ENG-25: ${traeFuera65} · leídas ${vistas65(leido65).join(' | ')} · con ENG-25 pedida: ${vistas65(conFantasma65).length} relaciones, nodos ${(conFantasma65?.nodes || []).map((n) => n.key).join(',')}`
     )
 
+    //     Una clave del índice que Jira no tiene (cosechada de un «ver
+    //     ENG-999») tumba la consulta ENTERA con un 400 en un Data Center, un
+    //     mensaje por clave (visto en el de Marco, revisión de H25, D01), y la
+    //     Jira de mentira contesta igual. `fetchIssueLinks` reintenta UNA vez
+    //     sin las claves PEDIDAS que el mensaje cita: dos peticiones, la
+    //     segunda sin ENG-999, y las relaciones de las otras dos.
+    const antesAusente65 = pedidasRest.length
+    const ausente65 = await jiraRest.fetchIssueLinks(pideApi, sitioJira, ['ENG-7', 'ENG-3', 'ENG-999'])
+    const urlsAusente65 = pedidasRest.slice(antesAusente65).map((u) => decodeURIComponent(/[?&]jql=([^&]*)/.exec(u)?.[1] || ''))
+    ok(
+      'relaciones de Jira: una clave que Jira no tiene da un 400 y se reintenta UNA vez sin ella, con las relaciones de las demás',
+      ausente65.ok &&
+        urlsAusente65.length === 2 &&
+        urlsAusente65[0] === 'issuekey in (ENG-7, ENG-3, ENG-999)' &&
+        urlsAusente65[1] === 'issuekey in (ENG-7, ENG-3)' &&
+        (ausente65.nodes || []).map((n) => n.key).join(',') === 'ENG-7,ENG-3' &&
+        vistas65(ausente65).join(' | ') === esperadas65(['ENG-7', 'ENG-3']).join(' | ') &&
+        esperadas65(['ENG-7', 'ENG-3']).join(' | ') === 'ENG-7 blocks ENG-3 (Blocks, 20001)',
+      ausente65.ok ? `${urlsAusente65.join(' → ')} · ${vistas65(ausente65).join(' | ')}` : `${ausente65.reason} · ${(ausente65.messages || []).join(' · ')} · ${urlsAusente65.join(' → ')}`
+    )
+
     // 66. El diagrama «Según Jira» (H25b, docs/plan/handoff/h25-contrato.md §2
     //     y §3): lo que hace `contrastarConJira` del panel, con los módulos
     //     REALES. Un diagrama del modelo leído por `readFlowchart` con cuatro
     //     incidencias de la fixture y una que no existe (ENG-999); se mandan
-    //     sólo las claves del índice —aquí, las que están en la fixture, que
-    //     es lo que el panel tendría cosechado—; `fetchIssueLinks` contra la
+    //     sólo las claves del índice, elegidas por `clavesDelIndice`, la MISMA
+    //     función del panel (`clavesParaContrastar` delega en ella), sobre un
+    //     índice hecho con la fixture, que es lo que el panel tendría
+    //     cosechado (revisión de H25, D06: antes el tramo filtraba por su
+    //     cuenta y su comprobación de SEGURIDAD no vigilaba nada de src/);
+    //     una arista común (C --> A) va al revés que en Jira, para que la
+    //     comparación sin orden se ejercite de verdad; `fetchIssueLinks` contra la
     //     Jira de mentira; `jiraDiagram` con esa respuesta; y la figura con el
     //     layout y la vista del panel. panel.js necesita `chrome.*` y no se
     //     puede cargar aquí: su cableado lo pina panel-wiring.test.js.
@@ -4792,14 +4818,15 @@ const actions = {
     const modelo66 = dgParse66.readFlowchart(
       [
         'flowchart LR',
-        '  A[ENG-7 Definir la API de rotación] --> C[ENG-12 Backend de rotación]:::riesgo',
+        '  A[ENG-7 Definir la API de rotación]',
+        '  C[ENG-12 Backend de rotación]:::riesgo --> A',
         '  C --> D["ENG-20 ¿Quién revoca la clave vieja? [1]"]:::hueco',
         '  B[ENG-3 Tokens de 90 días] -.->|contradice| D',
         '  D --> X[ENG-999 Una clave que la fixture no tiene]',
       ].join('\n')
     )
-    const enLaFixture66 = new Set(FIX.issues.map((i) => i.key))
-    const claves66 = modelo66.nodes.map((n) => n.ref?.id).filter((k) => k && enLaFixture66.has(k))
+    const indice66 = { issues: Object.fromEntries(FIX.issues.map((i) => [i.key, { key: i.key }])) }
+    const claves66 = dgLinks66.clavesDelIndice(modelo66, indice66, jiraRest.JIRA_REST_LIMITS.linkKeys)
     const antes66 = pedidasRest.length
     const r66 = await jiraRest.fetchIssueLinks(pideApi, sitioJira, claves66)
     const urls66 = pedidasRest.slice(antes66)

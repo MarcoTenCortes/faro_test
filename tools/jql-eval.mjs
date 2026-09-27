@@ -25,7 +25,9 @@
  *
  * DESDE H25 SABE DE RELACIONES. La plantilla `linksJql` de jira-rest.js escribe
  * `issuekey in (K1, K2, …)`, así que `key`/`issue`/`issuekey in (…)` admite una
- * LISTA de claves (cada una con forma de clave; vacía o con basura, 400). Y con
+ * LISTA de claves (cada una con forma de clave; vacía o con basura, 400; y una
+ * que no está en la fixture, 400 con UN mensaje por clave, como un Data Center:
+ * revisión de H25, D01). Y con
  * `fields=issuelinks` cada incidencia trae sus relaciones con la forma de la API
  * v2 —`{id, type:{id, name, inward, outward}, outwardIssue|inwardIssue}`—
  * sacadas del `issueLinks` DIRIGIDO de la fixture: `outwardIssue` en la de
@@ -530,6 +532,10 @@ export function runJql(issues, jql, { user = '', catalog = null } = {}) {
   // traducido es un 400, no una lista vacía.
   const rechazo = valorNoAdmitido(p.filtro, catalog)
   if (rechazo) return error(rechazo)
+  // Y valida las claves de `issuekey in (…)`: una que no existe es un 400 con
+  // UN mensaje por clave (visto en el Jira DC de Marco, 2026-09-27).
+  const ausentes = clavesAusentes(p.filtro, new Set(lista.map((x) => String(x.key).toUpperCase())))
+  if (ausentes.length) return { ok: false, errorMessages: ausentes }
   const clave = buscarLinked(p.filtro)
   const contexto = { user, catalogo: catalog, enlazadas: clave ? enlazadas(lista, clave) : new Set() }
   const out = []
@@ -547,6 +553,14 @@ function buscarLinked(nodo) {
   if (nodo.clase === 'and' || nodo.clase === 'or') return buscarLinked(nodo.izq) || buscarLinked(nodo.der)
   if (nodo.clase === 'en' && nodo.funcion.nombre === 'linkedissues') return nodo.funcion.args[0] || ''
   return ''
+}
+
+/** Los mensajes de Jira por cada clave de una lista `in (…)` que no está. */
+function clavesAusentes(nodo, existen) {
+  if (!nodo) return []
+  if (nodo.clase === 'and' || nodo.clase === 'or') return [...clavesAusentes(nodo.izq, existen), ...clavesAusentes(nodo.der, existen)]
+  if (nodo.clase !== 'claves') return []
+  return nodo.claves.filter((k) => !existen.has(k)).map((k) => `An issue with key '${k}' does not exist for field '${nodo.campo}'.`)
 }
 
 // ------------------------------------------------- la respuesta, con su forma

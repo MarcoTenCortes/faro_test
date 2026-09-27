@@ -71,6 +71,11 @@ test('jqlFailText: el motivo en palabras del usuario, con lo que dijo el SERVIDO
 test('H25: linksFailText — por qué no se contrastó el diagrama con Jira, por motivo', () => {
   eq(linksFailText({ ok: false, reason: 'cloud' }, HOST), 'En Jira Cloud no leo relaciones por la API (todo va por el MCP).')
   eq(linksFailText({ ok: false, reason: 'claves' }, HOST), 'Hacen falta al menos dos incidencias del índice para contrastar.')
+  // Jira devolvió menos de dos de las pedidas (revisión de H25, D03): cuántas y cuáles
+  // no volvieron, sin culpar al índice; lo que no es una clave no se enseña.
+  eq(linksFailText({ reason: 'devueltas', devueltas: 1, pedidas: 3, fuera: ['ENG-12', 'ENG-20'] }, HOST), 'Jira sólo ha devuelto 1 de las 3 incidencias pedidas (sin contrastar: ENG-12, ENG-20): una incidencia movida de proyecto vuelve con otra clave.')
+  eq(linksFailText({ reason: 'devueltas', devueltas: 0, pedidas: 2, fuera: [] }, HOST), 'Jira sólo ha devuelto 0 de las 2 incidencias pedidas: una incidencia movida de proyecto vuelve con otra clave.')
+  eq(linksFailText({ reason: 'devueltas', devueltas: 1, pedidas: 2, fuera: ['ENG-9', 7, '', null] }, HOST), 'Jira sólo ha devuelto 1 de las 2 incidencias pedidas (sin contrastar: ENG-9): una incidencia movida de proyecto vuelve con otra clave.')
   eq(linksFailText({ ok: false, reason: 'sesion', status: 401 }, HOST), jqlFailText({ ok: false, reason: 'sesion' }, HOST), 'la sesión, con la frase de la lista')
   eq(linksFailText({ ok: false, reason: 'sesion' }, HOST), `Tu sesión de ${HOST} no vale para su API: recarga la pestaña y vuelve a entrar.`)
   eq(linksFailText({ ok: false, reason: 'permiso' }, HOST), 'Sin acceso a la pestaña de Jira.')
@@ -89,8 +94,4 @@ test('H25: linksFailText — por qué no se contrastó el diagrama con Jira, por
   eq(linksFailText({ ok: false, reason: 'consulta no permitida' }, HOST), 'No he podido leer las relaciones de Jira (consulta no permitida).')
   eq(linksFailText({ ok: false, reason: 'forma', detail: 'la respuesta de la API no tiene la forma esperada' }, HOST), 'No he podido leer las relaciones de Jira (la respuesta de la API no tiene la forma esperada).')
   eq(linksFailText({ ok: false }, HOST), 'No he podido leer las relaciones de Jira (sin motivo).')
-  // Y la tregua es la de siempre, con el motivo tal cual.
-  const avisado = new Set()
-  eq(restFailureDue(avisado, 'claves', HOST, 'ses_1'), true)
-  eq(restFailureDue(avisado, 'claves', HOST, 'ses_1'), false)
 })

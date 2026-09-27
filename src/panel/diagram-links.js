@@ -25,10 +25,11 @@
  * `validateDiagram` de la etiqueta, que empieza por la clave: el nodo sigue
  * navegando como en el del modelo.
  *
- * El modelo no distingue el sentido de una relación y Jira sí («A bloquea a B»
- * frente a «B está bloqueada por A» es UNA relación con sentido), así que la
- * comparación va por PARES SIN ORDEN: una flecha A → B del modelo coincide con
- * una relación B → A de Jira.
+ * Una flecha del flujo que dibuja el modelo no dice qué sentido de la relación
+ * de Jira quiere decir (A → B puede ser «A bloquea a B» o «A depende de B»),
+ * así que la comparación va por PARES SIN ORDEN: una flecha A → B del modelo
+ * coincide con una relación B → A de Jira; el sentido de Jira se ve en su
+ * diagrama (revisión adversaria de H25, D05).
  *
  * Puro: no toca DOM ni chrome; nunca lanza. Un solo import, el de la barrera
  * (`validateDiagram`) y sus topes (`DIAGRAM_LIMITS`), que tienen dueño.
@@ -45,7 +46,7 @@ const lista = (v) => (Array.isArray(v) ? v : [])
 /**
  * El diagrama de Jira y la comparación con el del modelo.
  *
- * `comparacion` = `{ comunes, soloModelo, soloJira, nodos, fuera }`:
+ * `comparacion` = `{ comunes, soloModelo, soloJira, nodos, fuera, recortada }`:
  * - `comunes`: las relaciones de Jira `[{ from, to, type }]` (claves, en el
  *   sentido de Jira) cuyo par también dibujó el modelo;
  * - `soloModelo`: las aristas del modelo `[{ from, to, label }]` (claves, en el
@@ -53,12 +54,16 @@ const lista = (v) => (Array.isArray(v) ? v : [])
  * - `soloJira`: las relaciones de Jira `[{ from, to, type }]` sin par en el
  *   modelo;
  * - `nodos`: cuántas incidencias entran (las del modelo que Jira devolvió);
- * - `fuera`: las claves del modelo que Jira NO devolvió (sin índice o sin
- *   permiso), en el orden del modelo.
+ * - `fuera`: las claves del modelo que Jira NO devolvió (sin índice, sin
+ *   permiso o que Jira no reconoce), en el orden del modelo;
+ * - `recortada`: la lista de Jira no entró entera (`truncated` de
+ *   `fetchIssueLinks`, o el tope de aristas del diagrama): entonces
+ *   `soloModelo` va vacío, porque «Jira no lo tiene» no se puede afirmar de lo
+ *   que no cupo, y el resumen dice «al menos» (revisión adversaria de H25, D04).
  * `comunes.length + soloJira.length` son las aristas del diagrama.
  *
  * @param {object} modelDiagram el diagrama del modelo (`readFlowchart`)
- * @param {{nodes?: object[], links?: object[]}} result lo que devuelve `fetchIssueLinks`
+ * @param {{nodes?: object[], links?: object[], truncated?: boolean}} result lo que devuelve `fetchIssueLinks`
  * @returns {{diagram: object|null, comparacion: object}} `diagram` ya validado (`ok: true`), o null con menos de dos incidencias
  */
 export function jiraDiagram(modelDiagram, result) {
@@ -92,10 +97,12 @@ export function jiraDiagram(modelDiagram, result) {
   // Las relaciones de Jira entre dos claves del conjunto, sin repetir la misma
   // (mismo sentido y mismo tipo) y con el tope de aristas: dos relaciones de
   // tipo distinto entre los mismos nodos son dos aristas (el layout las separa).
+  // El tope va DETRÁS del dedupe: sólo una relación válida y nueva que no cabe
+  // es un recorte, y lo dice `recortada`.
   const aristas = []
   const vistas = new Set()
+  let recortada = result?.truncated === true
   for (const link of lista(result?.links)) {
-    if (aristas.length >= DIAGRAM_LIMITS.edges) break
     const from = link?.from
     const to = link?.to
     if (!idDe.has(from) || !idDe.has(to) || from === to) continue
@@ -103,6 +110,10 @@ export function jiraDiagram(modelDiagram, result) {
     const firma = `${from}|${to}|${type}`
     if (vistas.has(firma)) continue
     vistas.add(firma)
+    if (aristas.length >= DIAGRAM_LIMITS.edges) {
+      recortada = true
+      continue
+    }
     aristas.push({ from: idDe.get(from), to: idDe.get(to), label: type, style: 'solid', arrow: 'arrow' })
   }
 
@@ -137,14 +148,42 @@ export function jiraDiagram(modelDiagram, result) {
     if (!from || !to || from === to) continue
     const p = par(from, to)
     paresDelModelo.add(p)
-    if (paresDeJira.has(p) || yaDichas.has(`${p}|${e.label}`)) continue
+    // Con la lista de Jira recortada, «Jira no lo tiene» no se puede afirmar.
+    if (recortada || paresDeJira.has(p) || yaDichas.has(`${p}|${e.label}`)) continue
     yaDichas.add(`${p}|${e.label}`)
     soloModelo.push({ from, to, label: e.label })
   }
   const comunes = jira.filter((r) => paresDelModelo.has(par(r.from, r.to)))
   const soloJira = jira.filter((r) => !paresDelModelo.has(par(r.from, r.to)))
 
-  return { diagram, comparacion: { comunes, soloModelo, soloJira, nodos: nodos.length, fuera } }
+  return { diagram, comparacion: { comunes, soloModelo, soloJira, nodos: nodos.length, fuera, recortada } }
+}
+
+/**
+ * Las claves de un diagrama del modelo que se pueden mandar a Jira: las de sus
+ * nodos con `ref` de incidencia que YA están en el índice (cosechadas por M4,
+ * nunca de la prosa), sin repetir, en el orden del diagrama y con el tope que
+ * pone quien llama (`JIRA_REST_LIMITS.linkKeys`, que tiene dueño: por eso es
+ * un parámetro y no un import). Una clave que el modelo escribió y el índice
+ * no tiene no sale (§8.27). Pura: la usan el panel (`clavesParaContrastar`) y
+ * el tramo 66 del banco, que así ejercita la misma barrera (revisión
+ * adversaria de H25, D06).
+ *
+ * @param {object} diagrama el del modelo (`readFlowchart`)
+ * @param {{issues?: object}|null} indice el índice del sitio
+ * @param {number} tope cuántas como mucho
+ * @returns {string[]}
+ */
+export function clavesDelIndice(diagrama, indice, tope) {
+  const max = Number.isInteger(tope) && tope > 0 ? tope : 0
+  const claves = []
+  for (const n of lista(diagrama?.nodes)) {
+    if (claves.length >= max) break
+    const clave = n?.ref?.kind === 'jira-issue' ? n.ref.id : ''
+    if (!clave || claves.includes(clave) || !indice?.issues?.[clave]) continue
+    claves.push(clave)
+  }
+  return claves
 }
 
 const cuantas = (n, una, varias) => `${n} ${n === 1 ? una : varias}`
@@ -153,6 +192,7 @@ const cuantas = (n, una, varias) => `${n} ${n === 1 ? una : varias}`
  * El resumen de una comparación, para el pie de la figura, el anuncio y el
  * registro: «Según Jira: 3 relaciones entre 4 incidencias · coinciden 2 ·
  * sólo el modelo 1 · sólo Jira 1». «sólo el modelo» y «sólo Jira», sólo si hay.
+ * Con la lista de Jira `recortada`, «Según Jira: al menos N relaciones…».
  *
  * @param {object} comparacion la de `jiraDiagram`
  * @returns {string}
@@ -165,7 +205,7 @@ export function resumenJira(comparacion) {
   const relaciones = comunes + soloJira
   const entre = cuantas(nodos, 'incidencia', 'incidencias')
   const partes = relaciones
-    ? [`Según Jira: ${cuantas(relaciones, 'relación', 'relaciones')} entre ${entre}`, `coinciden ${comunes}`]
+    ? [`Según Jira: ${comparacion?.recortada === true ? 'al menos ' : ''}${cuantas(relaciones, 'relación', 'relaciones')} entre ${entre}`, `coinciden ${comunes}`]
     : [`Según Jira: sin relaciones en Jira entre ${entre}`]
   if (soloModelo) partes.push(`sólo el modelo ${soloModelo}`)
   if (soloJira) partes.push(`sólo Jira ${soloJira}`)

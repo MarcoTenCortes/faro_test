@@ -604,7 +604,9 @@ Veintiuna decisiones que sostienen el diseño:
      de tu Jira —con tu sesión, sin el modelo y sin un token— las relaciones
      de verdad entre ellas («blocks», «relates to»…) y dibuja debajo un segundo
      diagrama, «Según Jira», con las mismas cajas y las flechas de Jira, un
-     resumen y, en texto, lo que el modelo dibujó y Jira no tiene y al revés.
+     resumen y, en texto, lo que el modelo dibujó y Jira no tiene y al revés
+     (si Jira tiene más de las que caben en una lectura, dice «al menos» y no
+     afirma que falte nada). Si algo falla, lo dice bajo el diagrama cada vez.
      Sólo viajan claves del mapa, nunca una consulta; lo leído se pinta y no
      vuelve al modelo ni se guarda. En Jira Cloud y en Confluence no hay botón.
    - **El chat vacío ofrece hasta cuatro búsquedas al instante.** «Misma épica
@@ -783,7 +785,7 @@ cuáles no), que desde H16 son tuyos y no de un sitio.
 ## Comprobaciones
 
 ```bash
-npm run check              # sintaxis + orden + manifest + 1635 pruebas unitarias + docs
+npm run check              # sintaxis + orden + manifest + 1642 pruebas unitarias + docs
 npm run check:docs         # sólo el paso docs: número de pruebas, títulos del registro, mensajes y ficheros del mapa
 npm run test:integration   # contra un opencode real que arranca la propia prueba
 npm run harness            # banco de pruebas visual en http://127.0.0.1:5175
@@ -952,8 +954,10 @@ Con el banco levantado hay dos páginas:
   tiene dirigidas y con su tipo, la API falsa entiende `issuekey in (ENG-7,
   ENG-3, …)` con una lista de claves y devuelve `fields=issuelinks` como la de
   verdad, y dos tramos (65 y 66) comprueban que «Contrastar con Jira» lee las
-  exactas en una petición, que con menos de dos claves no pide nada y que una
-  clave que el modelo escribió y no existe no llega a pedirse.
+  exactas en una petición, que con menos de dos claves no pide nada, que una
+  clave que Jira no tiene (un 400 en un Data Center) se quita y se pide UNA vez
+  más sin ella, y que una clave que el modelo escribió y no está en el mapa no
+  llega a pedirse (con la misma función que usa el panel).
   Lo último es de seguridad: ninguna de esas lecturas sale del sitio, y una
   consulta que no salga de una plantilla no llega a pedirse.
 
@@ -1427,13 +1431,13 @@ src/
     source-history.js       qué páginas base usaste para analizar qué: el historial local que permite volver a proponerlas (puro + su almacén)
     references.js           las páginas que el contexto del sitio nombra como guía, plantilla o decisión, con su papel (puro)
     source-suggest.js       qué páginas base proponer y por qué, sin preguntarle al modelo (puro)
-    rest-notice.js          cuándo se te avisa de que una lectura de la API no salió (una vez por sitio, sesión y motivo) y con qué palabras, también las de «Contrastar con Jira» (puro)
+    rest-notice.js          cuándo se te avisa de que una lectura de la API no salió (una vez por sitio, sesión y motivo) y con qué palabras, también las de «Contrastar con Jira», que salen cada vez que lo pulsas (puro)
     search-chips.js         las búsquedas al instante: qué consultas se ofrecen y cuáles ejecuta Faro (puro)
     notes.js                observaciones numeradas: el bloque JSON de anclas, su validación, la segunda pasada (puro)
     diagram-parse.js        el diagrama Mermaid que escribe el modelo, leído con claves blancas; y copiarlo como Mermaid (puro, H24)
     diagram-layout.js       dónde va cada caja y cada flecha del diagrama (puro, H24)
     diagram-view.js         el diagrama pintado en SVG, sin innerHTML: nodos que abren su incidencia, «Ver como lista» (H24)
-    diagram-links.js        el diagrama «Según Jira»: las relaciones reales de Jira con los nodos del modelo, y qué coincide y qué no (puro, H25)
+    diagram-links.js        el diagrama «Según Jira»: las relaciones reales de Jira con los nodos del modelo, qué coincide y qué no, y qué claves del diagrama se pueden pedir: las del mapa (clavesDelIndice) (puro, H25)
     issue-profile.js        qué ticket es: tipo y estado leídos de sus campos → qué comprobar en el análisis (puro)
     prompts.js              plantillas, incluido el bloque de lo señalado y la página en bloques
   background/               orquestador del recorrido paso a paso
@@ -1458,7 +1462,7 @@ src/
   nav/                      esquema NavigationPlan y su validación
   shared/
     rest-get.js             la única puerta por la que Faro lee una API REST: sólo GET, sólo al mismo sitio, con tope de tiempo y sin lanzar nunca (puro)
-    jira-rest.js            lo que la API del propio Jira da exacto: consultas de plantilla, filas con claves blancas, el perfil contado de un proyecto (desde H22 uno por proyecto dentro del host: normalizeProfiles, withProfile) las búsquedas sugeridas y, desde H25, las relaciones reales entre las incidencias de un diagrama (linksJql, fetchIssueLinks); en Jira Cloud no pide nada (puro)
+    jira-rest.js            lo que la API del propio Jira da exacto: consultas de plantilla, filas con claves blancas, el perfil contado de un proyecto (desde H22 uno por proyecto dentro del host: normalizeProfiles, withProfile) las búsquedas sugeridas y, desde H25, las relaciones reales entre las incidencias de un diagrama (linksJql, fetchIssueLinks, que repite UNA vez sin la clave que Jira dice no tener); en Jira Cloud no pide nada (puro)
     confluence-rest.js      el árbol y la búsqueda de páginas por la API REST del sitio, con tu sesión; lo último que viste y el árbol entero de un espacio, paginado (puro)
     digest.js               cómo se enseñan los bloques y cómo se reconoce uno después (puro)
     config.js               ajustes por defecto y su migración (el modelo es de la persona); el plazo de la sonda de «Comprobar»; NAV_TIMING, el único sitio con los tiempos de la navegación; los topes de la eficiencia (cuántos mensajes se piden al restaurar, cuándo se avisa de una conversación pesada); y la lista de lo que Faro guarda, con el área del navegador en la que vive cada cosa
@@ -1473,7 +1477,7 @@ harness/                    Confluence y Jira de mentira para pruebas visuales; 
 test/                       arnés propio, sin dependencias; test/fixtures/prompts/ son las instantáneas de los prompts, y test/fixtures/models/ los rechazos REALES de tres proveedores y la lista de modelos de opencode
 tools/                      generación de iconos, clave del manifest, servidor del banco
   check-docs.mjs            el paso «docs» de npm run check (npm run check:docs suelto)
-  jql-eval.mjs              el mini-evaluador de JQL de la Jira falsa del banco: lista blanca de cláusulas (desde H25 también issuekey in (…) con una lista de claves, y fields=issuelinks) y 400 con su mensaje para todo lo demás (puro)
+  jql-eval.mjs              el mini-evaluador de JQL de la Jira falsa del banco: lista blanca de cláusulas (desde H25 también issuekey in (…) con una lista de claves, y fields=issuelinks; una clave que no está es un 400 con un mensaje por clave, como un Jira Data Center) y 400 con su mensaje para todo lo demás (puro)
   last-turn.mjs             el último turno real desde una copia de opencode.db (npm run turn)
   bench.mjs                 el metro: tamaño del system por escenario y tiempos de los módulos puros (npm run bench)
   contrast-report.mjs       la tabla de contraste del panel y del overlay, por tema, con las parejas de test/contrast-pairs.js (npm run contrast); un token que no exista es un fallo, no un hueco
