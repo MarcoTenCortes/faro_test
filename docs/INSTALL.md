@@ -462,25 +462,43 @@ Si usas un Confluence con varios espacios —por ejemplo SIMPL y DCPIAS—:
   vacío dice en una línea **«DCPIAS» aún no tiene mapa**, con un botón
   **Construir** que lo genera (son un par de minutos, y se hace una vez por
   espacio; con una respuesta en marcha el botón espera). Si el espacio ya tiene
-  páginas en el mapa, el título del chat vacío dice cuántas. Y si le pides que
+  mapa, el título del chat vacío dice cuántas páginas suyas hay en él; sin mapa,
+  dice «Listo para escuchar». Un espacio tiene mapa cuando se ha construido: que
+  Faro haya visto alguna de sus páginas (por la barra lateral o por una
+  respuesta) no cuenta. Y si le pides que
   te lleve a una página de un espacio sin mapa, bajo la respuesta sale la
   tarjeta «Me falta el mapa de este espacio» con el mismo ofrecimiento.
-- **El mapa de un sitio tiene un tope: 1 500 páginas**, cinco espacios de 300.
-  Cuando indexar un espacio más podría pasarse, Faro **no lee nada y no borra
+- **Construir el mapa de un espacio tiene un tope: 1 500 páginas**, cinco
+  espacios de 300, contando sólo las de los OTROS espacios —lo que se puede
+  olvidar: las páginas que Faro aprendió sin saber de qué espacio eran y las del
+  propio espacio no cuentan, así que reconstruirlo no lo hace crecer—. Es una
+  puerta al construir, no un tope del mapa entero, que con lo que Faro aprende de
+  la barra lateral y de las respuestas puede pasar de ese número. Cuando
+  construir un espacio más podría pasarse, Faro **no lee nada y no borra
   ningún espacio por su cuenta**: te avisa en rojo («El mapa de este sitio ya
   tiene N páginas de M espacios (tope 1500). Olvida el mapa de alguno desde
   Ajustes para indexar el espacio X.») y tú eliges cuál sobra.
 - **Ajustes → Mapas y contextos de este sitio** es la lista de lo que Faro
   tiene de cada espacio (o proyecto, o «todo el sitio»): cuántas páginas, cuánto
-  mide su contexto y de cuándo es su mapa, con un botón **Olvidar el mapa** por
-  fila. Olvidar el mapa de un espacio se lleva sus páginas del mapa y su
+  mide su contexto y de cuándo es su mapa (y «migrado del contexto de antes de
+  H21» si vino del contexto que tenías antes), con un botón **Olvidar el mapa**
+  por fila. En Jira, un proyecto sólo sale en la lista si tiene contexto (las
+  incidencias que Faro aprende por el camino no se olvidan desde aquí), y si
+  pulsas Olvidar el mapa de algo que no tenía nada que olvidar, te lo dice («No
+  había nada que olvidar de …»). Olvidar el mapa de un espacio se lleva sus páginas del mapa y su
   contexto, y **nada más**: los demás espacios, la memoria, el diario y todo lo
   demás del sitio se quedan. No es «Olvidar este sitio» (§8).
 - **El contexto que ya tenías de antes** (uno solo por sitio) se queda bajo su
   espacio sólo si se puede afirmar que era suyo —el mapa guardado era de ese
   espacio y se sabe cuándo se indexó—; en cualquier otro caso sigue valiendo
-  para todo el sitio, como hasta ahora. Faro lo convierte una sola vez, al
-  abrir el panel, y lo apunta en el Registro («Contexto migrado»).
+  para todo el sitio, como hasta ahora. También el que subiste a mano: subirlo
+  reindexaba el espacio de la pestaña, así que el mapa guardado dice de cuál
+  era, y se queda bajo ese espacio (en Ajustes, su fila dice «migrado del
+  contexto de antes de H21»). Faro lo convierte una sola vez, al abrir el panel,
+  y lo apunta en el Registro («Contexto migrado»). Si pasaba de 60 000
+  caracteres, al convertirlo se recorta y lo que sobra se pierde de lo que
+  guarda Faro (tu fichero sigue donde lo tengas): el Registro lo dice en
+  amarillo.
 - **Desde Jira**, del Confluence enlazado viaja UN contexto: el de todo el sitio
   si lo hay, o el de su único espacio con contexto; con dos o más, ninguno
   (elegir cuál por proyecto llegará en H22).
@@ -993,7 +1011,7 @@ incidencia, ni una línea del contexto—:
 
 - **índice de navegación** — «412 páginas en 2 espacios · 37 incidencias»: el
   mapa que permite llevarte, con rutas del propio sitio, y de cuántos espacios
-  son sus páginas.
+  son sus páginas. En Jira dice sólo «N incidencias».
 - **contexto del sitio** — «3 ámbitos con contexto (SIMPL, DCPIAS, todo el
   sitio)»: los resúmenes que el indexador escribió (o los que subiste tú), uno
   por espacio o proyecto. Se dice DE QUÉ son —las claves de los espacios o
@@ -1776,16 +1794,20 @@ en Confluence no hay nada de esto.
   `project:KEY` si el mapa guardado era de ese espacio y se sabía cuándo se
   indexó; `*`, todo el sitio, en cualquier otro caso: sigue valiendo en todos
   los espacios, como antes) y cuántos caracteres. Si no se pudo escribir no
-  sale, y se vuelve a intentar al abrir el panel.
+  sale, y se vuelve a intentar al abrir el panel. En amarillo, «N de M
+  caracteres (recortado a textMax)»: el contexto de antes pasaba de 60 000
+  caracteres y lo que sobraba se ha perdido de lo que guarda Faro.
 - «Mapa lleno» — (H21, en amarillo) pediste construir el mapa de un espacio y
-  el de este sitio ya está cerca de su tope (1 500 páginas): no se ha leído ni
+  las páginas de los otros espacios, más las 300 que puede traer, pasarían de
+  1 500 (las que no se pueden olvidar no cuentan; el número del detalle sí las
+  cuenta todas): no se ha leído ni
   escrito nada. El detalle dice cuántas páginas de cuántos espacios hay y qué
   espacio se quedó sin indexar; en el chat, un aviso rojo te manda a **Ajustes
   → Mapas y contextos de este sitio** a olvidar el mapa de otro.
 - «Mapa olvidado» — (H21) pulsaste **Olvidar el mapa** de un espacio (o
   proyecto) en Ajustes: en gris, el sitio, la clave y cuántas páginas y
-  caracteres de contexto se llevó; en amarillo, «no se pudo escribir», y el
-  mapa sigue donde estaba.
+  caracteres de contexto se llevó, o «nada que olvidar» si no había nada; en
+  amarillo, «no se pudo escribir», y el mapa sigue donde estaba.
 - «Contexto construido en segundo plano» — el indexado terminó cuando el panel
   ya estaba en otro sitio: se guardó bajo el host que se indexó (fundido con
   el índice guardado de ese host) sin tocar el estado ni el chat del sitio
@@ -2270,15 +2292,20 @@ abrir ese espacio. No se abre sola la pantalla de contexto, a propósito: el
 sitio ya está configurado, y un espacio nuevo no tiene por qué interrumpirte.
 
 **«El mapa de este sitio ya tiene N páginas…» (el mapa está lleno)**
-El mapa de un sitio guarda como mucho 1 500 páginas —cinco espacios de 300—,
-porque Faro lo reescribe entero en el navegador en cada turno que lo amplía. Al pedir el
+Construir el mapa de un espacio más se para si los demás espacios ya tienen
+cerca de 1 500 páginas —cinco espacios de 300—, porque Faro reescribe el mapa
+entero en el navegador en cada turno que lo amplía. Al pedir el
 mapa de un espacio más, si podría pasarse, Faro no lee nada ni borra ningún
 espacio por su cuenta: te avisa («Mapa lleno» en el registro). Abre **Ajustes →
 Mapas y contextos de este sitio**, pulsa **Olvidar el mapa** en el espacio que
 ya no uses (se lleva sus páginas del mapa y su contexto, y nada más) y vuelve a
-pulsar Construir. Al reconstruir el mapa de un espacio que YA está, sus
-páginas no se cuentan dos veces: se cuenta lo que hay sin él más lo que un
-espacio puede traer (300).
+pulsar Construir. Sólo cuentan las páginas de los OTROS espacios —lo que
+«Olvidar el mapa» puede liberar—: las que Faro aprendió sin saber de qué espacio
+eran no cuentan, y al reconstruir el mapa de un espacio que YA está sus páginas
+tampoco (se cuenta lo de los demás más lo que un espacio puede traer, 300). Por
+eso el mapa entero puede pasar de 1 500 con lo que se aprende de la barra
+lateral y de las respuestas: el tope es una puerta al construir, no un límite
+del mapa.
 
 **Sólo me ofrece «Llévame», nunca «Paso a paso»**
 Lo primero: **Ajustes → Cómo te lleva Faro** tiene que estar en *Guiada*. En

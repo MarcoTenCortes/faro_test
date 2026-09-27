@@ -315,15 +315,21 @@ export function indexDigest(index, { maxPages = 120, maxIssues = 60, relevantTo 
   // ver con ella; el resto rellena hasta el tope.
   //
   // Desde H21 el índice de un host guarda varios espacios (docs/PLAN2.md §3.4),
-  // y con `preferSpace` las páginas del espacio de la pestaña van DELANTE, en el
-  // mismo orden que les dio la relevancia, sin excluir las otras: un destino de
-  // otro espacio sigue siendo legítimo, sólo que ya no le quita el sitio al de
-  // aquí dentro del tope. Sin `preferSpace`, byte a byte lo de antes.
-  const ordenadas = rankByRelevance(Object.values(index.pages || {}), relevantTo, (p) => p.title)
+  // y con `preferSpace` el espacio de la pestaña DESEMPATA: a igual relevancia
+  // sus páginas van delante, y si no, la posición de siempre (relevancia →
+  // preferido → posición, como `suggestFromIndex` en sources.js). La revisión
+  // adversaria de H21 encontró que ponerlo POR ENCIMA de la relevancia dejaba
+  // fuera del tope —con 60 huecos y un espacio de 300 páginas— justo la página
+  // de OTRO espacio que la respuesta nombra, y un destino de otro espacio es
+  // legítimo. Sin `preferSpace`, byte a byte lo de antes.
   const preferido = typeof preferSpace === 'string' && isRealSpaceKey(preferSpace) ? preferSpace : ''
+  const todas = Object.values(index.pages || {})
   const pages = preferido
-    ? [...ordenadas.filter((p) => p?.spaceKey === preferido), ...ordenadas.filter((p) => p?.spaceKey !== preferido)]
-    : ordenadas
+    ? puntuar(todas, relevantTo, (p) => p.title)
+        .map((x) => ({ ...x, aqui: x.item?.spaceKey === preferido ? 1 : 0 }))
+        .sort((a, b) => b.n - a.n || b.aqui - a.aqui || a.i - b.i)
+        .map((x) => x.item)
+    : rankByRelevance(todas, relevantTo, (p) => p.title)
   if (pages.length) {
     lines.push(`PÁGINAS (${pages.length}${pages.length > maxPages ? `, se muestran ${maxPages}` : ''})`)
     for (const p of pages.slice(0, maxPages)) {
@@ -345,21 +351,29 @@ export function indexDigest(index, { maxPages = 120, maxIssues = 60, relevantTo 
 
 /** Ordena por palabras compartidas con un texto de referencia. Estable. */
 export function rankByRelevance(items, texto, titleOf) {
-  if (!texto) return items
+  return puntuar(items, texto, titleOf)
+    .sort((a, b) => b.n - a.n || a.i - b.i)
+    .map((x) => x.item)
+}
+
+/**
+ * `{item, n, i}` por elemento: `n` son las palabras (≥4 letras) que su título
+ * comparte con el texto, `i` su posición. Sin texto o sin palabras que mirar,
+ * todos con n = 0, que ordenado deja la posición de siempre. Una sola idea de
+ * «relevante» para `rankByRelevance` y para el desempate de `indexDigest`.
+ */
+function puntuar(items, texto, titleOf) {
   const claves = new Set(
-    String(texto)
+    String(texto || '')
       .toLowerCase()
       .split(/[^\p{L}\p{N}]+/u)
       .filter((w) => w.length >= 4)
   )
-  if (!claves.size) return items
-  return items
-    .map((item, i) => {
-      const palabras = String(titleOf(item) || '').toLowerCase().split(/[^\p{L}\p{N}]+/u)
-      let n = 0
-      for (const w of palabras) if (w.length >= 4 && claves.has(w)) n++
-      return { item, n, i }
-    })
-    .sort((a, b) => b.n - a.n || a.i - b.i)
-    .map((x) => x.item)
+  return items.map((item, i) => {
+    if (!claves.size) return { item, n: 0, i }
+    const palabras = String(titleOf(item) || '').toLowerCase().split(/[^\p{L}\p{N}]+/u)
+    let n = 0
+    for (const w of palabras) if (w.length >= 4 && claves.has(w)) n++
+    return { item, n, i }
+  })
 }

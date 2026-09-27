@@ -273,6 +273,13 @@ const state = {
   contexts: emptyContexts(),
   contextMd: '',
   contextScope: '',
+  // Con qué regla migró el arranque el contexto de antes de H21 en ESTE host
+  // (`{legacyScope, legacyIndexedAt}`, o null): las relecturas del indexado, del
+  // contexto subido y del olvido la repiten, porque si la reparación del
+  // arranque no se pudo escribir, lo guardado sigue siendo el texto viejo y
+  // `getContexts` lo repararía bajo «*» contra lo que el arranque decidió
+  // (revisión adversaria de H21, B9). Es del host: se vacía con él.
+  contextLegacy: null,
   memory: { entries: [] },
   sessionID: null,
   model: null,
@@ -719,6 +726,7 @@ async function refreshTab() {
     state.contexts = emptyContexts()
     state.contextMd = ''
     state.contextScope = ''
+    state.contextLegacy = null
     state.linkedContext = null
     // Los tiempos también son del sitio: hablan del arranque y del último turno
     // de ESE host. Dejados puestos, el Registro del sitio nuevo enseñaba las
@@ -780,13 +788,12 @@ async function refreshTab() {
   // Y si el chat está vacío, su estado vacío es del ámbito de antes (la línea
   // «aún no tiene mapa», las páginas del espacio): se repinta, SIN volver a
   // anunciar «Listo para escuchar» (A2), que cambiar de espacio no es abrir el
-  // panel.
+  // panel. La nueva ocupa el SITIO de la vieja: quitarla y colgar la nueva al
+  // final dejaba arriba los avisos que colgaban debajo de ella (revisión
+  // adversaria de H21, B12).
   if (changedScope && !state.streaming) {
     const vacio = el.chat.querySelector('.empty')
-    if (vacio) {
-      vacio.remove()
-      showWelcome({ announce: false })
-    }
+    if (vacio) showWelcome({ announce: false, replace: vacio })
   }
 
   paintLocation(site, tab.title)
@@ -954,26 +961,35 @@ async function bootForSite() {
   // paquete: puede ser el texto de antes de H21, y ése migra bajo el ámbito del
   // índice sólo si se puede afirmar que es suyo (`legacyScopeOf`); si no, bajo
   // «*», que se enseña en todos los espacios, o sea como hasta hoy.
-  state.contexts = normalizeContexts(bundle.contextRaw, {
-    legacyScope: legacyScopeOf(bundle, saved),
-    legacyIndexedAt: saved?.indexedAt,
-  })
+  // La regla se guarda: las relecturas de este host la repiten (revisión
+  // adversaria de H21, B9).
+  state.contextLegacy = { legacyScope: legacyScopeOf(bundle, saved), legacyIndexedAt: saved?.indexedAt }
+  state.contexts = normalizeContexts(bundle.contextRaw, state.contextLegacy)
   applyScope()
   // La migración se REPARA una vez, como la memoria: el texto viejo se escribe
   // ya con su forma nueva y el arranque siguiente no vuelve a decidir nada. Con
   // el host capturado antes de leer y el testigo al volver (§8.22). Si no se
   // puede escribir, lo normalizado vale igual en memoria y se reintenta en el
-  // próximo arranque: sólo se pierde la reparación.
+  // próximo arranque: sólo se pierde la reparación. La clave y los caracteres se
+  // calculan ANTES del await, de lo recién normalizado, y el registro va en
+  // cuanto vuelve la escritura, DELANTE del testigo: la escritura ya está hecha
+  // y el arranque siguiente ve un v2 y no vuelve a migrar, así que saltárselo
+  // era no registrarlo nunca (revisión adversaria de H21, C11). Y si el texto
+  // viejo pasaba del tope de un ámbito, se dice que se recortó (A6).
   if (typeof bundle.contextRaw === 'string' && bundle.contextRaw.trim()) {
+    const [clave = '*'] = scopeKeys(state.contexts)
+    const largo = state.contexts.scopes[clave]?.text.length || 0
+    const original = bundle.contextRaw.trim().length
     const reparado = await memory.saveContexts(hostArranque, state.contexts).then(
       () => true,
       () => false
     )
-    if (state.bootToken !== testigo) return
-    const [clave = '*'] = scopeKeys(state.contexts)
-    if (reparado) {
-      log.info('Contexto migrado', `${hostArranque} · ${clave} · ${state.contexts.scopes[clave]?.text.length || 0} caracteres`)
+    if (reparado && original > largo) {
+      log.warn('Contexto migrado', `${hostArranque} · ${clave} · ${largo} de ${original} caracteres (recortado a textMax)`)
+    } else if (reparado) {
+      log.info('Contexto migrado', `${hostArranque} · ${clave} · ${largo} caracteres`)
     }
+    if (state.bootToken !== testigo) return
   }
   // La memoria se reconstruye con claves blancas al leerla, como siempre. Lo
   // que aquí NO se hace es repararla en el almacén: esa escritura la sigue
@@ -2628,8 +2644,12 @@ async function restoreConversation(testigo = state.bootToken, { all = false } = 
  * `announce: false` (H21) repinta sin volver a decir «Listo para escuchar» al
  * lector de pantalla: cambiar de espacio con el chat vacío lo repinta —la línea
  * del mapa y las páginas son del espacio— y eso no es abrir el panel (A2).
+ *
+ * `replace`, un `.empty` que ya está en el chat: la bienvenida nueva ocupa su
+ * SITIO. Colgarla al final dejaba encima los avisos que había debajo de la vieja
+ * (revisión adversaria de H21, B12).
  */
-function showWelcome({ announce: anunciar = true } = {}) {
+function showWelcome({ announce: anunciar = true, replace = null } = {}) {
   const scope = defaultScope(state.site)
   const wrap = document.createElement('div')
   wrap.className = 'empty'
@@ -2640,15 +2660,21 @@ function showWelcome({ announce: anunciar = true } = {}) {
 
   // El espacio de la pestaña, en Confluence y con clave de verdad (H21). El
   // mapa es por espacio: el título cuenta las páginas de ÉSTE cuando las tiene,
-  // y lo de siempre si no —o sin espacio, byte a byte lo de antes—.
+  // y lo de siempre si no —o sin espacio, byte a byte lo de antes—. Si el
+  // espacio NO tiene mapa, el título no cuenta nada: «N cosas indexadas aquí»
+  // encima de ««X» aún no tiene mapa» se contradecían (revisión adversaria de
+  // H21, B10). La condición se calcula UNA vez, para el título y para la línea.
   const espacio = state.site?.product === 'confluence' && isRealSpaceKey(state.site.spaceKey) ? state.site.spaceKey : ''
+  const sinMapa = !!espacio && !hasMap(state.contexts, state.index, scopeKeyOf(state.site))
   const deEspacio = espacio ? pagesOfSpace(state.index, espacio).length : 0
   const h = document.createElement('h2')
-  h.textContent = deEspacio
-    ? `${deEspacio} páginas de «${espacio}» en el mapa`
-    : state.index
-      ? `${indexSize(state.index)} cosas indexadas aquí`
-      : 'Listo para escuchar'
+  h.textContent = sinMapa
+    ? 'Listo para escuchar'
+    : deEspacio
+      ? `${deEspacio} páginas de «${espacio}» en el mapa`
+      : state.index
+        ? `${indexSize(state.index)} cosas indexadas aquí`
+        : 'Listo para escuchar'
   wrap.appendChild(h)
 
   const p = document.createElement('p')
@@ -2661,7 +2687,7 @@ function showWelcome({ announce: anunciar = true } = {}) {
   // contexto —el sitio ya pasó la primera configuración—, pero se dice en UNA
   // línea con su botón. «Construir» son minutos de turnos de modelo, así que
   // con uno del chat en vuelo nace apagado y `setStreaming` lo enciende (H6).
-  if (espacio && !hasMap(state.contexts, state.index, scopeKeyOf(state.site))) {
+  if (sinMapa) {
     const linea = document.createElement('div')
     linea.className = 'no-map'
     const texto = document.createElement('span')
@@ -2714,7 +2740,8 @@ function showWelcome({ announce: anunciar = true } = {}) {
   chips.className = 'search-chips hidden'
   wrap.appendChild(chips)
 
-  el.chat.appendChild(wrap)
+  if (replace?.isConnected) replace.replaceWith(wrap)
+  else el.chat.appendChild(wrap)
   if (anunciar) announce(h.textContent)
 
   paintSearchChips(chips)
@@ -4594,8 +4621,10 @@ async function growTreeFromPage() {
   if (!conPadre.length) return
 
   // La barra lateral es SIEMPRE la del espacio de la pestaña, y sus filas llegan
-  // sin espacio: sin estamparlas, esas páginas no contarían para el mapa de este
-  // espacio (`hasMap`) ni para su subíndice (H21). Con una clave que no lo es,
+  // sin espacio: sin estamparlas, esas páginas no entrarían en su subíndice, ni
+  // contarían para el tope al construir, ni se podrían olvidar con «Olvidar el
+  // mapa» (H21). Para el MAPA no cuentan: desde la revisión adversaria de H21,
+  // `hasMap` es sólo el `indexedAt` del ámbito. Con una clave que no lo es,
   // `stampSpace` deja el índice como estaba, que es lo de antes.
   const arbol = stampSpace(
     normalizeIndex({ pages: snap.pages, updated: Date.now() }, state.site.host, state.index?.scope, {
@@ -4664,8 +4693,15 @@ async function persistIndex() {
   // único que vale es lo apuntado (revisión adversaria de H6).
   const sigueAqui = (state.site?.host ?? state.lastHost) === host
   const aGuardar = sigueAqui && state.index ? state.index : index
+  // Y se escribe ENCIMA de lo que hay en el almacén, releído justo antes: otra
+  // ventana del mismo host pudo guardar un espacio entretanto, y escribir la
+  // copia de memoria a secas se lo llevaba (revisión adversaria de H21, B5). Es
+  // una lectura más por turno; la escritura sigue siendo UNA (P3).
+  let escrito = aGuardar
   try {
-    await saveIndex(host, aGuardar)
+    const enDisco = (await getIndex(host)).index
+    escrito = mergeIndex(enDisco, aGuardar)
+    await saveIndex(host, escrito)
   } catch (err) {
     // Vuelve a quedar apuntado —salvo que algo más nuevo lo esté ya— para que el
     // turno siguiente lo intente otra vez.
@@ -4675,8 +4711,8 @@ async function persistIndex() {
   }
   log.ok(
     'Índice guardado',
-    `${Object.keys(aGuardar.pages || {}).length} páginas · ${Object.keys(aGuardar.issues || {}).length} incidencias · ` +
-      `total ${indexSize(aGuardar)} · ${host}`
+    `${Object.keys(escrito.pages || {}).length} páginas · ${Object.keys(escrito.issues || {}).length} incidencias · ` +
+      `total ${indexSize(escrito)} · ${host}`
   )
 }
 
@@ -7651,6 +7687,18 @@ async function treeDebug() {
   status.textContent = 'Copiado al portapapeles y volcado al Registro.'
 }
 
+/**
+ * La línea de «Este sitio» en Ajustes: host, cuántas entradas indexadas y si hay
+ * contexto. En su propia función porque la escriben dos: abrir Ajustes y
+ * «Olvidar el mapa», que cambia las dos cosas con la pantalla abierta y la
+ * dejaba diciendo lo de antes (revisión adversaria de H21, B11).
+ */
+function paintSettingsSiteInfo() {
+  $('settings-site-info').textContent = state.site
+    ? `${state.site.host} · ${state.index ? indexSize(state.index) + ' entradas indexadas' : 'sin índice'} · ${state.contextMd ? 'con contexto' : 'sin contexto'}`
+    : 'sin sitio'
+}
+
 async function showSettingsScreen() {
   $('set-nav-guided').checked = state.settings.navMode !== 'quick'
   $('set-nav-quick').checked = state.settings.navMode === 'quick'
@@ -7669,9 +7717,7 @@ async function showSettingsScreen() {
   // La confirmación de «Quitar las claves» es de la vez que se pidió (H19): la
   // lista era lo que opencode tenía entonces, y reabrir Ajustes no la trae.
   hideRemoveKeysConfirm()
-  $('settings-site-info').textContent = state.site
-    ? `${state.site.host} · ${state.index ? indexSize(state.index) + ' entradas indexadas' : 'sin índice'} · ${state.contextMd ? 'con contexto' : 'sin contexto'}`
-    : 'sin sitio'
+  paintSettingsSiteInfo()
   // Los mapas y contextos de este sitio, ámbito a ámbito (H21): de lo que el
   // panel tiene en memoria, sin leer nada, así que va antes de abrir.
   paintScopeList()
@@ -7783,9 +7829,15 @@ async function paintPrivacy() {
 
   const paginas = Object.keys(bundle.index?.pages || {}).length
   const incidencias = Object.keys(bundle.index?.issues || {}).length
-  // De cuántos espacios son esas páginas (H21): el mapa es por espacio.
+  // De cuántos espacios son esas páginas (H21): el mapa es por espacio. En Jira
+  // no hay espacios, y «0 páginas en 0 espacios» delante de las incidencias no
+  // decía nada (revisión adversaria de H21, B14).
   const espacios = countPages(bundle.index).spaces
-  add('índice de navegación', bundle.index ? `${paginas} páginas en ${espacios} espacios · ${incidencias} incidencias` : '(nada)')
+  const enJira = state.site?.product === 'jira'
+  add(
+    'índice de navegación',
+    !bundle.index ? '(nada)' : enJira ? `${incidencias} incidencias` : `${paginas} páginas en ${espacios} espacios · ${incidencias} incidencias`
+  )
   // El contexto es por ámbito (H21): cuántos hay y DE QUÉ son. Las claves se
   // enseñan —igual que la del proyecto del perfil, §4.11: dicen de qué es lo
   // guardado, no qué guarda— reconstruidas por las validadoras y nunca el texto.
@@ -8425,6 +8477,7 @@ function wireEvents() {
     state.contexts = emptyContexts()
     state.contextMd = ''
     state.contextScope = ''
+    state.contextLegacy = null
     state.memory = { entries: [] }
     state.sessionID = null
     state.sources = emptySources()
@@ -10011,15 +10064,28 @@ async function generateContext({ keepContext = false } = {}) {
     // cuando se empezó se lo llevaría: con la relectura, la ventana es de
     // milisegundos, como la del diario (§4.10). Con `keepContext` se conserva el
     // texto de este ámbito —el que subió el usuario— y sólo se estampa que tiene
-    // mapa (`indexedAt`).
-    const actuales = await memory.getContexts(host)
-    const nuevos = withContext(actuales, scopeKey, { text: keepContext ? undefined : contextMd, indexedAt: Date.now() })
+    // mapa (`indexedAt`); pero sólo si este ámbito TIENE texto propio: si la
+    // pestaña cambió de espacio entre la subida y el indexado (o «Generar el
+    // contexto otra vez» se pulsa desde otro espacio), el ámbito de ahora no lo
+    // tiene, `withContext` no crearía nada y se tiraban el contexto generado y su
+    // `indexedAt`, con el turno de modelo ya gastado (revisión adversaria de H21,
+    // B8/A4): se guarda lo generado. La relectura migra con la MISMA regla que el
+    // arranque (B9).
+    const actuales = await memory.getContexts(host, contextLegacyFor(host))
+    const propio = Object.hasOwn(actuales.scopes || {}, scopeKey)
+    const nuevos = withContext(actuales, scopeKey, { text: keepContext && propio ? undefined : contextMd, indexedAt: Date.now() })
     await memory.saveContexts(host, nuevos)
     if (sigueAqui()) {
       state.contexts = nuevos
       applyScope()
     }
-    const previo = sigueAqui() ? state.index : (await getIndex(host)).index
+    // El índice también se funde sobre lo RELEÍDO del almacén, no sobre la copia
+    // de memoria: con dos ventanas del mismo host indexando dos espacios, escribir
+    // `state.index` de antes se llevaba las páginas que la otra acababa de guardar
+    // y su espacio quedaba con `indexedAt` y sin árbol (revisión adversaria de
+    // H21, B5). Lo de este panel va encima, porque es lo más nuevo que conoce.
+    const enDisco = (await getIndex(host)).index
+    const previo = sigueAqui() && state.index ? mergeIndex(enDisco, state.index) : enDisco
     // Y lo que un turno dejara APUNTADO de este host y todavía sin escribir:
     // desde H6 (P3) `markIndexDirty` apunta y `persistIndex` escribe minutos
     // después, así que esa escritura tardía caería encima de lo que se acaba de
@@ -10166,8 +10232,9 @@ async function uploadContext(ev) {
   const text = await file.text()
   // El documento es del ÁMBITO de la pestaña (H21): subirlo en el espacio B no
   // pisa el contexto del A. Leer-fundir-escribir con relectura, como el
-  // indexado: los demás ámbitos del host se conservan tal cual.
-  const actuales = await memory.getContexts(host)
+  // indexado: los demás ámbitos del host se conservan tal cual, y un texto viejo
+  // sin reparar migra con la regla del arranque (revisión adversaria de H21, B9).
+  const actuales = await memory.getContexts(host, contextLegacyFor(host))
   const nuevos = await memory.saveContexts(host, withContext(actuales, scopeKey, { text }))
   if ((state.site?.host ?? state.lastHost) === host) {
     state.contexts = nuevos
@@ -10213,15 +10280,35 @@ function applyScope() {
 }
 
 /**
+ * Con qué regla releen los contextos el indexado, el contexto subido y el
+ * olvido: la que decidió el arranque de ESTE host (`state.contextLegacy`), y
+ * ninguna —o sea «*»— si el panel ya es de otro sitio, porque esa regla no es
+ * suya. Sin ella, un texto de antes de H21 cuya reparación falló en el arranque
+ * lo reparaba la primera relectura bajo «*», contra lo que el arranque tenía en
+ * memoria (revisión adversaria de H21, B9).
+ */
+function contextLegacyFor(host) {
+  return (state.site?.host ?? state.lastHost) === host ? state.contextLegacy || {} : {}
+}
+
+/**
  * Bajo qué ámbito migra el contexto de antes de H21, que era UN texto por host.
  *
  * Sólo bajo el del índice guardado cuando se puede afirmar que es suyo: hay
  * índice de esta versión (uno viejo se descarta y no dice nada), su ámbito es UN
  * espacio o UN proyecto con clave válida, y el sitio dice cuándo se indexó. En
- * cualquier duda —el índice de todo el sitio, un contexto subido a mano sin
- * indexar después (`uploadContext` no cambia `index.scope`)— va a «*», que se
- * enseña en todos los espacios: el comportamiento de antes, sin regresión.
+ * cualquier otra duda —el índice de todo el sitio, un sitio sin indexar— va a
+ * «*», que se enseña en todos los espacios: el comportamiento de antes.
  * `normalizeContexts` lo vuelve a exigir por su lado. Pura.
+ *
+ * Un CONTEXT.md subido a mano ANTES de H21 NO cae en «*»: `uploadContext`
+ * siempre reindexó después con `keepContext`, que fija `index.scope` en el
+ * espacio de la pestaña y escribe `indexedAt`, así que migra bajo ese espacio
+ * —la inferencia razonable: se subió estando ahí— y no se puede distinguir de
+ * uno generado. Por eso `paintScopeList` marca ese ámbito como «migrado del
+ * contexto de antes de H21»: el usuario ve adónde fue a parar y puede subirlo
+ * otra vez desde otra página (revisión adversaria de H21, B4/C1/A5; hasta ahí
+ * este comentario decía lo contrario).
  */
 function legacyScopeOf(bundle, saved) {
   const scope = bundle?.index?.scope
@@ -10236,12 +10323,15 @@ function legacyScopeOf(bundle, saved) {
  * «Mapas y contextos de este sitio», en Ajustes: una fila por ámbito con lo que
  * Faro tiene de él y un «Olvidar el mapa» (H21).
  *
- * Los ámbitos son los que tienen contexto y, además, los espacios (Confluence) o
- * proyectos (Jira) con algo en el índice: un espacio leído de la barra lateral
- * tiene mapa aunque nunca se le haya generado contexto. Se pinta de lo que el
- * panel tiene en memoria —son los mismos objetos que el olvido modifica— y con
- * un solo ámbito se pinta igual: es la vista de lo que hay. Cuentas y claves,
- * nunca contenido (§8.20): la clave dice DE QUÉ es lo guardado.
+ * Los ámbitos son los que tienen contexto y, en Confluence, además los espacios
+ * con páginas en el índice, que «Olvidar el mapa» se lleva. En Jira NO se lista
+ * un proyecto por sus incidencias cosechadas: el olvido no las quita, y la fila
+ * volvía con un «Olvidado el mapa» que no había pasado (revisión adversaria de
+ * H21, B14/C3). Se pinta de lo que el panel tiene en memoria —son los mismos
+ * objetos que el olvido modifica— y con un solo ámbito se pinta igual: es la
+ * vista de lo que hay. Cuentas y claves, nunca contenido (§8.20): la clave dice
+ * DE QUÉ es lo guardado. Un ámbito que vino del contexto de antes de H21 lo
+ * dice, para que se vea adónde fue a parar (B4).
  */
 function paintScopeList() {
   const box = $('scope-list')
@@ -10251,11 +10341,6 @@ function paintScopeList() {
   if (state.site.product === 'confluence') {
     for (const p of Object.values(state.index?.pages || {})) {
       const clave = scopeKeyOf({ product: 'confluence', spaceKey: p?.spaceKey })
-      if (clave !== '*') claves.add(clave)
-    }
-  } else if (state.site.product === 'jira') {
-    for (const i of Object.values(state.index?.issues || {})) {
-      const clave = scopeKeyOf({ product: 'jira', projectKey: i?.projectKey })
       if (clave !== '*') claves.add(clave)
     }
   }
@@ -10282,6 +10367,7 @@ function paintScopeList() {
     } else {
       partes.push(hasMap(state.contexts, state.index, clave) ? 'con mapa' : 'sin mapa')
     }
+    if (entrada?.legacy) partes.push('migrado del contexto de antes de H21')
 
     const fila = document.createElement('li')
     const k = document.createElement('span')
@@ -10311,17 +10397,26 @@ function paintScopeList() {
  * llega a su tope total («Mapa lleno»), y lo único que toca: los demás ámbitos
  * del host se quedan como estaban.
  *
- * El host se captura antes del primer await y se comprueba al volver (§8.22).
- * El contexto se relee antes de escribir —leer-fundir-escribir, como el
- * indexado—: si otro indexado del mismo host escribió su ámbito entretanto, la
- * copia de memoria se lo llevaría.
+ * El host se captura antes del primer await y se comprueba al volver (§8.22)
+ * con el sitio del PANEL, como el indexado: con la pestaña en el correo el
+ * olvido sigue siendo de este host, y si no se aplicaba en memoria, al volver
+ * `applyScope` devolvía al prompt el texto recién olvidado (revisión adversaria
+ * de H21, B3). El contexto se relee antes de escribir —leer-fundir-escribir,
+ * como el indexado, y con la regla de migración del arranque (B9)—: si otro
+ * indexado del mismo host escribió su ámbito entretanto, la copia de memoria se
+ * lo llevaría. El Registro va en cuanto la escritura vuelve, DELANTE de la
+ * guarda: el olvido ya está hecho (C11). Si no había nada que quitar se dice
+ * así, no «Olvidado» (B14). Y se repinta lo que depende de ello (B11).
  */
 async function forgetScope(key) {
   const host = state.site?.host || ''
   if (!host || state.streaming) return
+  const etiqueta = scopeLabel(key)
   const espacio = key.startsWith('space:') ? key.slice('space:'.length) : ''
   const paginas = espacio ? pagesOfSpace(state.index, espacio).length : 0
   const caracteres = contextFor(state.contexts, key, { fallback: '' }).length
+  let guardados = null
+  let nada = false
   try {
     if (espacio && state.index) {
       state.index = withoutSpace(state.index, espacio)
@@ -10331,11 +10426,9 @@ async function forgetScope(key) {
       if (state.indexDirty?.host === host) state.indexDirty = { host, index: state.index }
       await saveIndex(host, state.index)
     }
-    const actuales = await memory.getContexts(host)
-    const guardados = await memory.saveContexts(host, withoutContext(actuales, key))
-    if (state.site?.host !== host) return
-    state.contexts = guardados
-    applyScope()
+    const actuales = await memory.getContexts(host, contextLegacyFor(host))
+    nada = !paginas && !Object.hasOwn(actuales.scopes || {}, key)
+    guardados = await memory.saveContexts(host, withoutContext(actuales, key))
   } catch (err) {
     // §8.14: un olvido que no se pudo escribir no puede parecer hecho.
     log.warn('Mapa olvidado', `${host} · ${key} · no se pudo escribir: ${err?.message || err}`)
@@ -10343,9 +10436,16 @@ async function forgetScope(key) {
     paintScopeList()
     return
   }
-  log.info('Mapa olvidado', `${host} · ${key} · ${paginas} páginas · ${caracteres} caracteres`)
-  announce(`Olvidado el mapa de ${scopeLabel(key)}.`.replace(' de el ', ' del '))
+  log.info('Mapa olvidado', `${host} · ${key} · ` + (nada ? 'nada que olvidar' : `${paginas} páginas · ${caracteres} caracteres`))
+  if ((state.site?.host ?? state.lastHost) !== host) return
+  state.contexts = guardados
+  applyScope()
+  announce((nada ? `No había nada que olvidar de ${etiqueta}.` : `Olvidado el mapa de ${etiqueta}.`).replace(' de el ', ' del '))
   paintScopeList()
+  paintSettingsSiteInfo()
+  paintPrivacy().catch(() => {})
+  const vacio = state.site ? el.chat.querySelector('.empty') : null
+  if (vacio) showWelcome({ announce: false, replace: vacio })
 }
 
 async function newSession() {

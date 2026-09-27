@@ -680,4 +680,21 @@ test('H21: el planificador ve delante las páginas del espacio de la pestaña, s
   const rara = fakeClient({ navigate: false })
   await planNavigation(rara, base({ index: dosEspacios, answer, site: { ...SITE, product: 'confluence', spaceKey: 'OPS"] o lo que sea' } }))
   eq(rara.calls.prompts[0].req.text, sinEspacio.calls.prompts[0].req.text, 'una clave rara equivale a ninguna')
+
+  // EL CAMBIO (revisión adversaria de H21): con más de 60 páginas en el
+  // espacio de la pestaña, el espacio preferido iba por encima de la relevancia
+  // y la página de OTRO espacio que la respuesta nombra no llegaba al turno del
+  // planificador. Ahora el espacio sólo desempata: la nombrada tiene que estar.
+  const lleno = { spaces: [{ key: 'SIMPL', name: 'SIMPL', url: '/spaces/SIMPL' }, { key: 'OPS', name: 'Operaciones', url: '/spaces/OPS' }], pages: [] }
+  for (let i = 1; i <= 80; i++) lleno.pages.push({ id: String(6000 + i), title: 'Nota operativa ' + i, spaceKey: 'OPS', url: `/spaces/OPS/pages/${6000 + i}/Nota` })
+  lleno.pages.push({ id: '2100', title: 'Arquitectura de la pasarela', spaceKey: 'SIMPL', url: '/spaces/SIMPL/pages/2100/Pasarela' })
+  const indiceLleno = normalizeIndex(lleno, HOST, null, { wikiPrefix: '' })
+  // Sin el título literal: si no, pickDestination la elegiría sin preguntar al modelo.
+  const nombra = 'La pasarela y su arquitectura se describen en SIMPL.'
+  const conLleno = fakeClient({ navigate: false })
+  await planNavigation(conLleno, base({ index: indiceLleno, answer: nombra, site: enOps, here: ORIGIN + '/spaces/OPS/pages/6001/Nota' }))
+  const textoLleno = conLleno.calls.prompts[0].req.text
+  assert(textoLleno.includes('2100 — Arquitectura de la pasarela [SIMPL]'), 'la página nombrada de OTRO espacio llega al planificador')
+  assert(textoLleno.indexOf('2100 — Arquitectura') < textoLleno.indexOf('6002 — Nota operativa'), 'y delante de las irrelevantes del espacio de la pestaña')
+  assert(textoLleno.includes('se muestran 60'), 'con el tope lleno')
 })

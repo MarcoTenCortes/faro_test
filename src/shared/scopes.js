@@ -26,7 +26,8 @@
  * El índice se queda en UNA clave por host y sin migrar (§8.26): cada página
  * lleva su `spaceKey`, y lo que hace falta de un espacio se FILTRA
  * (`subIndex`), se ORDENA (el `preferSpace` de index-store y sources) o se
- * CUENTA (`hasMap`), pero nunca se parte.
+ * CUENTA (`countPages`), pero nunca se parte. Si un ámbito tiene mapa no lo
+ * dicen sus páginas sino su `indexedAt` (`hasMap`, revisión adversaria de H21).
  *
  * Una sola idea de qué es una clave: `validSpaceKey`/`validProjectKey` de
  * site.js (§9). La regex `SCOPE_KEY` es la lista blanca de la FORMA de la
@@ -204,8 +205,12 @@ export function normalizeContexts(raw, { legacyScope = '*', legacyIndexedAt = nu
       key,
       value: {
         text,
-        at: instanteValido(e.at) ? e.at : ahora,
-        indexedAt: instanteValido(e.indexedAt) ? e.indexedAt : null,
+        // Un instante del futuro (un reloj adelantado y luego corregido) se trae
+        // a ahora, como en normalizeActivity y normalizeModelChecks: si no, con el
+        // tope lleno de ámbitos del futuro, el recién escrito (at = ahora) sería
+        // el que tirara el tope (revisión adversaria de H21).
+        at: instanteValido(e.at) ? Math.min(e.at, ahora) : ahora,
+        indexedAt: instanteValido(e.indexedAt) ? Math.min(e.indexedAt, ahora) : null,
         legacy: e.legacy === true,
       },
     })
@@ -282,7 +287,20 @@ export function withContext(ctxs, key, { text, indexedAt = undefined, now = Date
     indexedAt: indexedAt === undefined ? previo?.indexedAt ?? null : indexedAt,
     legacy: false,
   }
-  return normalizeContexts({ version: CONTEXTS_VERSION, scopes: { ...base.scopes, [key]: entrada } }, { now })
+  const scopes = { ...base.scopes, [key]: entrada }
+  const claves = Object.keys(scopes)
+  if (claves.length > SCOPE_LIMITS.maxScopes) {
+    // Lo recién escrito no lo tira el tope: se cae el más viejo de los DEMÁS.
+    // Sin esto, con 40 ámbitos de un `at` igual al de ahora (uno del futuro
+    // se trae a ahora al normalizar), el desempate por posición tiraba justo
+    // el nuevo, que va el último (revisión adversaria de H21).
+    const otras = claves
+      .filter((k) => k !== key)
+      .map((k, i) => ({ k, i, at: scopes[k].at }))
+      .sort((a, b) => b.at - a.at || a.i - b.i)
+    for (const { k } of otras.slice(SCOPE_LIMITS.maxScopes - 1)) delete scopes[k]
+  }
+  return normalizeContexts({ version: CONTEXTS_VERSION, scopes }, { now })
 }
 
 /** Unos contextos nuevos sin el ámbito `key`. No muta. Pura. */
@@ -373,32 +391,29 @@ export function stampSpace(index, spaceKey) {
 }
 
 /**
- * ¿Tiene mapa este ámbito? UN solo criterio, en UN sitio: un `indexedAt`
- * válido en su contexto, o —sólo para un espacio— páginas de ese espacio en el
- * índice (el mapa lo da el árbol de la API, que siempre trae espacio; lo que
- * se cosecha de las herramientas entra sin espacio y no cuenta). Pura.
+ * ¿Tiene mapa este ámbito? UN solo criterio, en UN sitio (docs/PLAN2.md §3.4):
+ * un `indexedAt` válido en su contexto, que sólo pone construir el mapa. Las
+ * páginas del índice NO cuentan, vengan de donde vengan: la revisión adversaria
+ * de H21 encontró que lo cosechado de las herramientas (una URL
+ * `/spaces/KEY/pages/N` llega CON su espacio) y las filas de la barra lateral
+ * (que el panel estampa con el espacio de la pestaña) daban mapa tras el primer
+ * turno a un espacio que nadie había construido, y la tarjeta y la línea de
+ * «aún no tiene mapa» no salían nunca. `index` se queda en la firma para no
+ * tocar a los llamantes, y se ignora. Pura.
  */
 export function hasMap(ctxs, index, key) {
   const s = esObjeto(ctxs) && esObjeto(ctxs.scopes) ? ctxs.scopes : null
-  if (s && claveValida(key) && Object.hasOwn(s, key) && instanteValido(s[key]?.indexedAt)) return true
-  if (typeof key === 'string' && key.startsWith('space:') && claveValida(key)) {
-    return pagesOfSpace(index, key.slice('space:'.length)).length > 0
-  }
-  return false
+  return !!(s && claveValida(key) && Object.hasOwn(s, key) && instanteValido(s[key]?.indexedAt))
 }
 
 /**
  * Las claves de OTROS espacios con mapa, ordenadas: los ámbitos `space:` de los
- * contextos y los espacios con páginas en el índice, menos `key`. Es lo que
- * alimenta la línea «Este sitio tiene mapa de otros espacios». Pura.
+ * contextos con `indexedAt` válido, menos `key`. Es lo que alimenta la línea
+ * «Este sitio tiene mapa de otros espacios». `index` se queda en la firma y se
+ * ignora: desde la revisión adversaria de H21 las páginas no dan mapa. Pura.
  */
 export function otherScopesWithMap(ctxs, index, key) {
-  const candidatas = new Set(scopeKeys(ctxs).filter((k) => k.startsWith('space:')))
-  for (const p of paginas(index)) {
-    const k = claveDeEspacio(p.spaceKey)
-    if (k) candidatas.add('space:' + k)
-  }
-  return ordenadas([...candidatas].filter((k) => k !== key && hasMap(ctxs, index, k)))
+  return scopesWithMap(ctxs).filter((k) => k.startsWith('space:') && k !== key)
 }
 
 /** Cuántas páginas tiene el índice y de cuántos espacios distintos. Pura. */
@@ -413,14 +428,28 @@ export function countPages(index) {
 }
 
 /**
- * ¿Podría indexar `spaceKey` por la API pasar del tope TOTAL de páginas del
- * host? Lo que queda sin ese espacio más lo que un espacio puede traer
- * (`maxPages`), contra `maxTotal`. Se pregunta ANTES de leer nada: al
- * alcanzarse se para con aviso, sin desalojar ningún espacio solo (§3.4,
- * decisión 9). Pura.
+ * ¿Podría CONSTRUIR el mapa de `spaceKey` por la API pasar del tope total?
+ * Lo que queda de OTROS espacios más lo que un espacio puede traer
+ * (`maxPages`), contra `maxTotal`. Es una PUERTA al construir, no un tope del
+ * índice entero: lo que llega por la barra lateral o por las herramientas no
+ * pasa por aquí. Se pregunta ANTES de leer nada: al alcanzarse se para con
+ * aviso, sin desalojar ningún espacio solo (§3.4, decisión 9).
+ *
+ * Desde la revisión adversaria de H21 «lo que queda» cuenta SÓLO páginas con
+ * un espacio de verdad distinto de éste, porque es lo único que el usuario
+ * puede liberar con «Olvidar el mapa de X»: las que no llevan espacio (o una
+ * clave que no valida) no las quita ninguno, y contarlas dejaba un «Mapa
+ * lleno» sin salida. Y las del propio espacio no cuentan: reconstruirlo no lo
+ * hace crecer, lo sustituye. Pura.
  */
 export function spaceOverflow(index, spaceKey, { maxPages = INDEX_LIMITS.maxPages, maxTotal = INDEX_LIMITS.maxPagesTotal } = {}) {
-  return countPages(index).pages - pagesOfSpace(index, spaceKey).length + maxPages > maxTotal
+  const este = claveDeEspacio(spaceKey)
+  let otros = 0
+  for (const p of paginas(index)) {
+    const k = claveDeEspacio(p.spaceKey)
+    if (k && k !== este) otros++
+  }
+  return otros + maxPages > maxTotal
 }
 
 /**

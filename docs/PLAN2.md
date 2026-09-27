@@ -654,9 +654,16 @@ se puede afirmar, y el índice lleva tope total.
   blancas, `Object.hasOwn`, lo que no casa con `SCOPE_KEY` se cae, y un
   string (lo de hoy) migra bajo `legacyScope` **sólo si el `index.scope`
   guardado tiene `indexedAt` coherente con él; en cualquier duda —índice de
-  otra versión, `scope` `confluence-site`, contexto subido a mano por
-  `uploadContext`, que no cambia `index.scope`— va a `'*'`**, que se enseña en
-  todos los espacios, o sea el comportamiento de hoy y sin regresión;
+  otra versión, `scope` `confluence-site`— va a `'*'`**, que se enseña en
+  todos los espacios, o sea el comportamiento de hoy y sin regresión
+  (**corregido en la revisión adversaria de H21**: aquí decía que un contexto
+  subido a mano por `uploadContext` «no cambia `index.scope`» y va a `'*'`, y
+  era falso: `uploadContext` siempre acabó en `generateContext({ keepContext:
+  true })`, que fija `index.scope` e `indexedAt`, así que un CONTEXT.md subido a
+  mano antes de H21 migra bajo el espacio donde se subió cuando el índice
+  guardado lo afirma. Se deja así —atribuirlo a ese espacio es una inferencia
+  razonable— y la lista de Ajustes lo dice: «migrado del contexto de antes de
+  H21»);
   `contextFor(ctxs, key, {fallback: '*'})`, `withContext` (inmutable),
   `scopesWithMap`, `pagesOfSpace`, `subIndex` (sólo filtra `pages`),
   `stampSpace` y `linkedSpacesFor`. `faro:context:<host>` pasa de string a ese
@@ -667,13 +674,21 @@ se puede afirmar, y el índice lleva tope total.
   informativo («el último ámbito indexado») y `growTreeFromPage` estampa
   `spaceKey: state.site.spaceKey` en las filas que hoy entran con `null`.
   «Tiene mapa» pasa a ser por ámbito con UN solo criterio,
-  `scopes[k].indexedAt`. **Ningún espacio se desaloja solo** (sería lo
+  `scopes[k].indexedAt` (H21 lo construyó contando además las páginas de un
+  espacio en el índice, y su revisión adversaria volvió a este criterio: lo
+  cosechado de las herramientas y las filas de la barra lateral llegan con su
+  espacio y daban mapa, tras el primer turno, a un espacio que nadie había
+  construido). **Ningún espacio se desaloja solo** (sería lo
   contrario de «que se guarde un árbol u otro»): `INDEX_LIMITS.maxPagesTotal`
   se MIDE en H21 (`npm run bench` con diez espacios de 300: hoy 600 páginas
   son 65 KB y `persistIndex` escribe el objeto entero en cada turno, P3) y,
   al alcanzarse, indexar un espacio nuevo por la API se para con un aviso
   hasta que se olvide otro desde Ajustes («Olvidar el mapa de X», que borra
-  sus páginas, su `indexedAt` y su contexto). `sites[host].onboarded` se
+  sus páginas, su `indexedAt` y su contexto). Desde la revisión adversaria de
+  H21 es una PUERTA al construir un espacio por la API, no un tope del índice
+  entero (lo que llega por la barra lateral y las herramientas no pasa por
+  ella), y cuenta sólo las páginas de OTROS espacios de verdad —lo que se puede
+  olvidar—, así que reconstruir un espacio no lo hace crecer. `sites[host].onboarded` se
   queda: «el sitio ya pasó la primera configuración». Nada se anida en
   `sites[host]` salvo el mapa `linkedSpaces` de más abajo, que escribe entero
   un único escritor: `saveSite` funde a un solo nivel.
@@ -696,7 +711,11 @@ se puede afirmar, y el índice lleva tope total.
   sigue su rama); en Jira la guarda no cambia. Las dos cosas van pinadas en
   H21. `indexDigest` y `suggestFromIndex` ganan `preferSpace`:
   el espacio de la pestaña DELANTE sin excluir los demás (una página base de
-  otro espacio es legítima). El paso a paso entre espacios se mantiene.
+  otro espacio es legítima); en `indexDigest`, desde la revisión adversaria de
+  H21, como DESEMPATE (relevancia → preferido → posición, como en
+  `suggestFromIndex`): ponerlo por encima de la relevancia dejaba fuera del tope
+  del planificador la página de otro espacio que la respuesta nombra. El paso a
+  paso entre espacios se mantiene.
 - **Qué ve el modelo**: `baseSystem` gana `contextScope` opcional; con él la
   cabecera dice `--- CONTEXTO DE ESTE SITIO (espacio «DCPIAS»; …) ---`
   conservando el PREFIJO que usan los cortes de `prompts.js:723`; sin él
@@ -1423,6 +1442,20 @@ Reglas transversales, que salen de los dos juicios y valen para todos:
   Sin verificar: nada en la extensión cargada, el espejo con los ojos, y en
   real, sólo GET, SIMPL y DCPIAS como blob y la migración con el CONTEXT.md de
   Marco. La bitácora, en CLAUDE.md §12.5.
+- **Revisión adversaria aplicada el 2026-09-27** (sobre 4a62170): tres
+  cazadores, 34 hallazgos, 17 grupos confirmados y 0 refutados, 17 decisiones.
+  `preferSpace` sólo desempata en `indexDigest`; «tiene mapa» vuelve a ser SÓLO
+  el `indexedAt` (el UN criterio de §3.4); `maxPagesTotal` es una puerta al
+  construir que cuenta sólo las páginas de otros espacios de verdad; el índice
+  se escribe sobre lo releído (en `generateContext` y en `persistIndex`);
+  `keepContext` sin texto propio guarda lo generado; las relecturas migran con
+  la regla del arranque (`state.contextLegacy`); «Olvidar el mapa» con §8.22,
+  sus repintados y la verdad en Jira; la bienvenida nueva en el sitio de la
+  vieja; la clave de espacio entera en el prompt; lo del futuro traído a ahora;
+  la migración que recorta lo dice; «migrado del contexto de antes de H21» en
+  la lista (la premisa falsa de §3.4, corregida arriba); y pines de cuerpos
+  enteros. 1478 pruebas (+9), 20 + 44 mutaciones cazadas, las 39 instantáneas
+  sin regenerar. La bitácora, en CLAUDE.md §12.5.
 
 ### H22 · Jira por proyecto: contexto y perfil byProject (D2)
 
@@ -1693,8 +1726,10 @@ a partirse si en su revisión adversaria salen más de ~15 hallazgos.
   espacios** del Confluence enlazado: cinco resúmenes truncados de páginas
   que no vienen al caso; viaja UN espacio, con un selector manual de respaldo.
 - **Migrar el CONTEXT.md de hoy al `index.scope` guardado en cualquier caso**:
-  con un contexto subido a mano o un `scope` `confluence-site` podría
-  asignarse al espacio equivocado; en la duda, `'*'`.
+  con un `scope` `confluence-site` o un índice sin fecha de indexado podría
+  asignarse al espacio equivocado; en la duda, `'*'` (un contexto subido a mano
+  sí va a su espacio: `uploadContext` reindexaba, corrigió la revisión
+  adversaria de H21).
 - **Un cubo `references` en el índice, o más fases del indexador**: ya
   descartados en el primer plan; no vuelven por el multi-espacio.
 - **El MCP de Excalidraw** (oficial o comunitario), **Mermaid vendorizado**,

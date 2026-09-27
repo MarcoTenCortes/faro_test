@@ -305,11 +305,16 @@ test('H21: stampSpace sólo rellena las páginas sin espacio, y con una clave ra
   eq(stampSpace(null, 'ENG'), null)
 })
 
-test('H21: hasMap — un indexado válido, o páginas de ese espacio; y nada más', () => {
+test('H21: hasMap — un indexado válido, y nada más', () => {
   const idx = indice()
   const c = { version: 2, scopes: { 'project:SIMPL': ambito('p', { indexedAt: AYER }), 'space:DOC': ambito('d', { indexedAt: AYER }), 'space:WIKI': ambito('w'), '*': ambito('t') } }
   eq(hasMap(c, null, 'space:DOC'), true, 'con indexado aunque no haya índice')
-  eq(hasMap(emptyContexts(), idx, 'space:ENG'), true, 'con páginas del espacio aunque no haya contexto')
+  // EL CAMBIO: la revisión adversaria de H21 encontró que las páginas del
+  // índice daban mapa a un espacio que nadie había construido (las cosechadas
+  // de las herramientas llegan con /spaces/KEY/pages/N y las filas de la barra
+  // lateral se estampan con el espacio de la pestaña). Criterio único de
+  // docs/PLAN2.md §3.4: el `indexedAt` del ámbito. Las páginas no cuentan.
+  eq(hasMap(emptyContexts(), idx, 'space:ENG'), false, 'páginas del espacio sin contexto indexado: sin mapa')
   eq(hasMap(c, idx, 'space:WIKI'), false, 'contexto sin indexado y sin páginas: sin mapa')
   eq(hasMap(c, idx, 'project:SIMPL'), true)
   eq(hasMap(emptyContexts(), idx, 'project:SIMPL'), false, 'un proyecto sólo por su indexado')
@@ -318,11 +323,27 @@ test('H21: hasMap — un indexado válido, o páginas de ese espacio; y nada má
   eq(hasMap(null, null, 'space:ENG'), false)
 })
 
-test('H21: otherScopesWithMap da los OTROS espacios con mapa, de los contextos y del índice', () => {
-  const c = { version: 2, scopes: { 'space:DOC': ambito('d', { indexedAt: AYER }), 'space:WIKI': ambito('w'), 'project:SIMPL': ambito('p', { indexedAt: AYER }) } }
-  eq(otherScopesWithMap(c, indice(), 'space:ENG'), ['space:DOC', 'space:OPS'], 'sin el de ahora, sin proyectos y sin el que no tiene mapa')
-  eq(otherScopesWithMap(c, indice(), 'space:DCPIAS'), ['space:DOC', 'space:ENG', 'space:OPS'])
+test('H21: otherScopesWithMap da los OTROS espacios con mapa, sólo de los contextos con indexado', () => {
+  const c = { version: 2, scopes: { 'space:DOC': ambito('d', { indexedAt: AYER }), 'space:ENG': ambito('e', { indexedAt: AYER }), 'space:WIKI': ambito('w'), 'project:SIMPL': ambito('p', { indexedAt: AYER }) } }
+  // EL CAMBIO (revisión adversaria de H21): OPS tiene páginas en el índice y
+  // ningún contexto indexado, así que ya no sale: las páginas no dan mapa.
+  eq(otherScopesWithMap(c, indice(), 'space:ENG'), ['space:DOC'], 'sin el de ahora, sin proyectos, sin el que no tiene mapa y sin los de sólo páginas')
+  eq(otherScopesWithMap(c, indice(), 'space:DCPIAS'), ['space:DOC', 'space:ENG'])
+  eq(otherScopesWithMap(c, null, 'space:DCPIAS'), ['space:DOC', 'space:ENG'], 'el índice no cambia nada: se ignora')
   eq(otherScopesWithMap(null, null, '*'), [])
+})
+
+test('H21 revisión: una página cosechada no da mapa a su espacio, y un espacio tiene mapa sólo por su indexado', () => {
+  // La forma real de lo cosechado: una URL /spaces/OPS/pages/N de una
+  // herramienta llega al índice CON su spaceKey (harvestIndex, PAGE_URL).
+  const cosechada = { version: 3, host: 'confluence.x.eu', spaces: {}, pages: { 7001: { id: '7001', title: 'Runbook', spaceKey: 'OPS', parentId: null, path: '/spaces/OPS/pages/7001/Runbook' } }, projects: {}, issues: {} }
+  eq(hasMap(emptyContexts(), cosechada, 'space:OPS'), false, 'una cosechada sola no da mapa')
+  eq(otherScopesWithMap(emptyContexts(), cosechada, 'space:ENG'), [], 'ni mete OPS en la línea de otros espacios')
+  // Y al revés: el indexado da mapa aunque el índice no tenga ni una página suya.
+  const soloIndexado = withContext(emptyContexts(), 'space:OPS', { text: 'ops', indexedAt: AYER, now: AHORA })
+  const vacio = { version: 3, host: 'confluence.x.eu', spaces: {}, pages: {}, projects: {}, issues: {} }
+  eq(hasMap(soloIndexado, vacio, 'space:OPS'), true, 'con su indexado y sin páginas')
+  eq(otherScopesWithMap(soloIndexado, null, 'space:ENG'), ['space:OPS'])
 })
 
 test('H21: countPages y spaceOverflow en el borde exacto del tope total', () => {
@@ -340,6 +361,51 @@ test('H21: countPages y spaceOverflow en el borde exacto del tope total', () => 
   eq(spaceOverflow(conN(1200), 'OPS'), false, 'con los topes de INDEX_LIMITS')
   eq(spaceOverflow(conN(INDEX_LIMITS.maxPagesTotal - INDEX_LIMITS.maxPages + 1), 'OPS'), true)
   eq(spaceOverflow(null, 'ENG'), false)
+})
+
+test('H21 revisión: el tope total cuenta sólo lo que se puede olvidar, y reconstruir un espacio no crece', () => {
+  // Lo que no lleva espacio (cosechado de las herramientas, una clave que no
+  // valida) no lo quita ningún «Olvidar el mapa de X»: contarlo dejaba un
+  // «Mapa lleno» sin salida. Borde de la revisión adversaria de H21.
+  const opt = { maxPages: 300, maxTotal: 1500 }
+  const pages = {}
+  let n = 0
+  for (const esp of ['A', 'B', 'C', 'D', 'E']) for (let i = 0; i < 300; i++) pages[++n] = { id: String(n), spaceKey: esp }
+  pages[++n] = { id: String(n), spaceKey: null }
+  eq(spaceOverflow({ pages }, 'A', opt), false, '5×300 más UNA sin espacio: reindexar A no da lleno')
+  eq(spaceOverflow({ pages }, 'F', opt), true, 'un sexto espacio sí: 1 500 olvidables + 300')
+  const sinEspacio = {}
+  for (let i = 1; i <= 1201; i++) sinEspacio[i] = { id: String(i), spaceKey: i % 2 ? null : '_' }
+  eq(spaceOverflow({ pages: sinEspacio }, 'OPS', opt), false, '1 201 sin espacio (o con «_») no bloquean nada')
+  // countPages sigue contando todas las páginas, pero sólo los espacios de verdad.
+  eq(countPages({ pages: { 1: { spaceKey: '_' }, 2: { spaceKey: '~' }, 3: { spaceKey: 'ENG' }, 4: { spaceKey: 'eng"x' } } }), { pages: 4, spaces: 1 }, 'una clave rara no es un espacio')
+})
+
+test('H21 revisión: un at o un indexedAt del futuro se traen a ahora, y un ámbito recién escrito no lo tira el tope', () => {
+  const futuro = AHORA + 1e9
+  const r = normalizeContexts({ version: 2, scopes: { 'space:ENG': ambito('e', { at: futuro, indexedAt: futuro }) } }, { now: AHORA })
+  eq(r.scopes['space:ENG'].at, AHORA, 'el at futuro, ahora')
+  eq(r.scopes['space:ENG'].indexedAt, AHORA, 'el indexedAt futuro, ahora')
+  eq(normalizeContexts(r, { now: AHORA }), r, 'idempotente')
+  // Con 40 ámbitos de at futuro (un reloj adelantado y luego corregido), el
+  // tope tiraba justo el contexto recién escrito.
+  const llenos = {}
+  for (let i = 0; i < SCOPE_LIMITS.maxScopes; i++) llenos['space:F' + i] = ambito('f' + i, { at: futuro })
+  const conNuevo = withContext({ version: 2, scopes: llenos }, 'space:NUEVO', { text: 'nuevo', now: AHORA })
+  assert(Object.hasOwn(conNuevo.scopes, 'space:NUEVO'), 'el recién escrito se queda')
+  eq(Object.keys(conNuevo.scopes).length, SCOPE_LIMITS.maxScopes)
+})
+
+test('H21 revisión: a igual at, el tope se queda con los que estaban antes; y withContext deja de marcar legacy', () => {
+  const scopes = {}
+  for (let i = 0; i <= SCOPE_LIMITS.maxScopes; i++) scopes['space:E' + i] = ambito('t' + i, { at: AYER })
+  const claves = Object.keys(normalizeContexts({ version: 2, scopes }).scopes)
+  eq(claves.length, SCOPE_LIMITS.maxScopes)
+  eq(claves[claves.length - 1], 'space:E' + (SCOPE_LIMITS.maxScopes - 1), 'se cae el último, no el primero')
+  assert(claves.includes('space:E0') && !claves.includes('space:E' + SCOPE_LIMITS.maxScopes), 'el primero se queda')
+  const viejo = { version: 2, scopes: { '*': ambito('viejo', { legacy: true }) } }
+  eq(withContext(viejo, '*', { text: 'nuevo', now: AHORA }).scopes['*'].legacy, false, 'lo escrito ahora no es de antes de H21')
+  eq(withContext(viejo, '*', { text: undefined, indexedAt: AHORA, now: AHORA }).scopes['*'].legacy, false, 'tampoco al estampar sólo el indexado')
 })
 
 // ---- desde Jira ---------------------------------------------------------------

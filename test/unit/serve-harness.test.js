@@ -381,6 +381,23 @@ test('H14: el árbol del espacio se sirve por fecha, con antepasados y con total
   assert(contentSearch('type=page AND title~"Arqui*"', {}).results.length > 0, 'y la búsqueda por título')
 })
 
+test('H21 revisión: una clave del prototipo no es un espacio, y el orden de ENG por fecha es exacto (con su empate)', () => {
+  // La clave llega de una URL: sin `Object.hasOwn`, «constructor» o
+  // «__proto__» encontrarían algo del prototipo y el banco lanzaría.
+  for (const clave of ['constructor', '__proto__', 'toString', 'hasOwnProperty']) {
+    eq(spaceContent({ spaceKey: clave, start: 0, limit: 5 }).results, [], 'la lista de ' + clave)
+    eq(contentSearch('type = page AND space = "' + clave + '" ORDER BY lastmodified DESC', { limit: 5 }).results, [], 'el árbol de ' + clave)
+  }
+  eq(spaceOf('constructor'), null)
+  // El orden entero, no un trozo: 1 y 2003 empatan a 2 h y los desempata el id.
+  // Es lo que sostiene «lo que ENG contesta es byte a byte lo de antes».
+  eq(
+    contentSearch(spaceCql('ENG'), { start: 0, limit: 100 }).results.map((r) => r.id),
+    ['1', '2003', '100', '1086', '201', '300', '301', '400', '1080', '1081', '1082', '1083', '1084', '1085', '200', '3003', '2001', '2002', '3001', '3002']
+  )
+  eq([metaDe('1').horas, metaDe('2003').horas], [2, 2], 'el empate de verdad')
+})
+
 test('H14: lo que contesta el banco lo entiende parseSpaceSearch, y la lista sigue dando la portada', () => {
   const p = parseSpaceSearch(contentSearch(spaceCql('ENG'), { start: 0, limit: 6 }), { wikiPrefix: '/wiki', spaceKey: 'ENG' })
   eq(p.groups.length, 6)

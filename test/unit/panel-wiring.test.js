@@ -1009,7 +1009,9 @@ test('H6 P4: el arranque lee el sitio de UNA vez y no espera en fila lo que pued
   // EL CAMBIO (H21): el paquete trae el contexto CRUDO (`contextRaw`: el texto de
   // antes o el objeto por ámbitos) y el arranque lo normaliza con la regla de
   // migración; `state.contextMd` es ya un derivado que sólo escribe applyScope().
-  assert(/state\.contexts = normalizeContexts\(bundle\.contextRaw, \{/.test(codigo), 'el contexto sale del paquete')
+  // EL CAMBIO (revisión adversaria de H21, B9): la regla se guarda en
+  // `state.contextLegacy`, para que las relecturas la repitan.
+  assert(/state\.contexts = normalizeContexts\(bundle\.contextRaw, state\.contextLegacy\)/.test(codigo), 'el contexto sale del paquete')
   assert(/state\.index = bundle\.index/.test(codigo) && /if \(bundle\.stale\)/.test(codigo), 'el índice también, con su aviso de versión vieja')
   assert(/'Índice descartado'/.test(arranque), 'que sigue siendo el mismo')
   assert(/state\.sessionID = sessionID/.test(codigo), 'y la sesión ya no se pide otra vez más abajo')
@@ -1780,7 +1782,9 @@ test('H6 P3: el índice se escribe UNA vez por turno y bajo el host que lo apren
   assert(/state\.indexDirty = \{ host, index \}/.test(apuntar), 'junto al índice que se aprendió')
   const escribir = sinComentarios(JS.slice(JS.indexOf('async function persistIndex'), JS.indexOf('function warnAboutSources')))
   assert(/const pendiente = state\.indexDirty/.test(escribir) && /state\.indexDirty = null/.test(escribir), 'y se consume al escribir')
-  assert(/await saveIndex\(host, aGuardar\)/.test(escribir), 'se guarda bajo el host apuntado')
+  // EL CAMBIO (revisión adversaria de H21, B5): lo apuntado se escribe FUNDIDO
+  // sobre lo releído del almacén, y siempre bajo el host apuntado.
+  assert(/escrito = mergeIndex\(enDisco, aGuardar\)\n\s*await saveIndex\(host, escrito\)/.test(escribir), 'se guarda bajo el host apuntado')
   assert(!/saveIndex\(state\./.test(escribir), 'nunca bajo el de ahora: es lo único que impide escribir el índice de un sitio en la clave de otro')
   assert(/'Índice guardado'/.test(escribir), 'y queda en el registro, una vez por turno')
   assert(/'Índice sin guardar'/.test(escribir) && /state\.indexDirty = state\.indexDirty \|\| pendiente/.test(escribir), 'un fallo de cuota se dice y se vuelve a apuntar, no tapa la respuesta')
@@ -1985,7 +1989,8 @@ test('H6 revisión: una escritura tardía del índice no pisa un contexto recié
   assert(/const \{ host, index \} = pendiente/.test(escribir), 'el HOST sigue saliendo de lo apuntado')
   assert(/const sigueAqui = \(state\.site\?\.host \?\? state\.lastHost\) === host/.test(escribir), 'y si el panel sigue en ese host…')
   assert(/const aGuardar = sigueAqui && state\.index \? state\.index : index/.test(escribir), '…manda lo que el panel tiene ahora, que nunca es más viejo')
-  assert(/await saveIndex\(host, aGuardar\)/.test(escribir))
+  // EL CAMBIO (revisión adversaria de H21, B5): encima de lo releído.
+  assert(/escrito = mergeIndex\(enDisco, aGuardar\)\n\s*await saveIndex\(host, escrito\)/.test(escribir))
   assert(!/saveIndex\(state\./.test(escribir), 'nunca bajo el host de ahora: el host es el apuntado, pase lo que pase')
 })
 
@@ -3746,6 +3751,9 @@ test('H13: Ajustes dice qué guarda Faro de este sitio, con su medida y sin ense
     'espacios',
     'ambitos',
     'claves',
+    // Revisión adversaria de H21 (B14): en Jira la fila del índice dice sólo las
+    // incidencias; `enJira` elige el texto, no enseña nada.
+    'enJira',
     'incidencias',
     'resumenes',
     'state.settings.crossSessionMemory',
@@ -6353,39 +6361,8 @@ test('H21: el contexto y el mapa son por ámbito dentro del host, y nadie consum
     ),
     'la migración va al ámbito del índice sólo si se puede afirmar; en cualquier duda, a «*»'
   )
-  eq(
-    funcion('async function forgetScope('),
-    lineas(
-      'async function forgetScope(key) {',
-      "  const host = state.site?.host || ''",
-      '  if (!host || state.streaming) return',
-      "  const espacio = key.startsWith('space:') ? key.slice('space:'.length) : ''",
-      '  const paginas = espacio ? pagesOfSpace(state.index, espacio).length : 0',
-      "  const caracteres = contextFor(state.contexts, key, { fallback: '' }).length",
-      '  try {',
-      '    if (espacio && state.index) {',
-      '      state.index = withoutSpace(state.index, espacio)',
-      '      if (state.indexDirty?.host === host) state.indexDirty = { host, index: state.index }',
-      '      await saveIndex(host, state.index)',
-      '    }',
-      '    const actuales = await memory.getContexts(host)',
-      '    const guardados = await memory.saveContexts(host, withoutContext(actuales, key))',
-      '    if (state.site?.host !== host) return',
-      '    state.contexts = guardados',
-      '    applyScope()',
-      '  } catch (err) {',
-      "    log.warn('Mapa olvidado', `${host} · ${key} · no se pudo escribir: ${err?.message || err}`)",
-      "    announce('No he podido olvidar ese mapa.')",
-      '    paintScopeList()',
-      '    return',
-      '  }',
-      "  log.info('Mapa olvidado', `${host} · ${key} · ${paginas} páginas · ${caracteres} caracteres`)",
-      "  announce(`Olvidado el mapa de ${scopeLabel(key)}.`.replace(' de el ', ' del '))",
-      '  paintScopeList()',
-      '}'
-    ),
-    'olvidar un ámbito se lleva sus páginas y SU contexto (releído antes de escribir), bajo el host capturado, y nada más'
-  )
+  // El cuerpo entero de forgetScope lo pina «H21 revisión: los cuerpos que deciden…»: la
+  // revisión adversaria lo cambió (B3, B9, B11, B14, C11).
   eq(
     funcion('function nombresDeAmbitos('),
     lineas(
@@ -6426,7 +6403,7 @@ test('H21: el contexto y el mapa son por ámbito dentro del host, y nadie consum
       'state.contexts = emptyContexts()',
       'state.contexts = emptyContexts()',
       'state.contexts = guardados',
-      'state.contexts = normalizeContexts(bundle.contextRaw, {',
+      'state.contexts = normalizeContexts(bundle.contextRaw, state.contextLegacy)',
       'state.contexts = nuevos',
       'state.contexts = nuevos',
     ],
@@ -6446,19 +6423,20 @@ test('H21: el contexto y el mapa son por ámbito dentro del host, y nadie consum
   orden(refresco, ['const changedScope =', 'state.site = site\n', 'if (changedScope || (volviaDeFuera && !changedHost)) applyScope()'], 'calculado ANTES de reasignar el sitio y aplicado DESPUÉS')
   const hueco = corte(refresco, 'const changedScope =', 'applyScope()')
   assert(!/await |getSiteBundle\(|getSite\(|getContexts\(|chrome\.storage/.test(hueco), 'entre calcular el ámbito y aplicarlo no se lee nada del almacén')
+  // EL CAMBIO (revisión adversaria de H21, B12): la bienvenida nueva ocupa el
+  // SITIO de la vieja; quitarla y colgar la nueva al final dejaba arriba los
+  // avisos que colgaban debajo.
   una(
     refresco,
     lineas(
       '\n  if (changedScope && !state.streaming) {',
       "    const vacio = el.chat.querySelector('.empty')",
-      '    if (vacio) {',
-      '      vacio.remove()',
-      '      showWelcome({ announce: false })',
-      '    }',
+      '    if (vacio) showWelcome({ announce: false, replace: vacio })',
       '  }\n'
     ),
-    'con el chat vacío, se repinta el del ámbito nuevo SIN volver a anunciarlo (A2)'
+    'con el chat vacío, se repinta el del ámbito nuevo en su sitio y SIN volver a anunciarlo (A2)'
   )
+  assert(!refresco.includes('vacio.remove()'), 'B12: la vieja no se quita para colgar la nueva al final')
   const cambioHost = corte(refresco, 'if (changedHost) {', 'state.site = site\n')
   orden(cambioHost, ['state.contexts = emptyContexts()', "state.contextMd = ''", "state.contextScope = ''"], 'al cambiar de host se vacían los contextos y sus derivados')
 
@@ -6470,16 +6448,19 @@ test('H21: el contexto y el mapa son por ámbito dentro del host, y nadie consum
       'const hostArranque = state.site.host\n',
       'await Promise.all([',
       'if (state.bootToken !== testigo) return',
-      'state.contexts = normalizeContexts(bundle.contextRaw, {\n    legacyScope: legacyScopeOf(bundle, saved),\n    legacyIndexedAt: saved?.indexedAt,\n  })\n  applyScope()',
+      'state.contextLegacy = { legacyScope: legacyScopeOf(bundle, saved), legacyIndexedAt: saved?.indexedAt }\n  state.contexts = normalizeContexts(bundle.contextRaw, state.contextLegacy)\n  applyScope()',
       "if (typeof bundle.contextRaw === 'string' && bundle.contextRaw.trim()) {",
       'await memory.saveContexts(hostArranque, state.contexts)',
-      'if (state.bootToken !== testigo) return',
       "log.info('Contexto migrado', `${hostArranque} · ${clave} · ",
+      'if (state.bootToken !== testigo) return',
     ],
-    'el host se captura antes de leer, la migración sólo con un texto de antes y el testigo al volver de escribirla'
+    // EL CAMBIO (revisión adversaria de H21, C11): el registro va en cuanto
+    // vuelve la escritura, DELANTE del testigo; con el testigo delante, un
+    // arranque apagado a mitad dejaba la migración hecha y sin registrar nunca.
+    'el host se captura antes de leer, la migración sólo con un texto de antes, se registra al volver de escribirla y después el testigo'
   )
   eq(arranque.split('saveContexts(').length - 1, 1, 'el arranque escribe los contextos UNA vez, la reparación, y nada más')
-  const migracion = corte(arranque, "if (typeof bundle.contextRaw === 'string' && bundle.contextRaw.trim()) {", "log.info('Contexto migrado'")
+  const migracion = corte(arranque, "if (typeof bundle.contextRaw === 'string' && bundle.contextRaw.trim()) {", 'if (state.bootToken !== testigo) return')
   assert(!/state\.site/.test(migracion), 'la reparación va bajo el host capturado, nunca el de la pestaña de ahora (§8.22)')
 
   // (5) El indexado: ámbito capturado, tope total antes de leer y leer-fundir-escribir.
@@ -6496,16 +6477,20 @@ test('H21: el contexto y el mapa son por ámbito dentro del host, y nadie consum
   orden(indexar, ['spaceOverflow(', 'restIndexFor(', 'buildContext('], 'el tope se pregunta ANTES de leer la API')
   una(
     indexar,
+    // EL CAMBIO (revisión adversaria de H21): la relectura migra con la regla del
+    // arranque (B9), y keepContext sólo conserva un texto PROPIO del ámbito: si
+    // no lo tiene, se guarda lo generado en vez de tirarlo (B8/A4).
     lineas(
-      '\n    const actuales = await memory.getContexts(host)',
-      '    const nuevos = withContext(actuales, scopeKey, { text: keepContext ? undefined : contextMd, indexedAt: Date.now() })',
+      '\n    const actuales = await memory.getContexts(host, contextLegacyFor(host))',
+      '    const propio = Object.hasOwn(actuales.scopes || {}, scopeKey)',
+      '    const nuevos = withContext(actuales, scopeKey, { text: keepContext && propio ? undefined : contextMd, indexedAt: Date.now() })',
       '    await memory.saveContexts(host, nuevos)',
       '    if (sigueAqui()) {',
       '      state.contexts = nuevos',
       '      applyScope()',
       '    }\n'
     ),
-    'relectura justo antes de escribir, bajo el host y el ámbito capturados, con keepContext conservando el texto y estampando el mapa'
+    'relectura justo antes de escribir, bajo el host y el ámbito capturados, con keepContext conservando el texto propio y estampando el mapa'
   )
   const capturaIndexado = corte(indexar, '} catch (err) {', '} finally {')
   assert(!/saveContexts\(|getContexts\(|withContext\(/.test(capturaIndexado), 'un indexado fallido o cancelado no toca ningún ámbito')
@@ -6518,7 +6503,7 @@ test('H21: el contexto y el mapa son por ámbito dentro del host, y nadie consum
       'const host = state.site.host',
       'const scopeKey = scopeKeyOf(state.site)',
       'const text = await file.text()',
-      'const actuales = await memory.getContexts(host)\n  const nuevos = await memory.saveContexts(host, withContext(actuales, scopeKey, { text }))',
+      'const actuales = await memory.getContexts(host, contextLegacyFor(host))\n  const nuevos = await memory.saveContexts(host, withContext(actuales, scopeKey, { text }))',
       'if ((state.site?.host ?? state.lastHost) === host) {\n    state.contexts = nuevos\n    applyScope()\n  }',
     ],
     'el documento va al ámbito de la pestaña, capturado antes del primer await, y releído antes de escribir'
@@ -6534,7 +6519,10 @@ test('H21: el contexto y el mapa son por ámbito dentro del host, y nadie consum
     const i = lineasTrozo.findIndex((l) => l.includes('saveContexts('))
     assert(i > 0, firma + ' escribe los contextos')
     const previa = lineasTrozo.slice(0, i).reverse().find((l) => l.includes('await '))
-    assert(/const actuales = await memory\.getContexts\(host\)/.test(previa || ''), firma + ': el await anterior a la escritura es la relectura, y ningún otro')
+    assert(
+      /const actuales = await memory\.getContexts\(host, contextLegacyFor\(host\)\)/.test(previa || ''),
+      firma + ': el await anterior a la escritura es la relectura (con la regla de migración del arranque), y ningún otro'
+    )
   }
   eq(JS_SIN.split('saveContexts(').length - 1, 4, 'los contextos se escriben en cuatro sitios: la migración, el indexado, el contexto subido y el olvido')
 
@@ -6575,10 +6563,15 @@ test('H21: el contexto y el mapa son por ámbito dentro del host, y nadie consum
 
   // (9) El chat vacío: la línea del espacio sin mapa y el anuncio condicional.
   const vacio = funcion('function showWelcome(')
-  assert(vacio.startsWith('function showWelcome({ announce: anunciar = true } = {}) {'), 'repintar sin anunciar es un parámetro, que no tapa a announce()')
+  // EL CAMBIO (revisión adversaria de H21, B12): también se puede pedir que
+  // ocupe el sitio de otro `.empty`.
+  assert(vacio.startsWith('function showWelcome({ announce: anunciar = true, replace = null } = {}) {'), 'repintar sin anunciar es un parámetro, que no tapa a announce()')
   una(vacio, '\n  if (anunciar) announce(h.textContent)\n', 'sólo se anuncia si quien pinta lo pide')
   assert(!/\n\s*announce\(h\.textContent\)/.test(vacio), 'y ningún anuncio suelto')
-  una(vacio, '\n  if (espacio && !hasMap(state.contexts, state.index, scopeKeyOf(state.site))) {\n', 'la línea, sólo en un espacio sin mapa propio (hasMap, UN criterio)')
+  una(vacio, '\n  if (replace?.isConnected) replace.replaceWith(wrap)\n  else el.chat.appendChild(wrap)\n', 'B12: la bienvenida nueva ocupa el sitio de la vieja')
+  // EL CAMBIO (B10): la condición se calcula UNA vez, para el título y la línea.
+  una(vacio, "\n  const sinMapa = !!espacio && !hasMap(state.contexts, state.index, scopeKeyOf(state.site))\n", 'sin mapa propio (hasMap, UN criterio), calculado una vez')
+  una(vacio, '\n  if (sinMapa) {\n', 'la línea, sólo en un espacio sin mapa propio')
   una(
     vacio,
     "  const espacio = state.site?.product === 'confluence' && isRealSpaceKey(state.site.spaceKey) ? state.site.spaceKey : ''\n",
@@ -6597,10 +6590,13 @@ test('H21: el contexto y el mapa son por ámbito dentro del host, y nadie consum
     '«Construir» pide el turno parado: nace apagado con uno en vuelo (H6) y el clic se guarda'
   )
   orden(vacio, ["const p = document.createElement('p')", "linea.className = 'no-map'", "hoy.className = 'today hidden'"], 'entre la explicación y «hoy»')
+  // EL CAMBIO (revisión adversaria de H21, B10): sin mapa, el título no cuenta
+  // nada: «N cosas indexadas aquí» encima de ««X» aún no tiene mapa» se
+  // contradecían.
   una(
     vacio,
-    '\n  h.textContent = deEspacio\n    ? `${deEspacio} páginas de «${espacio}» en el mapa`\n    : state.index\n      ? `${indexSize(state.index)} cosas indexadas aquí`\n      : \'Listo para escuchar\'\n',
-    'el título cuenta las páginas del espacio cuando las tiene, y lo de siempre si no'
+    "\n  h.textContent = sinMapa\n    ? 'Listo para escuchar'\n    : deEspacio\n      ? `${deEspacio} páginas de «${espacio}» en el mapa`\n      : state.index\n        ? `${indexSize(state.index)} cosas indexadas aquí`\n        : 'Listo para escuchar'\n",
+    'el título: sin mapa, «Listo para escuchar»; con páginas del espacio, ésas; y lo de siempre si no'
   )
 
   // (10) El Confluence enlazado: UN contexto, con su ámbito, y sin escribir nada de ese host.
@@ -6682,4 +6678,342 @@ test('H21: el contexto y el mapa son por ámbito dentro del host, y nadie consum
   assert(JS_SIN.includes('ámbitos con contexto (${claves})'), 'con el mismo formato que el panel')
   const cajas = corte(espejo, 'const CAJAS = [', 'function check()')
   assert(cajas.includes("'.no-map'") && cajas.includes("'#scope-list li'"), 'check() mide a lo ancho la línea y las filas de ámbitos')
+})
+
+test('H21 revisión: los cuerpos que deciden, no sólo sus literales', () => {
+  // La prueba «H21» pinaba con igualdad applyScope, legacyScopeOf, forgetScope y
+  // nombresDeAmbitos, pero el resto por presencia de literales, y dieciocho de
+  // treinta y tres mutaciones del cazador B pasaban en verde: tres de ellas
+  // sacaban el TEXTO de un contexto a Ajustes o al Registro (`entrada['text']`,
+  // `state.contextMd.slice(…)`, `contextMd?.slice(…)`), contra §8.20. Aquí los
+  // cuerpos enteros con igualdad, las líneas ENTERAS con su salto, y lo que la
+  // revisión adversaria cambia (D3-D16 del orquestador).
+  const JS_SIN = sinComentarios(JS)
+  const LIMPIO = JS_SIN.split('\n')
+    .filter((l) => l.trim())
+    .join('\n')
+  const corte = (src, desde, hasta) => {
+    const i = src.indexOf(desde)
+    assert(i >= 0, 'falta la marca de inicio del recorte: ' + desde)
+    const j = src.indexOf(hasta, i + desde.length)
+    assert(j > i, 'falta la marca de final del recorte (o va antes): ' + hasta)
+    return src.slice(i, j)
+  }
+  const funcion = (firma) => corte(LIMPIO, firma, '\n}\n') + '\n}'
+  const una = (src, linea, msg) => eq(src.split(linea).length - 1, 1, msg + ': «' + linea.trim() + '»')
+  const lineas = (...ls) => ls.join('\n')
+  const orden = (src, marcas, msg) => {
+    let desde = 0
+    for (const m of marcas) {
+      const i = src.indexOf(m, desde)
+      assert(i >= 0, `${msg}: falta, o va antes de lo que debe, «${m}»`)
+      desde = i + m.length
+    }
+  }
+
+  // (1) Los cuerpos que deciden, ENTEROS.
+  const lista = funcion('function paintScopeList(')
+  eq(
+    lista,
+    lineas(
+      'function paintScopeList() {',
+      "  const box = $('scope-list')",
+      "  box.textContent = ''",
+      '  if (!state.site) return',
+      '  const claves = new Set(scopeKeys(state.contexts))',
+      "  if (state.site.product === 'confluence') {",
+      '    for (const p of Object.values(state.index?.pages || {})) {',
+      "      const clave = scopeKeyOf({ product: 'confluence', spaceKey: p?.spaceKey })",
+      "      if (clave !== '*') claves.add(clave)",
+      '    }',
+      '  }',
+      "  const ordenadas = [...claves].sort((a, b) => a.localeCompare(b, 'es'))",
+      '  if (!ordenadas.length) {',
+      "    const vacio = document.createElement('li')",
+      "    const k = document.createElement('span')",
+      "    k.className = 'k'",
+      "    k.textContent = 'este sitio'",
+      "    const v = document.createElement('span')",
+      "    v.className = 'v'",
+      "    v.textContent = 'sin mapa ni contexto todavía'",
+      '    vacio.append(k, v)',
+      '    box.appendChild(vacio)',
+      '    return',
+      '  }',
+      '  for (const clave of ordenadas) {',
+      '    const entrada = Object.hasOwn(state.contexts.scopes, clave) ? state.contexts.scopes[clave] : null',
+      '    const partes = []',
+      "    if (clave.startsWith('space:')) partes.push(`${pagesOfSpace(state.index, clave.slice('space:'.length)).length} páginas`)",
+      '    if (entrada) partes.push(`contexto ${entrada.text.length} caracteres`)',
+      '    if (entrada?.indexedAt) {',
+      "      partes.push('mapa del ' + new Date(entrada.indexedAt).toLocaleDateString('es', { day: 'numeric', month: 'short' }))",
+      '    } else {',
+      "      partes.push(hasMap(state.contexts, state.index, clave) ? 'con mapa' : 'sin mapa')",
+      '    }',
+      "    if (entrada?.legacy) partes.push('migrado del contexto de antes de H21')",
+      "    const fila = document.createElement('li')",
+      "    const k = document.createElement('span')",
+      "    k.className = 'k'",
+      '    k.textContent = scopeLabel(clave)',
+      "    const v = document.createElement('span')",
+      "    v.className = 'v'",
+      "    v.textContent = partes.join(' · ')",
+      "    const olvidar = document.createElement('button')",
+      "    olvidar.className = 'ghost small ' + NEEDS_IDLE",
+      "    olvidar.type = 'button'",
+      "    olvidar.textContent = 'Olvidar el mapa'",
+      "    olvidar.setAttribute('aria-label', ('Olvidar el mapa de ' + scopeLabel(clave)).replace(' de el ', ' del '))",
+      '    olvidar.disabled = state.streaming',
+      "    olvidar.addEventListener('click', () => {",
+      '      if (state.streaming) return',
+      '      forgetScope(clave).catch(console.error)',
+      '    })',
+      '    fila.append(k, v, olvidar)',
+      '    box.appendChild(fila)',
+      '  }',
+      '}'
+    ),
+    // B14/C3: en Jira no se lista un proyecto por sus incidencias cosechadas (el
+    // olvido no las quita y la fila volvía); B4: lo migrado lo dice.
+    'la lista de ámbitos: los del contexto y, en Confluence, los espacios del índice; cuentas, claves y «migrado», nunca el texto'
+  )
+  eq(
+    funcion('async function forgetScope('),
+    lineas(
+      'async function forgetScope(key) {',
+      "  const host = state.site?.host || ''",
+      '  if (!host || state.streaming) return',
+      '  const etiqueta = scopeLabel(key)',
+      "  const espacio = key.startsWith('space:') ? key.slice('space:'.length) : ''",
+      '  const paginas = espacio ? pagesOfSpace(state.index, espacio).length : 0',
+      "  const caracteres = contextFor(state.contexts, key, { fallback: '' }).length",
+      '  let guardados = null',
+      '  let nada = false',
+      '  try {',
+      '    if (espacio && state.index) {',
+      '      state.index = withoutSpace(state.index, espacio)',
+      '      if (state.indexDirty?.host === host) state.indexDirty = { host, index: state.index }',
+      '      await saveIndex(host, state.index)',
+      '    }',
+      '    const actuales = await memory.getContexts(host, contextLegacyFor(host))',
+      '    nada = !paginas && !Object.hasOwn(actuales.scopes || {}, key)',
+      '    guardados = await memory.saveContexts(host, withoutContext(actuales, key))',
+      '  } catch (err) {',
+      "    log.warn('Mapa olvidado', `${host} · ${key} · no se pudo escribir: ${err?.message || err}`)",
+      "    announce('No he podido olvidar ese mapa.')",
+      '    paintScopeList()',
+      '    return',
+      '  }',
+      "  log.info('Mapa olvidado', `${host} · ${key} · ` + (nada ? 'nada que olvidar' : `${paginas} páginas · ${caracteres} caracteres`))",
+      '  if ((state.site?.host ?? state.lastHost) !== host) return',
+      '  state.contexts = guardados',
+      '  applyScope()',
+      "  announce((nada ? `No había nada que olvidar de ${etiqueta}.` : `Olvidado el mapa de ${etiqueta}.`).replace(' de el ', ' del '))",
+      '  paintScopeList()',
+      '  paintSettingsSiteInfo()',
+      '  paintPrivacy().catch(() => {})',
+      "  const vacio = state.site ? el.chat.querySelector('.empty') : null",
+      '  if (vacio) showWelcome({ announce: false, replace: vacio })',
+      '}'
+    ),
+    // B3: la guarda es la del sitio del PANEL (con la pestaña en el correo el
+    // olvido sigue siendo de este host); C11: el Registro va en cuanto la
+    // escritura vuelve, DELANTE de la guarda; B14: «nada que olvidar» no se dice
+    // «Olvidado»; B11: se repinta lo que depende de ello; B9: la regla del arranque.
+    'olvidar un ámbito: sus páginas y SU contexto (releído con la regla del arranque), registrado al escribir, aplicado bajo el host del panel y repintado'
+  )
+  eq(
+    funcion('function contextLegacyFor('),
+    lineas(
+      'function contextLegacyFor(host) {',
+      '  return (state.site?.host ?? state.lastHost) === host ? state.contextLegacy || {} : {}',
+      '}'
+    ),
+    'B9: las relecturas migran con la regla del arranque sólo si el panel sigue en ese host'
+  )
+  eq(
+    funcion('function paintSettingsSiteInfo('),
+    lineas(
+      'function paintSettingsSiteInfo() {',
+      "  $('settings-site-info').textContent = state.site",
+      "    ? `${state.site.host} · ${state.index ? indexSize(state.index) + ' entradas indexadas' : 'sin índice'} · ${state.contextMd ? 'con contexto' : 'sin contexto'}`",
+      "    : 'sin sitio'",
+      '}'
+    ),
+    'B11: la línea de «Este sitio» en una función, para que el olvido la repinte'
+  )
+  eq(JS_SIN.split("$('settings-site-info')").length - 1, 1, 'B11: y nadie más la escribe')
+  una(funcion('async function showSettingsScreen('), '\n  paintSettingsSiteInfo()\n', 'B11: abrir Ajustes la pinta por la misma función')
+
+  // (2) La regla de migración del arranque, guardada por host y repetida en las
+  // tres relecturas (B9).
+  una(LIMPIO, '\n  contextLegacy: null,\n', 'la regla nace vacía en el estado')
+  eq(
+    (JS_SIN.match(/state\.contextLegacy = [^\n]*/g) || []).sort(),
+    [
+      'state.contextLegacy = null',
+      'state.contextLegacy = null',
+      'state.contextLegacy = { legacyScope: legacyScopeOf(bundle, saved), legacyIndexedAt: saved?.indexedAt }',
+    ],
+    'la decide el arranque, y la vacían el cambio de host y «Olvidar este sitio»'
+  )
+  const cambioHost = corte(LIMPIO, 'if (changedHost) {', 'state.site = site\n')
+  una(cambioHost, '\n    state.contextLegacy = null\n', 'es del host: se vacía con él')
+  una(
+    corte(LIMPIO, "$('btn-forget').addEventListener(", "$('mem-enabled').addEventListener("),
+    '\n    state.contextLegacy = null\n',
+    'y con «Olvidar este sitio»'
+  )
+  eq(
+    JS_SIN.split('memory.getContexts(host, contextLegacyFor(host))').length - 1,
+    3,
+    'el indexado, el contexto subido y el olvido releen con la regla del arranque'
+  )
+  eq(JS_SIN.split('memory.getContexts(').length - 1, 3, 'y no hay ninguna otra relectura de los contextos')
+
+  // (3) La migración del arranque: el registro al volver la escritura, delante
+  // del testigo (C11), y si recortó, en warn (A6).
+  una(
+    corte(LIMPIO, 'async function bootForSite(', 'function refreshProfileSoon('),
+    lineas(
+      "\n  if (typeof bundle.contextRaw === 'string' && bundle.contextRaw.trim()) {",
+      "    const [clave = '*'] = scopeKeys(state.contexts)",
+      '    const largo = state.contexts.scopes[clave]?.text.length || 0',
+      '    const original = bundle.contextRaw.trim().length',
+      '    const reparado = await memory.saveContexts(hostArranque, state.contexts).then(',
+      '      () => true,',
+      '      () => false',
+      '    )',
+      '    if (reparado && original > largo) {',
+      "      log.warn('Contexto migrado', `${hostArranque} · ${clave} · ${largo} de ${original} caracteres (recortado a textMax)`)",
+      '    } else if (reparado) {',
+      "      log.info('Contexto migrado', `${hostArranque} · ${clave} · ${largo} caracteres`)",
+      '    }',
+      '    if (state.bootToken !== testigo) return',
+      '  }\n'
+    ),
+    'la migración: clave y caracteres de lo recién normalizado, registro sólo si se escribió (en warn si recortó) y el testigo después'
+  )
+
+  // (4) El índice se escribe sobre lo RELEÍDO (B5), en el indexado y en el turno.
+  const indexar = corte(LIMPIO, 'async function generateContext(', 'function attachReindexButton(')
+  una(indexar, '\n    const enDisco = (await getIndex(host)).index\n', 'el indexado relee el índice del almacén')
+  una(indexar, '\n    const previo = sigueAqui() && state.index ? mergeIndex(enDisco, state.index) : enDisco\n', 'y funde encima lo del panel si sigue en el host')
+  orden(indexar, ['const enDisco = (await getIndex(host)).index', 'const previo = ', 'const fundido = mergeIndex(base, index)', 'await saveIndex(host, fundido)'], 'relectura antes de escribir')
+  assert(!/const previo = sigueAqui\(\) \? state\.index/.test(indexar), 'la copia de memoria ya no es la base a secas')
+  const escribir = funcion('async function persistIndex(')
+  orden(
+    escribir,
+    ['const aGuardar = sigueAqui && state.index ? state.index : index', 'const enDisco = (await getIndex(host)).index', 'escrito = mergeIndex(enDisco, aGuardar)', 'await saveIndex(host, escrito)'],
+    'el turno relee el almacén y escribe lo apuntado FUNDIDO encima'
+  )
+  eq(escribir.split('saveIndex(').length - 1, 1, 'una sola escritura por turno (P3)')
+  assert(!/saveIndex\([^)]*aGuardar\)/.test(escribir), 'ninguna escritura de la copia de memoria a secas')
+
+  // (5) keepContext sólo conserva un texto PROPIO (B8/A4).
+  una(indexar, '\n    const propio = Object.hasOwn(actuales.scopes || {}, scopeKey)\n', 'si el ámbito tiene texto propio')
+  una(
+    indexar,
+    '\n    const nuevos = withContext(actuales, scopeKey, { text: keepContext && propio ? undefined : contextMd, indexedAt: Date.now() })\n',
+    'y si no lo tiene, se guarda lo generado en vez de tirarlo'
+  )
+
+  // (6) Las líneas que decían cosas sin que nada las pinara (B6).
+  una(
+    indexar,
+    lineas(
+      '\n      showNotice(',
+      '        `El mapa de este sitio ya tiene ${pages} páginas de ${spaces} espacios (tope ${INDEX_LIMITS.maxPagesTotal}). ` +',
+      '          `Olvida el mapa de alguno desde Ajustes para indexar el espacio ${sitio.spaceKey}.`,',
+      '        true',
+      '      )\n'
+    ),
+    '«Mapa lleno» es un aviso ROJO (§8.14)'
+  )
+  una(corte(LIMPIO, 'async function uploadContext(', 'function applyScope('), '\n  await saveSite(host, { onboarded: true })\n', 'subir un contexto deja el sitio configurado')
+  const estado = funcion('async function paintState(')
+  una(
+    estado,
+    lineas(
+      '\n  add(',
+      "    'contexto',",
+      "    (state.contextMd ? `${state.contextScope || '*'}: ${state.contextMd.length} caracteres` : '(sin contexto)') +",
+      "      (otrosAmbitos ? ` · otros: ${otrosAmbitos}` : '')",
+      '  )\n'
+    ),
+    'el Registro dice la clave y cuántos caracteres, nunca el texto'
+  )
+  const logEnlazado = corte(LIMPIO, "\n    log.info(\n      'Contexto de Confluence enlazado',", '\n    )\n')
+  una(
+    logEnlazado,
+    "\n      `${host} · ${contextMd?.length || 0} caracteres · ${key ? (key === '*' ? '*' : scopeLabel(key).replace(/^el /, '')) : 'sin contexto'} · ${index ? indexSize(index) + ' entradas' : 'sin índice'}`",
+    'el enlazado se registra con su ámbito y sus cuentas, nunca con su texto'
+  )
+  const privacidad = funcion('async function paintPrivacy(')
+  una(
+    privacidad,
+    lineas(
+      '\n  const contextos = normalizeContexts(bundle.contextRaw, {',
+      '    legacyScope: legacyScopeOf(bundle, bundle.site),',
+      '    legacyIndexedAt: bundle.site?.indexedAt,',
+      '  })\n'
+    ),
+    'la privacidad cuenta los ámbitos con la misma regla de migración que el arranque'
+  )
+  // B14: en Jira la fila del índice dice sólo las incidencias.
+  una(privacidad, "\n  const enJira = state.site?.product === 'jira'\n", 'el producto de la pestaña')
+  una(
+    privacidad,
+    lineas(
+      '\n  add(',
+      "    'índice de navegación',",
+      "    !bundle.index ? '(nada)' : enJira ? `${incidencias} incidencias` : `${paginas} páginas en ${espacios} espacios · ${incidencias} incidencias`",
+      '  )\n'
+    ),
+    'en Jira «N incidencias» a secas; en Confluence, páginas, espacios e incidencias'
+  )
+
+  // (7) El chat vacío: el título de un espacio sin mapa, el mismo en el panel y
+  // en el espejo (B10), y la línea DENTRO del ciclo de pintado.
+  const vacio = funcion('function showWelcome(')
+  una(vacio, '\n  const deEspacio = espacio ? pagesOfSpace(state.index, espacio).length : 0\n', 'las páginas del espacio, no las del índice entero')
+  una(vacio, '\n    linea.append(texto, construir)\n    wrap.appendChild(linea)\n  }\n', 'la línea va dentro del estado vacío, en el mismo pintado')
+  una(vacio, "\n    construir.setAttribute('aria-label', `Construir el mapa de «${espacio}»`)\n", '«Construir» dice de qué espacio')
+  const espejo = readFileSync(join(ROOT, 'harness/panel-preview.html'), 'utf8')
+  una(espejo, "    construir.setAttribute('aria-label', `Construir el mapa de «${espacio}»`)\n", 'y en el espejo, igual')
+  una(vacio, "\n  h.textContent = sinMapa\n    ? 'Listo para escuchar'\n", 'B10: sin mapa, el título no cuenta nada')
+  una(espejo, "wrap.appendChild(mk('h2', null, sinMapa ? 'Listo para escuchar' : ", 'B10: el espejo pinta el MISMO título de un espacio sin mapa')
+
+  // (8) Lo migrado se dice en la lista, con el mismo literal en el espejo (B4).
+  const migradoPanel = "partes.push('migrado del contexto de antes de H21')"
+  una(lista, migradoPanel, 'la fila de un ámbito que vino del contexto de antes lo dice')
+  const ambitos = corte(espejo, 'function pintarListaDeAmbitos() {', '\n  }\n')
+  assert(ambitos.includes(' · migrado del contexto de antes de H21'), 'B4: el espejo enseña una fila migrada con el mismo literal')
+
+  // (9) El CSS de la lista de ámbitos, regla a regla y sin más.
+  una(CSS_LIMPIO, '\n#scope-list li { flex-wrap: wrap; }\n', 'a 320 px la fila envuelve')
+  una(CSS_LIMPIO, '\n#scope-list li button { margin-left: auto; }\n', 'y el botón va a la derecha, sin ancho propio')
+  eq(CSS_LIMPIO.split('#scope-list').length - 1, 2, 'ninguna otra regla de la lista (ni nowrap ni un ancho mínimo)')
+
+  // (10) SEGURIDAD §8.20: de lo guardado en un contexto sólo sale su longitud.
+  // Una regex para las cuatro formas de tocar el texto (`contextMd`, `.text`,
+  // `['text']`, `["text"]`); sólo vale si detrás va `.length`, o si es la
+  // pregunta de un ternario (su verdad no enseña nada).
+  const fuga = /(?:\bcontextMd\b|\.text\b|\[\s*['"`]text['"`]\s*\])(?!\s*\??\.length\b)(?!\s*\?(?![.?]))/
+  for (const [nombre, trozo] of [
+    ['paintScopeList', lista],
+    ['paintPrivacy', privacidad],
+    ['paintState', estado],
+    ['el log del enlazado', logEnlazado],
+  ]) {
+    const m = trozo.match(fuga)
+    assert(!m, `SEGURIDAD §8.20: ${nombre} toca el texto de un contexto: «${m ? trozo.slice(Math.max(0, m.index - 30), m.index + 40) : ''}»`)
+  }
+  // La regex caza las cuatro formas (control, para que no pueda pasar por vacía).
+  for (const malo of ["x.text.slice(0, 40)", "e['text']", 'e["text"]', 'state.contextMd.slice(0, 60)', 'contextMd?.slice(0, 40)', 'contextMd ?? x']) {
+    assert(fuga.test(malo), 'la regex de SEGURIDAD tiene que cazar: ' + malo)
+  }
+  for (const bueno of ['x.text.length', 'contextMd?.length', "state.contextMd ? 'a' : 'b'"]) {
+    assert(!fuga.test(bueno), 'y dejar pasar: ' + bueno)
+  }
 })

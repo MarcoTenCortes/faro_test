@@ -1616,7 +1616,7 @@ const actions = {
     setSidebar('clasica')
     renderPage('page:200')
     await wait(320)
-    const { subIndex, stampSpace, hasMap, emptyContexts, countPages } = await import('/src/shared/scopes.js')
+    const { subIndex, stampSpace, hasMap, emptyContexts, withContext, countPages } = await import('/src/shared/scopes.js')
     const { treeTitles } = await import('/src/panel/prompts.js')
     const { validatePlan } = await import('/src/nav/validate.js')
     const { ancestryOf, normalizeIndex } = await import('/src/atlassian/index-store.js')
@@ -1630,7 +1630,7 @@ const actions = {
       const sub = subIndex(fundido, clave)
       say(
         `  ${clave}: ${leido.arbol.own} de ${leido.arbol.total} por la API en ${leido.arbol.requests} peticiones · ` +
-          `${Object.keys(sub.pages).length} en su subíndice · portada ${leido.arbol.homeId} · mapa ${hasMap(emptyContexts(), fundido, 'space:' + clave)}`,
+          `${Object.keys(sub.pages).length} en su subíndice · portada ${leido.arbol.homeId} · mapa sin construir ${hasMap(emptyContexts(), fundido, 'space:' + clave)} · construido ${hasMap(withContext(emptyContexts(), 'space:' + clave, { text: 'x', indexedAt: Date.now() }), fundido, 'space:' + clave)}`,
         'ok'
       )
     }
@@ -4228,7 +4228,9 @@ const actions = {
     // La barra lateral no sabe de qué espacio es cada fila: el panel la estampa
     // con el de la pestaña antes de fundirla (`growTreeFromPage`), y sin eso esas
     // páginas no contarían para su mapa. Lo que ya tiene espacio no se toca, y
-    // una clave rara no estampa nada. Y el mapa de un espacio lo dice el índice.
+    // una clave rara no estampa nada. Y el mapa de un espacio lo dice su
+    // `indexedAt`, no el índice: desde la revisión adversaria de H21 las páginas
+    // no dan mapa (una cosechada o una fila de la barra no lo construyen).
     const filasBarra63 = leerBarra63().pages
     const barra63 = indices63.normalizeIndex({ pages: filasBarra63, updated: Date.now() }, location.hostname, null, {
       cloud: false,
@@ -4241,20 +4243,27 @@ const actions = {
       'ENG'
     )
     const vacios63 = ambitos63.emptyContexts()
+    const construidos63 = ambitos63.withContext(
+      ambitos63.withContext(vacios63, 'space:ENG', { text: 'x', indexedAt: Date.now() }),
+      'space:OPS',
+      { text: 'x', indexedAt: Date.now() }
+    )
     ok(
-      'la barra lateral se estampa con el espacio de la pestaña, y el mapa de cada espacio lo dice el índice',
+      'la barra lateral se estampa con el espacio de la pestaña, y el mapa de cada espacio lo dice su indexado, no sus páginas',
       filasBarra63.length > 10 &&
         Object.keys(estampada63.pages).length === new Set(filasBarra63.map((p) => p.id)).size &&
         Object.values(barra63.pages).every((p) => p.spaceKey === null) &&
         Object.values(estampada63.pages).every((p) => p.spaceKey === 'ENG') &&
         mezclada63.pages[unaDeOps63].spaceKey === 'OPS' &&
         ambitos63.stampSpace(barra63, 'A"B') === barra63 &&
-        ambitos63.hasMap(vacios63, fundido63, 'space:OPS') &&
-        ambitos63.hasMap(vacios63, fundido63, 'space:ENG') &&
-        !ambitos63.hasMap(vacios63, fundido63, 'space:XXX') &&
-        !ambitos63.hasMap(vacios63, subEng63, 'space:OPS'),
+        ambitos63.hasMap(construidos63, fundido63, 'space:OPS') &&
+        ambitos63.hasMap(construidos63, fundido63, 'space:ENG') &&
+        !ambitos63.hasMap(construidos63, fundido63, 'space:XXX') &&
+        !ambitos63.hasMap(vacios63, fundido63, 'space:OPS') &&
+        !ambitos63.hasMap(vacios63, fundido63, 'space:ENG'),
       `${filasBarra63.length} filas de la barra · ${Object.values(estampada63.pages).filter((p) => p.spaceKey === 'ENG').length} con ENG · ` +
-        `mapa OPS ${ambitos63.hasMap(vacios63, fundido63, 'space:OPS')} · XXX ${ambitos63.hasMap(vacios63, fundido63, 'space:XXX')}`
+        `mapa OPS ${ambitos63.hasMap(construidos63, fundido63, 'space:OPS')} · XXX ${ambitos63.hasMap(construidos63, fundido63, 'space:XXX')} · ` +
+        `OPS sin construir ${ambitos63.hasMap(vacios63, fundido63, 'space:OPS')}`
     )
 
     setSidebar('clasica')

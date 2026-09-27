@@ -412,15 +412,21 @@ function linkedHostLabel(host) {
     .slice(0, 200)
 }
 
+/** Lo más largo que `validSpaceKey` deja pasar: `dato` no recorta una clave válida. */
+const CLAVE_ESPACIO_MAX = 255
+
 /**
- * Una clave de espacio que va DENTRO de una línea de Faro (H21): tal cual si
- * tiene forma de clave (`validSpaceKey`, la única idea de qué es una, §9) y
- * acotada a `LOCATION_LIMITS.key`, o '' si no la tiene. `validSpaceKey` admite
- * claves personales de 255 caracteres con «:», «.», «_» y «@»: una línea que
- * habla como Faro no puede llevar una frase dentro. Pura.
+ * Una clave de espacio que va DENTRO de una línea de Faro (H21): ENTERA si
+ * tiene forma de clave (`validSpaceKey`, la única idea de qué es una, §9), o ''
+ * si no la tiene. `validSpaceKey` ya la acota a 255 caracteres, en una línea y
+ * sólo con letras, números y «~ _ . @ : -»: no cabe una frase dentro. La
+ * revisión adversaria de H21 quitó el recorte a `LOCATION_LIMITS.key` (40), que
+ * es de la cabecera del PANEL: aquí citaba un prefijo que no es la clave de
+ * ningún espacio —el modelo lo copiaría en una CQL— y fundía dos claves que
+ * compartían los 40 primeros caracteres. Pura.
  */
 function claveEnLinea(k) {
-  return typeof k === 'string' && validSpaceKey(k) === k ? dato(k, LOCATION_LIMITS.key) : ''
+  return typeof k === 'string' && validSpaceKey(k) === k ? dato(k, CLAVE_ESPACIO_MAX) : ''
 }
 
 /**

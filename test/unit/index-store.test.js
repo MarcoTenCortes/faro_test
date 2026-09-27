@@ -342,11 +342,31 @@ test('H21: indexDigest con preferSpace pone delante el espacio de la pestaña, e
   const lineas = (d) => d.split('\n').filter((l) => /^ {2}\d/.test(l)).map((l) => l.trim().split(' ')[0])
   eq(lineas(indexDigest(DOS_ESPACIOS, { preferSpace: 'OPS' })), ['2', '4', '1', '3', '5'], 'OPS delante en su orden, y las demás detrás')
   eq(lineas(indexDigest(DOS_ESPACIOS, { preferSpace: 'ENG' })), ['1', '3', '2', '4', '5'])
-  // Dentro de cada grupo manda la relevancia, como antes.
+  // La relevancia manda, y el espacio sólo desempata dentro del mismo nivel.
   eq(lineas(indexDigest(DOS_ESPACIOS, { preferSpace: 'OPS', relevantTo: 'guardias de runbooks' })), ['4', '2', '1', '3', '5'])
-  // Con el tope, lo que se queda fuera son las del OTRO espacio.
+  // EL CAMBIO: la revisión adversaria de H21 encontró que el espacio preferido
+  // iba POR ENCIMA de la relevancia, así que con ≥60 páginas en el espacio de
+  // la pestaña una página de OTRO espacio que la respuesta nombra no llegaba al
+  // planificador (el pin de antes lo exigía: «con el tope, lo que se queda
+  // fuera son las del OTRO espacio»). Ahora, a igual relevancia, el preferido
+  // delante; con más relevancia, la de otro espacio delante del preferido.
+  eq(lineas(indexDigest(DOS_ESPACIOS, { preferSpace: 'ENG', relevantTo: 'los runbooks' })), ['2', '4', '1', '3', '5'], 'lo relevante de OPS antes que lo irrelevante de ENG')
+  // Sin relevancia que decida, el tope deja fuera lo del otro espacio, como antes.
   eq(lineas(indexDigest(DOS_ESPACIOS, { preferSpace: 'OPS', maxPages: 3 })), ['2', '4', '1'])
   assert(indexDigest(DOS_ESPACIOS, { preferSpace: 'OPS', maxPages: 3 }).includes('PÁGINAS (5, se muestran 3)'), 'y cuenta todas')
+})
+
+test('H21 revisión: con el tope lleno del espacio de la pestaña, la página de OTRO espacio que la respuesta nombra sigue llegando, y la primera', () => {
+  const pages = {}
+  for (let i = 1; i <= 80; i++) pages[1000 + i] = { id: String(1000 + i), title: 'Nota operativa ' + i, spaceKey: 'OPS' }
+  pages[9999] = { id: '9999', title: 'Arquitectura de la pasarela', spaceKey: 'ENG' }
+  const indice = { version: 3, host: HOST, spaces: {}, pages, projects: {}, issues: {} }
+  const d = indexDigest(indice, { preferSpace: 'OPS', maxPages: 60, relevantTo: 'La arquitectura de la pasarela está descrita aparte.' })
+  const lineas = d.split('\n').filter((l) => /^ {2}\d/.test(l)).map((l) => l.trim().split(' ')[0])
+  eq(lineas.length, 60, 'el tope se respeta')
+  eq(lineas[0], '9999', 'la relevante de ENG, la primera (y la última del índice)')
+  eq(lineas[1], '1001', 'y detrás las de OPS, en su orden')
+  assert(d.includes('PÁGINAS (81, se muestran 60)'), 'cuenta todas')
 })
 
 test('H21: sin preferSpace (o con uno que no vale) indexDigest es byte a byte el de antes', () => {

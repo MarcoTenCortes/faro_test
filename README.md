@@ -329,7 +329,7 @@ De ahí que haya dos caminos hasta el mismo sitio: la extensión ve **la página
 que tienes delante**, y opencode consulta **la API**. Ninguno de los dos
 escribe nada.
 
-Diecinueve decisiones que sostienen el diseño:
+Veinte decisiones que sostienen el diseño:
 
 1. **El panel es el único que habla con opencode.** El content script vive
    dentro de una página que no controlamos: no conoce la contraseña del
@@ -660,12 +660,19 @@ Diecinueve decisiones que sostienen el diseño:
    espacio a otro** sigue funcionando (empieza por «Espacio X»). Al entrar en un
    espacio que todavía no tiene mapa no se abre ninguna pantalla: el chat vacío
    dice **«X aún no tiene mapa · Construir»**, y si pides que te lleve a una
-   página de ese espacio, la tarjeta te ofrece construirlo. El mapa de un sitio
-   tiene un **tope de 1 500 páginas** (cinco espacios de 300): al llegar, Faro no
-   borra ningún espacio solo, te avisa y tú eliges cuál olvidar desde
-   **Ajustes → Mapas y contextos de este sitio** («Olvidar el mapa»). El contexto
-   que ya tenías de antes se queda bajo su espacio sólo si se puede afirmar que
-   era suyo; si no, sigue valiendo para todo el sitio, como hasta ahora.
+   página de ese espacio, la tarjeta te ofrece construirlo. Un espacio tiene mapa
+   cuando se ha construido: que Faro haya visto alguna página suya no cuenta.
+   Construir un mapa más tiene una **puerta de 1 500 páginas** (cinco espacios de
+   300), que cuenta sólo las de los OTROS espacios —lo que se puede olvidar—; no
+   es un tope del mapa entero, que con lo que Faro aprende por el camino puede
+   pasar de ese número. Al llegar, Faro no borra ningún espacio solo, te avisa y
+   tú eliges cuál olvidar desde **Ajustes → Mapas y contextos de este sitio**
+   («Olvidar el mapa», que se lleva sus páginas y su contexto; si no había nada
+   que olvidar, lo dice). El contexto que ya tenías de antes se queda bajo su
+   espacio si el mapa guardado era de ese espacio y se sabe cuándo se indexó
+   —también el que subiste a mano, porque subirlo reindexaba el espacio—, y la
+   lista lo dice («migrado del contexto de antes de H21»); si no, sigue valiendo
+   para todo el sitio, como hasta ahora.
 
 ---
 
@@ -717,7 +724,7 @@ cuáles no), que desde H16 son tuyos y no de un sitio.
 ## Comprobaciones
 
 ```bash
-npm run check              # sintaxis + orden + manifest + 1469 pruebas unitarias + docs
+npm run check              # sintaxis + orden + manifest + 1478 pruebas unitarias + docs
 npm run check:docs         # sólo el paso docs: número de pruebas, títulos del registro, mensajes y ficheros del mapa
 npm run test:integration   # contra un opencode real que arranca la propia prueba
 npm run harness            # banco de pruebas visual en http://127.0.0.1:5175

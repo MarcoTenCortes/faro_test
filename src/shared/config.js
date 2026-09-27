@@ -206,14 +206,19 @@ export function migrateSettings(raw) {
  * hay más— se convierta en decenas de GET. Las páginas siguen teniendo UN solo
  * tope, `maxPages`, que es el mismo para el índice venga de donde venga.
  *
- * `maxPagesTotal` (H21) es el tope de páginas del índice ENTERO de un host, que
- * desde H21 guarda varios espacios (docs/PLAN2.md §3.4): cinco espacios de
- * `maxPages`. `persistIndex` escribe el objeto entero en cada turno (P3, H6) y
- * `npm run bench` mide lo que pesa (300, 1 500 y 3 000 páginas). Al alcanzarse
- * NO se desaloja ningún espacio solo —sería lo contrario de «que se guarde un
- * árbol u otro»—: indexar uno nuevo por la API se para con un aviso hasta que
- * se olvide el mapa de otro desde Ajustes (decisión 9). `maxPages` sigue siendo
- * el ÚNICO tope por espacio.
+ * `maxPagesTotal` (H21) es una PUERTA al CONSTRUIR el mapa de un espacio por
+ * la API (`spaceOverflow`), no un tope del índice entero: el índice de un host
+ * guarda desde H21 varios espacios (docs/PLAN2.md §3.4) y lo que llega por la
+ * barra lateral o por las herramientas no pasa por aquí, así que puede pasar
+ * de este número (acotado por espacio con `maxPages`). Cinco espacios de
+ * `maxPages`: `persistIndex` escribe el objeto entero en cada turno (P3, H6) y
+ * `npm run bench` mide lo que pesa (300, 1 500 y 3 000 páginas). La puerta
+ * cuenta sólo las páginas de OTROS espacios de verdad —lo que «Olvidar el mapa
+ * de X» puede liberar; revisión adversaria de H21—, y al alcanzarse NO se
+ * desaloja ningún espacio solo —sería lo contrario de «que se guarde un árbol u
+ * otro»—: construir uno nuevo se para con un aviso hasta que se olvide el mapa
+ * de otro desde Ajustes (decisión 9). `maxPages` sigue siendo el ÚNICO tope por
+ * espacio.
  */
 export const INDEX_LIMITS = {
   maxPages: 300,

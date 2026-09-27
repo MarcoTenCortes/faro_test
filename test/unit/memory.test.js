@@ -105,6 +105,20 @@ test('H21: getContexts migra el string de hoy bajo el ámbito del índice, lo re
     eq(Object.keys((await getContexts(HOST, { legacyScope: 'space:ENG' })).scopes), ['*'])
   }))
 
+test('H21 revisión: si la reparación no se puede escribir, getContexts lee normalizado igual y no lanza', () =>
+  conChrome(async (local) => {
+    const clave = STORAGE_KEYS.context(HOST)
+    local[clave] = 'texto de antes de H21'
+    // El almacén lleno: la escritura de la reparación revienta.
+    chrome.storage.local.set = async () => {
+      throw new Error('QUOTA_BYTES quota exceeded')
+    }
+    const leido = await getContexts(HOST)
+    eq(Object.keys(leido.scopes), ['*'], 'normalizado, bajo «*»')
+    eq(leido.scopes['*'].text, 'texto de antes de H21')
+    eq(local[clave], 'texto de antes de H21', 'y lo guardado sigue como estaba: se reintenta la próxima vez')
+  }))
+
 test('H21: saveContexts nunca guarda nada sin normalizar y con nada guardado quita la clave', () =>
   conChrome(async (local) => {
     const clave = STORAGE_KEYS.context(HOST)

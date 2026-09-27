@@ -1593,7 +1593,9 @@ async function arrancar() {
     for (const [clave, etiqueta, valor] of [
       ['space:ENG', 'el espacio ENG', '212 páginas · contexto 4812 caracteres · mapa del 24 sept'],
       ['space:OPS', 'el espacio OPS', '6 páginas · contexto 2210 caracteres · mapa del 25 sept'],
-      ['*', 'todo el sitio', 'contexto 1904 caracteres · sin mapa'],
+      // El de todo el sitio vino del contexto de antes de H21, y lo dice como
+      // `paintScopeList` (revisión adversaria de H21, B4).
+      ['*', 'todo el sitio', 'contexto 1904 caracteres · sin mapa · migrado del contexto de antes de H21'],
     ]) {
       const fila = doc.createElement('li')
       fila.dataset.scope = clave
