@@ -333,3 +333,28 @@ test('H21: el tope TOTAL de páginas del índice de un host, y maxPages sigue si
   eq(INDEX_LIMITS.maxPages, 300, 'el tope por espacio no cambia')
   eq(Object.keys(INDEX_LIMITS).filter((k) => /page/i.test(k)).sort(), ['maxPages', 'maxPagesTotal'], 'ningún otro tope de páginas')
 })
+
+// ------------------------------------------------------------------ H23
+
+import { HIGHLIGHT_COLORS } from '../../src/shared/config.js'
+
+test('H23: el color del subrayado nace azul, el ámbar se respeta y lo demás vuelve al azul', () => {
+  eq([...HIGHLIGHT_COLORS], ['azul', 'ambar'])
+  assert(Object.isFrozen(HIGHLIGHT_COLORS), 'la lista de colores no se toca desde fuera')
+  eq(DEFAULT_SETTINGS.highlightColor, 'azul', 'azul por defecto (docs/PLAN2.md §3.6)')
+  assert(HIGHLIGHT_COLORS.includes(DEFAULT_SETTINGS.highlightColor), 'el de por defecto es uno de los dos')
+  eq(migrateSettings({}).highlightColor, 'azul', 'unos ajustes de antes de H23 no lo traen: azul')
+  eq(migrateSettings(null).highlightColor, 'azul')
+  eq(migrateSettings({ highlightColor: 'ambar' }).highlightColor, 'ambar', 'lo que eligió la persona se respeta')
+  eq(migrateSettings({ highlightColor: 'azul' }).highlightColor, 'azul')
+  for (const raro of ['verde', 'Ambar', 'ámbar', ' ambar', '', 1, true, null, {}, ['ambar']]) {
+    eq(migrateSettings({ highlightColor: raro }).highlightColor, 'azul', 'no lo escribió Faro: ' + JSON.stringify(raro))
+  }
+  const entra = { highlightColor: 'verde' }
+  migrateSettings(entra)
+  eq(entra.highlightColor, 'verde', 'no se muta lo que entra')
+  // Es la ÚLTIMA clave, detrás de configWriteConsent: H22 toca DEFAULT_SETTINGS
+  // en paralelo y lo de cada hito va al final de su sitio, sin reordenar nada.
+  const claves = Object.keys(DEFAULT_SETTINGS)
+  eq(claves[claves.length - 1], 'highlightColor', 'la última clave de DEFAULT_SETTINGS')
+})

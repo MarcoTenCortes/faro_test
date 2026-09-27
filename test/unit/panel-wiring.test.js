@@ -23,6 +23,10 @@ import { keysUnverified } from '../../src/panel/setup.js'
 // y sus colores se cruzan con las parejas que de verdad se miden.
 import { readFlowchart } from '../../src/panel/diagram-parse.js'
 import { TEXTO, CONTROL } from '../contrast-pairs.js'
+// H23: los colores que el panel ofrece son los que config.js acepta, y lo que
+// dicen sus radios de «Señalar» y de las insignias se comprueba en la hoja.
+import { HIGHLIGHT_COLORS } from '../../src/shared/config.js'
+import { OVERLAY_CSS, PICK_CSS } from '../../src/content/overlay/styles.js'
 
 const ROOT = join(import.meta.dirname, '..', '..')
 const HTML = readFileSync(join(ROOT, 'src/panel/panel.html'), 'utf8')
@@ -8111,4 +8115,173 @@ test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibu
   )
   // Y el espejo dibuja como el panel: la valla sin mayúsculas (D18).
   assert(tercera.includes("if (block.lang.toLowerCase() !== 'mermaid' || !block.closed) return null"), 'el espejo mira la valla como drawCodeBlock')
+})
+
+test('H23: el color del subrayado se elige en Ajustes y viaja a la página; los radios no mienten', () => {
+  // H23 (docs/PLAN2.md §3.6, forma A): las marcas de la página pasan del amarillo
+  // a una TINTA que elige la persona, azul por defecto y ámbar a elegir. El radio
+  // «Subrayado» decía «marca el texto en amarillo», que dejó de ser verdad, y el
+  // color tiene su bloque propio en Ajustes. Se lee y se guarda como los demás
+  // ajustes, por líneas ENTERAS (la lección de H18/H19: un literal suelto se
+  // queda en verde aunque la línea diga otra cosa), y no rearranca nada: la
+  // página se entera por el service worker (`pushSettings`), como del subrayado.
+  const corte = (src, desde, hasta) => {
+    const i = src.indexOf(desde)
+    assert(i >= 0, 'falta la marca de inicio del recorte: ' + desde)
+    const j = src.indexOf(hasta, i + desde.length)
+    assert(j > i, 'falta la marca de final del recorte (o va antes): ' + hasta)
+    return src.slice(i, j)
+  }
+  const una = (src, linea, msg) => eq(src.split(linea).length - 1, 1, msg + ': «' + linea.trim() + '»')
+  const lineas = (...ls) => ls.join('\n')
+
+  // (1) El HTML de Ajustes: los ids, en su orden, y el bloque PROPIO del color
+  // justo detrás del de «Cómo te señala Faro» y antes de la pausa entre pasos.
+  for (const id of ['set-color-field', 'set-color-azul', 'set-color-ambar']) {
+    assert(htmlIds.has(id), 'falta en la pantalla de Ajustes: #' + id)
+  }
+  const ajustes = HTML.slice(HTML.indexOf('id="screen-settings"'), HTML.indexOf('id="screen-memory"'))
+  const posiciones = ['set-hl-marker', 'set-color-field', 'set-color-azul', 'set-color-ambar', 'set-delay'].map((id) =>
+    ajustes.indexOf(`id="${id}"`)
+  )
+  assert(posiciones.every((p) => p >= 0), 'los cinco ids están en la pantalla de Ajustes: ' + posiciones.join(' '))
+  eq([...posiciones].sort((a, b) => a - b), posiciones, 'en este orden: set-hl-marker < set-color-field < set-color-azul < set-color-ambar < set-delay')
+
+  const comoSenala = corte(ajustes, '<legend>Cómo te señala Faro dónde mirar</legend>', '</fieldset>')
+  assert(!/en amarillo/.test(comoSenala), 'el radio «Subrayado» ya no dice «en amarillo»: las marcas van con la tinta elegida')
+  una(
+    HTML,
+    lineas(
+      '\n    <fieldset class="field">',
+      '      <legend>Cómo te señala Faro dónde mirar</legend>',
+      '      <label class="check"><input type="radio" name="highlight-style" id="set-hl-spotlight" value="spotlight"> Foco — oscurece el resto de la página</label>',
+      '      <label class="check"><input type="radio" name="highlight-style" id="set-hl-marker" value="marker"> Subrayado — subraya el texto con la tinta elegida y rodea las imágenes, sin oscurecer nada</label>',
+      '    </fieldset>',
+      '    <fieldset class="field" id="set-color-field">',
+      '      <legend>Color del subrayado</legend>',
+      '      <label class="check"><input type="radio" name="highlight-color" id="set-color-azul" value="azul"> Azul — la tinta de las marcas y de la llegada; la herramienta de «Señalar» es siempre azul</label>',
+      '      <label class="check"><input type="radio" name="highlight-color" id="set-color-ambar" value="ambar"> Ámbar — el color de Faro, el de antes; las insignias [n] van siempre en ámbar</label>',
+      '    </fieldset>',
+      '    <div class="field">',
+      '      <label for="set-delay">Pausa entre pasos <span class="hint"><span id="delay-value">900</span> ms</span></label>\n'
+    ),
+    'el bloque del color, entero y en su sitio'
+  )
+  // Los radios son los valores que migrateSettings acepta, uno por color y en
+  // el mismo orden: un radio con un valor que config.js no conoce volvería a
+  // azul al guardar sin decir nada.
+  const radios = [...HTML.matchAll(/<input type="radio" name="highlight-color" id="set-color-(\w+)" value="(\w+)">/g)]
+  eq(radios.map((m) => m[2]), [...HIGHLIGHT_COLORS], 'un radio por cada HIGHLIGHT_COLORS, en su orden')
+  assert(radios.every((m) => m[1] === m[2]), 'el id de cada radio dice su valor')
+  eq(HTML.split('name="highlight-color"').length - 1, HIGHLIGHT_COLORS.length, 'y ningún otro control con ese nombre')
+
+  // (2) Al abrir Ajustes, los radios salen de state.settings, detrás de los del
+  // subrayado. Líneas enteras y seguidas.
+  const pantalla = sinComentarios(JS.slice(JS.indexOf('async function showSettingsScreen'), JS.indexOf('function setStatus')))
+  una(
+    pantalla,
+    lineas(
+      "\n  $('set-hl-marker').checked = state.settings.highlightStyle === 'marker'",
+      "  $('set-hl-spotlight').checked = state.settings.highlightStyle !== 'marker'",
+      "  $('set-color-ambar').checked = state.settings.highlightColor === 'ambar'",
+      "  $('set-color-azul').checked = state.settings.highlightColor !== 'ambar'",
+      "  $('set-delay').value = state.settings.stepDelayMs\n"
+    ),
+    'al abrir, el color refleja lo guardado (lo que no sea ámbar, azul, como migrateSettings)'
+  )
+
+  // (3) Al cerrar, se guarda detrás del subrayado y NO cuenta para rearrancar.
+  const cerrarCrudo = JS.slice(JS.indexOf("$('btn-settings-close')"), JS.indexOf("$('btn-reindex')"))
+  const cerrar = sinComentarios(cerrarCrudo)
+  una(
+    cerrar,
+    lineas(
+      "\n      reduceMotion: $('set-motion').checked,",
+      "      highlightStyle: $('set-hl-marker').checked ? 'marker' : 'spotlight',",
+      "      highlightColor: $('set-color-ambar').checked ? 'ambar' : 'azul',",
+      '      stepDelayMs: Number($(\'set-delay\').value),\n'
+    ),
+    'al cerrar se guarda el color, detrás del estilo del subrayado'
+  )
+  const guardados = /highlightColor: \$\('set-color-ambar'\)\.checked \? '(\w+)' : '(\w+)',/.exec(cerrar)
+  eq(guardados ? [guardados[2], guardados[1]] : null, [...HIGHLIGHT_COLORS], 'lo que se guarda es uno de HIGHLIGHT_COLORS, y los dos se pueden guardar')
+  eq(cerrar.split('highlightColor').length - 1, 1, 'highlightColor sólo aparece al guardar: ni en clientChanged ni en ninguna otra condición')
+  una(
+    cerrar,
+    '\n    const clientChanged = state.settings.serverUrl !== antes.serverUrl || state.settings.password !== antes.password\n',
+    'y no rearranca el panel: no cambia con quién se habla (P6a de H6)'
+  )
+  assert(cerrarCrudo.includes('el color del subrayado'), 'el comentario de lo que se aplica en caliente lo nombra')
+
+  // (4) Los radios no mienten. «La herramienta de «Señalar» es siempre azul»: la
+  // hoja del cursor y la selección no depende de la tinta. «Las insignias [n]
+  // van siempre en ámbar»: su regla no mira la tinta. «Y de la llegada»: el
+  // foco que guía en los pasos sigue en ámbar (`--faro-gold`), así que el radio
+  // no promete «lo que te señala» (revisión adversaria de H23, B6); lo que sí
+  // sigue a la tinta es la llegada, que va siempre sin oscurecer —`.spot.flat`
+  // o el subrayado—, con el velo y el filo de la tinta.
+  assert(/rgba\(59, 130, 246, \.32\)/.test(PICK_CSS) && !/233, 172, 74|faro-tinta/.test(PICK_CSS), 'Señalar es azul con cualquier tinta')
+  const overlaySin = OVERLAY_CSS.replace(/\/\*[\s\S]*?\*\//g, '')
+  const insignia = /\n\.note-badge \{[^}]*\}/.exec(overlaySin)?.[0] || ''
+  const insigniaActiva = /\n\.note-badge\.active \{[^}]*\}/.exec(overlaySin)?.[0] || ''
+  assert(/\n {2}background: var\(--faro-gold\);\n/.test(insignia), 'la insignia es ámbar: ' + insignia.trim().split('\n')[0])
+  assert(/background: var\(--faro-gold-deep\);/.test(insigniaActiva), 'y la activa, ámbar profundo')
+  assert(!/faro-tinta/.test(insignia + insigniaActiva), 'y ninguna de las dos sigue a la tinta')
+  const llegada = /\n\.spot\.flat,\n:host\(\.faro-marker\) \.spot \{[^}]*\}/.exec(overlaySin)?.[0] || ''
+  assert(/background: var\(--faro-tinta-velo\);/.test(llegada) && /0 0 0 1px var\(--faro-tinta\)/.test(llegada), 'la llegada sigue a la tinta')
+
+  // (5) El espejo marca el azul, que es el de por defecto, junto al foco, y
+  // mide a lo ancho la pantalla de Ajustes entera: un fieldset no se desborda,
+  // crece hasta su min-content, y `#set-color-field` no daba positivo ni con
+  // cuatro roturas inyectadas (revisión adversaria de H23, B3).
+  const espejo = readFileSync(join(ROOT, 'harness/panel-preview.html'), 'utf8')
+  una(espejo, "\n  $('set-hl-spotlight').checked = true\n  $('set-color-azul').checked = true\n", 'el espejo pinta Ajustes con el color de por defecto')
+  const cajas = corte(espejo, 'const CAJAS = [', '\n  ]\n') + '\n'
+  una(cajas, "\n    '#screen-settings',\n", 'check() mide a lo ancho la pantalla de Ajustes, con el bloque «Color del subrayado» dentro')
+
+  // (6) Y el banco lo comprueba en la página: su tramo 64 cambia la tinta y la
+  // devuelve, además de los highlights y el superíndice, y los tramos 20, 22,
+  // 23 y 26 dicen lo de H23 (docs.test.js ya exige la numeración 1..N). Cada
+  // tramo se recorta ANTES de quitarle los comentarios —`sinComentarios` se
+  // lleva la marca `// N.`— y se mira SIN ellos: un literal que sólo vive en
+  // un comentario, o una llamada comentada, daba verde (revisión adversaria de
+  // H23, B2/B5/B7: seis mutaciones del banco seguían vivas).
+  const banco = readFileSync(join(ROOT, 'harness/harness.js'), 'utf8')
+  const oks = (t) => (t.match(/\bok\(/g) || []).length
+  const t20 = sinComentarios(corte(banco, '\n    // 20. ', '\n    // 21. '))
+  const t22 = sinComentarios(corte(banco, '\n    // 22. ', '\n    // 23. '))
+  const t26 = sinComentarios(corte(banco, '\n    // 26. ', '\n    // 27. '))
+  const t64 = sinComentarios(corte(banco, '\n    // 64. ', 'return { passed, total: results.length, results }'))
+  const t23 = sinComentarios(corte(banco, '\n    // 23. ', '\n    // 24. '))
+
+  eq(oks(t64), 5, 'el tramo 64 hace cinco comprobaciones (la quinta, la línea de arriba)')
+  eq(t64.split("html64.classList.contains('faro-picking-dark')").length - 1, 2, 'el 64 mira faro-picking-dark al señalar y al cancelar')
+  assert(t64.includes("runner.setHighlightColor('ambar')"), 'el 64 pone la tinta ámbar, en código y no en un comentario')
+  eq(t64.split("runner.setHighlightColor('azul')").length - 1, 2, 'el 64 pone el azul al empezar y lo devuelve tras el ámbar')
+  assert(t64.includes('priority === 1'), 'el 64 mira la prioridad del highlight de la activa')
+  assert(t64.includes("CSS.highlights.get('faro-quote-activa')"), 'el 64 lee el highlight de la activa')
+  una(t64, "normales64.every((d) => alto64(d) === '2px') &&", 'el trazo mide 2 px')
+  una(t64, "activas64.every((d) => alto64(d) === '3px'),", 'y 3 px en la activa')
+  una(t64, 'document.caretRangeFromPoint(b.left + b.width / 2, b.top - 3)', 'la quinta mira el carácter de encima de cada insignia')
+  una(t64, 'const otraLinea = !!cajaArriba && cajaArriba.bottom <= finCita.top + 0.5', 'y sólo cuenta si es de otra línea')
+  una(t64, 'bien: (b.top - 2) >= cajaArriba.top + cajaArriba.height * 0.79 - 0.5,', 'el anillo no sube del 79 % de su caja, con medio píxel')
+  assert(t64.includes('cuentanArriba64.some((m) => m.n === fabricada64.n)'), 'y la fabricada, la que tiene un párrafo encima, cuenta')
+  eq(t64.split('finally {').length - 1, 2, 'dos finally: el de «Señalar» y el de fuera')
+  // Hasta el `}` que lo cierra (a cuatro espacios, como el `try`): hasta el
+  // final del tramo, sacar las dos llamadas justo detrás del bloque seguía en
+  // verde.
+  const finalDe64 = t64.slice(t64.lastIndexOf('} finally {'))
+  const finallyDeFuera = finalDe64.slice(0, finalDe64.indexOf('\n    }\n') + 1)
+  assert(
+    finallyDeFuera.includes('runner.setHighlightColor(tintaAntes64)') && finallyDeFuera.includes('runner.clearNotes()'),
+    'el finally de fuera devuelve la tinta y quita las notas: ' + finallyDeFuera.replace(/\s+/g, ' ')
+  )
+
+  eq(oks(t22), 4, 'el tramo 22 hace cuatro comprobaciones')
+  assert(t22.includes('html.faro-picking ::selection') && t22.includes(".startsWith('url(')"), 'el 22 mira la selección bajo html.faro-picking y el cursor url(')
+  assert(t26.includes('animationName'), 'el 26 mira la animación del trazo')
+  una(t26, "cajas.length > 0 && conSweep === 0 && animaciones.every((a) => a === 'none') && trazos.every((h) => h === '2px'),", 'el 26: sin sweep, sin animación y con el trazo de 2 px')
+  assert(!/amarillo/.test(t20), 'el tramo 20 ya no dice «amarillo» (fuera de su comentario)')
+  una(t23, 'Math.abs(parseFloat(insigniaUno.style.left) - (finDeLaCita.right + 1)) <= 1 &&', 'el 23 pone la insignia a 1 px del último carácter, con 1 px de tolerancia')
+  una(t23, 'Math.abs(parseFloat(insigniaUno.style.top) - Math.max(0, finDeLaCita.top - 5)) <= 1,', 'y 5 px por encima de la línea, con 1 px')
 })

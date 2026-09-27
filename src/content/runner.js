@@ -58,6 +58,15 @@ export class NavRunner {
     this.overlay.setStyle(style)
   }
 
+  /**
+   * La tinta de las marcas, del ajuste «Color del subrayado» (H23): la decide y
+   * la normaliza el overlay, como el estilo.
+   * @param {'azul'|'ambar'} color
+   */
+  setHighlightColor(color) {
+    this.overlay.setTint(color)
+  }
+
   /** Cómo desplazarse: seco si el usuario pidió menos animación. */
   get behavior() {
     return this.stillMotion ? 'auto' : 'smooth'

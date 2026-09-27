@@ -122,3 +122,30 @@ export const OVERLAY_TOKENS = [
 
 /** Los umbrales de WCAG 2.1, para que el test y el informe no puedan discrepar. */
 export const UMBRAL = { texto: 4.5, control: 3 }
+
+/**
+ * Lo que hay DEBAJO de una marca: los colores de una página de Atlassian, en
+ * claro y en oscuro (H23, docs/PLAN2.md §3.6). Desde la forma A el relleno de
+ * una marca es un `::highlight()` que se pinta debajo del texto, así que lo que
+ * se lee es la letra de la PÁGINA sobre la tinta mezclada con su fondo, y ése
+ * es el número que tiene que llegar a 4,5. El enlace es el azul de Atlassian:
+ * bajo la tinta se queda por debajo y se anota, no se exige.
+ */
+export const PAGINA = {
+  claro: { fondo: '#FFFFFF', texto: '#172B4D', enlace: '#0C66E4' },
+  oscuro: { fondo: '#1D2125', texto: '#B6C2CF', enlace: '#579DFF' },
+}
+
+/**
+ * Las tintas del relleno, `[tinta, highlight, qué pinta]`. El color NO se copia
+ * aquí: se lee de `highlightCss(tinta)` (styles.js), que es lo que se escribe en
+ * la página, con `/::highlight\(NOMBRE\)\s*\{[^}]*background-color:\s*(rgba?\([^)]*\))/`.
+ * Una lista con el color escrito a mano diría una cosa y la página otra, que es
+ * justo lo que pasó con las dos listas de parejas hasta H4.
+ */
+export const TINTAS = [
+  ['azul', 'faro-quote', 'relleno de una marca'],
+  ['azul', 'faro-quote-activa', 'relleno de la marca activa'],
+  ['ambar', 'faro-quote', 'relleno de una marca'],
+  ['ambar', 'faro-quote-activa', 'relleno de la marca activa'],
+]

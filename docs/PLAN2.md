@@ -1533,6 +1533,67 @@ Reglas transversales, que salen de los dos juicios y valen para todos:
   27, 41 y 42 en verde; `npm run contrast` en verde; capturas a 1280 y 480.
 - **Riesgo**: bajo-medio. La CSP del cursor en `data:` (degrada a `text`) y
   la regresión visual, que no se captura sin frames.
+- **Hecho el 2026-09-27** (rama `plan/h23-subrayado`, en un worktree aparte y
+  en paralelo con H22, sobre `plan/docs-mapa`): todo lo de «Qué», con la sonda
+  de CSP hecha ANTES de escribir el cursor (los dos sitios reales sólo mandan
+  `frame-ancestors`, sin `img-src` ni `default-src`: el cursor `data:` no queda
+  bloqueado; sin sesión). `cursor.js` puro, `PICK_CSS` con el subrayador claro
+  y el oscuro por clase y la selección azul sólo bajo `html.faro-picking`, la
+  barra responsiva, `.pick-hover` y el faro de la barra en azul, el relleno en
+  `::highlight(faro-quote)`/`::highlight(faro-quote-activa)` debajo del texto
+  y el trazo en pastilla que se dibuja, las insignias en superíndice,
+  `forced-colors`, `highlightColor` por `pushSettings` con su bloque propio
+  «Color del subrayado» en Ajustes, el radio «en amarillo» reescrito,
+  `PAGINA`/`TINTAS` en `test/contrast-pairs.js` y en `npm run contrast`, y el
+  banco. 1498 pruebas (+20), las 39 instantáneas intactas; mutaciones A 88/88
+  al construir (sobre el árbol final de la revisión, las 71 del cazador A dan
+  61 cazadas, 2 vivas —la codificación del cursor, C2 y C4— y 8 que ya no
+  aplican) y B 28/28. **Desvíos**: el tramo del banco es el **64** (el 63 ya era de
+  H21), con los 20, 22, 23 y 26 cambiados con verdad y los 27, 41 y 42 sin
+  tocar; la insignia a `top − 8` y no `− 6` (con Segoe UI 14 px, a −6 acababa
+  0-1 px por debajo de la mitad del carácter siguiente; la revisión la dejó en
+  13 px y `− 5`, abajo); los dos highlights
+  **disjuntos** —la activa sólo en el suyo— porque Chrome apila los dos
+  rellenos traslúcidos y en oscuro el texto bajaba a 3,88 (azul) y 3,31
+  (ámbar); el escalonado del «se dibuja» dentro de la animación
+  (`--faro-retardo`), porque con la clase puesta tarde el trazo se veía entero
+  antes de dibujarse; el `case MSG.SETTINGS` pinado en `runner-wiring`, sin
+  `bootstrap-wiring`; y el enlace de Atlassian bajo el azul elegido queda en
+  3,74 (claro) y 4,05 (oscuro), por debajo de lo que estimaba §3.6 (anotado,
+  no exigido). Sin verificar: las capturas a 1280 y 480, el banco y el espejo
+  en el Browser pane (los mide el orquestador), y nada en la extensión cargada
+  (el cursor moviéndose, su nitidez al 150 %, el trazo dibujándose, los sitios
+  reales en oscuro). La bitácora, en docs/BITACORA.md §12.5.
+- **Revisión adversaria aplicada el 2026-09-27** (sobre 5184261): tres
+  cazadores, 39 hallazgos, 16 grupos y seis refutadores; todos confirmados
+  (tres matizados, ninguno refutado) y tres decisiones provisionales tumbadas
+  y sustituidas por su refutador. La tinta llega a toda pestaña que el panel
+  comprueba (`contentStatus` y `ensureContentScript` empujan los ajustes; una
+  carga sin recorrido sigue sin despertar el content script); la insignia pasa
+  a 13 px subida 5, y no 16 subida 8, que tapaba 6-10 px de la línea de arriba
+  (desvío MEDIDO frente a esta ficha, con un quinto `ok(` en el tramo 64 sobre
+  una cita fabricada de 2.ª línea); el trazo a 2 px, 3 la activa, que ya no
+  tapa los descendentes enteros; la activa se RESTA de los Range de las demás
+  (`fuera`), así que ninguna letra lleva dos rellenos; la tinta fuerte oscura
+  pasa a la más clara (`#93C5FD`/`#F3C77A`: el trazo activo azul daba 2,49
+  sobre su relleno) con la columna «sobre su relleno» en `npm run contrast`;
+  `clientWidth` y no `innerWidth` para las insignias y el cartel; `setPicking`
+  reescribe una hoja vieja; el radio «Azul» dice «y de la llegada»;
+  `#screen-settings` en las cajas del espejo; `HIGHLIGHT_CSS` borrada; y pines
+  que no pinaban (el núcleo de la forma A, la barra, los tramos 20/22/23/26/64
+  sin comentarios, el `finally` del 64). 1505 pruebas (+7); mutaciones de los
+  constructores, 7/7 en el service worker, 35/36 en el overlay y su CSS (la
+  viva, volver a `#3B82F6` en oscuro, sin pin a propósito) y 30/30 en el panel
+  y el banco; el banco 136/136 con frames (64 tramos, 137 `ok(`), las 39
+  instantáneas sin regenerar. La bitácora, en docs/BITACORA.md §12.5.
+- **Commits y fusión** (2026-09-27): en `plan/h23-subrayado`, sobre
+  `plan/docs-mapa` 6256545, 5184261 la construcción, 65adb9c su revisión
+  adversaria y 3cd6ae3 el hash; y fundido sobre la punta de la pila (8a98d94,
+  con H22 y H24 cerrados) en `plan/h23-fusion`, con los dos lados enteros y la
+  decisión en §8.28 (la 27 es de H24). Recontado sobre el árbol fusionado:
+  1607 pruebas (las 1580 de la pila y las 27 de H23), el banco con 64 tramos,
+  138 `ok(` y 137 resultados, y las 40 instantáneas sin regenerar. Falta la
+  verificación del orquestador en el navegador y el commit de la fusión.
 
 ### H24 · Diagramas: renderizador propio de flowchart y «Dibujar el flujo»
 

@@ -28,10 +28,15 @@ la respuesta**.
 - **Guiada o rápida**, a elegir en Ajustes: que intente siempre enseñarte el
   camino, o que te lleve directamente sin esperar a nada.
 - **Dos formas de señalar**: el foco de siempre, que oscurece el resto de la
-  página, o un **subrayado amarillo** que no tapa nada y rodea las imágenes con
-  un filete muy fino. Se elige en Ajustes.
-- **Señalar tú**: un botón en la barra de abajo cambia el cursor y te deja
-  subrayar un párrafo o pulsar una imagen. Eso —y sólo eso— es el contexto de la
+  página, o un **subrayado** que no oscurece nada y rodea las imágenes con un
+  filete muy fino. Se elige en Ajustes, y también **el color de la tinta**:
+  azul por defecto, o el ámbar de antes. La tinta va **debajo** del texto —la
+  letra de la página se sigue leyendo por encima de 4,5:1, en claro y en
+  oscuro— con un trazo fino bajo cada línea; los números `[n]` y los botones de
+  Faro siguen en ámbar, que es su marca.
+- **Señalar tú**: un botón en la barra de abajo convierte el cursor en un
+  **subrayador azul** y te deja subrayar un párrafo (la selección también se ve
+  en azul) o pulsar una imagen. Eso —y sólo eso— es el contexto de la
   siguiente pregunta. La imagen viaja de verdad, no su `alt`.
 - **Skills**: General, Búsqueda, Resumen y Análisis, junto al selector de modelo.
   Las dos primeras te llevan; las otras dos trabajan sobre lo que tienes delante
@@ -89,10 +94,11 @@ la respuesta**.
   números en ningún sitio, trocea la prosa en observaciones en una pasada
   aparte; y si tampoco, un botón vuelve a pedirlo numerado. Cuando de verdad
   no hay nada que observar, el modelo cierra con «Sin observaciones.» y Faro
-  lo dice tal cual, sin tratarlo como un fallo. El panel y las marcas de la
+  lo dice tal cual, sin tratarlo como un fallo. El panel y las insignias de la
   página comparten el mismo ámbar: la pastilla numerada que ves en el chat es,
-  byte a byte, la que ves sobre el texto de la página (y hay un test que no
-  deja que se separen). La tarjeta del análisis dice además **de qué clase es
+  byte a byte, la que ves junto al texto de la página (y hay un test que no
+  deja que se separen); en la página va en superíndice, detrás de su cita, y
+  ya no tapa la palabra que sigue. La tarjeta del análisis dice además **de qué clase es
   cada observación** —dato, supuesto, hueco, contradicción, riesgo— y deja
   **copiarlas** tal como se leen, con sus números, para pegarlas en el
   comentario de la incidencia o de la página.
@@ -313,8 +319,8 @@ flowchart LR
 Cinco piezas y ningún misterio:
 
 - **La extensión** es la única que toca la página. Lee lo que estás viendo, va
-  desplegando el árbol de la izquierda y marca en amarillo el fragmento del que
-  te habla, sin modificar el documento.
+  desplegando el árbol de la izquierda y subraya con su tinta —azul, o ámbar si
+  lo eliges— el fragmento del que te habla, sin modificar el documento.
 - **opencode** corre en tu máquina. La extensión no habla con ninguna nube:
   sólo con `127.0.0.1` y, en modo lectura, con el Confluence que ya tienes
   abierto, para leer el árbol de páginas con tu propia sesión.
@@ -329,7 +335,7 @@ De ahí que haya dos caminos hasta el mismo sitio: la extensión ve **la página
 que tienes delante**, y opencode consulta **la API**. Ninguno de los dos
 escribe nada.
 
-Veinte decisiones que sostienen el diseño:
+Veintiuna decisiones que sostienen el diseño:
 
 1. **El panel es el único que habla con opencode.** El content script vive
    dentro de una página que no controlamos: no conoce la contraseña del
@@ -431,17 +437,24 @@ Veinte decisiones que sostienen el diseño:
 10. **Una marca por línea, y recortada a su caja.** `getClientRects()` no
    devuelve una caja por línea: devuelve una por cada trozo con estilo propio.
    En un bloque de código con resaltado de sintaxis eso eran diecisiete cajas
-   para cuatro líneas, varias repetidas, con el amarillo apilado a manchas —y el
-   barrido blanco pintándose *fuera* de cada caja, que es lo que sacaba barras
-   escalonadas por el margen. Ahora se funden por línea (`overlay/rects.js`,
-   puro y con pruebas), se recortan al contenedor que las contiene —un bloque
-   con scroll horizontal recorta su texto, la marca se recorta igual— y sobre
-   código la marca se aligera a sólo el trazo, para no tapar la sintaxis.
+   para cuatro líneas, varias repetidas, con el amarillo de entonces apilado a
+   manchas —y el barrido blanco pintándose *fuera* de cada caja, que es lo que
+   sacaba barras escalonadas por el margen. Ahora se funden por línea
+   (`overlay/rects.js`, puro y con pruebas), se recortan al contenedor que las
+   contiene —un bloque con scroll horizontal recorta su texto, la marca se
+   recorta igual— y cada caja es sólo un **trazo** de tinta bajo la línea, que
+   se dibuja de izquierda a derecha una vez: el relleno ya no va en ella (ver
+   la 11), así que ni sobre código tapa la sintaxis.
 
 11. **El resaltado no toca el DOM del contenido.** Usa la CSS Custom Highlight
    API sobre `Range`, y el overlay vive en un Shadow DOM cerrado colgado de
    `<html>`. Confluence monta su vista sobre React: insertar nodos dentro del
-   contenido es pedir que el siguiente render se los lleve por delante.
+   contenido es pedir que el siguiente render se los lleve por delante. Y cada
+   pieza pinta lo suyo: el **relleno** de una marca es el resaltado nativo,
+   que el navegador pinta DEBAJO de la letra —con el relleno encima, en el
+   tema oscuro el texto marcado bajaba a 3,6:1—, y la observación que estás
+   mirando va en un resaltado propio que no se suma al de las demás; el
+   overlay sólo dibuja el trazo y los números.
 
 12. **En modo Búsqueda, el destino se lee de la respuesta.** Ahí se le pide al
    modelo que nombre cada página con su id y que cierre con una línea fija,
@@ -693,6 +706,23 @@ Veinte decisiones que sostienen el diseño:
    de análisis sólo ayuda a elegir el espacio: su texto no entra en ninguna
    pregunta.
 
+21. **La herramienta de señalar es azul; el color de tus marcas lo eliges tú.**
+   Lo pidió el equipo de Marco: un cursor que diga «estás subrayando» y marcas
+   que se lean. Mientras señalas, el cursor es un **subrayador azul** (con el de
+   seleccionar texto de respaldo) y la selección se ve en azul, pero sólo
+   entonces: fuera de «Señalar», la selección de tu Jira es cosa tuya. Las
+   marcas de lo que Faro te enseña van con una **tinta** que eliges en Ajustes,
+   azul por defecto o el ámbar de antes, y los números `[n]` y los botones de
+   Faro se quedan en ámbar, porque son la marca de Faro y no el resultado. No
+   se pintó todo de azul: el azul es el de los enlaces de Atlassian, y ningún
+   azul con texto oscuro encima llega a 3:1 sobre blanco. El relleno va
+   **debajo** de la letra, elegido para que el texto de una página de Atlassian
+   quede por encima de 4,5:1 en claro y en oscuro (lo exige un test, y
+   `npm run contrast` imprime la tabla); un enlace bajo la tinta se queda algo
+   por debajo, y se anota. Y el cursor viaja dentro de la propia hoja, como una
+   imagen `data:`: la dirección de un fichero de la extensión escrita en la
+   página le diría a esa página que tienes Faro.
+
 ---
 
 ## Qué se conserva al reabrir el panel
@@ -744,13 +774,13 @@ cuáles no), que desde H16 son tuyos y no de un sitio.
 ## Comprobaciones
 
 ```bash
-npm run check              # sintaxis + orden + manifest + 1580 pruebas unitarias + docs
+npm run check              # sintaxis + orden + manifest + 1607 pruebas unitarias + docs
 npm run check:docs         # sólo el paso docs: número de pruebas, títulos del registro, mensajes y ficheros del mapa
 npm run test:integration   # contra un opencode real que arranca la propia prueba
 npm run harness            # banco de pruebas visual en http://127.0.0.1:5175
 npm run turn -- --n 1      # el último turno real (pregunta, sistema, herramientas, respuesta) desde una copia de opencode.db
 npm run bench              # el metro: cuánto pesa el system de cada escenario y cuánto tardan los módulos puros
-npm run contrast           # el contraste de cada pareja de colores, por tema: informa, y falla si alguna baja de 4,5 (texto) o 3 (control)
+npm run contrast           # el contraste de cada pareja de colores, por tema: informa, y falla si alguna baja de 4,5 (texto) o 3 (control) (lo «anotado» de TINTAS no cuenta)
 npm run sandbox            # escribe de verdad en la configuración de un opencode PROPIO y aislado, y comprueba lo que Faro escribe ahí (Windows)
 npm run snapshots          # regenera las instantáneas de los prompts (test/fixtures/prompts) cuando un cambio de prompt es intencionado
 ```
@@ -924,6 +954,17 @@ Con el banco levantado hay dos páginas:
   cambiar, y con la sesión caducada se queda sin las cuatro lecturas de Jira
   sin que se escape un solo título ni un id.
 
+  Y las del subrayado: que mientras señalas el cursor es el subrayador —una
+  imagen `data:` con el de texto de respaldo, que se va al acabar— y la
+  selección azul sólo existe mientras dura; que la observación que miras va en
+  su propio resaltado, con prioridad, y no se repite en el de las demás; que
+  cada número queda en superíndice, sin tapar la mitad de abajo del carácter
+  que sigue a su cita ni las letras de la línea de arriba, de la que como mucho
+  pisa los descendentes (medido contra la caja de esos caracteres); que la caja
+  de cada línea es transparente con un trazo de 2 px, 3 en la activa; y que
+  cambiar la tinta a ámbar y volver al azul llega a la página y la deja como
+  estaba, y con la página en oscuro «Señalar» pone su otro cursor y lo quita.
+
 - **`npm run turn`** enseña lo que el modelo contestó DE VERDAD en el último
   turno de la última sesión del panel: la pregunta, cuánto sistema llevaba (con
   sus primeras y últimas líneas), cada consulta a Atlassian con su JQL o su id y
@@ -956,7 +997,10 @@ Con el banco levantado hay dos páginas:
   bordes decorativos salen marcados «exenta» con su número, y el test comprueba
   que sigan por debajo de 3. Las parejas no se declaran en el informe: viven en
   `test/contrast-pairs.js`, que es la misma lista que pina `panel-css.test.js`,
-  el que sí corre en `npm run check`.
+  el que sí corre en `npm run check`. Desde H23 hay una quinta tabla, TINTAS: el
+  texto de una página de Atlassian bajo el relleno de cada tinta, que se exige
+  ≥4,5 en claro y en oscuro; el enlace bajo la tinta y el trazo de la marca
+  salen «anotado» y no cuentan como fallo.
 
 - **`npm run sandbox`** comprueba lo que Faro escribe en la configuración de
   opencode, escribiendo DE VERDAD —y por eso nunca en el tuyo—: arranca un
@@ -1386,6 +1430,7 @@ src/
     page-links.js           los enlaces que la página tiene en su CONTENIDO, y de qué parte viene cada uno (nunca los de la interfaz)
     page-id.js              el id de la página de Confluence, leído de una etiqueta de la cabecera; sin un solo import, porque lo pide el aviso de cada carga de página
     overlay/rects.js        funde por línea y recorta a su caja (puro)
+    overlay/cursor.js       el cursor de «Señalar»: un subrayador azul, en una imagen data: y no en un fichero de la extensión (puro)
     tree-dom.js             qué es el árbol, una fila y su control · diagnóstico
     locators.js             cascada href → rol → texto + lista blanca de clics
     picker.js               modo de selección: subrayar texto, elegir imágenes

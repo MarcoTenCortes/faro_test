@@ -177,6 +177,7 @@
           case MSG.SETTINGS:
             runner.setReducedMotion(!!msg.reduceMotion)
             if (msg.highlightStyle) runner.setHighlightStyle(msg.highlightStyle)
+            if (msg.highlightColor) runner.setHighlightColor(msg.highlightColor)
             if (msg.timing) Object.assign(runner.timing, msg.timing)
             sendResponse({ ok: true })
             return

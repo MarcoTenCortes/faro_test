@@ -151,9 +151,12 @@ test('todo lo que alcanza el content script existe y casa con algún patrón de 
   // llegan por los imports estáticos de otros. Desde H7, también el cimiento
   // REST: confluence-rest.js importa `getJson` de shared/rest-get.js y
   // `validSpaceKey` de atlassian/site.js, así que Chrome los pide por URL y
-  // tienen que estar expuestos aunque bootstrap.js no los nombre.
+  // tienen que estar expuestos aunque bootstrap.js no los nombre. Y desde H23,
+  // el cursor de «Señalar»: lo importa styles.js, así que son 25 y no 24, y cae
+  // en «src/content/overlay/*.js» sin tocar el manifest.
   for (const hondo of [
     'src/content/overlay/styles.js',
+    'src/content/overlay/cursor.js',
     'src/content/anchor-match.js',
     'src/content/pick-payload.js',
     'src/shared/rest-get.js',
