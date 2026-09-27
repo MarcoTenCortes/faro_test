@@ -465,6 +465,7 @@ test('H6 P6a: al cambiar los ajustes, el worker los empuja a la pestaña activa'
   rig.state.local['faro:settings'] = {
     reduceMotion: true,
     highlightStyle: 'marker',
+    highlightColor: 'ambar',
     stepDelayMs: 1200,
     password: 'secreta',
   }
@@ -476,10 +477,28 @@ test('H6 P6a: al cambiar los ajustes, el worker los empuja a la pestaña activa'
   eq(empujados[0].tabId, 3, 'a la pestaña ACTIVA, no a la primera de la lista ni a la del recorrido')
   eq(empujados[0].msg.reduceMotion, true)
   eq(empujados[0].msg.highlightStyle, 'marker')
+  eq(empujados[0].msg.highlightColor, 'ambar', 'y la tinta que el usuario acaba de elegir')
   eq(empujados[0].msg.timing, { stepPauseMs: 1200 }, 'con la pausa que el usuario acaba de poner')
   // SEGURIDAD: al content script van los ajustes de la página, no la contraseña
   // del servidor (que es lo que vive en la misma clave).
-  eq(Object.keys(empujados[0].msg).sort(), ['highlightStyle', 'reduceMotion', 'timing', 'type'])
+  // EL CAMBIO (H23, docs/PLAN2.md §3.6): la tinta de las marcas es un ajuste de
+  // la PÁGINA —la pinta el overlay—, así que viaja con los otros tres; eran
+  // cuatro claves hasta H23.
+  eq(Object.keys(empujados[0].msg).sort(), ['highlightColor', 'highlightStyle', 'reduceMotion', 'timing', 'type'])
+})
+
+test('H23: unos ajustes de antes, sin color del subrayado, empujan el azul', async () => {
+  // `pushSettings` lee con `getSettings`, que pasa por `migrateSettings`: una
+  // página no recibe nunca un color que no sea uno de los dos.
+  const rig = makeChrome()
+  await loadWorker(rig)
+  for (const guardado of [{ reduceMotion: false }, { highlightColor: 'verde' }]) {
+    rig.state.sentWithTab.length = 0
+    rig.state.local['faro:settings'] = guardado
+    await cambiar({ 'faro:settings': { newValue: guardado } })
+    const empujados = rig.state.sentWithTab.filter((s) => s.msg.type === MSG.SETTINGS)
+    eq(empujados.map((s) => s.msg.highlightColor), ['azul'], 'azul con ' + JSON.stringify(guardado))
+  }
 })
 
 test('H6 P6a: otra clave, u otra zona del almacén, no empujan nada', async () => {

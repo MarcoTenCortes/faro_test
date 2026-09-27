@@ -1691,9 +1691,18 @@ const actions = {
       results.push({ name, pass, detail })
       say(`${pass ? '✓' : '✗'} ${name}${detail ? ' · ' + detail : ''}`, pass ? 'ok' : 'bad')
     }
+    // Lo resaltado en la página. Desde H23 el relleno vive en DOS highlights
+    // disjuntos (overlay.js, `_setHighlight`): `faro-quote` con todas las marcas
+    // menos la activa y `faro-quote-activa` con la activa, porque dos rellenos
+    // traslúcidos sobre la misma letra se apilan. Lo resaltado es la UNIÓN: sin
+    // ella, la 24 (tres marcas, una activa) contaría dos.
     const highlighted = () => {
-      const h = CSS.highlights.get('faro-quote')
-      return h ? [...h].map((r) => r.toString()) : []
+      const rangos = new Set()
+      for (const nombre of ['faro-quote', 'faro-quote-activa']) {
+        const h = CSS.highlights.get(nombre)
+        if (h) for (const r of h) rangos.add(r)
+      }
+      return [...rangos].map((r) => r.toString())
     }
 
     // 1. Cita exacta
@@ -2042,8 +2051,10 @@ const actions = {
       `${fantasma.status} · ${location.pathname}`
     )
 
-    // 20. El otro estilo de resaltado: subrayado en amarillo, sin oscurecer, y
-    //     las imagenes con un recuadro fino.
+    // 20. El otro estilo de resaltado: subrayado con la tinta, sin oscurecer, y
+    //     las imagenes con un recuadro fino. Hasta H23 era «en amarillo»; desde
+    //     entonces el relleno y el trazo son de la tinta que elige el usuario
+    //     (azul por defecto, ámbar a elegir), y el nombre lo dice.
     setSidebar('clasica')
     renderPage('page:2003')
     await wait(320)
@@ -2053,7 +2064,7 @@ const actions = {
     await wait(700)
     const hostOverlay = document.getElementById('faro-overlay-host')
     ok(
-      'modo subrayado: marca el texto en amarillo y no oscurece la pagina',
+      'modo subrayado: marca el texto con la tinta y no oscurece la pagina',
       hostOverlay?.classList.contains('faro-marker') && rMarker.anchored && highlighted().length === 1,
       `${rMarker.strategy} · ${highlighted().length} resaltados`
     )
@@ -2081,6 +2092,13 @@ const actions = {
     )
     const esperaTexto = picker.start()
     const conCursor = document.documentElement.classList.contains('faro-picking')
+    // H23: mientras se señala, el cursor es el subrayador de cursor.js —una URL
+    // `data:`, nunca un recurso de la extensión, que dejaría a la vista de la
+    // página la dirección que `use_dynamic_url` esconde (S7)— con `text` de
+    // respaldo detrás; y la selección azul vive en la misma hoja, sólo bajo
+    // `html.faro-picking`. Se lee mientras dura, y se comprueba abajo.
+    const cursorSenalando = getComputedStyle(document.documentElement).cursor
+    const hojaSenalar = document.getElementById('faro-pick-style')?.textContent || ''
 
     const frase = 'genera y renueva credenciales'
     const nodo = parrafo.firstChild
@@ -2105,6 +2123,22 @@ const actions = {
         pickTexto.heading === 'Identity Provider' &&
         !document.documentElement.classList.contains('faro-picking'),
       pickTexto ? `«${pickTexto.text}» bajo «${pickTexto.heading}»` : 'no devolvió nada'
+    )
+
+    const cursorAlAcabar = getComputedStyle(document.documentElement).cursor
+    ok(
+      'señalar: el cursor es el subrayador, una imagen data: con el de texto de respaldo, y se va al acabar',
+      cursorSenalando.startsWith('url(') &&
+        cursorSenalando.includes('data:image/svg+xml') &&
+        cursorSenalando.includes(', text') &&
+        !cursorAlAcabar.startsWith('url('),
+      `${cursorSenalando.slice(0, 34)}…${cursorSenalando.slice(-14)} (${cursorSenalando.length} caracteres) · al acabar «${cursorAlAcabar}»`
+    )
+    ok(
+      'señalar: la seleccion azul vive solo bajo html.faro-picking, sin la direccion de la extension',
+      hojaSenalar.includes('html.faro-picking ::selection') && !hojaSenalar.includes('chrome-extension://'),
+      `#faro-pick-style ${hojaSenalar.length} caracteres · ${(hojaSenalar.match(/::selection/g) || []).length} ::selection · ` +
+        `chrome-extension:// ${hojaSenalar.includes('chrome-extension://') ? 'SÍ' : 'no'}`
     )
 
     const esperaImagen = picker.start()
@@ -2150,15 +2184,20 @@ const actions = {
       `sin anclar ${resNotas.missed.join(',')} · ${highlighted().length} resaltados`
     )
 
-    // La insignia va DETRÁS de su cita, no encima ni en el margen.
+    // La insignia va DETRÁS de su cita, no encima ni en el margen. Desde H23
+    // (forma A, anexo 2-F) en SUPERÍNDICE: a 1 px del último carácter y 8 px por
+    // encima de la línea (overlay.js, `_paintNoteBadges`). Hasta entonces iba
+    // centrada en la línea (`right + 3`, `top + height / 2 - 8.5`) y tapaba las
+    // primeras letras de la palabra siguiente; que ya no tapa lo que se lee lo
+    // mide el tramo 64 contra la caja del carácter que sigue.
     const rangoUno = runner.overlay.notes.find((x) => x.n === 1)?.ranges[0]
     const finDeLaCita = [...(rangoUno?.getClientRects() || [])].pop()
     const insigniaUno = insignias[0]
     ok(
       'la insignia va justo detras del ultimo caracter de su cita',
       !!finDeLaCita &&
-        Math.abs(parseFloat(insigniaUno.style.left) - (finDeLaCita.right + 3)) <= 3 &&
-        Math.abs(parseFloat(insigniaUno.style.top) - (finDeLaCita.top + finDeLaCita.height / 2 - 8.5)) <= 3,
+        Math.abs(parseFloat(insigniaUno.style.left) - (finDeLaCita.right + 1)) <= 3 &&
+        Math.abs(parseFloat(insigniaUno.style.top) - Math.max(0, finDeLaCita.top - 8)) <= 3,
       finDeLaCita
         ? `cita acaba en ${Math.round(finDeLaCita.right)},${Math.round(finDeLaCita.top)} · insignia en ${insigniaUno.style.left},${insigniaUno.style.top}`
         : 'sin rectangulo'
@@ -2247,7 +2286,8 @@ const actions = {
       cajas.filter((d) => d.classList.contains('on-code')).length + ' de ' + cajas.length
     )
 
-    // Y ninguna caja se solapa con otra: el amarillo no se apila.
+    // Y ninguna caja se solapa con otra: dos trazos no se apilan (hasta H23,
+    // era el amarillo lo que se apilaba a manchas).
     let solapes = 0
     for (let i = 0; i < cajas.length; i++) {
       for (let j = i + 1; j < cajas.length; j++) {
@@ -2258,18 +2298,24 @@ const actions = {
     }
     ok('codigo: las marcas no se apilan unas sobre otras', solapes === 0, solapes + ' solapes')
 
-    // El barrido blanco sólo existe mientras barre. Antes vivía siempre,
-    // aparcado en translateX(-110%) —o en +110% al acabar, que `forwards`
-    // retiene—, y se iba sólo porque cada repintado por scroll recreaba el
-    // rectángulo sin la clase. Desde H6 los nodos se REUTILIZAN, así que la
-    // clase se quita a propósito al acabar la animación (`animationend`, con un
-    // respaldo por tiempo): se espera a que termine y se comprueba lo mismo,
-    // que es ahora una garantía y no un efecto secundario del scroll.
+    // La animación sólo corre mientras dibuja. Hasta H23 era un barrido blanco
+    // que vivía siempre, aparcado en translateX(-110%) —o en +110% al acabar,
+    // que `forwards` retiene—, y se iba sólo porque cada repintado por scroll
+    // recreaba el rectángulo sin la clase; desde H6 los nodos se REUTILIZAN, así
+    // que la clase se quita a propósito al acabar la animación (`animationend`,
+    // con un respaldo por tiempo). Desde H23 (forma A) el `::after` ES el trazo
+    // de tinta y existe siempre: lo que tiene que irse es la ANIMACIÓN, no el
+    // pseudo. Se espera a que termine («se dibuja» dura .45 s, escalonado 40 ms
+    // por caja) y se comprueba que ninguna caja se queda con `sweep`, que su
+    // `::after` ya no anima y que sigue ahí con los 3 px del trazo.
     await wait(1200)
+    const conSweep = cajas.filter((d) => d.classList.contains('sweep')).length
+    const animaciones = cajas.map((d) => getComputedStyle(d, '::after').animationName)
+    const trazos = cajas.map((d) => getComputedStyle(d, '::after').height)
     ok(
-      'codigo: el barrido no se queda aparcado fuera de la marca',
-      cajas.every((d) => getComputedStyle(d, '::after').content === 'none'),
-      cajas.map((d) => getComputedStyle(d, '::after').content).join(' ')
+      'codigo: el barrido no se queda aparcado y el trazo sigue dibujado',
+      cajas.length > 0 && conSweep === 0 && animaciones.every((a) => a === 'none') && trazos.every((h) => h === '3px'),
+      `${conSweep} con sweep · animación ${animaciones.join(' ')} · trazo ${trazos.join(' ')}`
     )
 
     // 27. El bloque de código con scroll horizontal propio: el navegador recorta
@@ -4266,6 +4312,202 @@ const actions = {
         `OPS sin construir ${ambitos63.hasMap(vacios63, fundido63, 'space:OPS')}`
     )
 
+    // 64. El subrayado de H23 (forma A, docs/PLAN2.md §3.6). El relleno de las
+    //     marcas vive DEBAJO del texto, en dos highlights del documento que no
+    //     comparten ni un Range —`faro-quote` con todas menos la activa y
+    //     `faro-quote-activa` con la activa, prioridad 1—, porque dos rellenos
+    //     traslúcidos sobre la misma letra se apilan y en oscuro dejaban el
+    //     texto por debajo de 4,5:1; el overlay dibuja encima sólo el TRAZO de
+    //     cada línea (3 px, 4 px la activa) en un `.quote-rect` transparente;
+    //     las insignias suben a superíndice para no tapar lo que se lee detrás
+    //     de la cita; la tinta se elige (azul o ámbar, «Color del subrayado» de
+    //     Ajustes) y con la página en tema oscuro «Señalar» pone el subrayador
+    //     de cuerpo claro. Sobre las observaciones de siempre de `page:200`: qué
+    //     Range es de qué nota, qué insignia lleva qué número y de qué color era
+    //     el trazo se leen de la página, no se escriben aquí.
+    runner.clear()
+    setSidebar('clasica')
+    renderPage('page:200')
+    await wait(320)
+    const tintaAntes64 = runner.overlay.tint
+    runner.setHighlightColor('azul')
+    const res64 = await runner.applyNotes({ notes: OBSERVACIONES })
+    await wait(500)
+    await runner.focusNote({ n: 2 })
+    await wait(400)
+
+    //     (1) Los dos highlights, disjuntos, y entre los dos todas las marcas.
+    const notas64 = runner.overlay.notes
+    const todos64 = notas64.flatMap((x) => x.ranges)
+    const activos64 = notas64.find((x) => x.n === 2)?.ranges || []
+    const hTodas64 = CSS.highlights.get('faro-quote')
+    const hActiva64 = CSS.highlights.get('faro-quote-activa')
+    const enTodas64 = hTodas64 ? [...hTodas64] : []
+    const enActiva64 = hActiva64 ? [...hActiva64] : []
+    ok(
+      'subrayado: la activa en su propio highlight, con prioridad 1 y sin repetirse en el de las demas; entre los dos, todas',
+      res64.placed.includes(2) &&
+        runner.overlay.activeNote === 2 &&
+        !!hActiva64 &&
+        hActiva64.priority === 1 &&
+        activos64.length > 0 &&
+        enActiva64.length === activos64.length &&
+        activos64.every((r) => hActiva64.has(r)) &&
+        !enTodas64.some((r) => hActiva64.has(r)) &&
+        enTodas64.length + enActiva64.length === todos64.length &&
+        todos64.every((r) => hTodas64?.has(r) || hActiva64.has(r)),
+      `notas ${res64.placed.join(',')} con ${todos64.length} Range · activa ${runner.overlay.activeNote} · ` +
+        `faro-quote-activa ${enActiva64.length} (prioridad ${hActiva64?.priority}) · faro-quote ${enTodas64.length}`
+    )
+
+    //     (2) La insignia es un SUPERÍNDICE: acaba por encima de la mitad de la
+    //     caja del carácter que sigue a su cita —como mucho roza su trazo alto;
+    //     la mitad de abajo, que es lo que se lee, queda libre— y no se echa
+    //     atrás sobre la cita. La caja de un carácter es la que da su Range (su
+    //     área de contenido), no la de la línea. Una cita cuyo carácter
+    //     siguiente ya cae en otra línea, o no se pinta, no cuenta; una sin
+    //     insignia, sí, y falla.
+    const caracterSiguiente64 = (rango) => {
+      let nodo = rango.endContainer
+      let desde = rango.endOffset
+      if (nodo.nodeType !== Node.TEXT_NODE) return null
+      if (desde >= nodo.data.length) {
+        const paseo = document.createTreeWalker(document.getElementById('page-content') || document.body, NodeFilter.SHOW_TEXT)
+        paseo.currentNode = nodo
+        nodo = paseo.nextNode()
+        while (nodo && !nodo.data.length) nodo = paseo.nextNode()
+        if (!nodo) return null
+        desde = 0
+      }
+      const r = document.createRange()
+      r.setStart(nodo, desde)
+      r.setEnd(nodo, desde + 1)
+      return r
+    }
+    const insignias64 = [...runner.overlay.el.noteLayer.children]
+    const medidas64 = notas64.map((nota) => {
+      const ultimoRango = nota.ranges[nota.ranges.length - 1]
+      const finCita = [...(ultimoRango?.getClientRects() || [])].filter((r) => r.width > 0 && r.height > 0).pop()
+      const siguiente = ultimoRango ? caracterSiguiente64(ultimoRango) : null
+      const caja = siguiente?.getBoundingClientRect()
+      const enSuLinea = !!caja && !!finCita && caja.height > 0 && Math.abs(caja.top - finCita.top) < finCita.height / 2
+      if (!enSuLinea) return { n: nota.n, cuenta: false, texto: `${nota.n}: sin carácter detrás en su línea` }
+      const insignia = insignias64.find((b) => b.dataset.n === String(nota.n))
+      if (!insignia) return { n: nota.n, cuenta: true, bien: false, texto: `${nota.n}: SIN insignia` }
+      const b = insignia.getBoundingClientRect()
+      const mitad = caja.top + caja.height / 2
+      const sobra = b.bottom - mitad
+      return {
+        n: nota.n,
+        cuenta: true,
+        bien: b.bottom <= mitad && b.left >= caja.left - 1,
+        texto:
+          `${nota.n}: «${siguiente.toString()}» caja ${caja.top.toFixed(1)}+${caja.height.toFixed(1)} · ` +
+          `insignia ${b.top.toFixed(1)}–${b.bottom.toFixed(1)}, mitad ${mitad.toFixed(1)} (${sobra > 0 ? '+' : ''}${sobra.toFixed(1)}) · ` +
+          `izquierda ${b.left.toFixed(1)} ≥ ${(caja.left - 1).toFixed(1)}`,
+      }
+    })
+    const cuentan64 = medidas64.filter((m) => m.cuenta)
+    ok(
+      'subrayado: cada insignia es un superindice que no tapa la mitad de abajo del caracter que sigue a su cita',
+      cuentan64.length > 0 && cuentan64.every((m) => m.bien),
+      medidas64.map((m) => m.texto).join(' · ')
+    )
+
+    //     (3) El trazo: la caja del overlay es transparente —el relleno vive en
+    //     el highlight, debajo del texto— y su `::after` es la pastilla de
+    //     tinta, 3 px, y 4 px en la activa.
+    const cajas64 = [...runner.overlay.el.quoteLayer.children]
+    const normales64 = cajas64.filter((d) => !d.classList.contains('active'))
+    const activas64 = cajas64.filter((d) => d.classList.contains('active'))
+    const fondos64 = [...new Set(cajas64.map((d) => getComputedStyle(d).backgroundColor))]
+    const alto64 = (d) => getComputedStyle(d, '::after').height
+    ok(
+      'subrayado: el rectangulo del overlay es transparente y su trazo mide 3 px, 4 px en la activa',
+      normales64.length > 0 &&
+        activas64.length > 0 &&
+        fondos64.length === 1 &&
+        fondos64[0] === 'rgba(0, 0, 0, 0)' &&
+        normales64.every((d) => alto64(d) === '3px') &&
+        activas64.every((d) => alto64(d) === '4px'),
+      `${cajas64.length} cajas, ${activas64.length} de la activa · fondo ${fondos64.join(' | ')} · ` +
+        `trazo ${[...new Set(normales64.map(alto64))].join('/')}, ${[...new Set(activas64.map(alto64))].join('/')} en la activa`
+    )
+
+    //     (4) La tinta llega a la página (`runner.setHighlightColor`, que es lo
+    //     que hace bootstrap con el ajuste): en ámbar el host lleva
+    //     `faro-tinta-ambar`, la hoja del relleno cambia y el trazo cambia de
+    //     color; en azul todo vuelve a como estaba. Y con la página en tema
+    //     oscuro, «Señalar» pone `faro-picking-dark` —el subrayador de cuerpo
+    //     claro, otro cursor que el de la página clara— y al cancelar lo quita.
+    //     El banco no tiene tema oscuro propio: se pone `data-color-mode`, que
+    //     es lo que lee `_applyColorScheme` al montar, se le pide que lo relea,
+    //     y se deja como estaba pase lo que pase.
+    const host64 = document.getElementById('faro-overlay-host')
+    const vistaTinta64 = () => ({
+      clase: !!host64?.classList.contains('faro-tinta-ambar'),
+      hoja: document.getElementById('faro-highlight-style')?.textContent || '',
+      trazo: normales64[0] ? getComputedStyle(normales64[0], '::after').backgroundColor : '',
+    })
+    const relleno64 = (hoja) => /::highlight\(faro-quote\)\s*\{[^}]*background-color:\s*(rgba?\([^)]*\))/.exec(hoja)?.[1] || '—'
+    const azulAntes64 = vistaTinta64()
+    runner.setHighlightColor('ambar')
+    const ambar64 = vistaTinta64()
+    runner.setHighlightColor('azul')
+    const azulDespues64 = vistaTinta64()
+
+    const html64 = document.documentElement
+    const modoAntes64 = html64.getAttribute('data-color-mode')
+    const senalarCon64 = async (modo) => {
+      html64.setAttribute('data-color-mode', modo)
+      runner.overlay._applyColorScheme()
+      const espera = picker.start()
+      const vista = { oscuro: html64.classList.contains('faro-picking-dark'), cursor: getComputedStyle(html64).cursor }
+      picker.cancel()
+      await espera
+      vista.quitado = !html64.classList.contains('faro-picking-dark') && !html64.classList.contains('faro-picking')
+      return vista
+    }
+    let claro64 = null
+    let oscuro64 = null
+    try {
+      claro64 = await senalarCon64('light')
+      oscuro64 = await senalarCon64('dark')
+    } finally {
+      if (modoAntes64 === null) html64.removeAttribute('data-color-mode')
+      else html64.setAttribute('data-color-mode', modoAntes64)
+      runner.overlay._applyColorScheme()
+    }
+    ok(
+      'subrayado: la tinta ambar llega a la pagina y la azul la deja como estaba; en una pagina oscura, Señalar pone su cursor y lo quita',
+      !azulAntes64.clase &&
+        azulAntes64.hoja.includes('rgba(59, 130, 246, .28)') &&
+        ambar64.clase &&
+        ambar64.hoja.includes('rgba(233, 172, 74, .28)') &&
+        !!ambar64.trazo &&
+        ambar64.trazo !== azulAntes64.trazo &&
+        !azulDespues64.clase &&
+        azulDespues64.hoja === azulAntes64.hoja &&
+        azulDespues64.trazo === azulAntes64.trazo &&
+        !!claro64 &&
+        !claro64.oscuro &&
+        claro64.cursor.startsWith('url(') &&
+        claro64.quitado &&
+        !!oscuro64 &&
+        oscuro64.oscuro &&
+        oscuro64.cursor.startsWith('url(') &&
+        oscuro64.cursor !== claro64.cursor &&
+        oscuro64.quitado,
+      `azul: relleno ${relleno64(azulAntes64.hoja)}, trazo ${azulAntes64.trazo} · ` +
+        `ámbar: clase ${ambar64.clase}, relleno ${relleno64(ambar64.hoja)}, trazo ${ambar64.trazo} · ` +
+        `de vuelta: clase ${azulDespues64.clase}, relleno ${relleno64(azulDespues64.hoja)}, trazo ${azulDespues64.trazo} · ` +
+        `Señalar en claro: faro-picking-dark ${claro64?.oscuro}, quitado ${claro64?.quitado} · ` +
+        `en oscuro: faro-picking-dark ${oscuro64?.oscuro}, quitado ${oscuro64?.quitado}, ` +
+        `cursor ${oscuro64 && claro64 && oscuro64.cursor !== claro64.cursor ? 'distinto del claro' : 'IGUAL que el claro'}`
+    )
+    runner.setHighlightColor(tintaAntes64)
+    runner.clearNotes()
+
     setSidebar('clasica')
     renderPage('page:200')
     await wait(320)
@@ -4361,5 +4603,9 @@ window.faroHarness = {
   // estampar la barra, si un espacio tiene mapa…): a demanda como los demás,
   // para poder repetir el tramo 63 desde fuera sin pasar por los de antes.
   scopes: () => import('/src/shared/scopes.js'),
+  // Y de H23, el cursor de «Señalar» (el SVG, su URL `data:` y la regla con su
+  // punto activo), a demanda: para mirarlo a otro tamaño o con el otro tema sin
+  // tener que arrancar el selector.
+  cursor: () => import('/src/content/overlay/cursor.js'),
 }
 say('banco listo')

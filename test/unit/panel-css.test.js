@@ -27,9 +27,9 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { test, eq, assert } from '../harness.js'
-import { contrastRatio, cssVarsOf, durationLiterals, parseColor, pxLiterals } from '../contrast.js'
-import { TEXTO, CONTROL, EXENTOS, UMBRAL } from '../contrast-pairs.js'
-import { OVERLAY_CSS } from '../../src/content/overlay/styles.js'
+import { blendOver, contrastRatio, cssVarsOf, durationLiterals, parseColor, pxLiterals } from '../contrast.js'
+import { TEXTO, CONTROL, EXENTOS, UMBRAL, PAGINA, TINTAS } from '../contrast-pairs.js'
+import { OVERLAY_CSS, PICK_CSS, highlightCss } from '../../src/content/overlay/styles.js'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const CSS = readFileSync(join(ROOT, 'src', 'panel', 'panel.css'), 'utf8')
@@ -431,4 +431,66 @@ test('estilo: el foco de los campos no se anula', () => {
     /:focus-visible\s*\{[^}]*outline:\s*2px solid var\(--mark\)/.test(SIN_COMENTARIOS),
     'el anillo de foco es --mark'
   )
+})
+
+// --------------------------------------------------------------------- H23
+
+test('H23: el texto de la página bajo la tinta llega a 4,5 en los dos temas, y el enlace se anota', () => {
+  // Pasó en el anexo 2-F: con el relleno en el overlay, ENCIMA de la letra y
+  // sumado al ::highlight de debajo, el texto marcado en oscuro bajaba a 3,63:1.
+  // Desde la forma A el relleno es sólo el ::highlight, debajo del texto, así
+  // que lo que se lee es la letra de la página sobre la tinta mezclada con su
+  // fondo. La activa se mide sola porque va en SU highlight y fuera del de
+  // todas (overlay-wiring.test.js lo ejecuta): apilada sobre la normal, en
+  // oscuro bajaba a 3,88 (azul) y 3,31 (ámbar).
+  eq(Object.keys(PAGINA), ['claro', 'oscuro'], 'los dos temas de una página de Atlassian')
+  eq(TINTAS.length, 4, 'dos tintas × todas y la activa')
+  for (const [tinta, nombre, que] of TINTAS) {
+    const re = new RegExp('::highlight\\(' + nombre + '\\)\\s*\\{[^}]*background-color:\\s*(rgba?\\([^)]*\\))')
+    const m = re.exec(highlightCss(tinta))
+    assert(m, `la tinta ${tinta} (${nombre}) no está en highlightCss`)
+    assert(parseColor(m[1]) && parseColor(m[1]).a < 1, `${tinta} · ${nombre}: un relleno traslúcido, ${m[1]}`)
+    for (const [tema, p] of Object.entries(PAGINA)) {
+      const fondo = blendOver(m[1], null, p.fondo)
+      const texto = contrastRatio(p.texto, fondo)
+      assert(texto >= UMBRAL.texto, `${tinta} · ${nombre} · ${tema}: el texto de la página se queda en ${dos(texto)} (${que})`)
+      // El enlace de Atlassian se anota (npm run contrast lo imprime), no se exige.
+      assert(contrastRatio(p.enlace, fondo) !== null, `${tinta} · ${nombre} · ${tema}: el enlace se puede medir`)
+    }
+  }
+  eq(highlightCss('rojo'), highlightCss('azul'), 'lo que no es ámbar es azul')
+  assert(highlightCss('ambar') !== highlightCss('azul'), 'y las dos tintas son dos rellenos')
+})
+
+test('H23: el overlay no mezcla colores, no escribe ninguna URL de la extensión en la página, y declara la tinta en sus cuatro hosts', () => {
+  assert(!/mix-blend-mode/.test(OVERLAY_CSS), 'la mezcla es la forma B (H25), y en el host aislado es inerte')
+  // SEGURIDAD (S7, §8.21): lo que se escribe en el documento lo lee la página, y
+  // una URL de un recurso de la extensión le enseñaría el GUID de sesión que
+  // `use_dynamic_url` esconde. El cursor va en una URL data:.
+  const cursor = readFileSync(join(ROOT, 'src', 'content', 'overlay', 'cursor.js'), 'utf8')
+  for (const [nombre, texto] of [
+    ['PICK_CSS', PICK_CSS],
+    ['OVERLAY_CSS', OVERLAY_CSS],
+    ["highlightCss('azul')", highlightCss('azul')],
+    ["highlightCss('ambar')", highlightCss('ambar')],
+    ['el fuente de cursor.js', cursor],
+  ]) {
+    assert(!/chrome\.runtime\.getURL|chrome-extension:\/\//.test(texto), `${nombre} no nombra ninguna URL de la extensión`)
+  }
+  assert(PICK_CSS.includes('url("data:image/svg+xml;utf8,'), 'el cursor viaja en una URL data:')
+
+  const sinComentarios = OVERLAY_CSS.replace(/\/\*[\s\S]*?\*\//g, '')
+  for (const host of [':host', ':host(.faro-dark)', ':host(.faro-tinta-ambar)', ':host(.faro-tinta-ambar.faro-dark)']) {
+    const vars = cssVarsOf(sinComentarios, host)
+    assert(parseColor(vars['--faro-tinta'] || ''), `${host} declara --faro-tinta`)
+    assert(parseColor(vars['--faro-tinta-fuerte'] || ''), `${host} declara --faro-tinta-fuerte`)
+  }
+  const claro = cssVarsOf(sinComentarios, ':host')
+  for (const velo of ['--faro-tinta-velo', '--faro-tinta-velo-fuerte']) {
+    assert(parseColor(claro[velo] || '')?.a < 1, `${velo} es un velo traslúcido`)
+  }
+  // El ámbar de la marca de Faro no se toca: las insignias y los botones siguen
+  // en --faro-gold (los pines de «la marca del panel es la marca de la página»).
+  const oscuro = cssVarsOf(sinComentarios, ':host(.faro-dark)')
+  assert(!('--faro-gold' in oscuro) && !('--faro-gold-deep' in oscuro), 'el ámbar no cambia con el tema')
 })

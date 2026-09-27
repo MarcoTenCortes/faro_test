@@ -738,9 +738,18 @@ Junto al selector de modelo, abajo, hay otras dos cosas:
   observación que hable de una página base sale en la lista sin marca.
 
 - **Señalar en la página** — el icono del rotulador. Al pulsarlo el cursor
-  cambia y puedes subrayar un párrafo o pulsar una imagen; aparece una barra
-  abajo con «Usar esto». Lo que elijas queda en un recuadro encima del cuadro de
-  texto y acompaña a la **siguiente** pregunta, sólo a ésa.
+  pasa a ser un **subrayador azul** (con la punta abajo a la izquierda: la
+  selección empieza en la gota de tinta de la punta; si el navegador no
+  quisiera la imagen, queda el cursor de seleccionar texto de siempre) y puedes
+  subrayar un párrafo —la selección se ve en azul, sólo mientras señalas— o
+  pulsar una imagen, que se rodea de azul al pasar por encima; aparece una barra
+  abajo con «Usar esto». En una ventana estrecha la barra se recoge: primero se
+  acorta y a menos de 480 px desaparece la pista de la derecha, y si aun así no
+  cabe, la barra pasa a dos líneas en vez de salirse. Con la página en tema
+  oscuro el subrayador es de un azul más claro. La herramienta es siempre azul,
+  elijas la tinta que elijas para las marcas (abajo). Lo que elijas queda en un
+  recuadro encima del cuadro de texto y acompaña a la **siguiente** pregunta,
+  sólo a ésa.
 
   De un texto se guarda la cita, lo que hay justo antes y después, y el
   encabezado bajo el que está. De una imagen, su descripción **y la imagen
@@ -820,6 +829,23 @@ Junto al selector de modelo, abajo, hay otras dos cosas:
 - **Ajustes → Qué guarda Faro de mí** — la lista de todo lo que Faro tiene
   apuntado de este sitio, una línea por cosa y con su medida, y debajo el botón
   que se lo lleva todo. Está entero en el apartado 8 de esta guía.
+
+- **Ajustes → Cómo te señala Faro dónde mirar** — *Foco* oscurece el resto de
+  la página durante los pasos de un recorrido; *Subrayado* subraya el texto con
+  la tinta elegida y rodea las imágenes, sin oscurecer nada. Al LLEGAR, y en las
+  marcas de un análisis, siempre se subraya.
+
+- **Ajustes → Color del subrayado** — la **tinta** de las marcas: **Azul** (por
+  defecto) o **Ámbar**, el color de Faro que las marcas llevaban antes. Una
+  marca es un relleno suave DEBAJO del texto (la letra de la página se sigue
+  leyendo, por encima de 4,5:1 en claro y en oscuro) y un trazo fino bajo cada
+  línea que se dibuja de izquierda a derecha una vez; la observación que estás
+  mirando lleva el relleno un poco más fuerte y el trazo más grueso. Los números
+  `[n]` de un análisis y los botones de Faro («Usar esto», el del cartel) van
+  **siempre en ámbar**, y la herramienta de «Señalar» siempre en azul: el
+  ajuste sólo cambia las marcas. Se aplica al momento, sin rearrancar el panel:
+  la página se entera por el service worker, como del resto de ajustes de la
+  página.
 
 - **Elegir modelo** — el desplegable de abajo, junto a la Skill. Lista los
   modelos que **tu** opencode tiene conectados (`GET /config/providers`: los
@@ -1258,11 +1284,32 @@ de modelo.
 
 `npm run harness` levanta en <http://127.0.0.1:5175> una Confluence y un Jira de
 mentira con las piezas reales encima. El botón **Autocomprobación completa**
-recorre hoy **63 tramos numerados (129 comprobaciones)**; hay que correrla con el panel del navegador a
+recorre hoy **64 tramos numerados (135 comprobaciones)**; hay que correrla con el panel del navegador a
 la vista y a 1280×900, porque con la ventana oculta Chrome estrangula los
 temporizadores y no ejecuta los fotogramas.
 
-El último (63) es **un sitio con DOS espacios** (H21): la Confluence de mentira
+El último (64) es **el subrayado** (H23), sobre las tres observaciones de
+siempre de la página 200: que la observación activa va en su propio resaltado
+(`faro-quote-activa`, con prioridad 1) y NO se repite en el de las demás
+(`faro-quote`), y que entre los dos están todas —dos rellenos traslúcidos sobre
+la misma letra se suman, y en oscuro el texto se quedaba por debajo de 4,5:1—;
+que cada número `[n]` es un superíndice que no tapa la mitad de abajo del
+carácter que sigue a su cita, medido contra la caja de ESE carácter; que la
+caja de cada línea es transparente —el relleno vive en el resaltado, debajo
+del texto— y su trazo mide 3 px, 4 en la activa; y que la tinta ámbar llega a
+la página y la azul la deja como estaba, y que con la página en tema oscuro
+«Señalar» pone su cursor claro y al cancelar lo quita. Con él cambiaron cuatro
+tramos de antes: el 20 ya no dice «en amarillo»; el 22 comprueba además que
+mientras se señala el cursor es el subrayador (una imagen `data:` con el de
+texto de respaldo, que se va al acabar) y que la selección azul sólo vive bajo
+`html.faro-picking`, sin ninguna dirección de la extensión; el 23 pone el
+número a 1 px del final de la cita y 8 px por encima de la línea; y el 26 ya
+no espera que el `::after` desaparezca (ahora ES el trazo) sino que la
+animación se haya ido y el trazo siga ahí, con sus 3 px. En la consola,
+`await faroHarness.cursor()` da el módulo del cursor (el SVG, su URL y la
+regla), para mirarlo a otro tamaño o con el otro tema.
+
+El 63 es **un sitio con DOS espacios** (H21): la Confluence de mentira
 tiene ahora un segundo espacio, OPS, con su portada y su árbol, y el tramo lee
 los dos por la API, los funde en un solo mapa como hace Faro al construir el
 del segundo, y comprueba lo que se saca de ahí POR ESPACIO: que el mapa de ENG
@@ -1361,7 +1408,8 @@ corto y un detalle. Todos los títulos, por dónde salen:
 - «Ajustes aplicados» — cerraste Ajustes con **Guardar y volver** y no hacía
   falta rearrancar el panel, porque ni la dirección del servidor ni la
   contraseña cambiaron. Lo demás (el modo de navegación, la pausa entre pasos,
-  el estilo del subrayado, «Reducir animaciones») se aplicó en caliente, y la
+  el estilo del subrayado, el color del subrayado, «Reducir animaciones») se
+  aplicó en caliente, y la
   respuesta que estuviera llegando siguió viva: hasta esta versión, cerrar
   Ajustes reconstruía el cliente y mataba el turno en vuelo.
 - «Conversación recortada» — la sesión de opencode tiene más mensajes de los
@@ -1856,8 +1904,8 @@ al volver. «Nueva sesión» a mitad de turno también lo cancela, y el botón e
 desactivado mientras se responde.
 Cerrar **Ajustes** ya no lo cancela, salvo que hayas cambiado la dirección del
 servidor o la contraseña: eso es lo único que obliga a reconstruir el cliente.
-Cambiar «Reducir animaciones», el modo de navegación, la pausa entre pasos o el
-estilo del subrayado se aplica en caliente («Ajustes aplicados» en el registro)
+Cambiar «Reducir animaciones», el modo de navegación, la pausa entre pasos, el
+estilo del subrayado o su color se aplica en caliente («Ajustes aplicados» en el registro)
 y la respuesta sigue llegando; la página se entera al momento, sin esperar a que
 navegues.
 
@@ -2471,17 +2519,36 @@ dice y no toca nada. Si no, vuelve a pedir el análisis.
 
 **No quiero que oscurezca la página entera**
 **Ajustes → Cómo te señala Faro → Subrayado**. En ese modo no se oscurece nada:
-el texto se marca en amarillo y las imágenes quedan rodeadas por un filete muy
-fino. El otro modo, *Foco*, es el de siempre.
+el texto se subraya con la tinta elegida en **Ajustes → Color del subrayado**
+(azul por defecto, o ámbar) y las imágenes quedan rodeadas por un filete muy
+fino del mismo color. El otro modo, *Foco*, es el de siempre.
 
 Ese ajuste gobierna los **pasos** del recorrido. Al **llegar** al destino nunca
 se oscurece: el foco sirve para enseñarte dónde va el siguiente clic, y una vez
 estás delante de lo que buscabas sólo taparía lo que has venido a leer.
 
+**Las marcas eran amarillas y ahora son azules (o prefiero el amarillo)**
+Desde esta versión la tinta de las marcas es azul por defecto; el ámbar de
+antes sigue en **Ajustes → Color del subrayado → Ámbar**, y se aplica al
+momento. Los números `[n]` siguen en ámbar con cualquiera de las dos. En las
+dos tintas el relleno va DEBAJO del texto y está medido para que la letra de
+la página se lea por encima de 4,5:1 en claro y en oscuro; un **enlace** de
+Atlassian bajo la tinta se queda algo por debajo (entre 3,2 y 4,3:1, según
+tinta y tema): se anota y no se exige. `npm run contrast` imprime la tabla
+entera (TINTAS).
+
 **Pulso el rotulador y no pasa nada**
 Como la navegación paso a paso, señalar en la página necesita permiso sobre el
 dominio y que el content script esté cargado. Si acabas de conceder el permiso,
 recarga la pestaña. En `*.atlassian.net` funciona de fábrica.
+
+**Al señalar, el cursor es el de texto y no el subrayador azul**
+El subrayador es una imagen `data:` metida en la hoja que Faro cuelga de la
+página, y si el navegador no la acepta —una política de seguridad del sitio
+que no admita imágenes `data:`, por ejemplo— queda el cursor de seleccionar
+texto, que es su respaldo: se señala igual. En los dos sitios de Marco la
+política sólo manda `frame-ancestors` (comprobado el 2026-09-27, sin sesión),
+así que allí no debería pasar.
 
 **Señalé una imagen y dice «sin adjuntar»**
 La imagen está servida desde otro origen, así que el navegador no deja

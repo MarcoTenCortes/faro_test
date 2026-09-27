@@ -25,13 +25,27 @@
  * desplazarse, que es lo que se veía en el Jira del usuario. Y la caja de
  * recorte, que cuesta un `getComputedStyle` por cada antepasado, se buscaba
  * dos veces por observación y por frame.
+ *
+ * Qué pinta cada capa, desde H23 (forma A, docs/PLAN2.md §3.6): el RELLENO de
+ * una marca es un `::highlight()` del documento, debajo del texto, con dos
+ * nombres —`faro-quote` para todas y `faro-quote-activa` para la que estás
+ * mirando—; el overlay dibuja encima sólo el TRAZO de cada línea (un
+ * `.quote-rect` transparente con su `::after`) y las insignias, que suben a
+ * superíndice para no tapar la palabra siguiente. El color es la tinta que
+ * elige el usuario (`setTint`), azul o ámbar.
  */
 
-import { OVERLAY_CSS, HIGHLIGHT_CSS, PICK_CSS } from './styles.js'
+import { OVERLAY_CSS, highlightCss, PICK_CSS } from './styles.js'
 import { rectsOf, clipRects } from './rects.js'
 
 const HOST_ID = 'faro-overlay-host'
 const HIGHLIGHT_NAME = 'faro-quote'
+// La observación activa, en su propio highlight y con prioridad 1. Sus Range
+// NO están también en el de todas: comprobado el 2026-09-27 en Chrome, dos
+// highlights traslúcidos sobre la misma letra pintan los DOS fondos, uno encima
+// del otro, y en el tema oscuro la activa apilada dejaba el texto por debajo de
+// 4,5:1 (3,88 en azul y 3,31 en ámbar, medido con test/contrast.js).
+const HIGHLIGHT_ACTIVE_NAME = 'faro-quote-activa'
 const SVG_NS = 'http://www.w3.org/2000/svg'
 
 export class Overlay {
@@ -49,6 +63,8 @@ export class Overlay {
     this.onNote = null
     this.stillMotion = false
     this.style = 'spotlight'
+    // La tinta de las marcas (el ajuste «Color del subrayado», H23).
+    this.tint = 'azul'
     // Lo que se va a pintar, con lo caro de cada observación ya buscado una
     // vez: la caja que la recorta y si cae dentro de un bloque de código.
     this._groups = []
@@ -105,6 +121,7 @@ export class Overlay {
 
     this._applyColorScheme()
     this._applyStyle()
+    this._applyTint()
     this._injectHighlightStyle()
 
     document.addEventListener('keydown', this._onKey, true)
@@ -156,6 +173,29 @@ export class Overlay {
     this.host?.classList.toggle('faro-marker', this.style === 'marker')
   }
 
+  /**
+   * La tinta de las marcas. Llega de los ajustes (`MSG.SETTINGS`) y puede
+   * llegar antes de que haya overlay montado: se guarda, y `mount()` la aplica.
+   * @param {'azul'|'ambar'} color lo que no sea 'ambar' cuenta como azul
+   */
+  setTint(color) {
+    this.tint = color === 'ambar' ? 'ambar' : 'azul'
+    this._applyTint()
+  }
+
+  /**
+   * La tinta vive en dos sitios, porque el relleno está en el documento y no ve
+   * las variables del host: una clase en el host (el trazo y los velos) y la
+   * hoja `#faro-highlight-style` (el relleno), que sobrevive a `destroy()` y
+   * por eso se reescribe aunque la haya dejado otro overlay.
+   */
+  _applyTint() {
+    this.host?.classList.toggle('faro-tinta-ambar', this.tint === 'ambar')
+    const hoja = document.getElementById('faro-highlight-style')
+    const texto = highlightCss(this.tint)
+    if (hoja && hoja.textContent !== texto) hoja.textContent = texto
+  }
+
   _applyColorScheme() {
     const attr = document.documentElement.getAttribute('data-color-mode')
     const dark =
@@ -169,7 +209,7 @@ export class Overlay {
     if (document.getElementById('faro-highlight-style')) return
     const s = document.createElement('style')
     s.id = 'faro-highlight-style'
-    s.textContent = HIGHLIGHT_CSS
+    s.textContent = highlightCss(this.tint)
     document.head?.appendChild(s)
   }
 
@@ -478,18 +518,28 @@ export class Overlay {
     this.notes = notas
     this.activeNote = 0
     this.quoteRanges = todos
-    this._setHighlight(todos)
+    this._setHighlight(todos, this._activeRanges())
     this._prepareGroups()
     this._repaint(true)
     return notas.length
   }
 
-  /** Destaca una observación sobre las demás. */
+  /**
+   * Destaca una observación sobre las demás: su relleno pasa al highlight de la
+   * activa y su trazo, a la clase `active`.
+   */
   focusNote(n) {
     if (!this.notes.some((x) => x.n === n)) return false
     this.activeNote = n
+    this._setHighlight(this.quoteRanges, this._activeRanges())
     this._repaint(false)
     return true
+  }
+
+  /** Los Range de la observación activa, o ninguno. */
+  _activeRanges() {
+    const nota = this.activeNote ? this.notes.find((x) => x.n === this.activeNote) : null
+    return nota?.ranges || []
   }
 
   clearNotes() {
@@ -509,6 +559,7 @@ export class Overlay {
     this._groups = []
     try {
       CSS.highlights?.delete(HIGHLIGHT_NAME)
+      CSS.highlights?.delete(HIGHLIGHT_ACTIVE_NAME)
     } catch {
       /* nada que limpiar */
     }
@@ -516,12 +567,29 @@ export class Overlay {
     if (this.el.noteLayer) this.el.noteLayer.textContent = ''
   }
 
-  _setHighlight(ranges) {
+  /**
+   * El relleno de las marcas, debajo del texto: `faro-quote` con todas menos la
+   * activa y `faro-quote-activa` con la activa, con prioridad 1 por si su texto
+   * coincide con el de otra observación. Cada Range está en UN highlight: los
+   * dos rellenos son traslúcidos y, apilados, se suman.
+   *
+   * @param {Range[]} ranges todos los de la página
+   * @param {Range[]} activos los de la observación activa (ninguno en una cita)
+   */
+  _setHighlight(ranges, activos = []) {
     if (!('highlights' in CSS) || typeof Highlight !== 'function') return
     try {
-      CSS.highlights.set(HIGHLIGHT_NAME, new Highlight(...ranges))
+      const resto = activos.length ? ranges.filter((r) => !activos.includes(r)) : ranges
+      CSS.highlights.set(HIGHLIGHT_NAME, new Highlight(...resto))
+      if (activos.length) {
+        const activa = new Highlight(...activos)
+        activa.priority = 1
+        CSS.highlights.set(HIGHLIGHT_ACTIVE_NAME, activa)
+      } else {
+        CSS.highlights.delete(HIGHLIGHT_ACTIVE_NAME)
+      }
     } catch {
-      /* si falla, quedan los rectángulos de respaldo */
+      /* si falla, queda el trazo de los rectángulos */
     }
   }
 
@@ -617,11 +685,14 @@ export class Overlay {
   }
 
   /**
-   * Los rectángulos amarillos, uno por línea de cada observación.
+   * Los trazos, uno por línea de cada observación: un rectángulo transparente
+   * con la caja EXACTA de la línea, cuyo `::after` es la pastilla de tinta
+   * (styles.js). El relleno no va aquí: es el `::highlight` de debajo.
    *
-   * La observación activa se marca más fuerte, y el barrido blanco sólo corre
-   * en el pintado que lo pide (el primero de un análisis o de una llegada):
-   * al desplazar la página las marcas se quedan donde están, encendidas.
+   * La observación activa lleva el trazo más grueso, y el «se dibuja» sólo
+   * corre en el pintado que lo pide (el primero de un análisis o de una
+   * llegada): al desplazar la página las marcas se quedan donde están,
+   * encendidas.
    */
   _paintQuoteRects(sweep, medidas) {
     const layer = this.el.quoteLayer
@@ -645,12 +716,23 @@ export class Overlay {
         // se espera un frame para que la transición desde `opacity: 0` se vea.
         if (nuevo && sweep) requestAnimationFrame(() => nodo.classList.add('on'))
         else nodo.classList.add('on')
-        if (sweep && !this.stillMotion) setTimeout(() => barrer(nodo), 60 + i * 40)
+        // El escalonado va DENTRO de la animación (--faro-retardo): con un
+        // setTimeout delante el trazo se veía entero y luego se redibujaba.
+        if (sweep && !this.stillMotion) barrer(nodo, 60 + i * 40)
       }
     )
   }
 
-  /** El número de cada observación, detrás del último carácter de su cita. */
+  /**
+   * El número de cada observación, detrás del último carácter de su cita y en
+   * superíndice. Pasó de verdad (anexo 2-F): centrada en la línea, la insignia
+   * tapaba las dos o tres primeras letras de la palabra siguiente. Subida 8 px
+   * (el plan decía 6; con Segoe UI 14 px a 6 acababa 0-1 px por debajo de la
+   * mitad del carácter siguiente, medido en el banco), su mitad de arriba cae en
+   * el hueco sobre la línea;
+   * la de abajo todavía puede rozar lo alto de la primera letra que sigue, y
+   * cuánto es cosa del banco, que mide cajas de verdad.
+   */
   _paintNoteBadges(animate, medidas) {
     const layer = this.el.noteLayer
     if (!layer) return
@@ -659,12 +741,12 @@ export class Overlay {
     const items = []
     for (const m of medidas) {
       if (!m.n || !m.ultimo) continue
-      // Pegada al final de la cita, sin salirse de la ventana, y sin pisar a
-      // otra insignia: dos citas que acaban a la misma altura ponían sus números
-      // uno encima del otro y sólo se leía el de arriba.
+      // Pegada al final de la cita, sin salirse de la ventana ni por arriba, y
+      // sin pisar a otra insignia: dos citas que acaban a la misma altura ponían
+      // sus números uno encima del otro y sólo se leía el de arriba.
       const sitio = libre(
-        Math.min(m.ultimo.left + m.ultimo.width + 3, window.innerWidth - 26),
-        m.ultimo.top + m.ultimo.height / 2 - 8.5,
+        Math.min(m.ultimo.left + m.ultimo.width + 1, window.innerWidth - 24),
+        Math.max(0, m.ultimo.top - 8),
         ocupados
       )
       ocupados.push(sitio)
@@ -807,8 +889,14 @@ export class Overlay {
     this.el.pickBar?.classList.remove('on')
   }
 
-  /** Cursor de selección sobre la página. Va en <head>, nunca en el contenido. */
+  /**
+   * Cursor y selección de «Señalar» sobre la página. Va en <head>, nunca en el
+   * contenido. Con la página en tema oscuro (lo que ya decidió
+   * `_applyColorScheme` para el host), el subrayador de cuerpo claro: el picker
+   * monta el overlay antes de llamar aquí.
+   */
   setPicking(on) {
+    const html = document.documentElement
     if (on) {
       if (!document.getElementById('faro-pick-style')) {
         const s = document.createElement('style')
@@ -816,9 +904,10 @@ export class Overlay {
         s.textContent = PICK_CSS
         document.head?.appendChild(s)
       }
-      document.documentElement.classList.add('faro-picking')
+      html.classList.add('faro-picking')
+      html.classList.toggle('faro-picking-dark', !!this.host?.classList.contains('faro-dark'))
     } else {
-      document.documentElement.classList.remove('faro-picking')
+      html.classList.remove('faro-picking', 'faro-picking-dark')
     }
   }
 
@@ -862,27 +951,35 @@ function nuevasStats() {
 }
 
 /**
- * Lo que dura el barrido en styles.js (`faro-sweep 1.1s`), con margen. Es el
- * respaldo para quitar la clase si `animationend` no llega: una marca fuera de
- * la pantalla o con las animaciones apagadas por el sistema no lo dispara.
+ * Lo que dura el «se dibuja» del trazo en styles.js (`faro-tinta .45s`), con
+ * margen. Es el respaldo para quitar la clase si `animationend` no llega: una
+ * marca fuera de la pantalla o con las animaciones apagadas por el sistema no
+ * lo dispara. Se suma al retardo de cada caja (barrer), porque la animación
+ * empieza tras él. Era 1200 con el barrido blanco de antes (`faro-sweep 1.1s`).
  */
-const SWEEP_MS = 1200
+const SWEEP_MS = 600
 
 /**
- * Lanza el barrido de una marca y lo retira al acabar.
+ * Lanza el «se dibuja» de una marca y lo retira al acabar.
  *
- * El pseudo-elemento sólo EXISTE mientras la clase está puesta (styles.js:
- * `.quote-rect::after { content: none }`), y antes se iba solo porque cada
- * scroll recreaba el rectángulo sin la clase. Ahora el nodo se reutiliza, así
- * que la clase hay que quitarla a propósito: si no, cada marca de la página se
- * queda componiendo una capa con la banda blanca aparcada fuera de su caja,
- * que es justo lo que el comentario de styles.js cuenta que pasaba.
+ * Desde H23 el trazo (`.quote-rect::after`) existe siempre y lo que la clase
+ * pone es la animación. Cada scroll reutiliza el nodo (P1), así que la clase
+ * hay que quitarla a propósito: si se quedara puesta, el siguiente pintado que
+ * la volviera a poner no la reiniciaría, y el banco (tramo 26) mira que ninguna
+ * marca se quede con la animación colgada.
+ *
+ * El retardo escalonado (60 + i·40 ms) va en `--faro-retardo`, que el CSS usa
+ * como `animation-delay`, y la clase se pone EN EL ACTO. Pasó al revisar el
+ * contrato: con la clase puesta tarde por un setTimeout, el trazo (que existe
+ * siempre) se veía entero durante el retardo y luego se redibujaba desde
+ * scaleX(0). Con `both`, durante el retardo rige el `from` y no se ve.
  */
-function barrer(nodo) {
+function barrer(nodo, retardo = 0) {
   if (!nodo.isConnected) return
+  nodo.style.setProperty('--faro-retardo', retardo + 'ms')
   nodo.addEventListener('animationend', quitarBarrido, { once: true })
   clearTimeout(nodo._faroSweep)
-  nodo._faroSweep = setTimeout(() => nodo.classList.remove('sweep'), SWEEP_MS)
+  nodo._faroSweep = setTimeout(() => nodo.classList.remove('sweep'), SWEEP_MS + retardo)
   nodo.classList.add('sweep')
 }
 
@@ -895,7 +992,10 @@ function css(el, prop, value) {
   if (el.style[prop] !== value) el.style[prop] = value
 }
 
-/** Un hueco de 17x17 que no pise a los ya puestos. Se aparta a la derecha. */
+/**
+ * Un hueco de 16x16 (más su anillo) que no pise a los ya puestos. Se aparta a
+ * la derecha, sin salirse de la ventana.
+ */
 function libre(left, top, ocupados) {
   const CHOCA = 19
   let x = left
@@ -903,7 +1003,7 @@ function libre(left, top, ocupados) {
     if (!ocupados.some((o) => Math.abs(o.left - x) < CHOCA && Math.abs(o.top - top) < CHOCA)) break
     x += CHOCA
   }
-  return { left: Math.min(x, window.innerWidth - 26), top }
+  return { left: Math.min(x, window.innerWidth - 24), top }
 }
 
 /**

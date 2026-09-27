@@ -10,7 +10,14 @@
  *    curva: lo bastante lentos para poder seguirlos con la vista, que es de lo
  *    que va guiar a alguien.
  *  - Con `prefers-reduced-motion` quedan sólo fundidos.
+ *  - Dos colores con dos papeles, desde H23 (docs/PLAN2.md §3.6): el ÁMBAR es
+ *    la marca de Faro —el foco, el cartel, sus botones y las insignias [n]—, y
+ *    la TINTA es el color de lo que Faro te señala en la página —el trazo de
+ *    una marca, su relleno, el foco sin escudo, el filete de una imagen—, azul
+ *    por defecto y ámbar a elegir. La herramienta de «Señalar» es siempre azul.
  */
+
+import { cursorRule } from './cursor.js'
 
 export const OVERLAY_CSS = `
 :host {
@@ -24,6 +31,10 @@ export const OVERLAY_CSS = `
   --faro-glow: rgba(233, 172, 74, .34);
   --faro-shadow: 0 12px 32px -10px rgba(19, 18, 24, .45), 0 2px 6px rgba(19, 18, 24, .18);
   --faro-ease: cubic-bezier(.32, .72, 0, 1);
+  --faro-tinta: #2563EB;
+  --faro-tinta-fuerte: #1D4ED8;
+  --faro-tinta-velo: rgba(59, 130, 246, .16);
+  --faro-tinta-velo-fuerte: rgba(59, 130, 246, .28);
 
   all: initial;
   position: fixed;
@@ -41,6 +52,23 @@ export const OVERLAY_CSS = `
   --faro-line: #35323F;
   --faro-scrim: rgba(8, 8, 11, .66);
   --faro-shadow: 0 12px 32px -10px rgba(0, 0, 0, .7), 0 2px 6px rgba(0, 0, 0, .4);
+  --faro-tinta: #60A5FA;
+  --faro-tinta-fuerte: #3B82F6;
+}
+
+/* La tinta a elegir (el ajuste «Color del subrayado»): el ámbar de antes de H23.
+   El trazo claro sobre blanco se queda en 2,94 y el de la activa en 5,92; en
+   oscuro, 8,07 y 5,51 (lo imprime «npm run contrast»). El relleno, el que lleva la
+   letra encima, vive en highlightCss() y se exige en panel-css.test.js. */
+:host(.faro-tinta-ambar) {
+  --faro-tinta: #C98A22;
+  --faro-tinta-fuerte: #8A5A0A;
+  --faro-tinta-velo: rgba(233, 172, 74, .16);
+  --faro-tinta-velo-fuerte: rgba(233, 172, 74, .28);
+}
+:host(.faro-tinta-ambar.faro-dark) {
+  --faro-tinta: #E9AC4A;
+  --faro-tinta-fuerte: #C98A22;
 }
 
 * { box-sizing: border-box; }
@@ -220,58 +248,62 @@ button:focus-visible { outline: 2px solid var(--faro-gold); outline-offset: 2px;
 
 /* --------------------------------------------------- resaltado de texto */
 
+/* Forma A (H23, docs/PLAN2.md §3.6). Pasó de verdad: el relleno amarillo iba en
+   este rectángulo, ENCIMA de la letra, y se sumaba al ::highlight de debajo; en
+   el tema oscuro el texto marcado bajaba de 8,95:1 a 3,63:1 (anexo 2-F). Ahora
+   el relleno vive sólo en ::highlight(faro-quote), que se pinta DEBAJO del
+   texto (highlightCss, en el documento), y aquí queda el trazo: una pastilla de
+   3 px pegada al borde inferior de la caja de la línea, que ya incluye el
+   espacio de los descendentes, así que el trazo queda bajo la letra y no la
+   tapa. El rectángulo es transparente. */
 .quote-layer { position: fixed; inset: 0; pointer-events: none; }
 .quote-rect {
   position: fixed;
-  border-radius: 3px;
-  background: linear-gradient(180deg, rgba(233,172,74,.10), rgba(233,172,74,.22));
-  box-shadow: inset 0 -2px 0 var(--faro-gold);
+  background: transparent;
   opacity: 0;
-  /* El barrido vive DENTRO. Sin esto se pintaba fuera de su caja —empieza en
-     translateX(-110%)— y sobre un bloque de código, con una marca por línea y
-     de anchuras distintas, salían barras blancas escalonadas por la izquierda,
-     fuera del bloque. */
+  /* El trazo vive DENTRO de la caja: recortado a ella, sobre un bloque de
+     código con scroll propio no se sale del bloque (antes era el barrido el que
+     se pintaba fuera, empezando en translateX(-110%): barras blancas
+     escalonadas por la izquierda). El tramo 26 del banco lo pina. */
   overflow: hidden;
   transition: opacity .4s ease;
 }
 .quote-rect.on { opacity: 1; }
 
-/* Un barrido corto de izquierda a derecha, una sola vez.
-
-   El pseudo sólo EXISTE mientras barre. Antes existía siempre, aparcado en
-   translateX(-110%) —o en +110% al terminar, que forwards retiene—, y como
-   cada repintado por scroll vuelve a crear los rectángulos sin la clase, la
-   banda blanca se quedaba fija. Con content:none no hay nada que aparcar, y
-   de paso no se compone una capa por cada marca de la página. */
-.quote-rect::after { content: none; }
-
-.quote-rect.sweep::after {
+/* El trazo existe SIEMPRE (el barrido de antes sólo existía mientras barría, y
+   con content:none se iba). Lo que va y viene es la animación: la clase
+   «sweep» la pone barrer() y la quita al acabar. */
+.quote-rect::after {
   content: "";
   position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  background: linear-gradient(100deg, transparent 20%, rgba(255,255,255,.55) 50%, transparent 80%);
-  transform: translateX(-110%);
-  animation: faro-sweep 1.1s var(--faro-ease) forwards;
+  left: 0; right: 0;
+  bottom: 0;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--faro-tinta);
+  transform-origin: left center;
 }
-@keyframes faro-sweep { to { transform: translateX(110%); } }
+/* La observación que estás mirando ahora mismo: un trazo más grueso y oscuro. */
+.quote-rect.active::after { height: 4px; background: var(--faro-tinta-fuerte); }
 
-/* Sobre un bloque de código el fondo es oscuro y el texto va de colores: ahí un
-   blanco al 55% es un fogonazo, y el relleno amarillo encima de la sintaxis la
-   vuelve ilegible. La marca se queda en lo que de verdad hace falta, el trazo
-   inferior del rotulador. */
-.quote-rect.on-code {
-  background: rgba(233, 172, 74, .13);
-  box-shadow: inset 0 -2px 0 var(--faro-gold);
-}
-.quote-rect.on-code.sweep::after {
-  background: linear-gradient(100deg, transparent 20%, rgba(255,255,255,.22) 50%, transparent 80%);
-}
+/* Se dibuja de izquierda a derecha, una sola vez: el barrido blanco de antes
+   era un fogonazo sobre cualquier fondo oscuro. El escalonado de cada caja lo
+   escribe barrer() en --faro-retardo; con both, durante el retardo rige el
+   from (scaleX(0)) y el trazo no se ve entero antes de dibujarse. */
+.quote-rect.sweep::after { animation: faro-tinta .45s var(--faro-ease) both; animation-delay: var(--faro-retardo, 0ms); }
+@keyframes faro-tinta { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+
+/* Sobre un bloque de código el fondo es oscuro y el texto va de colores: en
+   código, sólo el trazo, como siempre (el relleno del ::highlight tampoco
+   tapa la sintaxis: va debajo). */
+.quote-rect.on-code { background: transparent; }
 
 /* ------------------------------------------------- el foco sin escudo
 
-   El mismo foco, pero sin oscurecer la página: fondo amarillo translúcido,
-   filete de 1 px y línea inferior, como un rotulador.
+   El mismo foco, pero sin oscurecer la página: un velo de la tinta, filete de
+   1 px y línea inferior, como un rotulador. Sigue la TINTA y no el ámbar desde
+   H23: es una marca de resultado («esto es lo que buscabas»), no la marca de
+   Faro, y así dice lo mismo que el subrayado de una cita.
 
    Se usa en dos sitios, y por eso está escrito una sola vez:
      - Al LLEGAR a un destino. El oscurecido sirve para guiarte por el árbol,
@@ -282,14 +314,14 @@ button:focus-visible { outline: 2px solid var(--faro-gold); outline-offset: 2px;
 .spot.flat,
 :host(.faro-marker) .spot {
   border-radius: 4px;
-  background: rgba(233, 172, 74, .16);
+  background: var(--faro-tinta-velo);
   box-shadow:
-    0 0 0 1px var(--faro-gold),
-    inset 0 -2px 0 var(--faro-gold);
+    0 0 0 1px var(--faro-tinta),
+    inset 0 -2px 0 var(--faro-tinta);
 }
 @keyframes faro-marker-breathe {
-  0%, 100% { background: rgba(233, 172, 74, .16); }
-  50%      { background: rgba(233, 172, 74, .28); }
+  0%, 100% { background: var(--faro-tinta-velo); }
+  50%      { background: var(--faro-tinta-velo-fuerte); }
 }
 .spot.flat.breathe,
 :host(.faro-marker) .spot.breathe { animation: faro-marker-breathe 2.6s ease-in-out .4s infinite; }
@@ -303,32 +335,39 @@ button:focus-visible { outline: 2px solid var(--faro-gold); outline-offset: 2px;
    Lo que deja el modo Análisis: cada punto sobre el que tiene algo que decir
    queda subrayado, y detrás del último carácter va su número, como una nota al
    pie. Al final de la cita y no en el margen, a propósito: en un panel estrecho
-   o con la barra lateral abierta el margen no existe. */
+   o con la barra lateral abierta el margen no existe.
+
+   Desde H23 van en SUPERÍNDICE (overlay.js las sube 8 px sobre la línea):
+   centradas en la línea tapaban las dos o tres primeras letras de la palabra
+   siguiente (anexo 2-F). Miden 16 px y llevan un anillo de 2 px del color del
+   papel, que las despega del texto y de la línea de arriba. Siguen en ámbar:
+   son la marca de Faro, la misma pastilla [n] que el chat. */
 
 .note-layer { position: fixed; inset: 0; pointer-events: none; }
 
 .note-badge {
   position: fixed;
-  min-width: 17px;
-  height: 17px;
+  min-width: 16px;
+  height: 16px;
   padding: 0 4px;
   border: 1px solid var(--faro-gold-deep);
-  border-radius: 9px;
+  border-radius: 8px;
   background: var(--faro-gold);
   color: #1B1405;
-  font-size: 10.5px;
+  font-size: 10px;
   font-weight: 700;
-  line-height: 15px;
+  line-height: 14px;
   text-align: center;
   font-variant-numeric: tabular-nums;
-  box-shadow: 0 1px 3px rgba(19, 18, 24, .35);
+  box-shadow: 0 0 0 2px var(--faro-paper), 0 1px 3px rgba(19, 18, 24, .35);
   pointer-events: auto;
   cursor: pointer;
   opacity: 0;
-  transform: translateY(2px);
+  transform: scale(.6);
   transition: opacity .3s ease, transform .3s var(--faro-ease), box-shadow .16s ease, background .16s ease;
 }
-.note-badge.on { opacity: 1; transform: translateY(0); }
+/* Entra creciendo, sin rebote: la curva del fichero no pasa de 1. */
+.note-badge.on { opacity: 1; transform: scale(1); }
 /* Igual que el botón del cartel: sobre el ámbar profundo el texto sigue siendo
    #1B1405 (6,22:1). Con el crema de antes la insignia que estabas mirando era
    justo la menos legible de la página (2,76:1). */
@@ -336,18 +375,7 @@ button:focus-visible { outline: 2px solid var(--faro-gold); outline-offset: 2px;
 .note-badge.active {
   background: var(--faro-gold-deep);
   color: #1B1405;
-  box-shadow: 0 0 0 3px rgba(233, 172, 74, .38);
-}
-
-/* La observación que estás mirando ahora mismo, más marcada que las demás. */
-.quote-rect.active {
-  background: linear-gradient(180deg, rgba(233,172,74,.28), rgba(233,172,74,.46));
-  box-shadow: inset 0 -2px 0 var(--faro-gold-deep);
-}
-/* Y dentro de un bloque de código, destacada por el trazo y no por el relleno. */
-.quote-rect.on-code.active {
-  background: rgba(233, 172, 74, .22);
-  box-shadow: inset 0 -3px 0 var(--faro-gold);
+  box-shadow: 0 0 0 2px var(--faro-paper), 0 0 0 4px rgba(233, 172, 74, .38);
 }
 
 /* ------------------------------------------------- recuadro de imágenes */
@@ -355,7 +383,7 @@ button:focus-visible { outline: 2px solid var(--faro-gold); outline-offset: 2px;
 .outline-layer { position: fixed; inset: 0; pointer-events: none; }
 .img-outline {
   position: fixed;
-  border: 1px solid var(--faro-gold);
+  border: 1px solid var(--faro-tinta);
   border-radius: 2px;
   pointer-events: none;
   opacity: 0;
@@ -363,13 +391,18 @@ button:focus-visible { outline: 2px solid var(--faro-gold); outline-offset: 2px;
 }
 .img-outline.on { opacity: 1; }
 
-/* ------------------------------------------------- modo de selección */
+/* ------------------------------------------------- modo de selección
+
+   La herramienta de «Señalar» es siempre azul, elija el usuario la tinta que
+   elija (H23): el cursor subrayador, la selección, el recuadro al pasar por
+   una imagen y el faro de la barra. Es la herramienta, no el resultado; y
+   «Usar esto» sigue en ámbar, porque es la acción de Faro. */
 
 .pick-hover {
   position: fixed;
-  border: 1px solid var(--faro-gold);
+  border: 1px solid #3B82F6;
   border-radius: 2px;
-  background: rgba(233, 172, 74, .10);
+  background: rgba(59, 130, 246, .10);
   pointer-events: none;
   opacity: 0;
   transition: opacity .12s ease;
@@ -382,6 +415,7 @@ button:focus-visible { outline: 2px solid var(--faro-gold); outline-offset: 2px;
   bottom: 26px;
   transform: translate(-50%, 10px);
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
   max-width: min(560px, 92vw);
@@ -398,8 +432,29 @@ button:focus-visible { outline: 2px solid var(--faro-gold); outline-offset: 2px;
   transition: opacity .2s ease, transform .2s var(--faro-ease);
 }
 .pick-bar.on { opacity: 1; transform: translate(-50%, 0); }
-.pick-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pick-hint { color: var(--faro-muted); font-size: 11.5px; flex: none; }
+/* Pasó de verdad: a 364 px el texto elegido medía 0 px y «Cancelar» se salía
+   de la barra (anexo 2-F), porque la pista no cedía nada (flex: none). Ahora
+   cede ella antes que el texto, por debajo de 480 px se oculta, y la barra
+   envuelve en vez de salirse. */
+.pick-text { flex: 1 1 120px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pick-hint {
+  color: var(--faro-muted);
+  font-size: 11.5px;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+@media (max-width: 480px) {
+  .pick-hint { display: none; }
+  .pick-bar { max-width: 96vw; }
+}
+/* El faro de la barra, en el azul de la herramienta; el del cartel no cambia. */
+.pick-bar .beacon { border-color: #3B82F6; }
+.pick-bar .beacon::after { background: #3B82F6; }
+:host(.faro-dark) .pick-bar .beacon { border-color: #60A5FA; }
+:host(.faro-dark) .pick-bar .beacon::after { background: #60A5FA; }
 
 /* ------------------------------------------------------------- avisos */
 
@@ -430,7 +485,8 @@ button:focus-visible { outline: 2px solid var(--faro-gold); outline-offset: 2px;
   .spot.breathe { animation: none; }
   .note-badge { transition: opacity .16s ease; }
   .ring.draw rect { animation: none; stroke-dashoffset: 0; }
-  .quote-rect.sweep::after { content: none; }
+  /* El trazo se queda (con content:none desaparecería): sólo deja de dibujarse. */
+  .quote-rect.sweep::after { animation: none; }
   .progress.run i { animation: none; width: 100%; }
 }
 :host(.faro-still) .spot,
@@ -439,35 +495,83 @@ button:focus-visible { outline: 2px solid var(--faro-gold); outline-offset: 2px;
 :host(.faro-still) .spot.breathe { animation: none; }
 :host(.faro-still) .note-badge { transition: opacity .16s ease; }
 :host(.faro-still) .ring.draw rect { animation: none; stroke-dashoffset: 0; }
-:host(.faro-still) .quote-rect.sweep::after { content: none; }
-`
+:host(.faro-still) .quote-rect.sweep::after { animation: none; }
 
-/**
- * Estilo del resaltado nativo. Va en el documento, no en el shadow root:
- * `::highlight()` sólo se puede estilar desde una hoja del documento.
- * Es la única inserción que hacemos fuera del shadow, y va en <head>, nunca
- * dentro del contenido.
- */
-export const HIGHLIGHT_CSS = `
-::highlight(faro-quote) {
-  background-color: rgba(233, 172, 74, .28);
-  color: inherit;
+/* Alto contraste de Windows: los colores de Faro se sustituyen por los del
+   sistema, y un trazo de 3 px de «Highlight» solo se perdería. La caja entera
+   se rodea, y la insignia conserva los suyos porque su texto ya se lee. */
+@media (forced-colors: active) {
+  .quote-rect { outline: 2px solid Highlight; outline-offset: 1px; }
+  .quote-rect::after { background: Highlight; }
+  .note-badge { forced-color-adjust: none; }
 }
 `
 
 /**
- * Cursor del modo de selección.
+ * El relleno de las marcas, por tinta: el de todas y el de la que estás mirando.
+ *
+ * Va en el documento, no en el shadow root: `::highlight()` sólo se puede
+ * estilar desde una hoja del documento, y por eso tampoco ve las variables del
+ * host: el color va en literal, uno por tinta (docs/PLAN2.md §3.6). Es la única
+ * inserción que hacemos fuera del shadow, y va en <head>, nunca dentro del
+ * contenido.
+ *
+ * Se pinta DEBAJO del texto, que es lo que lo hace legible: el relleno del
+ * rectángulo de antes iba encima y en oscuro dejaba la letra a 3,63:1. Cada
+ * relleno está elegido para que el texto de una página de Atlassian quede por
+ * encima de 4,5:1 en los DOS temas (texto claro 10,14 · oscuro 6,13 la normal
+ * en azul; la tabla entera la imprime `npm run contrast`, y la exige
+ * `panel-css.test.js` leyendo ESTOS literales). Un enlace de Atlassian bajo la
+ * tinta se queda por debajo (3,74 / 4,05 en azul) y se anota, no se exige.
+ *
+ * La observación activa va en SU highlight, `faro-quote-activa`, con prioridad
+ * 1, y fuera del de las demás: dos rellenos traslúcidos sobre la misma letra se
+ * suman, y en oscuro la activa apilada sobre la normal bajaba a 3,88:1 (azul)
+ * y 3,31:1 (ámbar). Cada Range pinta un relleno y sólo uno.
+ */
+const RELLENO = Object.freeze({
+  azul: Object.freeze(['rgba(59, 130, 246, .28)', 'rgba(59, 130, 246, .40)']),
+  ambar: Object.freeze(['rgba(233, 172, 74, .28)', 'rgba(201, 138, 34, .34)']),
+})
+
+/**
+ * La hoja de `#faro-highlight-style` para una tinta.
+ * @param {'azul'|'ambar'} tinta lo que no sea 'ambar' cuenta como azul
+ */
+export function highlightCss(tinta) {
+  const [normal, activa] = tinta === 'ambar' ? RELLENO.ambar : RELLENO.azul
+  return `
+::highlight(faro-quote) { background-color: ${normal}; color: inherit; }
+::highlight(faro-quote-activa) { background-color: ${activa}; color: inherit; }
+`
+}
+
+/** La de por defecto, la azul; se conserva para quien la importe. */
+export const HIGHLIGHT_CSS = highlightCss('azul')
+
+/**
+ * Cursor y selección del modo de «Señalar».
  *
  * Va en el documento porque el cursor de la página no se puede cambiar desde un
  * shadow root. Se cuelga de una clase en <html> para poder quitarlo entero, y
- * no toca ni un nodo del contenido.
+ * no toca ni un nodo del contenido. La clase oscura la pone `setPicking`
+ * cuando el overlay está en tema oscuro.
+ *
+ * El cursor es el subrayador azul de cursor.js, con `text` de respaldo: lo que
+ * se hace es seleccionar texto, y `crosshair` decía «apunta a un píxel». Las
+ * imágenes conservan `copy` —también en oscuro: por eso sus selectores repiten
+ * la clase oscura, o la regla del subrayador oscuro, más específica, les
+ * ganaría— y dentro del overlay, el de siempre.
+ *
+ * La selección azul vive SÓLO bajo `html.faro-picking`: fuera de «Señalar» la
+ * selección de la página no es cosa de Faro.
  */
 export const PICK_CSS = `
-html.faro-picking, html.faro-picking * { cursor: crosshair !important; }
-html.faro-picking img,
-html.faro-picking svg,
-html.faro-picking figure,
-html.faro-picking figure * { cursor: copy !important; }
-html.faro-picking #faro-overlay-host,
-html.faro-picking #faro-overlay-host * { cursor: default !important; }
+html.faro-picking, html.faro-picking * { cursor: ${cursorRule('claro')} !important; }
+html.faro-picking.faro-picking-dark, html.faro-picking.faro-picking-dark * { cursor: ${cursorRule('oscuro')} !important; }
+html.faro-picking img, html.faro-picking svg, html.faro-picking figure, html.faro-picking figure *,
+html.faro-picking.faro-picking-dark img, html.faro-picking.faro-picking-dark svg,
+html.faro-picking.faro-picking-dark figure, html.faro-picking.faro-picking-dark figure * { cursor: copy !important; }
+html.faro-picking #faro-overlay-host, html.faro-picking #faro-overlay-host * { cursor: default !important; }
+html.faro-picking ::selection { background-color: rgba(59, 130, 246, .32); color: inherit; text-decoration: underline 2px #2563EB; text-underline-offset: 3px; }
 `

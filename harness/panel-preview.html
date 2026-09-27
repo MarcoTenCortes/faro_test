@@ -1798,6 +1798,7 @@ async function arrancar() {
   $('set-delay').value = 900
   $('set-nav-guided').checked = true
   $('set-hl-spotlight').checked = true
+  $('set-color-azul').checked = true
   $('set-url').value = 'http://127.0.0.1:4096'
   $('setup-config-path').textContent = 'C:\\Users\\marco\\.config\\opencode\\opencode.json'
   // El bloque lo escribe `buildMcpConfig` de verdad, con tokens de mentira: si
@@ -2404,6 +2405,10 @@ async function arrancar() {
     // Revisión adversaria de H19: el cuarto texto, lo que Faro no sabe vaciar,
     // que nombra entradas y la misma carpeta real.
     '#remove-keys-leftovers',
+    // H23: el bloque «Color del subrayado» de Ajustes. Sus dos radios son las
+    // frases más largas de la sección Navegación y a 320 px parten en varias
+    // líneas; lo que esto caza es que el fieldset se salga a lo ancho.
+    '#set-color-field',
   ]
 
   function check() {

@@ -32,15 +32,30 @@
  * medida baja de su umbral o si falta un token; las parejas marcadas «exenta»
  * se imprimen con su número y no cuentan.
  *
+ * Desde H23, una tabla más: TINTAS, el texto de una página de Atlassian debajo
+ * del relleno de una marca (el `::highlight` de `highlightCss`, leído de ahí y
+ * no copiado), por tinta, estado y tema. Ése se exige (4,5); el enlace de
+ * Atlassian bajo la tinta y el trazo de la marca contra el fondo se imprimen
+ * «anotado» y no cuentan (docs/PLAN2.md §3.6).
+ *
  *   node tools/contrast-report.mjs        (= npm run contrast)
  */
 
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { OVERLAY_CSS } from '../src/content/overlay/styles.js'
-import { contrastRatio, cssVarsOf, parseColor } from '../test/contrast.js'
-import { TEXTO, CONTROL, EXENTOS, OVERLAY_REGLAS, OVERLAY_TOKENS, UMBRAL } from '../test/contrast-pairs.js'
+import { OVERLAY_CSS, highlightCss } from '../src/content/overlay/styles.js'
+import { blendOver, contrastRatio, cssVarsOf, parseColor } from '../test/contrast.js'
+import {
+  TEXTO,
+  CONTROL,
+  EXENTOS,
+  OVERLAY_REGLAS,
+  OVERLAY_TOKENS,
+  UMBRAL,
+  PAGINA,
+  TINTAS,
+} from '../test/contrast-pairs.js'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -181,6 +196,111 @@ function filasDeReglas(css, pares, tokens) {
   })
 }
 
+// -------------------------------------------------------------------- tintas
+
+/** El relleno de un highlight en la hoja de una tinta, o null si no está. */
+function relleno(tinta, nombre) {
+  const re = new RegExp('::highlight\\(' + nombre + '\\)\\s*\\{[^}]*background-color:\\s*(rgba?\\([^)]*\\))')
+  return re.exec(highlightCss(tinta))?.[1] ?? null
+}
+
+/**
+ * Los tokens del overlay con los que se pinta el trazo de una tinta en un
+ * tema: el `:host`, y encima lo que redefine cada clase del host, en el mismo
+ * orden en que las aplica la cascada de styles.js.
+ */
+function tokensDeTinta(tinta, tema) {
+  const capas = [':host']
+  if (tema === 'oscuro') capas.push(':host(.faro-dark)')
+  if (tinta === 'ambar') capas.push(':host(.faro-tinta-ambar)')
+  if (tinta === 'ambar' && tema === 'oscuro') capas.push(':host(.faro-tinta-ambar.faro-dark)')
+  return Object.assign({}, ...capas.map((sel) => cssVarsOf(OVERLAY_CSS, sel)))
+}
+
+/**
+ * Las filas de la tabla TINTAS. Las de texto se exigen; el enlace va en su
+ * columna y el trazo en su fila, los dos «anotado». Un relleno que no esté en
+ * highlightCss es un fallo, como un token que falta.
+ */
+function filasDeTintas() {
+  const filas = []
+  for (const [tinta, nombre, que] of TINTAS) {
+    const rgba = relleno(tinta, nombre)
+    for (const [tema, p] of Object.entries(PAGINA)) {
+      const pareja = `${tinta} · ${nombre} · ${tema}`
+      if (!rgba) {
+        filas.push({ falta: `no está en highlightCss('${tinta}')`, pareja, que })
+        continue
+      }
+      const fondo = blendOver(rgba, null, p.fondo)
+      const ratio = contrastRatio(p.texto, fondo)
+      const cumple = ratio >= UMBRAL.texto
+      filas.push({
+        ratio,
+        nivel: !cumple ? 'falla' : ratio >= AAA ? 'AAA' : 'AA',
+        pareja,
+        colores: `${p.texto} / ${hex(rgba)} sobre ${p.fondo} = ${fondo}`,
+        enlace: `${numero(contrastRatio(p.enlace, fondo))} anotado`,
+        que: `texto de la página bajo el ${que}`,
+      })
+    }
+  }
+  for (const tinta of [...new Set(TINTAS.map(([t]) => t))]) {
+    for (const [tema, p] of Object.entries(PAGINA)) {
+      const tokens = tokensDeTinta(tinta, tema)
+      for (const [token, que] of [
+        ['--faro-tinta', 'trazo de una marca'],
+        ['--faro-tinta-fuerte', 'trazo de la marca activa'],
+      ]) {
+        const color = resolver(token, tokens)
+        const pareja = `${tinta} · ${token} · ${tema}`
+        if (!color) {
+          filas.push({ falta: `no existe ${token}`, pareja, que })
+          continue
+        }
+        filas.push({
+          ratio: contrastRatio(color.color, p.fondo),
+          nivel: 'anotado (control)',
+          pareja,
+          colores: `${hex(color.color)} / ${p.fondo}`,
+          enlace: '—',
+          que: `${que}, contra el fondo de la página`,
+        })
+      }
+    }
+  }
+  return filas
+}
+
+/** La tabla TINTAS: sólo cuentan como fallo el texto que baja de 4,5 y lo que falta. */
+function seccionTintas(titulo, fuente, filas) {
+  const fallos = []
+  const cuerpo = []
+  for (const f of filas) {
+    if (f.falta) {
+      cuerpo.push([{ t: '—', color: RED }, { t: 'falta', color: RED }, f.pareja, { t: f.falta, color: RED }, '', f.que])
+      fallos.push(`${titulo} · ${f.pareja} (${f.falta}) · ${f.que}`)
+      continue
+    }
+    const anotada = f.nivel.startsWith('anotado')
+    const color = f.nivel === 'falla' ? RED : anotada ? DIM : GREEN
+    cuerpo.push([
+      { t: numero(f.ratio), color },
+      { t: f.nivel, color },
+      f.pareja,
+      { t: f.colores, dim: true },
+      { t: f.enlace, dim: true },
+      f.que,
+    ])
+    if (f.nivel === 'falla') fallos.push(`${titulo} · ${f.pareja} (${numero(f.ratio)}, pide ${numero(UMBRAL.texto)}) · ${f.que}`)
+  }
+  console.log(`\n${BOLD}${titulo}${OFF} ${DIM}· ${fuente}${OFF}`)
+  for (const linea of tabla(['ratio', 'nivel', 'tinta · highlight · tema', 'colores', 'enlace', 'qué pinta'], cuerpo, { derecha: [0] })) {
+    console.log(linea)
+  }
+  return fallos
+}
+
 // ------------------------------------------------------------------ formateo
 
 /** Dos decimales con coma, como se escriben los ratios en la documentación. */
@@ -250,7 +370,12 @@ function main() {
     ...seccion('OVERLAY · OSCURO', 'src/content/overlay/styles.js → :host(.faro-dark)', [
       ...filasDeReglas(OVERLAY_CSS, REGLAS, overlayOscuro),
       ...filasDeTokens(TOKENS_OVERLAY, overlayOscuro, 'dark'),
-    ])
+    ]),
+    ...seccionTintas(
+      'TINTAS (texto de la página bajo el relleno)',
+      "src/content/overlay/styles.js → highlightCss(tinta) sobre PAGINA de test/contrast-pairs.js",
+      filasDeTintas()
+    )
   )
 
   console.log(
@@ -258,7 +383,10 @@ function main() {
       `borde sobre el fondo; por eso «relleno de la pastilla» sólo se mide en oscuro (anexo D). El overlay no se\n` +
       `mide más allá de sus rellenos con texto: no se rediseña y sus neutros siguen al tema de la PÁGINA, no al\n` +
       `del panel (anexo D, descartado 2). «exenta» es un borde que NO llega a ${numero(UMBRAL.control)}:1 y no tiene por qué:\n` +
-      `ninguno de los tres es lo único que identifica su control, y el test comprueba que siguen por debajo.${OFF}`
+      `ninguno de los tres es lo único que identifica su control, y el test comprueba que siguen por debajo.\n` +
+      `TINTAS: el relleno de una marca va DEBAJO del texto (::highlight), así que lo que se lee es la letra de la\n` +
+      `página sobre la tinta mezclada con su fondo, y eso se exige. El enlace de Atlassian bajo la tinta y el\n` +
+      `trazo de la marca contra el fondo van «anotado»: se imprimen y no cuentan (docs/PLAN2.md §3.6).${OFF}`
   )
 
   if (fallos.length) {

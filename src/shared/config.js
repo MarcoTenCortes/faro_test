@@ -58,6 +58,15 @@ export function mcpNameForHost(host) {
 export const NAV_MODES = ['guided', 'quick']
 
 /**
+ * El color de la tinta con que se marca lo que Faro te señala en la página (el
+ * ajuste «Color del subrayado», H23, docs/PLAN2.md §3.6): azul por defecto y el
+ * ámbar de antes a elegir. Es sólo la tinta de las marcas: la herramienta de
+ * «Señalar» es siempre azul, y las insignias [n] y los botones, siempre ámbar,
+ * que es la marca de Faro.
+ */
+export const HIGHLIGHT_COLORS = Object.freeze(['azul', 'ambar'])
+
+/**
  * Tiempos de la navegación asistida. Es el ÚNICO sitio donde viven: el content
  * script (bootstrap.js) construye el NavRunner con una copia, runner.js cae en
  * estos valores cuando el panel no manda otros, y el service worker abandona
@@ -137,6 +146,13 @@ export const DEFAULT_SETTINGS = {
    * reinicia todas las conexiones de ese opencode, y eso se pregunta antes.
    */
   configWriteConsent: false,
+  /**
+   * La tinta de las marcas (H23, docs/PLAN2.md §3.6): azul por defecto, porque
+   * el azul se lee debajo del texto en los dos temas y no se confunde con los
+   * botones ámbar de Faro; el ámbar de antes, a elegir. Viaja a la página con
+   * los demás ajustes de la página (`pushSettings` del service worker).
+   */
+  highlightColor: 'azul',
 }
 
 /** Lo más largo que se admite en un id de proveedor o de modelo guardado. */
@@ -194,6 +210,9 @@ export function migrateSettings(raw) {
   // El permiso para escribir en la configuración de opencode (H18): sólo un
   // booleano de verdad cuenta como dado; lo demás, como no preguntado.
   if (typeof s.configWriteConsent !== 'boolean') s.configWriteConsent = DEFAULT_SETTINGS.configWriteConsent
+  // La tinta de las marcas (H23): unos ajustes de antes no la traen, y lo que
+  // no es uno de los dos colores no lo escribió Faro.
+  if (!HIGHLIGHT_COLORS.includes(s.highlightColor)) s.highlightColor = DEFAULT_SETTINGS.highlightColor
   return s
 }
 

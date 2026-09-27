@@ -20,6 +20,8 @@
  *    contenido y qué interfaz) se calcula una vez por pasada y se pasa; antes
  *    lo recalculaban `pageDigest()`, `blockBoundary()` y el peldaño global,
  *    hasta tres veces por observación y doce observaciones por análisis.
+ *  - H23 (docs/PLAN2.md §3.6): el color del subrayado llega de `MSG.SETTINGS`
+ *    (bootstrap.js) al overlay por `setHighlightColor`, que sólo delega.
  * Estas no se pueden ejecutar en Node (necesitan el DOM), así que se comprueba
  * el cableado; `visibleResolution` sí, con Ranges de mentira.
  */
@@ -199,4 +201,24 @@ test('visibleResolution: un Range sin cajas no se ve, y una resolución fallida 
   eq(visibleResolution({ ok: false, ranges: [range([caja])] }), false, 'fallida aunque traiga Range')
   eq(visibleResolution(null), false)
   eq(visibleResolution(undefined), false)
+})
+
+// --- H23: la tinta del subrayado ----------------------------------------------
+
+test('H23: el color del subrayado llega de MSG.SETTINGS al overlay por el ejecutor, que no lo decide', () => {
+  // El panel lo guarda, el service worker lo empuja (service-worker.test.js
+  // pina las claves del mensaje) y aquí se pina el último tramo: sin estas dos
+  // líneas el ajuste se guardaba y la página seguía en azul.
+  const ini = JS.indexOf('  setHighlightColor(color) {')
+  assert(ini >= 0, 'el ejecutor tiene setHighlightColor(color)')
+  const fin = JS.indexOf('\n  }\n', ini)
+  eq(JS.slice(ini, fin).trim(), 'setHighlightColor(color) {\n    this.overlay.setTint(color)', 'delega en el overlay, que normaliza el color')
+
+  const boot = readFileSync(join(ROOT, 'src/content/bootstrap.js'), 'utf8')
+  const caso = boot.slice(boot.indexOf('case MSG.SETTINGS:'), boot.indexOf('case MSG.STEP:'))
+  assert(caso.length > 0, 'bootstrap.js atiende MSG.SETTINGS')
+  const estilo = caso.indexOf('if (msg.highlightStyle) runner.setHighlightStyle(msg.highlightStyle)')
+  const color = caso.indexOf('if (msg.highlightColor) runner.setHighlightColor(msg.highlightColor)')
+  assert(estilo >= 0 && color > estilo, 'el color, detrás del estilo y sólo si viene')
+  assert(color < caso.indexOf('sendResponse({ ok: true })'), 'antes de contestar')
 })

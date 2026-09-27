@@ -302,6 +302,7 @@ async function pushSettings(tabId) {
     type: MSG.SETTINGS,
     reduceMotion: s.reduceMotion,
     highlightStyle: s.highlightStyle,
+    highlightColor: s.highlightColor,
     timing: { stepPauseMs: s.stepDelayMs },
   })
 }

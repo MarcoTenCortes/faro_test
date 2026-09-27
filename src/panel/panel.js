@@ -7705,6 +7705,8 @@ async function showSettingsScreen() {
   $('set-motion').checked = state.settings.reduceMotion
   $('set-hl-marker').checked = state.settings.highlightStyle === 'marker'
   $('set-hl-spotlight').checked = state.settings.highlightStyle !== 'marker'
+  $('set-color-ambar').checked = state.settings.highlightColor === 'ambar'
+  $('set-color-azul').checked = state.settings.highlightColor !== 'ambar'
   $('set-delay').value = state.settings.stepDelayMs
   $('delay-value').textContent = state.settings.stepDelayMs
   $('set-rest-tools').checked = state.settings.restTools
@@ -8367,6 +8369,7 @@ function wireEvents() {
       navMode: $('set-nav-quick').checked ? 'quick' : 'guided',
       reduceMotion: $('set-motion').checked,
       highlightStyle: $('set-hl-marker').checked ? 'marker' : 'spotlight',
+      highlightColor: $('set-color-ambar').checked ? 'ambar' : 'azul',
       stepDelayMs: Number($('set-delay').value),
       // El interruptor de las lecturas REST no toca al cliente de opencode, así
       // que se aplica en caliente como el resto: la próxima tarjeta de búsqueda
@@ -8383,10 +8386,11 @@ function wireEvents() {
     // volver a descargar la conversación entera. Eso sólo hace falta si cambió
     // con quién se habla: la dirección del servidor o la contraseña. Lo demás
     // (el modo de navegación, la pausa entre pasos, el subrayado, «Reducir
-    // animaciones») se aplica en caliente: la UI del panel aquí mismo, y la
-    // página por el service worker, que ve el cambio de `faro:settings` con
-    // `chrome.storage.onChanged` y le empuja los ajustes. Hasta H6, cerrar
-    // Ajustes a mitad de respuesta mataba el turno (pendiente de §4.4).
+    // animaciones» y, desde H23, el color del subrayado) se aplica en caliente:
+    // la UI del panel aquí mismo, y la página por el service worker, que ve el
+    // cambio de `faro:settings` con `chrome.storage.onChanged` y le empuja los
+    // ajustes. Hasta H6, cerrar Ajustes a mitad de respuesta mataba el turno
+    // (pendiente de §4.4).
     const clientChanged = state.settings.serverUrl !== antes.serverUrl || state.settings.password !== antes.password
     // Los veredictos de modelos son de UN opencode (H16): con otro servidor no
     // dicen nada, y el arranque de abajo relee los que tocan con su lista.

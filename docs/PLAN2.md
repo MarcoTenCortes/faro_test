@@ -1509,6 +1509,34 @@ Reglas transversales, que salen de los dos juicios y valen para todos:
   27, 41 y 42 en verde; `npm run contrast` en verde; capturas a 1280 y 480.
 - **Riesgo**: bajo-medio. La CSP del cursor en `data:` (degrada a `text`) y
   la regresión visual, que no se captura sin frames.
+- **Hecho el 2026-09-27** (rama `plan/h23-subrayado`, en un worktree aparte y
+  en paralelo con H22, sobre `plan/docs-mapa`): todo lo de «Qué», con la sonda
+  de CSP hecha ANTES de escribir el cursor (los dos sitios reales sólo mandan
+  `frame-ancestors`, sin `img-src` ni `default-src`: el cursor `data:` no queda
+  bloqueado; sin sesión). `cursor.js` puro, `PICK_CSS` con el subrayador claro
+  y el oscuro por clase y la selección azul sólo bajo `html.faro-picking`, la
+  barra responsiva, `.pick-hover` y el faro de la barra en azul, el relleno en
+  `::highlight(faro-quote)`/`::highlight(faro-quote-activa)` debajo del texto
+  y el trazo en pastilla que se dibuja, las insignias en superíndice,
+  `forced-colors`, `highlightColor` por `pushSettings` con su bloque propio
+  «Color del subrayado» en Ajustes, el radio «en amarillo» reescrito,
+  `PAGINA`/`TINTAS` en `test/contrast-pairs.js` y en `npm run contrast`, y el
+  banco. 1498 pruebas (+20), las 39 instantáneas intactas; mutaciones A 88/88
+  y B 28/28. **Desvíos**: el tramo del banco es el **64** (el 63 ya era de
+  H21), con los 20, 22, 23 y 26 cambiados con verdad y los 27, 41 y 42 sin
+  tocar; la insignia a `top − 8` y no `− 6` (con Segoe UI 14 px, a −6 acababa
+  0-1 px por debajo de la mitad del carácter siguiente); los dos highlights
+  **disjuntos** —la activa sólo en el suyo— porque Chrome apila los dos
+  rellenos traslúcidos y en oscuro el texto bajaba a 3,88 (azul) y 3,31
+  (ámbar); el escalonado del «se dibuja» dentro de la animación
+  (`--faro-retardo`), porque con la clase puesta tarde el trazo se veía entero
+  antes de dibujarse; el `case MSG.SETTINGS` pinado en `runner-wiring`, sin
+  `bootstrap-wiring`; y el enlace de Atlassian bajo el azul elegido queda en
+  3,74 (claro) y 4,05 (oscuro), por debajo de lo que estimaba §3.6 (anotado,
+  no exigido). Sin verificar: las capturas a 1280 y 480, el banco y el espejo
+  en el Browser pane (los mide el orquestador), y nada en la extensión cargada
+  (el cursor moviéndose, su nitidez al 150 %, el trazo dibujándose, los sitios
+  reales en oscuro). La bitácora, en docs/BITACORA.md §12.5.
 
 ### H24 · Diagramas: renderizador propio de flowchart y «Dibujar el flujo»
 
