@@ -424,9 +424,9 @@ Los pasos completos, con el porqué de cada regla: docs/REFERENCIA.md §11.
 | H18 | MCP por `PATCH /global/config`, sandbox | `…h18-mcp-automatico` · 80e7ce9 + 8188813 | 1416 |
 | H19 | «Quitar las claves de este sitio» | `…h19-quitar-claves` · 9f65b73 + 8bb5298 | 1431 |
 | H21 | Contexto y mapa por ámbito (`scopes.js`) | `…h21-multi-espacio` · 4a62170 + 9a7780a | 1478 |
-| H23 | Subrayado (forma A): tinta azul/ámbar bajo el texto, trazo, insignias en superíndice, cursor subrayador | `plan/h23-subrayado` · 5184261 + (revisión al cerrar) | 1505 |
+| H23 | Subrayado (forma A): tinta azul/ámbar bajo el texto, trazo, insignias en superíndice, cursor subrayador | `plan/h23-subrayado` · 5184261 + 65adb9c | 1505 |
 
-Ramas `plan/…`. **Dónde vive:** 22 ramas apiladas sobre `40f56d7` (H0-H21), nada pusheado ni PR, `main` local en `523c25f`; H20 saltado (manual, con gasto); encima, este mapa (Tarea 0, 2026-09-27) en `plan/docs-mapa`, sobre `2684f14`, y sobre él dos carriles en paralelo: H22 en `plan/h22-jira-por-proyecto` (cerrado allí con su revisión adversaria) y H23 en `plan/h23-subrayado`, en un worktree aparte (`C:/Users/marco/Desktop/faro-h23`) y commiteado en 5184261 + (revisión al cerrar) (docs/plan/handoff/ESTADO.md).
+Ramas `plan/…`. **Dónde vive:** 22 ramas apiladas sobre `40f56d7` (H0-H21), nada pusheado ni PR, `main` local en `523c25f`; H20 saltado (manual, con gasto); encima, este mapa (Tarea 0, 2026-09-27) en `plan/docs-mapa`, sobre `2684f14`, y sobre él dos carriles en paralelo: H22 en `plan/h22-jira-por-proyecto` (cerrado allí con su revisión adversaria) y H23 en `plan/h23-subrayado`, en un worktree aparte (`C:/Users/marco/Desktop/faro-h23`) y commiteado en 5184261 + 65adb9c (docs/plan/handoff/ESTADO.md).
 
 **Límites que no son de ningún hito:**
 - Jira Cloud sin REST de Jira (410): todo por el MCP (`sinRestDeJira`).
