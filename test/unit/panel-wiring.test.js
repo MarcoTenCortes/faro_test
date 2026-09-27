@@ -19,6 +19,10 @@ import { ESCAPE_CLOSES } from '../../src/panel/screens.js'
 // H18: la regla de «claves sin comprobar» es UNA y vive en setup.js; el panel
 // sólo la llama. Aquí se ejecuta con un registro guardado de HOY (la migración).
 import { keysUnverified } from '../../src/panel/setup.js'
+// H24: el diagrama del espejo se LEE con el parser real, no se mira por encima;
+// y sus colores se cruzan con las parejas que de verdad se miden.
+import { readFlowchart } from '../../src/panel/diagram-parse.js'
+import { TEXTO, CONTROL } from '../contrast-pairs.js'
 
 const ROOT = join(import.meta.dirname, '..', '..')
 const HTML = readFileSync(join(ROOT, 'src/panel/panel.html'), 'utf8')
@@ -527,7 +531,9 @@ test('EL CAMBIO: un análisis sin «[n]» ya no acaba en «no ha numerado»: se 
 
   const envio = JS.slice(JS.indexOf('async function send('), JS.indexOf('function paintTurn('))
   assert(/question: text,\s*\n\s*parts: turn\.parts,/.test(envio), 'la pregunta y las partes del turno llegan a las marcas')
-  assert(/repaint: \(prose\) => \{/.test(envio) && /renderMarkdown\(prose, \{ onLink: openUrl, onNote: focusNote, allowHref: linkAllowed \}\)/.test(envio))
+  // EL CAMBIO (H24): el repintado también dibuja los diagramas (`onCodeBlock`),
+  // escrito ANTES de `allowHref` para que el pin S5b siga contando las cuatro.
+  assert(/repaint: \(prose\) => \{/.test(envio) && /renderMarkdown\(prose, \{ onLink: openUrl, onNote: focusNote, onCodeBlock: drawCodeBlock, allowHref: linkAllowed \}\)/.test(envio))
   assert(/body\.isConnected \? body : liveBubble\(null\)/.test(envio), 'si el chat se repintó a mitad de turno, la prosa va a la burbuja viva')
   assert(/function liveBubble\(bubble\)/.test(JS))
 
@@ -7620,4 +7626,349 @@ test('H22 revisión: los cuerpos que deciden en el selector, generateContext y e
     'lo guardado entra en el estado y vuelve a elegir el enlazado, sólo en ese host (§8.22)'
   )
   eq(apunte.split('applyLinkedScope(').length - 1, 1, 'y sólo ahí dentro')
+})
+
+test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibujar el flujo» no manda nada', () => {
+  // H24 (docs/plan/handoff/h24-contrato.md §3): un ```mermaid CERRADO de la
+  // respuesta se dibuja con el parser, el layout y la vista propios; un nodo con
+  // clave navega AL HACER CLIC por el mismo camino que una fila de la lista de
+  // Jira (validatePlan + runPlan 'direct'); y «Dibujar el flujo» deja escrita la
+  // pregunta, como «Preguntar sobre estos». Cuerpos ENTEROS, como en «H22 revisión».
+  const JS_SIN = sinComentarios(JS)
+  const LIMPIO = JS_SIN.split('\n')
+    .filter((l) => l.trim())
+    .join('\n')
+  const corte = (src, desde, hasta) => {
+    const i = src.indexOf(desde)
+    assert(i >= 0, 'falta la marca de inicio del recorte: ' + desde)
+    const j = src.indexOf(hasta, i + desde.length)
+    assert(j > i, 'falta la marca de final del recorte (o va antes): ' + hasta)
+    return src.slice(i, j)
+  }
+  const funcion = (firma) => corte(LIMPIO, firma, '\n}\n') + '\n}'
+  const una = (src, linea, msg) => eq(src.split(linea).length - 1, 1, msg + ': «' + linea.trim() + '»')
+  const lineas = (...ls) => ls.join('\n')
+  const orden = (src, marcas, msg) => {
+    let desde = 0
+    for (const m of marcas) {
+      const i = src.indexOf(m, desde)
+      assert(i >= 0, `${msg}: falta, o va antes de lo que debe, «${m}»`)
+      desde = i + m.length
+    }
+  }
+
+  // (1) Los tres módulos, con lo que el panel usa de cada uno.
+  una(LIMPIO, "\nimport { readFlowchart, toMermaid, citedIssueKeys, DIAGRAM_LIMITS } from './diagram-parse.js'\n", 'el parser')
+  una(LIMPIO, "\nimport { layoutDiagram } from './diagram-layout.js'\n", 'el layout')
+  una(LIMPIO, "\nimport { diagramNode, textMeasurer } from './diagram-view.js'\n", 'la vista')
+
+  // (2) Las CUATRO llamadas a renderMarkdown dibujan, y la regla de S5b sigue
+  // al final del objeto en las cuatro (el pin de S5b no se toca).
+  eq(JS_SIN.split('renderMarkdown(').length - 1, 4, 'cuatro llamadas a renderMarkdown')
+  eq(
+    (JS_SIN.match(/renderMarkdown\([^)]*\{ onLink: openUrl, onNote: focusNote, onCodeBlock: drawCodeBlock, allowHref: linkAllowed \}\)/g) || []).length,
+    4,
+    'las cuatro pasan drawCodeBlock, ANTES de allowHref'
+  )
+  eq(JS_SIN.split('drawCodeBlock').length - 1, 5, 'y drawCodeBlock no se usa en ningún otro sitio: la declaración y las cuatro')
+
+  // (3) drawCodeBlock, ENTERO: sólo ```mermaid con la valla cerrada (durante el
+  // streaming, el código); lo que no se entiende se ve con su motivo (§8.14);
+  // lo que sí, con la vista propia, las insignias sólo de las observaciones que
+  // existen y un registro por texto.
+  eq(
+    funcion('function drawCodeBlock('),
+    lineas(
+      'function drawCodeBlock(block, pre) {',
+      "  if (block.lang !== 'mermaid' || !block.closed) return null",
+      '  const t0 = performance.now()',
+      '  const d = readFlowchart(block.text)',
+      '  const nuevo = block.text !== ultimoDiagramaRegistrado',
+      '  ultimoDiagramaRegistrado = block.text',
+      '  if (!d.ok) {',
+      "    if (nuevo) log.info('Diagrama', 'no dibujado · ' + d.errores[0])",
+      "    const caja = document.createElement('div')",
+      "    caja.className = 'dg-fallback'",
+      "    caja.append(pre, noticeNode('No he podido dibujarlo: ' + d.errores[0]))",
+      '    return caja',
+      '  }',
+      '  const layout = layoutDiagram(d, { measure: medirTextoDelPanel() })',
+      '  const figure = diagramNode(d, layout, {',
+      '    onOpen: abrirNodoDelDiagrama,',
+      '    onNote: focusNote,',
+      '    onCopy: copiarMermaid,',
+      '    notes: new Set(state.notes.map((n) => n.n)),',
+      '    mermaid: toMermaid(d),',
+      "    uid: 'dg' + (++contadorDiagramas),",
+      '  })',
+      "  if (nuevo) log.ok('Diagrama', `${d.nodes.length} nodos · ${d.edges.length} aristas · ${d.nodes.filter((n) => n.ref).length} con clave · ${Math.round(performance.now() - t0)} ms`)",
+      '  return figure',
+      '}'
+    ),
+    'drawCodeBlock: sólo la valla mermaid cerrada, el fallo visible, la vista con sus insignias y un registro por texto'
+  )
+  una(LIMPIO, "\nlet ultimoDiagramaRegistrado = ''\n", 'el último texto registrado vive en el módulo')
+  una(LIMPIO, '\nlet contadorDiagramas = 0\n', 'y el contador de los uid, para que dos diagramas no compartan marcador')
+  eq(
+    funcion('function medirTextoDelPanel('),
+    lineas(
+      'function medirTextoDelPanel() {',
+      "  if (!medidorDelPanel) medidorDelPanel = textMeasurer(getComputedStyle(el.chat).font || '12px sans-serif')",
+      '  return medidorDelPanel',
+      '}'
+    ),
+    'una sola medida real, con la fuente del chat, memorizada'
+  )
+  una(LIMPIO, '\nlet medidorDelPanel = null\n', 'el medidor se crea una vez')
+
+  // (4) Abrir un nodo, ENTERO: por openIssueFromResults —validatePlan contra el
+  // índice, noticeNode en la figura si no está, runPlan 'direct'—; y la fila de
+  // «Copiar como Mermaid», que runPlan apaga con todos los botones de la tarjeta,
+  // vuelve a encenderse. SEGURIDAD: ni una URL ni una ruta REST en el panel.
+  eq(
+    funcion('async function abrirNodoDelDiagrama('),
+    lineas(
+      'async function abrirNodoDelDiagrama(ref, figure) {',
+      "  if (ref?.kind !== 'jira-issue' || !state.site) return",
+      '  await openIssueFromResults(ref.id, { site: state.site, card: figure })',
+      "  for (const b of figure.querySelectorAll('.dg-actions button')) b.disabled = false",
+      '}'
+    ),
+    'un nodo navega por el camino de las filas de la lista'
+  )
+  assert(!/'\/browse\/' \+/.test(JS_SIN) && !JS_SIN.includes('/rest/api/'), 'SEGURIDAD: ninguna URL de incidencia ni ruta REST concatenada en el panel')
+  eq(
+    funcion('async function copiarMermaid('),
+    lineas(
+      'async function copiarMermaid(texto, boton) {',
+      '  if (!(await copyToClipboard(texto, boton))) return',
+      "  log.ok('Diagrama', `Mermaid copiado · ${texto.length} caracteres`)",
+      "  announce('Diagrama copiado como Mermaid.')",
+      '}'
+    ),
+    'copiar sólo registra lo que de verdad copió'
+  )
+  const dibujo = funcion('function drawCodeBlock(') + funcion('async function abrirNodoDelDiagrama(') + funcion('async function copiarMermaid(')
+  assert(!/innerHTML|insertAdjacentHTML|outerHTML/.test(dibujo), 'SEGURIDAD: el panel no dibuja con innerHTML')
+
+  // (5) «Dibujar el flujo»: la pregunta fija, sin claves ni host (§8.20), y el
+  // botón ENTERO, que la deja escrita y no manda nada.
+  const pregunta = JS.slice(JS.indexOf('const DIAGRAM_QUESTION'), JS.indexOf('\n', JS.indexOf('const DIAGRAM_QUESTION')))
+  eq(
+    pregunta.trim(),
+    "const DIAGRAM_QUESTION = 'Dibuja el flujo entre las incidencias de tu última respuesta como un diagrama Mermaid «flowchart LR» dentro de un bloque ```mermaid: como mucho 15 nodos, cada nodo con la clave de la incidencia como primera palabra de su etiqueta y después su resumen corto; :::riesgo, :::hueco o :::contradiccion en lo que falle, y el número [n] de la observación que lo respalde. Sólo el diagrama y una frase.'",
+    'la pregunta que deja escrita el botón'
+  )
+  for (const prohibido of ['jql', 'host', 'key', 'site', '${']) assert(!pregunta.includes(prohibido), 'la pregunta no lleva ' + prohibido)
+  const boton = funcion('function diagramButton(')
+  eq(
+    boton,
+    lineas(
+      'function diagramButton() {',
+      "  const b = document.createElement('button')",
+      "  b.className = 'ghost small ' + NEEDS_IDLE",
+      "  b.type = 'button'",
+      "  b.textContent = 'Dibujar el flujo'",
+      "  b.title = 'Deja escrita la pregunta que pide el diagrama: la mandas tú'",
+      '  b.disabled = state.streaming',
+      "  b.addEventListener('click', () => {",
+      '    if (state.streaming) return',
+      "    state.pendingDiagram = { host: state.site?.host || '' }",
+      "    log.info('Diagrama', 'pregunta preparada · sin mandar')",
+      '    el.input.value = DIAGRAM_QUESTION',
+      '    autoGrow()',
+      '    el.input.focus()',
+      "    announce('Pregunta preparada: puedes cambiarla antes de enviarla.')",
+      '  })',
+      '  return b',
+      '}'
+    ),
+    'el botón deja la pregunta escrita con el host del momento, nace apagado con un turno en vuelo, y nada más'
+  )
+  assert(!/\bsend\(/.test(boton), 'SEGURIDAD (§8.20): el botón no manda nada')
+  eq(JS_SIN.split('diagramButton(').length - 1, 2, 'la declaración y un solo sitio que lo cuelga')
+  eq(JS_SIN.split('state.pendingDiagram = {').length - 1, 1, 'y sólo el botón lo arma')
+
+  // (6) send(): se consume ANTES de mandar, como la precarga; la nota bajo la
+  // pregunta; el botón detrás del pintado final, sólo en Jira, con tres claves
+  // o más y sin un diagrama ya en la respuesta; y offerNotes se entera.
+  const envio = funcion('async function send(')
+  const consumo = lineas(
+    '\n  const diagrama = state.pendingDiagram',
+    '  state.pendingDiagram = null',
+    '  const diagramaAlPedir = !!diagrama && diagrama.host === state.site.host\n'
+  )
+  una(envio, consumo, 'se consume al mandar, y sólo vale en el host donde se pulsó (§8.22)')
+  orden(envio, ['const preloadAlPedir =', consumo.trim(), 'runTurn('], 'junto a la precarga y antes de mandar el turno')
+  una(envio, "\n        diagramaAlPedir ? 'dibujar el flujo' : '',\n", 'se dice bajo la pregunta')
+  orden(envio, ['addUserMessage(', 'preloadNote(preloadDelTurno),', "diagramaAlPedir ? 'dibujar el flujo' : '',", 'state.lastQuestion = text'], 'en la nota, junto a la de la precarga')
+  const oferta = lineas(
+    "\n    if (productoAlPedir === 'jira' && citedIssueKeys(answer).length >= DIAGRAM_LIMITS.offerMinKeys && !/^\\s*(```|~~~)\\s*mermaid/m.test(answer)) {",
+    "      const fila = document.createElement('div')",
+    "      fila.className = 'nav-actions'",
+    '      fila.appendChild(diagramButton())',
+    '      attachToBubble(bubble, fila)',
+    '    }\n'
+  )
+  una(envio, oferta, 'el botón sólo en Jira, con tres claves o más y sin un diagrama ya en la respuesta')
+  orden(
+    envio,
+    ['if (!mismoSitio) {', 'paintTurn(turn, toolsBox, cuerpo, true)', 'announce(answerAnnouncement(answer))', oferta.trim(), 'await offerNotes('],
+    'detrás del pintado final, con el panel en el mismo sitio, y antes de las marcas'
+  )
+  una(envio, '\n      esDiagrama: diagramaAlPedir,\n', 'offerNotes sabe que la pregunta era dibujar')
+  const restaurar = funcion('async function restoreConversation(')
+  assert(!restaurar.includes('diagramButton('), 'no se restaura, como «Preguntar sobre estos»')
+
+  // (7) offerNotes sale en silencio con una respuesta a «Dibujar el flujo»:
+  // antes de la pasada que trocea (un turno de pago) y antes de medir nada. El
+  // título es «Diagrama», no «Sin marcas»: el diagrama dibujado ES lo visible,
+  // y así el pin de §8.14 (cada «Sin marcas» con su aviso) sigue siendo verdad.
+  const notas = funcion('async function offerNotes(')
+  una(notas, '\n    esDiagrama = false,\n', 'la opción nueva, apagada por defecto')
+  una(
+    notas,
+    lineas(
+      "\n  if (skill !== 'analisis') return",
+      '  if (esDiagrama) {',
+      "    log.info('Diagrama', 'sin marcas: la pregunta era dibujar el flujo')",
+      '    return',
+      '  }',
+      '  if (!state.site || !state.tabId || !state.client) return\n'
+    ),
+    'la salida va justo detrás de la del modo'
+  )
+  orden(notas, ['if (esDiagrama) {', 'const respuestaCorta', 'segmentedPassNotes('], 'antes de medir la respuesta y de la pasada que trocea')
+
+  // (8) Se olvida donde la precarga: al cambiar de página, con una sesión nueva
+  // y al olvidar el sitio (antes de repintar).
+  una(LIMPIO, '\n  pendingPreload: null,\n  pendingDiagram: null,\n', 'vive en el estado, al lado de la precarga, y nunca se guarda')
+  const otraPagina = corte(corte(LIMPIO, 'async function refreshTab(', 'async function bootForSite('), 'if (otraPagina) {', 'state.tabId = tab.id')
+  una(otraPagina, '\n    state.pendingPreload = null\n    state.pendingDiagram = null\n', 'al cambiar de página se olvida')
+  una(corte(LIMPIO, 'async function newSession(', 'function emptyToday'), '\n  state.pendingPreload = null\n  state.pendingDiagram = null\n', 'y con una sesión nueva')
+  const olvidar = corte(LIMPIO, "$('btn-forget').addEventListener", "$('mem-enabled').addEventListener")
+  una(olvidar, '\n    state.pendingPreload = null\n    state.pendingDiagram = null\n', 'y al olvidar el sitio')
+  orden(olvidar, ['state.pendingDiagram = null', 'await bootForSite()'], 'antes de repintar')
+  eq(JS_SIN.split('state.pendingDiagram = null').length - 1, 4, 'send y los tres olvidos, y nadie más')
+
+  // (9) answerAnnouncement, EJECUTADA: el código de un diagrama no se lee en voz
+  // alta, venga en ``` o en ~~~, cerrado o sin cerrar.
+  const anunciar = new Function('numberedIn', funcion('function answerAnnouncement(') + '\nreturn answerAnnouncement')(() => [])
+  eq(anunciar('Antes\n```mermaid\nflowchart LR\nA --> B\n```\nDespués'), 'Respuesta lista. Antes Después', 'una valla ``` cerrada')
+  eq(anunciar('Antes\n~~~mermaid\nflowchart LR\nA --> B\n~~~\nDespués'), 'Respuesta lista. Antes Después', 'una valla ~~~ cerrada')
+  eq(anunciar('Antes\n```mermaid\nflowchart LR\nA --> B'), 'Respuesta lista. Antes', 'una ``` abierta hasta el final')
+  eq(anunciar('Antes\n~~~mermaid\nA --> B'), 'Respuesta lista. Antes', 'una ~~~ abierta hasta el final')
+  eq(anunciar('Sin **código** ni nada'), 'Respuesta lista. Sin código ni nada', 'sin vallas, lo de siempre')
+
+  // (10) El CSS: cada clase que pinta la vista y cada tipo de observación tiene
+  // su regla (con llave: un renombrado no pasa).
+  for (const clase of [
+    '.dg-wrap',
+    '.dg-svg',
+    '.dg-sub',
+    '.dg-sub text',
+    '.dg-edge',
+    '.dg-edge-dotted',
+    '.dg-edge-thick',
+    '.dg-edge-label',
+    '.dg-node',
+    '.dg-label',
+    '.dg-link',
+    '.dg-link:focus-visible',
+    '.dg-note',
+    '.dg-note circle',
+    '.dg-note text',
+    '.dg-list',
+    '.dg-list summary',
+    '.dg-actions',
+    '.dg-fallback',
+  ]) {
+    assert(CSS_LIMPIO.includes(clase + ' {'), 'clase sin regla en el CSS: ' + clase)
+  }
+  for (const kind of NOTE_KINDS) assert(CSS_LIMPIO.includes(`.dg-${kind} {`), 'tipo de observación sin color en el diagrama: ' + kind)
+  assert(/\.dg-edge-dotted \{[^}]*stroke-dasharray:/.test(CSS_LIMPIO), 'el punteado va por CLASE, no en la vista')
+  // Y cada color del diagrama es una pareja que test/contrast-pairs.js MIDE en
+  // los dos temas: medir un token no basta si la regla pinta con otro (L3-18).
+  // Los nodos, las etiquetas y las aristas viven sobre el fondo del chat (--ground).
+  const regla = (sel) => {
+    const m = CSS_LIMPIO.match(new RegExp('(?:^|\\n)' + sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ' \\{([^}]*)\\}'))
+    assert(m, 'falta la regla ' + sel)
+    return m[1]
+  }
+  const pinta = (sel, prop, token) => assert(regla(sel).includes(`${prop}: var(${token})`), `${sel} pinta ${prop} con ${token}`)
+  const medida = (lista, fg, bg) => assert(lista.some(([f, b, , tema]) => f === fg && b === bg && !tema), `la pareja ${fg} sobre ${bg} se mide en los dos temas`)
+  for (const [kind, fondo, borde] of [
+    ['riesgo', '--danger-bg', '--danger'],
+    ['contradiccion', '--danger-bg', '--danger'],
+    ['hueco', '--gold-bg', '--gold'],
+    ['supuesto', '--gold-bg', '--gold'],
+  ]) {
+    pinta(`.dg-${kind}`, 'fill', fondo)
+    pinta(`.dg-${kind}`, 'stroke', borde)
+    medida(TEXTO, '--ink', fondo)
+    medida(TEXTO, borde, '--ground')
+  }
+  pinta('.dg-dato', 'stroke', '--ok')
+  medida(TEXTO, '--ok', '--ground')
+  pinta('.dg-node', 'fill', '--surface')
+  pinta('.dg-node', 'stroke', '--hairline-strong')
+  pinta('.dg-edge', 'stroke', '--hairline-strong')
+  medida(CONTROL, '--hairline-strong', '--ground')
+  pinta('.dg-label', 'fill', '--ink')
+  medida(TEXTO, '--ink', '--surface')
+  pinta('.dg-edge-label', 'fill', '--muted')
+  pinta('.dg-sub text', 'fill', '--muted')
+  medida(TEXTO, '--muted', '--ground')
+  pinta('.dg-note circle', 'fill', '--mark')
+  pinta('.dg-note text', 'fill', '--on-mark')
+  medida(TEXTO, '--on-mark', '--mark')
+
+  // (11) El espejo: los tres módulos reales, la tercera respuesta con su
+  // diagrama DIBUJADO por ellos, la fila de «Dibujar el flujo» bajo la segunda,
+  // y la figura medida a lo ancho.
+  const espejo = readFileSync(join(ROOT, 'harness/panel-preview.html'), 'utf8')
+  const imports = corte(espejo, '] = await Promise.all([', '])')
+  orden(
+    imports,
+    ["import('/src/shared/scopes.js'),", "import('/src/panel/diagram-parse.js'),", "import('/src/panel/diagram-layout.js'),", "import('/src/panel/diagram-view.js'),"],
+    'los tres módulos, detrás de scopes.js'
+  )
+  una(espejo, '\n    { readFlowchart, toMermaid },\n    { layoutDiagram },\n    { diagramNode, textMeasurer },\n', 'con lo que usa de cada uno')
+  const jira = corte(espejo, 'function conversacionJira()', 'function estadoVacio()')
+  orden(
+    jira,
+    ['b1.appendChild(prosa(texto, true))', 'b1.appendChild(filaDibujarElFlujo())', 'chat.appendChild(b1)', 'chat.appendChild(respuestaConDiagrama())'],
+    'la fila bajo la segunda respuesta y el diagrama en la tercera'
+  )
+  const tercera = corte(espejo, 'function respuestaConDiagrama()', 'function conversacionJira()')
+  orden(
+    tercera,
+    [
+      'renderMarkdown(',
+      'onCodeBlock: dibujarEnElEspejo',
+      'function dibujarEnElEspejo(block, pre) {',
+      'readFlowchart(block.text)',
+      'layoutDiagram(d, { measure: textMeasurer(',
+      'diagramNode(d, layout, {',
+      'notes: new Set([1, 2, 3]),',
+      'mermaid: toMermaid(d),',
+    ],
+    'el diagrama del espejo pasa por el renderMarkdown, el parser, el layout y la vista reales'
+  )
+  assert(
+    corte(espejo, 'function filaDibujarElFlujo()', 'function respuestaConDiagrama()').includes("mk('button', 'ghost small needs-idle', 'Dibujar el flujo')"),
+    'la fila con la clase con la que nace en el panel'
+  )
+  const textoPregunta = pregunta.slice(pregunta.indexOf("'") + 1, pregunta.lastIndexOf("'"))
+  assert(textoPregunta.length > 100 && jira.includes("'" + textoPregunta + "'"), 'la pregunta de la tercera burbuja es la del panel, letra a letra')
+  orden(jira, [textoPregunta, "'dibujar el flujo'", 'chat.appendChild(respuestaConDiagrama())'], 'con la nota que pone el panel, y antes de la respuesta')
+  const fuente = [...corte(tercera, "'```mermaid',", "'```',").matchAll(/^\s*'(.*)',$/gm)].map((m) => m[1]).slice(1)
+  const d = readFlowchart(fuente.join('\n'))
+  assert(d.ok, 'el Mermaid del espejo se lee: ' + d.errores.join(' · '))
+  eq([d.nodes.length, d.edges.length, d.subgraphs.length], [6, 7, 1], 'seis nodos, siete aristas y un subgrafo, como en el anexo')
+  eq(d.nodes.map((n) => n.kind).filter(Boolean), ['riesgo', 'hueco', 'contradiccion'], 'con sus tipos')
+  eq(d.nodes.filter((n) => n.ref).length, 6, 'todas con clave')
+  eq(d.nodes.map((n) => n.note).filter(Boolean), [1, 2, 3], 'y tres observaciones, las del Set de notas')
+  assert(d.edges.some((e) => e.label) && fuente.some((l) => l.includes(' & ')), 'con una arista con etiqueta y un «&»')
+  assert(corte(espejo, 'const CAJAS = [', 'function check()').includes("'.dg-wrap'"), 'check() mide la figura a lo ancho')
 })

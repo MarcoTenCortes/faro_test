@@ -1,0 +1,1078 @@
+{
+  "fecha": "2026-09-27",
+  "hito": "H24",
+  "fuente": "lectores Opus L1 (markdown/panel) · L2 (puras/tests) · L3 (CSS/contraste/espejo), sobre 9cfc93d",
+  "hechos": [
+    {
+      "lente": "L1",
+      "id": "M1",
+      "fichero": "src/panel/markdown.js",
+      "lineas": "14-33",
+      "hecho": "parseBlocks(src) detecta la valla con un regex que admite ``` o ~~~ (3 o más) y un lang opcional; el cierre es otro regex del mismo carácter; consume hasta el cierre o el fin del texto SIN distinguir si cerró, y produce {type:'code', lang, text} (sin clave closed).",
+      "cita": "const fence = line.match(/^\\s*(`{3,}|~{3,})\\s*(\\S*)\\s*$/) ... const cierre = fence[1][0] === '`' ? /^\\s*`{3,}\\s*$/ : /^\\s*~{3,}\\s*$/ ... while (i < lines.length && !cierre.test(lines[i])) body.push(lines[i++])\n      i++ // cierre\n      blocks.push({ type: 'code', lang, text: body.join('\\n') })"
+    },
+    {
+      "lente": "L1",
+      "id": "M2",
+      "fichero": "src/panel/markdown.js",
+      "lineas": "89-97",
+      "hecho": "No existen fenceLine ni closesFence; lo único auxiliar de vallas es isBlockStart, que corta un párrafo al ver ``` o ~~~.",
+      "cita": "function isBlockStart(line) {\n  return (\n    /^\\s*(```|~~~)/.test(line) ||"
+    },
+    {
+      "lente": "L1",
+      "id": "M3",
+      "fichero": "src/panel/markdown.js",
+      "lineas": "191-193",
+      "hecho": "Firma de renderMarkdown: sólo tres opciones, sin onCodeBlock; las reempaqueta en opts para appendInline.",
+      "cita": "export function renderMarkdown(src, { onLink, onNote, allowHref } = {}) {\n  const frag = document.createDocumentFragment()\n  const opts = { onLink, onNote, allowHref }"
+    },
+    {
+      "lente": "L1",
+      "id": "M4",
+      "fichero": "src/panel/markdown.js",
+      "lineas": "204-213",
+      "hecho": "Un bloque code se pinta como pre.md-pre > code con textContent y data-lang si hay lang.",
+      "cita": "case 'code': {\n        const pre = document.createElement('pre')\n        pre.className = 'md-pre'\n        const code = document.createElement('code')\n        code.textContent = block.text\n        if (block.lang) code.dataset.lang = block.lang"
+    },
+    {
+      "lente": "L1",
+      "id": "M5",
+      "fichero": "src/panel/markdown.js",
+      "lineas": "14,103,170,191",
+      "hecho": "El módulo no importa nada; exporta parseBlocks, parseInline, isSafeHref y renderMarkdown (blockedLink, appendInline, cuenta e isBlockStart son internas).",
+      "cita": "export function parseBlocks(src) { / export function parseInline(src) { / export function isSafeHref(href) { / export function renderMarkdown(src, { onLink, onNote, allowHref } = {}) {"
+    },
+    {
+      "lente": "L1",
+      "id": "M6",
+      "fichero": "test/unit/markdown.test.js",
+      "lineas": "1-2",
+      "hecho": "El test importa las cuatro exportaciones.",
+      "cita": "import { parseBlocks, parseInline, isSafeHref, renderMarkdown } from '../../src/panel/markdown.js'"
+    },
+    {
+      "lente": "L1",
+      "id": "M7",
+      "fichero": "test/unit/markdown.test.js",
+      "lineas": "147-185",
+      "hecho": "documentoFalso da elementos con tagName, className, dataset, listeners, children, appendChild, addEventListener y textContent get/set; el document sólo tiene createDocumentFragment, createElement (tag en minúsculas) y createTextNode. conDocument lo instala en globalThis y lo restaura en finally. No hay createElementNS, setAttribute, append ni classList.",
+      "cita": "return {\n    createDocumentFragment: () => elemento('#fragment'),\n    createElement: (tag) => elemento(String(tag).toLowerCase()),\n    createTextNode: texto,\n  }"
+    },
+    {
+      "lente": "L1",
+      "id": "M8",
+      "fichero": "test/unit/markdown.test.js",
+      "lineas": "187-191",
+      "hecho": "forma() convierte el árbol a texto → cadena y elemento → { 'tag.clase': hijos }.",
+      "cita": "function forma(nodo) {\n  if (nodo.tagName === '#text') return nodo.textContent\n  return { [nodo.tagName + (nodo.className ? '.' + nodo.className : '')]: nodo.children.map(forma) }"
+    },
+    {
+      "lente": "L1",
+      "id": "M9",
+      "fichero": "test/unit/markdown.test.js",
+      "lineas": "20-25, 67-72, 220",
+      "hecho": "Tres pruebas tocan código: el bloque conserva el texto (lang 'js'), la valla sin cerrar sigue siendo type 'code', y en renderMarkdown el código en línea no se anida. Ninguna pinta un bloque code con renderMarkdown.",
+      "cita": "test('markdown: bloque de código conserva el texto tal cual', () => { ... eq(parseBlocks('```\\nsin cerrar')[0].type, 'code') ... test('renderMarkdown: en código no se anida nada («`arr[1]`» no es una pastilla)', () => {"
+    },
+    {
+      "lente": "L1",
+      "id": "P1",
+      "fichero": "src/panel/panel.js",
+      "lineas": "101",
+      "hecho": "El panel importa sólo renderMarkdown de markdown.js.",
+      "cita": "import { renderMarkdown } from './markdown.js'"
+    },
+    {
+      "lente": "L1",
+      "id": "P2",
+      "fichero": "src/panel/panel.js",
+      "lineas": "2701",
+      "hecho": "Llamada 1 de 4 a renderMarkdown: en restoreConversation, cuando la tarjeta viva se reconoce por la prosa ORIGINAL, se repinta la burbuja con la numerada.",
+      "cita": "cuerpo.append(renderMarkdown(prose, { onLink: openUrl, onNote: focusNote, allowHref: linkAllowed }))"
+    },
+    {
+      "lente": "L1",
+      "id": "P3",
+      "fichero": "src/panel/panel.js",
+      "lineas": "3083-3091",
+      "hecho": "Llamada 2 de 4: addAssistantMessage(text), que usa restoreConversation para cada respuesta guardada (línea 2622: const bubble = addAssistantMessage(prose)).",
+      "cita": "d.appendChild(renderMarkdown(text, { onLink: openUrl, onNote: focusNote, allowHref: linkAllowed }))"
+    },
+    {
+      "lente": "L1",
+      "id": "P4",
+      "fichero": "src/panel/panel.js",
+      "lineas": "3619-3629",
+      "hecho": "Llamada 3 de 4: el callback repaint que send() pasa a offerNotes, que pinta en body o en liveBubble(null).",
+      "cita": "destino.appendChild(renderMarkdown(prose, { onLink: openUrl, onNote: focusNote, allowHref: linkAllowed }))"
+    },
+    {
+      "lente": "L1",
+      "id": "P5",
+      "fichero": "src/panel/panel.js",
+      "lineas": "3688, 3700, 3711-3714",
+      "hecho": "Llamada 4 de 4: paintTurn(tracker, toolsBox, body, final = false), que separa las anclas con splitAnchorsBlock(tracker.text, { final }) y repinta body entero en cada trozo del streaming.",
+      "cita": "function paintTurn(tracker, toolsBox, body, final = false) { ... const { prose, pending } = splitAnchorsBlock(tracker.text, { final }) ... body.appendChild(renderMarkdown(prose, { onLink: openUrl, onNote: focusNote, allowHref: linkAllowed }))"
+    },
+    {
+      "lente": "L1",
+      "id": "P6",
+      "fichero": "test/unit/panel-wiring.test.js",
+      "lineas": "765-766, 530",
+      "hecho": "El pin S5b cuenta EXACTAMENTE 4 llamadas con allowHref: linkAllowed al final del objeto; con onCodeBlock detrás de allowHref el regex `allowHref: linkAllowed \\}\\)` dejaría de casar. La 530 pina el literal entero de la llamada del repaint.",
+      "cita": "eq((JS.match(/renderMarkdown\\([^)]*allowHref: linkAllowed \\}\\)/g) || []).length, 4, 'las cuatro llamadas pasan la regla')"
+    },
+    {
+      "lente": "L1",
+      "id": "P7",
+      "fichero": "src/panel/panel.js",
+      "lineas": "7317-7333",
+      "hecho": "linkCtx da el origen de la pestaña y el del Confluence enlazado; linkAllowed aplica allowedLinkOrigin con él.",
+      "cita": "function linkCtx() {\n  return { origin: state.site?.origin || '', linkedOrigin: linkedSite(state.linkedContext)?.origin || '' }\n}\n...\nfunction linkAllowed(href) {\n  return allowedLinkOrigin(href, linkCtx())\n}"
+    },
+    {
+      "lente": "L1",
+      "id": "P8",
+      "fichero": "src/panel/panel.js",
+      "lineas": "3499-3500, 3522-3523",
+      "hecho": "La rama final de send(): separa anclas con splitAnchorsBlock(turn.text), y tras comprobar mismoSitio pinta el final con paintTurn(..., true).",
+      "cita": "const { prose, anchors } = splitAnchorsBlock(turn.text)\n    const answer = prose.trim() ... state.turns.push({ role: 'assistant', text: answer })\n    paintTurn(turn, toolsBox, cuerpo, true)"
+    },
+    {
+      "lente": "L1",
+      "id": "P9",
+      "fichero": "src/panel/panel.js",
+      "lineas": "3541, 3606, 3646, 3658",
+      "hecho": "Orden real hoy tras pintar: announce(answerAnnouncement), offerNotes en 3606, growIndex en 3646 y offerNavigation en 3658 (el PLAN cita 2555 y 2675, que ya no son esas líneas).",
+      "cita": "await offerNotes(answer, bubble, { ... await growIndex(turn.parts, { site: sitioAlPedir }) ... await offerNavigation(answer, bubble, skill, turn.parts, { preloaded: !!preloadDelTurno })"
+    },
+    {
+      "lente": "L1",
+      "id": "P10",
+      "fichero": "src/panel/panel.js",
+      "lineas": "2527, 2613, 2619-2622",
+      "hecho": "restoreConversation(testigo = state.bootToken, { all = false } = {}) une los textos del turno, separa anclas y pinta la prosa (adaptada en Análisis) con addAssistantMessage.",
+      "cita": "const { prose: cruda, anchors } = splitAnchorsBlock(turno.textos.join('\\n\\n')) ... if (prose) {\n          const bubble = addAssistantMessage(prose)"
+    },
+    {
+      "lente": "L1",
+      "id": "P11",
+      "fichero": "src/panel/panel.js",
+      "lineas": "210",
+      "hecho": "splitAnchorsBlock viene de notes.js y se llama en 2613 (restaurar), 3499 (send) y 3700 (paintTurn).",
+      "cita": "  splitAnchorsBlock,"
+    },
+    {
+      "lente": "L1",
+      "id": "P12",
+      "fichero": "src/panel/panel.js",
+      "lineas": "5187",
+      "hecho": "La pregunta que deja escrita la precarga.",
+      "cita": "const PRELOAD_QUESTION = '¿Qué tienen en común estas incidencias?'"
+    },
+    {
+      "lente": "L1",
+      "id": "P13",
+      "fichero": "src/panel/panel.js",
+      "lineas": "5203-5227",
+      "hecho": "preloadButton crea un button ghost small NEEDS_IDLE, desactivado si hay streaming; al pulsar apunta state.pendingPreload con host, lo registra 'Búsqueda precargada', escribe PRELOAD_QUESTION, autoGrow, focus y announce. No manda nada.",
+      "cita": "function preloadButton(issues, { site, jql, total }) {\n  const b = document.createElement('button')\n  b.className = 'ghost small ' + NEEDS_IDLE ... state.pendingPreload = { jql, total, issues, host: site.host }\n    const nota = preloadNote(state.pendingPreload)\n    log.ok('Búsqueda precargada', `${nota} · ${jql}`)\n    el.input.value = PRELOAD_QUESTION"
+    },
+    {
+      "lente": "L1",
+      "id": "P14",
+      "fichero": "src/panel/panel.js",
+      "lineas": "5173",
+      "hecho": "preloadButton se cuelga en la fila .nav-actions de la tarjeta de la búsqueda, sólo con filas.",
+      "cita": "card.querySelector('.nav-actions')?.appendChild(preloadButton(issues, { site, jql, total }))"
+    },
+    {
+      "lente": "L1",
+      "id": "P15",
+      "fichero": "src/panel/panel.js",
+      "lineas": "521-528",
+      "hecho": "state.pendingPreload nace a null, con su comentario (H12: {jql, total, issues, host}, lo consume send(), nunca se guarda).",
+      "cita": "  pendingPreload: null,"
+    },
+    {
+      "lente": "L1",
+      "id": "P16",
+      "fichero": "src/panel/panel.js",
+      "lineas": "3193-3195, 3214",
+      "hecho": "send() captura y consume la precarga antes de todo, la descarta si es de otro host, y decide lo que viaja con preloadedApplies.",
+      "cita": "const preload = state.pendingPreload\n  state.pendingPreload = null\n  const preloadAlPedir = preload?.host === state.site.host ? preload : null ... const preloadDelTurno = preloadAlPedir && preloadedApplies({ site: state.site, skill, sources }) ? preloadAlPedir : null"
+    },
+    {
+      "lente": "L1",
+      "id": "P17",
+      "fichero": "src/panel/panel.js",
+      "lineas": "3296, 3303-3306, 3384",
+      "hecho": "La nota bajo la pregunta, el descarte dicho y lo que recibe baseSystem.",
+      "cita": "preloadNote(preloadDelTurno), ... if (preloadAlPedir && !preloadDelTurno) {\n      log.info('Búsqueda precargada', 'no viaja: el alcance del análisis es exclusivo') ... preloaded: preloadDelTurno,"
+    },
+    {
+      "lente": "L1",
+      "id": "P18",
+      "fichero": "src/panel/panel.js",
+      "lineas": "644-658, 8724, 10728",
+      "hecho": "Se olvida en refreshTab al cambiar de página (dentro de if (otraPagina)), en el oyente de btn-forget (8666) y en newSession.",
+      "cita": "const otraPagina = !samePage(tab.url || '', state.tabUrl || '')\n  if (otraPagina) { ... state.pendingPreload = null\n  } / state.pendingPreload = null (8724, 10728)"
+    },
+    {
+      "lente": "L1",
+      "id": "P19",
+      "fichero": "test/unit/panel-wiring.test.js",
+      "lineas": "2117-2124, 2137-2188",
+      "hecho": "Los pines de H12: el literal del botón, el consumo en send antes de runTurn, el descarte por host, y el olvido en refreshTab (entre 'if (otraPagina) {' y 'state.tabId = tab.id'), newSession (hasta 'function emptyToday') y btn-forget (antes de 'await bootForSite()').",
+      "cita": "assert(/const preload = state\\.pendingPreload\\s*state\\.pendingPreload = null/.test(envio), 'se consume al mandar') ... assert(envio.indexOf('state.pendingPreload = null') < envio.indexOf('runTurn('), 'antes de mandar el turno')"
+    },
+    {
+      "lente": "L1",
+      "id": "P20",
+      "fichero": "src/panel/panel.js",
+      "lineas": "5330-5346",
+      "hecho": "Firma de offerNotes.",
+      "cita": "async function offerNotes(\n  answer,\n  bubble,\n  {\n    skill = state.skill,\n    anchors = null,\n    digest = null,\n    digestReason = '',\n    urlAlPedir = '',\n    signal = null,\n    conBase = false,\n    product = '',\n    question = '',\n    parts = [],\n    repaint = null,\n  } = {}\n) {"
+    },
+    {
+      "lente": "L1",
+      "id": "P21",
+      "fichero": "src/panel/panel.js",
+      "lineas": "5349-5352, 5367-5376",
+      "hecho": "Las primeras salidas son por skill, sitio/tabId/cliente y signal; respuestaCorta se mide sobre la respuesta ORIGINAL (con cualquier valla dentro) y adaptada viene de normalizeNumbering.",
+      "cita": "if (skill !== 'analisis') return\n  if (!state.site || !state.tabId || !state.client) return\n  if (signal?.aborted) return ... const respuestaCorta = original.length < NOTE_LIMITS.shortAnswer\n  const adaptada = normalizeNumbering(answer, { expected: expectedCount(anchors), shortAnswer: NOTE_LIMITS.shortAnswer })"
+    },
+    {
+      "lente": "L1",
+      "id": "P22",
+      "fichero": "src/panel/panel.js",
+      "lineas": "5430-5445",
+      "hecho": "Sin números: si una herramienta falló o la respuesta es corta sale con 'Sin marcas' y withRetryNumbered; si no, sólo registra 'Sin bloque de anclas' y sigue hacia la pasada que trocea.",
+      "cita": "if (herramientaRota || respuestaCorta) {\n      log.info('Sin marcas', herramientaRota ? 'una consulta falló y la respuesta no numera nada' : 'la respuesta es corta y no numera nada')"
+    },
+    {
+      "lente": "L1",
+      "id": "P23",
+      "fichero": "src/panel/panel.js",
+      "lineas": "5498-5504",
+      "hecho": "La rama que llama a segmentedPassNotes (un turno de pago) se toma sin números o con origen 'json'.",
+      "cita": "} else if (!numeros.length || origen === 'json') { ... const seg = await segmentedPassNotes(answer, digest, signal)"
+    },
+    {
+      "lente": "L1",
+      "id": "P24",
+      "fichero": "src/panel/panel.js",
+      "lineas": "5433, 5451, 5464, 5474, 5507, 5526, 5545, 5563",
+      "hecho": "offerNotes tiene 8 literales 'Sin marcas' y 8 visibles: 7 noticeNode( (5437, 5454, 5477, 5511, 5530, 5546, 5564) más showPermissionNotice() (5465); hay además un noticeNode de 'Sin observaciones' en 5399. Una salida 'Sin marcas' sin aviso rompería el pin.",
+      "cita": "log.warn('Sin marcas', 'falta permiso en ' + state.site.host)\n    showPermissionNotice()"
+    },
+    {
+      "lente": "L1",
+      "id": "P25",
+      "fichero": "test/unit/panel-wiring.test.js",
+      "lineas": "229-237",
+      "hecho": "El pin cuenta 'Sin marcas' contra noticeNode( + showPermissionNotice() entre 'async function offerNotes' y 'function notesCard' (sobre JS con comentarios).",
+      "cita": "const mudos = cuerpo.split(\"'Sin marcas'\").length - 1\n  const visibles = cuerpo.split('noticeNode(').length - 1 + (cuerpo.split('showPermissionNotice()').length - 1)\n  assert(mudos > 0, 'se esperaban motivos registrados')\n  assert(visibles >= mudos, `${mudos} motivos registrados y sólo ${visibles} visibles`)"
+    },
+    {
+      "lente": "L1",
+      "id": "P26",
+      "fichero": "src/panel/panel.js",
+      "lineas": "5281-5307",
+      "hecho": "openIssueFromResults valida el destino jira-issue con validatePlan contra el índice y el origen del sitio, avisa con noticeNode en la tarjeta si no vale, y lanza runPlan 'direct'; después reactiva filas y NEEDS_IDLE.",
+      "cita": "const r = validatePlan(\n    { navigate: true, mode: 'direct', destination: { kind: 'jira-issue', id: key } },\n    { index: state.index, origin: site.origin, host: site.host, here: state.tabUrl, site }\n  )\n  if (!r.ok || !r.plan?.navigate) { ... card.appendChild(noticeNode(aviso, true))\n    announce(aviso)\n    return\n  }\n  await runPlan(r.plan, 'direct', card)"
+    },
+    {
+      "lente": "L1",
+      "id": "P27",
+      "fichero": "test/unit/panel-wiring.test.js",
+      "lineas": "2080-2090",
+      "hecho": "Pines de openIssueFromResults: el validatePlan literal, el contexto, runPlan 'direct', el noticeNode y el import.",
+      "cita": "assert(/await runPlan\\(r\\.plan, 'direct', card\\)/.test(abrir), 'y lo lanza el mismo runPlan: NAVIGATE_DIRECT')"
+    },
+    {
+      "lente": "L1",
+      "id": "P28",
+      "fichero": "src/panel/panel.js",
+      "lineas": "6011-6019",
+      "hecho": "focusNote(n) NO comprueba state.notes: manda FOCUS_NOTE a la pestaña y, si no hay ok, muestra un aviso.",
+      "cita": "async function focusNote(n) {\n  if (!state.tabId) return\n  const res = await chrome.tabs.sendMessage(state.tabId, { type: MSG.FOCUS_NOTE, n }).catch(() => null)\n  if (!res?.ok) {\n    showNotice(res?.reason || 'Esa marca ya no está en la página.', true)"
+    },
+    {
+      "lente": "L1",
+      "id": "P29",
+      "fichero": "src/panel/panel.js",
+      "lineas": "3154-3162",
+      "hecho": "answerAnnouncement ya quita las vallas cerradas ``` (no ~~~ ni una sin cerrar) antes de anunciar.",
+      "cita": "function answerAnnouncement(answer) {\n  const n = numberedIn(answer).length\n  const plano = String(answer || '')\n    .replace(/```[\\s\\S]*?```/g, ' ')\n    .replace(/[*_`#>]+/g, '')\n    .replace(/\\s+/g, ' ')\n    .trim()\n  return `Respuesta lista${n ? ` · ${n} observaciones` : ''}. ${plano}`"
+    },
+    {
+      "lente": "L1",
+      "id": "P30",
+      "fichero": "src/panel/panel.js",
+      "lineas": "3824-3831",
+      "hecho": "attachToBubble cuelga el nodo de la burbuja (o del chat si ya no está en el documento), anuncia su texto y baja el chat.",
+      "cita": "function attachToBubble(bubble, node) {\n  const destino = bubble?.isConnected ? bubble : el.chat\n  destino.appendChild(node)\n  announce(node.textContent)"
+    },
+    {
+      "lente": "L1",
+      "id": "P31",
+      "fichero": "src/panel/panel.js",
+      "lineas": "3936-3941",
+      "hecho": "noticeNode(text, bad) es un div.notice (+ ' bad') con textContent.",
+      "cita": "function noticeNode(text, bad) {\n  const d = document.createElement('div')\n  d.className = 'notice' + (bad ? ' bad' : '')\n  d.textContent = text"
+    },
+    {
+      "lente": "L1",
+      "id": "P32",
+      "fichero": "src/panel/panel.js",
+      "lineas": "2467",
+      "hecho": "NEEDS_IDLE es una clase CSS; setStreaming la usa para desactivar botones en el chat (8227).",
+      "cita": "const NEEDS_IDLE = 'needs-idle'"
+    },
+    {
+      "lente": "L1",
+      "id": "P33",
+      "fichero": "src/panel/panel.js",
+      "lineas": "3144-3151, 3131",
+      "hecho": "announce() limpia espacios, no hace nada durante state.restoring, recorta a ANNOUNCE_MAX (600) y añade un p al #announcer, dejando 4 como mucho.",
+      "cita": "function announce(text) {\n  const t = String(text || '').replace(/\\s+/g, ' ').trim()\n  if (!t || state.restoring || !el.announcer) return"
+    },
+    {
+      "lente": "L1",
+      "id": "P34",
+      "fichero": "src/panel/panel.js",
+      "lineas": "260, 263, 269, 375, 380, 528, 535",
+      "hecho": "El objeto state tiene, entre otras, site: null, index: null, notes: [], noteRows, notesCard, notesResult: null, pendingPreload: null y pendingIntent: null (la última clave). No hay pendingDiagram.",
+      "cita": "const state = {\n  settings: { ...DEFAULT_SETTINGS },\n  client: null,\n  site: null, ... notes: [], ... notesResult: null, ... pendingPreload: null, ... pendingIntent: null,\n}"
+    },
+    {
+      "lente": "L1",
+      "id": "P35",
+      "fichero": "src/panel/panel.js",
+      "lineas": "94, 197-214",
+      "hecho": "Desde validate.js sólo se importa validatePlan; de notes.js se importa una lista con splitAnchorsBlock y NOTE_LIMITS, pero NO NOTE_KINDS.",
+      "cita": "import { validatePlan } from '../nav/validate.js' ... import {\n  collectNotes, ... splitAnchorsBlock,\n  titleFromProse,\n  surplusNumbers,\n  NOTE_LIMITS,\n} from './notes.js'"
+    },
+    {
+      "lente": "L1",
+      "id": "P36",
+      "fichero": "src/panel/panel.js",
+      "lineas": "5602-5608",
+      "hecho": "KIND_LABELS es una constante LOCAL de panel.js (no se importa); NOTE_KINDS se exporta en notes.js:73.",
+      "cita": "const KIND_LABELS = {\n  dato: 'dato',\n  supuesto: 'supuesto',\n  hueco: 'hueco',\n  contradiccion: 'contradicción',\n  riesgo: 'riesgo',\n}"
+    },
+    {
+      "lente": "L1",
+      "id": "P37",
+      "fichero": "src/panel/panel.js",
+      "lineas": "5215-5217",
+      "hecho": "Ejemplo de un log con título entre comillas simples y detalle con ' · '.",
+      "cita": "log.ok('Búsqueda precargada', `${nota} · ${jql}`)"
+    },
+    {
+      "lente": "L1",
+      "id": "H1",
+      "fichero": "src/panel/panel.html",
+      "lineas": "14, 69, 71, 106",
+      "hecho": "Los ids del chat: #announcer (aria-live polite), main#chat, footer#composer y textarea#input; el panel los recoge en el objeto el (panel.js 236-238).",
+      "cita": "<main class=\"chat\" id=\"chat\" aria-busy=\"false\"></main> ... <footer class=\"composer\" id=\"composer\"> ... <textarea id=\"input\" rows=\"1\" placeholder=\"Pregunta algo sobre este espacio…\" spellcheck=\"false\"></textarea>"
+    },
+    {
+      "lente": "L1",
+      "id": "H2",
+      "fichero": "src/panel/panel.js",
+      "lineas": "6093-6147",
+      "hecho": "navCard(plan) construye div.nav-card con .nav-kicker, .nav-title, .nav-text opcional, .nav-steps si hay más de un paso y div.nav-actions con un botón por navOptions que llama a runPlan(plan, opt.mode, card).",
+      "cita": "const actions = document.createElement('div')\n  actions.className = 'nav-actions'\n\n  for (const opt of navOptions(plan, state.settings)) {\n    const b = document.createElement('button')\n    b.className = opt.kind\n    b.type = 'button'\n    b.textContent = opt.label\n    b.addEventListener('click', () => runPlan(plan, opt.mode, card))"
+    },
+    {
+      "lente": "L2",
+      "id": "L2-01",
+      "fichero": "src/panel/notes.js",
+      "lineas": "73",
+      "hecho": "NOTE_KINDS es un array exportado, sin Object.freeze, con cinco etiquetas.",
+      "cita": "export const NOTE_KINDS = ['dato', 'supuesto', 'hueco', 'contradiccion', 'riesgo']"
+    },
+    {
+      "lente": "L2",
+      "id": "L2-02",
+      "fichero": "src/panel/notes.js",
+      "lineas": "53-67",
+      "hecho": "NOTE_LIMITS es un objeto literal exportado SIN Object.freeze: max 12, titleMax 120, exactMin 8, shortAnswer 400, openingMin 3, openingMax 120.",
+      "cita": "export const NOTE_LIMITS = {\n  max: 12,\n  titleMax: 120,\n  ...\n  exactMin: 8,\n  ...\n  shortAnswer: 400,\n  ...\n  openingMin: 3,\n  openingMax: 120,\n}"
+    },
+    {
+      "lente": "L2",
+      "id": "L2-03",
+      "fichero": "src/panel/notes.js",
+      "lineas": "282-287",
+      "hecho": "noteNumber NO se exporta (función local); acepta 1..99 si pasa looksLikeNoteNumber, si no null. validateNotes filtra kind con NOTE_KINDS.includes (línea 833).",
+      "cita": "function noteNumber(x) {\n  if (!looksLikeNoteNumber(x)) return null\n  const n = Number(x)\n  return n >= 1 && n <= 99 ? n : null\n}"
+    },
+    {
+      "lente": "L2",
+      "id": "L2-04",
+      "fichero": "src/atlassian/site.js",
+      "lineas": "235-238",
+      "hecho": "validIssueKey: trim + mayúsculas; proyecto de 1-20 caracteres [A-Z][A-Z0-9_] y número de 1-9 dígitos; devuelve la clave o ''.",
+      "cita": "export function validIssueKey(value) {\n  const k = String(value || '').trim().toUpperCase()\n  return /^[A-Z][A-Z0-9_]{0,19}-\\d{1,9}$/.test(k) ? k : ''\n}"
+    },
+    {
+      "lente": "L2",
+      "id": "L2-05",
+      "fichero": "src/atlassian/site.js",
+      "lineas": "241-244",
+      "hecho": "validProjectKey: misma forma sin el número.",
+      "cita": "export function validProjectKey(value) {\n  const k = String(value || '').trim().toUpperCase()\n  return /^[A-Z][A-Z0-9_]{0,19}$/.test(k) ? k : ''\n}"
+    },
+    {
+      "lente": "L2",
+      "id": "L2-06",
+      "fichero": "src/atlassian/site.js",
+      "lineas": "257-260",
+      "hecho": "validSpaceKey: no pasa a mayúsculas; admite '~' inicial y exige además isRealSpaceKey.",
+      "cita": "export function validSpaceKey(value) {\n  const k = String(value || '').trim()\n  return /^~?[A-Za-z0-9_.@:-]{1,255}$/.test(k) && isRealSpaceKey(k) ? k : ''\n}"
+    },
+    {
+      "lente": "L2",
+      "id": "L2-07",
+      "fichero": "src/atlassian/site.js",
+      "lineas": "342-352",
+      "hecho": "sinInvisibles borra con la regex INVISIBLES (C0 salvo \\t\\n\\v\\f\\r, DEL, ZWSP..RLM, LRE..RLO, U+2060-2064, U+2066-2069, BOM), escrita con \\u escapados dentro de un string pasado a new RegExp; NO toca saltos ni NEL.",
+      "cita": "const INVISIBLES = new RegExp(\n  '[\\\\u0000-\\\\u0008\\\\u000E-\\\\u001F\\\\u007F\\\\u200B-\\\\u200F\\\\u202A-\\\\u202E\\\\u2060-\\\\u2064\\\\u2066-\\\\u2069\\\\uFEFF]',\n  'g'\n)\n...\nexport function sinInvisibles(text) {\n  return String(text ?? '').replace(INVISIBLES, '')\n}"
+    },
+    {
+      "lente": "L2",
+      "id": "L2-08",
+      "fichero": "src/atlassian/site.js",
+      "lineas": "319, 355-357",
+      "hecho": "site.js tiene su propia ESPACIOS (\\s + NEL) y una unaLinea local (no exportada) que hace sinInvisibles + colapso + trim.",
+      "cita": "const ESPACIOS = new RegExp('[\\\\s\\\\u0085]+', 'g')\n...\nfunction unaLinea(text) {\n  return sinInvisibles(text).replace(ESPACIOS, ' ').trim()\n}"
+    },
+    {
+      "lente": "L2",
+      "id": "L2-09",
+      "fichero": "src/panel/prompts.js",
+      "lineas": "532-534",
+      "hecho": "dato() (no exportada): sinInvisibles, colapsa ESPACIOS (incluye NEL) a un espacio, trim y recorta a max (200 por defecto).",
+      "cita": "function dato(value, max = 200) {\n  return sinInvisibles(value).replace(ESPACIOS, ' ').trim().slice(0, max)\n}"
+    },
+    {
+      "lente": "L2",
+      "id": "L2-10",
+      "fichero": "src/panel/prompts.js",
+      "lineas": "423, 435-437",
+      "hecho": "claveEnLinea (no exportada): sólo si es string y validSpaceKey la deja idéntica, la pasa por dato con CLAVE_ESPACIO_MAX = 255; si no, ''.",
+      "cita": "function claveEnLinea(k) {\n  return typeof k === 'string' && validSpaceKey(k) === k ? dato(k, CLAVE_ESPACIO_MAX) : ''\n}"
+    },
+    {
+      "lente": "L2",
+      "id": "L2-11",
+      "fichero": "src/panel/prompts.js",
+      "lineas": "972-975",
+      "hecho": "El colapso del NEL se escribe con \\u escapados dentro de un string a new RegExp (no con String.fromCharCode): SALTOS, SALTOS_CON_ESPACIOS y ESPACIOS; no hay invisibles crudos en el fuente.",
+      "cita": "const SALTOS = new RegExp('\\\\r?\\\\n|[\\\\u2028\\\\u2029\\\\u0085]')\nconst SALTOS_CON_ESPACIOS = new RegExp('[\\\\s\\\\u0085]*(?:\\\\r?\\\\n|[\\\\u2028\\\\u2029\\\\u0085])[\\\\s\\\\u0085]*', 'g')\n/** `\\s` más el NEL: lo que hay que colapsar para dejar un título en una línea. */\nconst ESPACIOS = new RegExp('[\\\\s\\\\u0085]+', 'g')"
+    },
+    {
+      "lente": "L2",
+      "id": "L2-12",
+      "fichero": "src/panel/prompts.js",
+      "lineas": "9",
+      "hecho": "prompts.js importa sinInvisibles y validIssueKey de site.js (ruta relativa '../atlassian/site.js').",
+      "cita": "import { cleanTabTitle, sinInvisibles, validIssueKey, validSpaceKey, validProjectKey, LOCATION_LIMITS } from '../atlassian/site.js'"
+    },
+    {
+      "lente": "L2",
+      "id": "L2-13",
+      "fichero": "src/panel/rest-notice.js",
+      "lineas": "1-17",
+      "hecho": "Módulo puro modelo: la cabecera /** */ dice qué decide, POR QUÉ EXISTE (la regla estaba en panel.js y cuatro mutaciones pasaban las pruebas; §9 manda sacarla a módulo puro como screens.js, chat-scroll.js, links.js) y cierra con «Puro: …».",
+      "cita": " * Lo que el panel decide con una regla vive en un módulo puro con su prueba (§9), como\n * `screens.js`, `chat-scroll.js` o `links.js`.\n *\n * Puro: no toca DOM ni chrome; el conjunto de lo ya avisado entra por parámetro."
+    },
+    {
+      "lente": "L2",
+      "id": "L2-14",
+      "fichero": "src/panel/rest-notice.js",
+      "lineas": "27, 40, 58",
+      "hecho": "Exporta REST_REASON_ALWAYS (con Object.freeze), restFailureDue y jqlFailText; cada export lleva su /** */ con @param/@returns.",
+      "cita": "export const REST_REASON_ALWAYS = Object.freeze(['jql'])\n...\nexport function restFailureDue(warned, reason, host, sessionID) {\n...\nexport function jqlFailText(r, host) {"
+    },
+    {
+      "lente": "L2",
+      "id": "L2-15",
+      "fichero": "src/panel/today.js",
+      "lineas": "53-55",
+      "hecho": "Los objetos de límites UPPER_SNAKE del proyecto se declaran casi todos como literal exportado SIN freeze, con un /** */ por campo; sólo SCOPE_LIMITS (src/shared/scopes.js:60) usa Object.freeze.",
+      "cita": "export const TODAY_LIMITS = {\n  /** Filas que salen de aquí. Ocho es una pantalla; una lista larga no se mira. */\n  maxItems: 8,"
+    },
+    {
+      "lente": "L2",
+      "id": "L2-16",
+      "fichero": "src/shared/scopes.js",
+      "lineas": "60",
+      "hecho": "Única declaración de *_LIMITS con Object.freeze en src/.",
+      "cita": "export const SCOPE_LIMITS = Object.freeze({ maxScopes: 40, textMax: 60000, keysShown: 6 })"
+    },
+    {
+      "lente": "L2",
+      "id": "L2-17",
+      "fichero": "test/harness.js",
+      "lineas": "3-7",
+      "hecho": "registry es un array exportado; test(name, fn) sólo hace push.",
+      "cita": "export const registry = []\n\nexport function test(name, fn) {\n  registry.push({ name, fn })\n}"
+    },
+    {
+      "lente": "L2",
+      "id": "L2-18",
+      "fichero": "test/harness.js",
+      "lineas": "11-36",
+      "hecho": "assert(cond, msg), eq compara JSON.stringify, near(actual, expected, tolerance=0.001, msg), throws es async y await fn().",
+      "cita": "export function eq(actual, expected, msg = '') {\n  const a = JSON.stringify(actual)\n  const b = JSON.stringify(expected)\n...\nexport function near(actual, expected, tolerance = 0.001, msg = '') {\n...\nexport async function throws(fn, msg = 'se esperaba una excepción') {"
+    },
+    {
+      "lente": "L2",
+      "id": "L2-19",
+      "fichero": "test/run.js",
+      "lineas": "19-26, 77-83",
+      "hecho": "run.js descubre recursivamente todo *.test.js bajo test/unit, los ordena, los importa uno a uno y guarda porFichero[basename] = pruebas que registró ese fichero.",
+      "cita": "const files = walk(join(HERE, 'unit')).sort()\n  const porFichero = {}\n  for (const f of files) {\n    const antes = registry.length\n    await import(pathToFileURL(f).href)\n    porFichero[basename(f)] = registry.length - antes\n  }"
+    },
+    {
+      "lente": "L2",
+      "id": "L2-20",
+      "fichero": "test/run.js",
+      "lineas": "30-66, 85-147",
+      "hecho": "Orden de check: sintaxis, orden (TDZ sólo sobre /src/), manifest, unitarias («pass/total pruebas»), y docs sólo si las unitarias pasan con checkDocs(ROOT, { tests: registry.length, porFichero }).",
+      "cita": "const docs = checkDocs(ROOT, { tests: registry.length, porFichero })"
+    },
+    {
+      "lente": "L2",
+      "id": "L2-21",
+      "fichero": "test/unit/dead-exports.test.js",
+      "lineas": "64-67, 86",
+      "hecho": "LISTA_BLANCA y PENDIENTES_DE_HITO están vacías; hay un test que exige PENDIENTES_DE_HITO vacía.",
+      "cita": "const LISTA_BLANCA = {\n  // (vacía a propósito: hoy nada de src/ se exporta legítimamente sin que\n  // alguien lo importe. Añadir aquí sólo con motivo escrito.)\n}\n...\nconst PENDIENTES_DE_HITO = {}"
+    },
+    {
+      "lente": "L2",
+      "id": "L2-22",
+      "fichero": "test/unit/dead-exports.test.js",
+      "lineas": "99-119",
+      "hecho": "EXPORTADAS_SIN_IMPORTAR tiene 19 rutas; incluye 'src/atlassian/site.js': ['validIssueKey'] y 'src/panel/prompts.js': ['formatReminder'] (aunque prompts.js ya importa validIssueKey: la lista es no estricta, así que una entrada que empieza a importarse no falla).",
+      "cita": "'src/atlassian/site.js': ['validIssueKey'],"
+    },
+    {
+      "lente": "L2",
+      "id": "L2-23",
+      "fichero": "test/unit/dead-exports.test.js",
+      "lineas": "284-292",
+      "hecho": "El corpus de importadores es src/, harness/ (.js y .html), tools/ y test/, menos el propio fichero: un test que importa la exportación SÍ cuenta como importador (lo prueba el caso 'CONSTANTE' importado desde test/unit/mod.test.js).",
+      "cita": "  .filter(({ rel }) => /^(src|harness|tools|test)\\//.test(rel) && rel !== PROPIO)"
+    },
+    {
+      "lente": "L2",
+      "id": "L2-24",
+      "fichero": "test/unit/dead-exports.test.js",
+      "lineas": "310-321",
+      "hecho": "Regla: toda exportación de src/ tiene que importarla de verdad alguien (import estático/dinámico/reexport o X.a con import * as), o estar en una lista; mencionar el nombre en un test por regex no cuenta.",
+      "cita": "eq(nuevas.map((l) => `${l} y nadie lo importa: impórtalo desde un test, quita el export o apúntalo`), [])"
+    },
+    {
+      "lente": "L2",
+      "id": "L2-25",
+      "fichero": "test/unit/dead-exports.test.js",
+      "lineas": "336-340, 350",
+      "hecho": "Comprobación de sobrantes: estricta para LISTA_BLANCA y PENDIENTES; NO estricta para EXPORTADAS_SIN_IMPORTAR (sólo falla si la ruta o la exportación ya no existen).",
+      "cita": "    [LISTA_BLANCA, true],\n    [EXPORTADAS_SIN_IMPORTAR, false],\n    [pendientesPlanos, true],"
+    },
+    {
+      "lente": "L2",
+      "id": "L2-26",
+      "fichero": "test/unit/undefined-refs.test.js",
+      "lineas": "85, 106, 118",
+      "hecho": "Sobre src/: ningún nombre que exporte el proyecto se usa sin importarlo o declararlo, todo import apunta a un fichero existente y todo nombre importado existe en su módulo.",
+      "cita": "test('un ayudante del proyecto no se usa sin importarlo', () => {"
+    },
+    {
+      "lente": "L2",
+      "id": "L2-27",
+      "fichero": "manifest.json",
+      "lineas": "54-66",
+      "hecho": "web_accessible_resources expone src/content, overlay, shared, atlassian y nav; src/panel/*.js NO está expuesto, con use_dynamic_url true.",
+      "cita": "\"resources\": [\n        \"src/content/*.js\",\n        \"src/content/overlay/*.js\",\n        \"src/shared/*.js\",\n        \"src/atlassian/*.js\",\n        \"src/nav/*.js\"\n      ],"
+    },
+    {
+      "lente": "L2",
+      "id": "L2-28",
+      "fichero": "test/unit/web-accessible.test.js",
+      "lineas": "191-192",
+      "hecho": "El test exige que nada de src/panel, src/background ni src/opencode esté expuesto: un módulo nuevo en src/panel/ no necesita nada en el manifest (y exponerlo fallaría).",
+      "cita": "  // Y nada del panel, del service worker ni de opencode: la página no los necesita.\n  const deMas = reales.filter((f) => /^src\\/(panel|background|opencode)\\//.test(f) && expuesta(f, patrones))"
+    },
+    {
+      "lente": "L2",
+      "id": "L2-29",
+      "fichero": "test/unit/docs.test.js",
+      "lineas": "74-86",
+      "hecho": "ficherosDelCorpus: todos los .js de src/, panel.html, panel.css, los .js de test/, .js/.html de harness/, .js/.mjs de tools/ y manifest.json, menos docs.test.js.",
+      "cita": "    ...recorrer(join(ROOT, 'src'), (n) => n.endsWith('.js')),\n    join(ROOT, 'src', 'panel', 'panel.html'),\n    join(ROOT, 'src', 'panel', 'panel.css'),\n    ...recorrer(join(ROOT, 'test'), (n) => n.endsWith('.js')),"
+    },
+    {
+      "lente": "L2",
+      "id": "L2-30",
+      "fichero": "test/unit/docs.test.js",
+      "lineas": "117-124",
+      "hecho": "Se saltan los fragmentos con puntos suspensivos, los nombres de fichero, las /regex/, las listas de claves que empiezan por [' y los esquemas con hueco <x>.",
+      "cita": "  if (/…|\\.\\.\\./.test(f)) return 'puntos suspensivos'\n  if (/^[\\w./-]+\\.(m?js|md|html|css|json)$/.test(f)) return 'fichero'\n  if (f.length > 1 && f.startsWith('/') && f.endsWith('/')) return 'regex'\n  if (f.startsWith(\"['\")) return 'lista de claves'\n  if (/<[^<>\\s]+>/.test(f)) return 'esquema con hueco'"
+    },
+    {
+      "lente": "L2",
+      "id": "L2-31",
+      "fichero": "test/unit/docs.test.js",
+      "lineas": "138-154",
+      "hecho": "buscar: #id sólo en panel.html como id=\"…\", .clase sólo en panel.css, un identificador como palabra entera, «nombre valor» en una misma línea, y si no, literal, sin espacios o sin escapes.",
+      "cita": "  if (/^#[A-Za-z][\\w-]*$/.test(fragmento)) return corpus.html.includes(`id=\"${fragmento.slice(1)}\"`) ? 'id' : ''\n  if (/^\\.[A-Za-z][\\w-]*$/.test(fragmento)) return new RegExp(escapar(fragmento) + '(?![\\\\w-])').test(corpus.css) ? 'clase' : ''"
+    },
+    {
+      "lente": "L2",
+      "id": "L2-32",
+      "fichero": "tools/check-docs.mjs",
+      "lineas": "185, 221-228, 540",
+      "hecho": "Un título de registro es el primer literal de log.(ok|info|warn|error)('…' en src/ (sin comentarios) y tiene que aparecer entre «» en docs/INSTALL.md o en CLAUDE.md (STRICT.titles = error).",
+      "cita": "const documented = new Set([...documentedTitles(install), ...documentedTitles(claude)])"
+    },
+    {
+      "lente": "L2",
+      "id": "L2-33",
+      "fichero": "tools/check-docs.mjs",
+      "lineas": "406-409, 426-456",
+      "hecho": "srcFilesInMap lee el PRIMER bloque ``` de la sección §3 de CLAUDE.md; una línea con ruta completa como primer token (src/panel/x.js  descripción) cuenta, y cualquier token con forma de fichero de la línea se resuelve contra ese directorio.",
+      "cita": "export function mapBlock(claudeMd) {\n  const m = /```[^\\n]*\\n([\\s\\S]*?)\\n```/.exec(sectionOf(claudeMd, 3))\n  return m ? m[1] : ''\n}"
+    },
+    {
+      "lente": "L2",
+      "id": "L2-34",
+      "fichero": "CLAUDE.md",
+      "lineas": "§3 bloque de código",
+      "hecho": "La forma de una entrada del mapa es «ruta  descripción de una línea (docs/…)».",
+      "cita": "src/panel/rest-notice.js  cuándo se dice que una lectura REST falló (docs/FLUJOS.md §4.7)"
+    },
+    {
+      "lente": "L2",
+      "id": "L2-35",
+      "fichero": "src/nav/validate.js",
+      "lineas": "42, 110",
+      "hecho": "validatePlan(raw, ctx) con ctx {index, origin, host, here?, site?}; devuelve {ok:true, plan} o {ok:false, reason} por fail(reason).",
+      "cita": "export function validatePlan(raw, ctx) {\n  if (!raw || typeof raw !== 'object') return fail('El plan no es un objeto.')"
+    },
+    {
+      "lente": "L2",
+      "id": "L2-36",
+      "fichero": "src/nav/validate.js",
+      "lineas": "53-61, 65",
+      "hecho": "Sin índice o con un destino que resolveTarget no encuentra falla con el motivo «no está en el índice de este sitio»; además exige mismo origen y productOfSite.",
+      "cita": "        ? `El destino «${clean(String(raw.destination.id), 60)}» no está en el índice de este sitio.`"
+    },
+    {
+      "lente": "L2",
+      "id": "L2-37",
+      "fichero": "src/nav/validate.js",
+      "lineas": "86-89",
+      "hecho": "Para jira-issue (y confluence-page) no se usa el path del modelo: los pasos son los de treeSteps más el destino.",
+      "cita": "  if (destination.kind !== 'confluence-page' && destination.kind !== 'jira-issue') {\n    const delModelo = resolveSteps(raw.path, index, origin)"
+    },
+    {
+      "lente": "L2",
+      "id": "L2-38",
+      "fichero": "src/atlassian/index-store.js",
+      "lineas": "238-247",
+      "hecho": "resolveTarget busca confluence-page en index.pages[id] y jira-issue en index.issues[id.toUpperCase()].",
+      "cita": "    case 'confluence-page':\n      entry = index.pages?.[id]\n      break\n...\n    case 'jira-issue':\n      entry = index.issues?.[id.toUpperCase()]"
+    },
+    {
+      "lente": "L2",
+      "id": "L2-39",
+      "fichero": "src/atlassian/index-store.js",
+      "lineas": "269-281",
+      "hecho": "Sin entrada o sin path seguro (toSafePath) devuelve null; si no, {kind, id, title, path, url = origin + path}.",
+      "cita": "  return {\n    kind,\n    id: entry.id || entry.key,\n    title: entry.title || entry.name || entry.key || entry.id,\n    path,\n    url: String(origin || '').replace(/\\/+$/, '') + path,\n  }"
+    },
+    {
+      "lente": "L2",
+      "id": "L2-40",
+      "fichero": "src/panel/panel.js",
+      "lineas": "5281-5294",
+      "hecho": "openIssueFromResults, el modelo que cita el plan: validatePlan con jira-issue contra state.index y, si falla, log.warn('Navegación fallida'), noticeNode en la tarjeta y announce; si vale, runPlan(r.plan, 'direct', card).",
+      "cita": "  const r = validatePlan(\n    { navigate: true, mode: 'direct', destination: { kind: 'jira-issue', id: key } },\n    { index: state.index, origin: site.origin, host: site.host, here: state.tabUrl, site }\n  )"
+    },
+    {
+      "lente": "L2",
+      "id": "L2-41",
+      "fichero": "test/unit/markdown.test.js",
+      "lineas": "143-185",
+      "hecho": "El document falso sólo simula createDocumentFragment, createElement y createTextNode; los elementos tienen tagName, className, dataset, listeners, children, appendChild, addEventListener y un textContent getter/setter. NO hay createElementNS, setAttribute, classList, querySelector ni removeChild. conDocument lo instala en globalThis.document y lo restaura en finally.",
+      "cita": "  return {\n    createDocumentFragment: () => elemento('#fragment'),\n    createElement: (tag) => elemento(String(tag).toLowerCase()),\n    createTextNode: texto,\n  }"
+    },
+    {
+      "lente": "L2",
+      "id": "L2-42",
+      "fichero": "test/unit/markdown.test.js",
+      "lineas": "188-191",
+      "hecho": "Las aserciones comparan el árbol con forma(): texto → cadena y elemento → {'tag.clase': hijos}.",
+      "cita": "function forma(nodo) {\n  if (nodo.tagName === '#text') return nodo.textContent\n  return { [nodo.tagName + (nodo.className ? '.' + nodo.className : '')]: nodo.children.map(forma) }\n}"
+    },
+    {
+      "lente": "L2",
+      "id": "L2-43",
+      "fichero": "src/panel/markdown.js",
+      "lineas": "22-31",
+      "hecho": "parseBlocks: hoy un bloque de código no lleva closed; una valla sin cerrar consume hasta el final y queda igual que una cerrada.",
+      "cita": "      while (i < lines.length && !cierre.test(lines[i])) body.push(lines[i++])\n      i++ // cierre\n      blocks.push({ type: 'code', lang, text: body.join('\\n') })"
+    },
+    {
+      "lente": "L3",
+      "id": "L3-01",
+      "fichero": "src/panel/panel.css",
+      "lineas": "36-71",
+      "hecho": "Tokens de color del tema claro en :root: --ground #F5F5F8, --surface #FFFFFF, --surface-2 #EFEFF4, --ink #17161D, --ink-2 #45424F, --muted #66637A, --hairline #E2E1EA, --hairline-strong #8A8894, --gold #7A4F08, --gold-bg #FBF3E3, --gold-line #E2C795, --mark #E9AC4A, --mark-strong #C98A22, --on-mark #1B1405, --ok #0C6F62, --danger #A63A32, --danger-bg #F9E8E6, --shadow; y alias --line/--line-2/--teal/--clay/--clay-bg.",
+      "cita": "--gold: #7A4F08;\n  --gold-bg: #FBF3E3;\n  --gold-line: #E2C795;\n  --mark: #E9AC4A;\n  --mark-strong: #C98A22;\n  --on-mark: #1B1405;\n  --ok: #0C6F62;\n  --danger: #A63A32;\n  --danger-bg: #F9E8E6;"
+    },
+    {
+      "lente": "L3",
+      "id": "L3-02",
+      "fichero": "src/panel/panel.css",
+      "lineas": "67-71",
+      "hecho": "Los alias son var() de otros tokens, no colores propios: --teal es --ok y --clay es --danger.",
+      "cita": "--line: var(--hairline);\n  --line-2: var(--hairline-strong);\n  --teal: var(--ok);\n  --clay: var(--danger);\n  --clay-bg: var(--danger-bg);"
+    },
+    {
+      "lente": "L3",
+      "id": "L3-03",
+      "fichero": "src/panel/panel.css",
+      "lineas": "74-98",
+      "hecho": "Escala: --text-2xs 10px, --text-xs 11px, --text-sm 12px, --text-md 13.5px, --text-lg 15px, --text-xl 18px; --s1..--s6 = 4/8/12/16/20/24px; --r-sm 6px, --r-md 8px, --r-lg 12px, --r-pill 999px; --dur-1 120ms, --dur-2 240ms, --ease.",
+      "cita": "--dur-1: 120ms;\n  --dur-2: 240ms;\n  --ease: cubic-bezier(.32,.72,0,1);"
+    },
+    {
+      "lente": "L3",
+      "id": "L3-04",
+      "fichero": "src/panel/panel.css",
+      "lineas": "103-104, 140",
+      "hecho": "Dos bloques oscuros que redefinen sólo colores (idénticos, pinado): uno dentro de @media prefers-color-scheme y otro forzado por data-theme para el espejo; en oscuro --gold y --mark son ambos #E9AC4A, --ok #45BFAB, --danger #E9847B, --hairline rgba(255,255,255,.08).",
+      "cita": "@media (prefers-color-scheme: dark) {\n  :root:not([data-theme=\"light\"]) {  ...  :root[data-theme=\"dark\"] {"
+    },
+    {
+      "lente": "L3",
+      "id": "L3-05",
+      "fichero": "src/panel/panel.css",
+      "lineas": "20-27",
+      "hecho": "La cabecera del CSS fija la regla: fuera de :root sólo 0, 1 y 2 a mano; medidas de pieza y ritmos de espera van en EXCEPCIONES y DURACIONES_PROPIAS de panel-css.test.js; las parejas viven en test/contrast-pairs.js.",
+      "cita": "fuera de\n   :root sólo se escriben a mano el 0, el 1 y el 2."
+    },
+    {
+      "lente": "L3",
+      "id": "L3-06",
+      "fichero": "src/panel/panel.css",
+      "lineas": "1048-1065",
+      "hecho": "Familia .model-row (H17) como ejemplo de estilo reciente: filas separadas por hairline, textos por tokens, estados .bad/.ok sólo cambian el color del porqué.",
+      "cita": ".model-row {\n  flex-wrap: wrap;\n  align-items: baseline;\n  gap: 0 var(--s2);\n  margin: 0;\n  padding: var(--s1) 0;\n  border-bottom: 1px solid var(--hairline);\n}\n.model-row:last-child { border-bottom: 0; }"
+    },
+    {
+      "lente": "L3",
+      "id": "L3-07",
+      "fichero": "src/panel/panel.css",
+      "lineas": "1423-1446",
+      "hecho": "Familia .today-row (H11): caja sobre --surface con borde --hairline, radio --r-md; .new con filete inset de --mark; .compact con transición var(--dur-1).",
+      "cita": ".today-row {\n  display: flex;\n  align-items: center;\n  gap: var(--s2);\n  width: 100%;\n  text-align: left;\n  font: inherit;\n  font-size: var(--text-sm);\n  background: var(--surface);\n  color: var(--ink-2);\n  border: 1px solid var(--hairline);\n  border-radius: var(--r-md);"
+    },
+    {
+      "lente": "L3",
+      "id": "L3-08",
+      "fichero": "src/panel/panel.css",
+      "lineas": "503",
+      "hecho": ".nav-actions envuelve desde H12 para que dos botones largos quepan a 320 px.",
+      "cita": ".nav-actions { display: flex; flex-wrap: wrap; gap: var(--s2); }"
+    },
+    {
+      "lente": "L3",
+      "id": "L3-09",
+      "fichero": "src/panel/panel.css",
+      "lineas": "768-784",
+      "hecho": "No hay regla button.ghost.small compuesta: son dos reglas, button.ghost (borde --hairline-strong, texto --ink-2) y button.small (tamaño y relleno).",
+      "cita": "button.ghost { background: transparent; color: var(--ink-2); border-color: var(--hairline-strong); }\nbutton.ghost:hover { background: var(--surface-2); color: var(--ink); }\n...\nbutton.small { font-size: var(--text-xs); padding: var(--s1) var(--s2); }"
+    },
+    {
+      "lente": "L3",
+      "id": "L3-10",
+      "fichero": "src/panel/panel.css",
+      "lineas": "411-431",
+      "hecho": "Hoy un bloque de código del chat se pinta como .md-pre (fondo --surface, borde --hairline, overflow-x auto, --text-xs) con su code en --ink-2 sin fondo; el código en línea es .msg :not(pre) > code sobre --surface-2.",
+      "cita": ".md-pre {\n  margin: 0 0 .7em;\n  background: var(--surface);\n  border: 1px solid var(--hairline);\n  border-radius: var(--r-md);\n  padding: var(--s2) var(--s3);\n  overflow-x: auto;\n  font-size: var(--text-xs);\n  line-height: 1.6;\n}"
+    },
+    {
+      "lente": "L3",
+      "id": "L3-11",
+      "fichero": "src/panel/panel.css",
+      "lineas": "337, 697",
+      "hecho": "No hay ninguna regla para figure ni para un svg de contenido; las únicas reglas de svg son los iconos de botón (15x15).",
+      "cita": ".icon-btn svg { width: 15px; height: 15px; }"
+    },
+    {
+      "lente": "L3",
+      "id": "L3-12",
+      "fichero": "src/panel/panel.css",
+      "lineas": "849, 1198, 1243, 1319, 1441",
+      "hecho": "La única sombra no inset es la de --shadow en la línea 849 (la .busy-card); las demás son filetes inset de --mark.",
+      "cita": "  box-shadow: var(--shadow);"
+    },
+    {
+      "lente": "L3",
+      "id": "L3-13",
+      "fichero": "test/contrast-pairs.js",
+      "lineas": "16-19, 32-56",
+      "hecho": "TEXTO: filas [frente, fondo, qué dibuja, tema?], el cuarto campo 'dark' sólo si se exige en oscuro. Hoy tiene 23 filas (líneas 33-55).",
+      "cita": "['--ink-2', '--surface-2', 'código en línea de la prosa y fila de sugerencia con el ratón'],"
+    },
+    {
+      "lente": "L3",
+      "id": "L3-14",
+      "fichero": "test/contrast-pairs.js",
+      "lineas": "67-72",
+      "hecho": "CONTROL (umbral 3) tiene 4 filas; la del ámbar lleva el cuarto campo 'dark'.",
+      "cita": "['--hairline-strong', '--surface', 'borde de input y textarea'],\n  ...\n  ['--mark', '--surface', 'relleno de la pastilla [n] y del faro', 'dark'],"
+    },
+    {
+      "lente": "L3",
+      "id": "L3-15",
+      "fichero": "test/contrast-pairs.js",
+      "lineas": "90-94",
+      "hecho": "EXENTOS tiene 3 filas: bordes que se miden y deben seguir POR DEBAJO de 3.",
+      "cita": "['--hairline', '--surface', 'filete entre filas y marco de tarjetas: decorativo'],"
+    },
+    {
+      "lente": "L3",
+      "id": "L3-16",
+      "fichero": "test/contrast-pairs.js",
+      "lineas": "102-117",
+      "hecho": "OVERLAY_REGLAS tiene 5 filas [regla, qué dibuja], OVERLAY_TOKENS 2 filas y UMBRAL es un objeto.",
+      "cita": "['.note-badge', 'insignia [n] sobre la página'],\n...\nexport const UMBRAL = { texto: 4.5, control: 3 }"
+    },
+    {
+      "lente": "L3",
+      "id": "L3-17",
+      "fichero": "test/unit/panel-css.test.js",
+      "lineas": "30-31, 45-60, 72-80",
+      "hecho": "Las parejas se comprueban leyendo panel.css con cssVarsOf por bloque (claro ':root', oscuro ':root:not([data-theme=\"light\"])' fundido sobre el claro) y exigiendo ratio >= UMBRAL en los dos temas, saltando las filas cuyo cuarto campo es de otro tema.",
+      "cita": "for (const [fg, bg, que, soloEn] of TEXTO) {\n      if (soloEn && soloEn !== clave) continue\n      const r = ratio(tokens, fg, bg)\n      assert(r >= UMBRAL.texto, "
+    },
+    {
+      "lente": "L3",
+      "id": "L3-18",
+      "fichero": "test/unit/panel-css.test.js",
+      "lineas": "82-99",
+      "hecho": "La prueba de CONTROL además exige que .choice use --hairline-strong como borde (medir el token no basta si el control no lo usa).",
+      "cita": "/border:\\s*1px solid var\\(--hairline-strong\\)/.test(choice[1]),"
+    },
+    {
+      "lente": "L3",
+      "id": "L3-19",
+      "fichero": "test/unit/panel-css.test.js",
+      "lineas": "102-123",
+      "hecho": "«un token de borde no es tinta»: recoge todas las declaraciones color: del CSS sin comentarios, exige más de 20 y ninguna con var() de BORDES (border-color/accent-color sí pueden).",
+      "cita": "const BORDES = ['--hairline', '--hairline-strong', '--gold-line', '--line', '--line-2']\n...\n  assert(tinta.length > 20, 'el panel pinta texto en muchos sitios: si esto es 0, la regex no está leyendo nada')"
+    },
+    {
+      "lente": "L3",
+      "id": "L3-20",
+      "fichero": "test/unit/panel-css.test.js",
+      "lineas": "125-146",
+      "hecho": "Las filas de EXENTOS se comprueban por debajo de UMBRAL.control en los dos temas; si alguna llega a 3 hay que moverla a CONTROL.",
+      "cita": "r < UMBRAL.control,"
+    },
+    {
+      "lente": "L3",
+      "id": "L3-21",
+      "fichero": "test/unit/panel-css.test.js",
+      "lineas": "148-159",
+      "hecho": "Los tres bloques de tokens tienen que declarar los mismos nombres, los dos oscuros los mismos valores, y ningún color puede quedarse con un solo tema.",
+      "cita": "eq(oscuroForzado, oscuroSistema, 'el oscuro forzado tiene que decir lo mismo que el del sistema')"
+    },
+    {
+      "lente": "L3",
+      "id": "L3-22",
+      "fichero": "test/unit/panel-css.test.js",
+      "lineas": "212-220",
+      "hecho": "ESCALA se deriva de los tokens --text*, --s* y --r* del bloque claro en px, más 0, 1 y 2; excluye --r-pill.",
+      "cita": "const ESCALA = new Set([0, 1, 2])\nfor (const [nombre, valor] of Object.entries(claro)) {\n  if (nombre === '--r-pill') continue\n  if (/^--(text|s\\d|r)-?/.test(nombre)) {"
+    },
+    {
+      "lente": "L3",
+      "id": "L3-23",
+      "fichero": "test/unit/panel-css.test.js",
+      "lineas": "222, 236-261, 263-291",
+      "hecho": "font-size/padding/gap/margin/border-radius sólo pueden usar la ESCALA. width/height/min-*/max-* pueden usar ESCALA o EXCEPCIONES, un Map px→motivo que se comprueba en los dos sentidos (una excepción sin uso falla). Valores existentes: 3,5,9,13,14,17,26,28,32,44,92,160,230,260,300,320,520.",
+      "cita": "[28, 'lado del botón de icono'],"
+    },
+    {
+      "lente": "L3",
+      "id": "L3-24",
+      "fichero": "test/unit/panel-css.test.js",
+      "lineas": "298-333",
+      "hecho": "DURACIONES_PROPIAS es un Map literal de duración→motivo, comprobado en los dos sentidos; cualquier otra duración tiene que ser var(--dur-1)/var(--dur-2).",
+      "cita": "['.8s', 'la vuelta del spinner que espera al MCP'],"
+    },
+    {
+      "lente": "L3",
+      "id": "L3-25",
+      "fichero": "test/unit/panel-css.test.js",
+      "lineas": "335-344, 426-432",
+      "hecho": "Otras prohibiciones: sin box-shadow que no sea inset (salvo la tarjeta del velo), sin transform translate en hover, sin outline: none/0, y el :focus-visible con outline de 2px en --mark.",
+      "cita": "/(?:^|;)\\s*box-shadow:\\s*(?!inset\\b)\\S/"
+    },
+    {
+      "lente": "L3",
+      "id": "L3-26",
+      "fichero": "test/unit/panel-wiring.test.js",
+      "lineas": "47, 2798-2804",
+      "hecho": "No hay una prueba genérica de que toda clase pintada tenga regla: se hace por hito en panel-wiring, con una lista explícita de clases y CSS_LIMPIO.includes(clase + ' {') (con llave, para que un renombrado no pase). Se repite en 3723, 4987 y 6714.",
+      "cita": "for (const clase of ['.suggest-list', '.suggest-row.suggested', '.suggest-why', '.suggest-actions']) {\n    assert(CSS_LIMPIO.includes(clase + ' {'), 'clase sin regla en el CSS: ' + clase)"
+    },
+    {
+      "lente": "L3",
+      "id": "L3-27",
+      "fichero": "tools/contrast-report.mjs",
+      "lineas": "30-33, 262-269",
+      "hecho": "Imprime la tabla de TEXTO, CONTROL y EXENTOS por tema, más las reglas y tokens del overlay. Sale con 1 si una pareja no exenta baja de su umbral o si falta un token; las exentas se imprimen sin contar.",
+      "cita": "console.log(`\\n${RED}✗ ${fallos.length} pareja(s) por debajo de su umbral${OFF}`)\n    ...\n    process.exitCode = 1"
+    },
+    {
+      "lente": "L3",
+      "id": "L3-28",
+      "fichero": "harness/panel-preview.html",
+      "lineas": "225, 239-242",
+      "hecho": "El espejo carga el panel.html real en un iframe y arranca sólo cuando lo cargado es el panel (con la guarda #app); si no, espera al load.",
+      "cita": "if (frame.contentDocument?.readyState === 'complete' && frame.contentDocument.getElementById('app')) arrancar()\nelse frame.addEventListener('load', arrancar, { once: true })"
+    },
+    {
+      "lente": "L3",
+      "id": "L3-29",
+      "fichero": "harness/panel-preview.html",
+      "lineas": "256-293",
+      "hecho": "Los módulos reales se importan con un Promise.all de import('/src/…') desestructurado en orden: 17 imports, desde setup.js hasta scopes.js; renderMarkdown sale de markdown.js (2.º).",
+      "cita": "    { renderMarkdown },\n...\n    import('/src/panel/markdown.js'),"
+    },
+    {
+      "lente": "L3",
+      "id": "L3-30",
+      "fichero": "harness/panel-preview.html",
+      "lineas": "984-990",
+      "hecho": "La prosa del asistente se pinta con el renderMarkdown REAL a través de la flecha const prosa, que sólo pasa onNote cuando lleva marcas.",
+      "cita": "const prosa = (lineas, conMarcas = false) => {\n    const cuerpo = doc.createElement('div')\n    cuerpo.appendChild(\n      renderMarkdown(lineas.join('\\n'), conMarcas ? { onNote: (n) => console.log('ir a la observación', n) } : {})\n    )"
+    },
+    {
+      "lente": "L3",
+      "id": "L3-31",
+      "fichero": "harness/panel-preview.html",
+      "lineas": "1414, 1505-1522",
+      "hecho": "La conversación «Jira · SIMPL-1234» es function conversacionJira(), que cuelga del chat. Su segunda respuesta (b1) lleva toolsFold, prosa, tarjetaNotas, aviso y avisoConversacionPesada; después cuelgan del chat tarjetaPermiso, avisoMcpSinConectar() y avisoClavesSinComprobar() (H18).",
+      "cita": "    chat.appendChild(tarjetaPermiso(SITIOS.jira.host))\n    chat.appendChild(avisoMcpSinConectar())\n    // H18: el recordatorio de unas claves adoptadas sin comprobar, con su botón.\n    chat.appendChild(avisoClavesSinComprobar())\n  }"
+    },
+    {
+      "lente": "L3",
+      "id": "L3-32",
+      "fichero": "harness/panel-preview.html",
+      "lineas": "1189-1204, 1070",
+      "hecho": "avisoMcpSinConectar es una declaración function que devuelve un div con aviso(texto, true) y un .nav-actions con button 'ghost small'; aviso es una flecha const (línea 1070).",
+      "cita": "const acciones = mk('div', 'nav-actions')\n    const btn = mk('button', 'ghost small', 'Cambiar las claves')"
+    },
+    {
+      "lente": "L3",
+      "id": "L3-33",
+      "fichero": "harness/panel-preview.html",
+      "lineas": "1750-1756",
+      "hecho": "pintarChat elige la conversación por estado.chat; 'jira' → conversacionJira().",
+      "cita": "else if (estado.chat === 'jira') conversacionJira()"
+    },
+    {
+      "lente": "L3",
+      "id": "L3-34",
+      "fichero": "harness/panel-preview.html",
+      "lineas": "2402-2451",
+      "hecho": "CAJAS es un array literal de 30 selectores: '.top', '.brand', '.top-actions', '.nav-actions', '.composer', '.composer-meta', '.composer-row', '.chat', '.result-row', '.search-chip-row', '.suggest-row.suggested', '.today-row', '.privacy li', '.no-map', '#scope-list li', '#set-linked-space-field', '#setup-mcp-hint', '#setup-mcp-hint .cmd', '#setup-manual-hint', '#setup-manual-hint .cmd', '#setup-consent', '#setup-consent .check', '#setup-manual-why', '.model-row', '#model-list', '#remove-keys-confirm', '#remove-keys-confirm .check', '#remove-keys-confirm .row', '#remove-keys-leftovers'. Cada añadido lleva un comentario con su hito.",
+      "cita": "    // H22: el selector del espacio enlazado, con una opción larga («Automático\n    // (hoy DCPIAS, por el contexto)») que no puede empujar Ajustes a lo ancho.\n    '#set-linked-space-field',"
+    },
+    {
+      "lente": "L3",
+      "id": "L3-35",
+      "fichero": "harness/panel-preview.html",
+      "lineas": "2455-2530",
+      "hecho": "check() toma el PRIMER querySelector de cada selector de CAJAS y lo marca como apretado si scrollWidth > clientWidth + 1. overflowX es el desbordamiento del documento o cualquier caja apretada, y ok exige !overflowX.",
+      "cita": "const apretadas = CAJAS.map((s) => [s, doc.querySelector(s)])\n      .filter(([, e]) => e && e.scrollWidth > e.clientWidth + 1)\n      .map(([s]) => s)\n    const overflowX = raiz.scrollWidth > raiz.clientWidth || apretadas.length > 0"
+    },
+    {
+      "lente": "L3",
+      "id": "L3-36",
+      "fichero": "harness/panel-preview.html",
+      "lineas": "2004-2014, 1156-1161, 1572-1575",
+      "hecho": "Lección TDZ de H17: todo arrancar() es una sola función async y una const declarada más abajo estaba en su TDZ al usarse antes, lo que tumbaba faroPreview. Por eso las ayudas nuevas se escriben como declaraciones function.",
+      "cita": "// Las tres son DECLARACIONES `function`, no `const`, a propósito: se usan\n  // desde `await pintarPantallaModelo()`, más arriba en este mismo `arrancar()`,\n  // y una `const` de aquí abajo estaría todavía en su TDZ"
+    },
+    {
+      "lente": "L3",
+      "id": "L3-37",
+      "fichero": "harness/panel-preview.html",
+      "lineas": "2045-2046",
+      "hecho": "Hay imports dinámicos de módulos del panel fuera del Promise.all inicial (patrón para la pantalla de modelo de H17).",
+      "cita": "      import('/src/shared/models.js'),\n      import('/src/opencode/client.js'),"
+    },
+    {
+      "lente": "L3",
+      "id": "L3-38",
+      "fichero": "docs/INSTALL.md",
+      "lineas": "1359-1364",
+      "hecho": "La sección «Qué significa cada título del registro» no dice cuántos títulos hay; los agrupa bajo rótulos en negrita (Arranque y conexión, Un turno 1501, Análisis 1581, Páginas base 1632, Navegación 1667…).",
+      "cita": "### Qué significa cada título del registro\n\nEl registro del panel (el icono de las líneas) apunta cada cosa con un título\ncorto y un detalle. Todos los títulos, por dónde salen:"
+    },
+    {
+      "lente": "L3",
+      "id": "L3-39",
+      "fichero": "docs/INSTALL.md",
+      "lineas": "1489-1493",
+      "hecho": "Formato de una entrada: «Título», raya, entre paréntesis el hito y el nivel, qué pasó y la forma del detalle.",
+      "cita": "- «Espacio enlazado» — (H22, en gris) cambiaste en **Ajustes → Este sitio** en\n  qué espacio del Confluence enlazado se documenta el proyecto de la pestaña:"
+    },
+    {
+      "lente": "L3",
+      "id": "L3-40",
+      "fichero": "docs/INSTALL.md",
+      "lineas": "1608",
+      "hecho": "El título «Sin marcas» ya existe en el grupo Análisis con la lista de sus razones: las ocho que emite el panel.",
+      "cita": "- «Sin marcas» — no se marcó nada, con la razón (las ocho que emite el panel):"
+    },
+    {
+      "lente": "L3",
+      "id": "L3-41",
+      "fichero": "docs/REFERENCIA.md",
+      "lineas": "554",
+      "hecho": "En §9 hay una frase que cuenta los títulos y los enumera por hito empezando por el último: hoy son 105, tras H22.",
+      "cita": "Los 105 de hoy (2026-09-27, tras H22; el único de H22, «Espacio enlazado»; los tres de H21, «Contexto migrado», «Mapa lleno» y «Mapa olvidado»; el único de H19, «Claves quitadas»;"
+    }
+  ],
+  "dudas": [
+    "L1: focusNote no mira state.notes antes de mandar FOCUS_NOTE: para que '[n] llama a focusNote sólo si esa nota existe' hay que comprobarlo en diagram-view o en el panel. ¿Dónde va esa comprobación, y contra qué: state.notes (que se vacía en forgetNotes) o state.notesResult.filas?",
+    "L1: El pin S5b (panel-wiring 765) exige que cada llamada acabe en 'allowHref: linkAllowed })'. ¿onCodeBlock se escribe ANTES de allowHref para que el pin siga contando 4, o se cambia el regex del pin?",
+    "L1: parseBlocks no distingue una valla cerrada de una sin cerrar: tras el while hace i++ en los dos casos. ¿'closed' se calcula como i < lines.length antes de ese i++?",
+    "L1: answerAnnouncement sólo quita vallas ``` cerradas: una ~~~mermaid o una valla sin cerrar se anunciarían con su código. ¿H24 amplía ese regex?",
+    "L1: El documento falso de markdown.test.js no tiene createElementNS, setAttribute, append ni classList. ¿El test de diagram-view trae su propio document mínimo?",
+    "L2: validIssueKey figura en EXPORTADAS_SIN_IMPORTAR (dead-exports.test.js:101), pero prompts.js:9 ya la importa. Como esa lista no es estricta, no falla. ¿La quita H24 al importarla desde diagram-parse.js (la lista «sólo encoge»), o se deja?",
+    "L2: No hay ningún helper exportado que junte sinInvisibles con el colapso del NEL: dato() (prompts.js) y unaLinea() (site.js) son locales y cada fichero tiene su propia ESPACIOS. ¿diagram-parse.js reescribe ESPACIOS (una tercera copia) o se exporta una de las dos?",
+    "L2: noteNumber es local en notes.js y no se exporta. ¿El `note` del diagrama ([n]) repite el rango 1..99 o se exporta noteNumber?",
+    "L2: El document falso de markdown.test.js no tiene createElementNS, setAttribute ni classList. ¿diagram-view.test.js amplía una copia propia o se comparte? Hoy es una función local del test, no exportada.",
+    "L3: CLAUDE.md §9 dice «la lista de los 104» y docs/REFERENCIA.md:554 dice «Los 105 de hoy (… tras H22…)». ¿Cuál es el número real? El paso docs no parece contarlo, así que H24 tendría que poner 106 en los dos o dejar el de CLAUDE.md en 104.",
+    "L3: No existe ninguna prueba genérica que exija que cada clase pintada por el JS tenga su regla en el CSS: se pina por hito con listas explícitas en panel-wiring.test.js (líneas 2803, 3723, 4987 y 6714). ¿H24 pina .dg-* del mismo modo?",
+    "L3: El plan pide cuatro parejas nuevas «con tokens que ya existen». Aún falta decidir cuáles; por ejemplo, un borde de nodo con --hairline-strong sobre --surface-2 o --ink sobre --gold-bg ya están cubiertos o no en las listas actuales.",
+    "L3: check() mide sólo el PRIMER elemento de cada selector de CAJAS (doc.querySelector). Con '.dg-wrap' sólo se mediría el primer diagrama de la conversación."
+  ]
+}

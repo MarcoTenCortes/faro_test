@@ -50,7 +50,7 @@ Cinco piezas: la página (Jira/Confluence) · la extensión · opencode · el LL
 ## 2. Arrancar y comprobar
 
 ```bash
-npm run check              # sintaxis + TDZ + manifest + 1498 pruebas unitarias + docs (sólo si las unitarias pasan)
+npm run check              # sintaxis + TDZ + manifest + 1555 pruebas unitarias + docs (sólo si las unitarias pasan)
 npm run check:docs         # sólo el paso docs, informe entero; sale con 1 si hay errores
 npm run test:integration   # su propio opencode serve (4123) y el cliente real; GASTA turnos de pago
 npm run harness            # Confluence de mentira en http://127.0.0.1:5175 (preview_start "harness")
@@ -105,7 +105,7 @@ Qué es cada fichero, en una línea; el mapa largo (qué hizo cada hito en cada 
 
 ```
 manifest.json  MV3, sidePanel, use_dynamic_url (S7) (docs/MAPA.md)
-src/panel/panel.js  el panel, ÚNICO que habla con opencode: estado, chat, turnos; H22 applyLinkedScope (docs/FLUJOS.md §4.1)
+src/panel/panel.js  el panel, ÚNICO que habla con opencode: estado, chat, turnos; H22 applyLinkedScope; H24 drawCodeBlock (docs/FLUJOS.md §4.1)
 src/panel/panel.html  las pantallas; ids pinados por test; H22 #set-linked-space en Ajustes (docs/MAPA.md)
 src/panel/panel.css  sobre tokens, claro y oscuro; contraste pinado (docs/REFERENCIA.md §9)
 src/panel/chat-scroll.js  stuckToBottom: ¿chat pegado al fondo? (A7) (docs/MAPA.md)
@@ -127,7 +127,10 @@ src/panel/planner.js  de la respuesta a un plan; jqlDestination (docs/FLUJOS.md 
 src/panel/indexer.js  buildContext, harvestIndex (docs/FLUJOS.md §4.6)
 src/panel/setup.js  el MCP: configureMcp, quitar las claves (docs/FLUJOS.md §4.7)
 src/panel/memory.js  contextos por ámbito y memoria (docs/FLUJOS.md §4.6)
-src/panel/markdown.js  markdown → DOM sin innerHTML; allowHref (docs/MAPA.md)
+src/panel/markdown.js  markdown → DOM sin innerHTML; allowHref; H24 closed y onCodeBlock (docs/MAPA.md)
+src/panel/diagram-parse.js  H24: el Mermaid flowchart leído con claves blancas; toMermaid (docs/FLUJOS.md §4.4)
+src/panel/diagram-layout.js  H24: layoutDiagram, capas y baricentro (docs/REFERENCIA.md §6)
+src/panel/diagram-view.js  H24: diagramNode, el SVG sin innerHTML (docs/FLUJOS.md §4.4)
 src/background/service-worker.js  paso a paso, permisos, «visto» (docs/FLUJOS.md §4.3)
 src/content/bootstrap.js  content script: switch de mensajes (docs/FLUJOS.md §4.9)
 src/content/runner.js  NavRunner: executeStep, applyNotes (docs/FLUJOS.md §4.4)
@@ -217,10 +220,10 @@ Los flujos viven ENTEROS en `docs/FLUJOS.md` (§4.1-4.11, con su numeración de 
 - **§4.1 Arranque del panel** (`bootForSite`): el testigo `state.bootToken`, el paquete del sitio en UNA lectura en paralelo con la red (H6), el MCP en segundo plano con `checkMcp`/`state.mcpCheck`/`state.mcpPending` (H14), el modelo de la persona y «Elige el modelo» ANTES de las claves en el primer uso (H16-H17), las claves que se escriben solas y la adopción con `verified` (H18), lo que deja «Quitar las claves» (H19) y el contexto por ámbito con `applyScope`/`changedScope` (H21).
 - **§4.2 Un turno de chat** (`send()`): lo que se captura al pedir (§8.22), `runTurn`, `mismoSitio`, el orden pintar → `warnAboutSources` → `recordAnalysisTurn` → `offerNotes` → índice → `offerNavigation` → `persistIndex`, el cronómetro de H3, el silencio del modelo (H6), los veredictos de modelo y «Reintentar con X» (H16) y «Elegir otro modelo» (H17).
 - **§4.3 Navegación**: `offerNavigation` → `planNavigation` → `validatePlan` (sólo ids del índice, mismo origen, la rama del árbol) → `runPlan` → pasos en la página; la lista de una búsqueda de Jira dentro de su tarjeta (H8).
-- **§4.4 Modo Análisis**: el prompt con «[n]» y el bloque JSON de anclas, la escalera «siempre subraya» de `offerNotes`, `applyNotes` en la página, Escape, restaurar, las páginas base y las sugeridas (H10, H14).
+- **§4.4 Modo Análisis**: el prompt con «[n]» y el bloque JSON de anclas, la escalera «siempre subraya» de `offerNotes`, `applyNotes` en la página, Escape, restaurar, las páginas base y las sugeridas (H10, H14); un ```mermaid cerrado se dibuja (`drawCodeBlock`) y una respuesta a «Dibujar el flujo» no se subraya (`esDiagrama`, H24).
 - **§4.5 Señalar en la página**: el pick y `selectionBlock` citado línea a línea con «> » (S3).
 - **§4.6 Indexado y memoria**: `generateContext` bajo host Y ámbito con relectura antes de escribir, `restIndexFor` (el árbol por la API, H9/H14), cancelado y fallido por el modelo, la memoria normalizada (R1) y los contextos por ámbito con su tope total (H21).
-- **§4.7 Jira**: claves por producto y hosts enlazados, el MCP caído con «Reintentar» (H15), la verificación que no culpa a las claves (H16), las claves escritas por `PATCH /global/config` (H18) y quitadas desde Ajustes (H19), Búsqueda con JQL y la búsqueda como destino, la lista y los chips (H8), «Preguntar sobre estos» (H12), el perfil del proyecto (H9) y los ids en JQL (H14).
+- **§4.7 Jira**: claves por producto y hosts enlazados, el MCP caído con «Reintentar» (H15), la verificación que no culpa a las claves (H16), las claves escritas por `PATCH /global/config` (H18) y quitadas desde Ajustes (H19), Búsqueda con JQL y la búsqueda como destino, la lista y los chips (H8), «Preguntar sobre estos» (H12) y «Dibujar el flujo» (H24), el perfil del proyecto (H9) y los ids en JQL (H14).
 - **§4.8 Análisis en Jira**: la incidencia en bloques (`jiraIssueScope`), los campos leídos de la pantalla, el estado del botón de transiciones y «Ninguno» (H14), las páginas base desde un Jira DC.
 - **§4.9 Lecturas REST sin tokens**: la única puerta `getJson`, los dos módulos REST con plantillas fijas, la ruta de contexto observada, el interruptor `restTools` y lo que el PASO 0 y H14 vieron en los sitios reales.
 - **§4.10 Qué mirar hoy** (H11): apuntar (el service worker como ÚNICO escritor de «visto»), leer, puntuar, pintar, actuar y olvidar; sin modelo.
@@ -281,6 +284,7 @@ Cada contrato con su porqué y sus bordes, en docs/REFERENCIA.md §6; aquí, la 
 - **Búsqueda sugerida** (`suggestedQueries`): `['jql','kind','label']`.
 - **Chip de búsqueda** (`searchChips`): `['jql','kind','label','run','title']`.
 - **Búsqueda precargada** (`state.pendingPreload`).
+- **Diagrama** (H24): `readFlowchart` → `{ok, direction, nodes, edges, subgraphs, errores}`, nodo `{id, label, shape, kind, ref, note, sub}`, arista `{from, to, label, style, arrow}`; `layoutDiagram` → `{width, height, nodes, edges, subgraphs}` 1:1 con el diagrama; `diagramNode` → `figure.dg-wrap`; `state.pendingDiagram` `{host}` o null, sólo memoria.
 - **Últimas consultas** (`normalizeRecentJql`): 5.
 - **Avisos REST ya dados** (`state.restWarned`).
 - **Filtro favorito** (`parseFilters`).
@@ -345,6 +349,7 @@ Sólo el enunciado; el porqué, el incidente que la motivó y sus matices están
 24. **Faro sólo escribe MCP en opencode** — una barrera (`mcp-config.js`) y dos puertas: `updateMcpEntries` y `reloadGlobalConfig`, nunca un PATCH genérico ni `POST /mcp`; nunca `/config` de proyecto ni `agent`/`permission`/`plugin`/`command`; sin configuración legible no se escribe. Con permiso, `reconfiguring()`, `sensitive`, sin pisar lo que no pidió; quitar = entrada entera `enabled: false`. Pruebas sólo en `npm run sandbox`.
 25. **El modelo es de la persona** — `settings.model` global; `resolveModel` nunca elige solo, se elige en «Elige el modelo». Fallos clasificados gratis en `faro:model-checks` con TTL; la única sonda es «Comprobar» (`probeModel`).
 26. **El ámbito, unidad del contexto** — contexto por `space:`/`project:`/`'*'` en la misma clave, índice por host sin partir; migración a `'*'` en la duda. «Tiene mapa» = `hasMap` (sólo `indexedAt`); tope total sin desalojo; ninguna clave nueva en `STORAGE_KEYS` por ámbito. En Jira (H22), por proyecto también el perfil (`byProject`) y el contexto del enlazado que viaja (`linkedSpacesFor`; lo elegido a mano manda).
+27. **Diagramas** — el modelo escribe Mermaid `flowchart`; la extensión lo valida con claves blancas y lo pinta con `createElementNS`, sin dependencias ni `innerHTML`; un nodo navega sólo al hacer clic, por `validatePlan` y con la clave en el índice; nada del diagrama se vuelve consulta; «Dibujar el flujo» no manda nada; sin viñeta en el prompt ni MCP de dibujo.
 
 ## 9. Convenciones de código
 - Cabecera `/** … */` en cada módulo con POR QUÉ existe y el incidente que lo motivó; comentarios de razones, no de mecánica.
@@ -354,8 +359,8 @@ Sólo el enunciado; el porqué, el incidente que la motivó y sus matices están
 - Toda exportación de `src/` la importa alguien de verdad, o está en `dead-exports.test.js`: `EXPORTADAS_SIN_IMPORTAR` (deuda que sólo encoge), `LISTA_BLANCA` (con motivo), `PENDIENTES_DE_HITO` (vacía, pinado). Lo que no usa nadie se borra.
 - Prompts como funciones puras (`[...].join('\n')`); todo cambio hace fallar `prompt-snapshots.test.js`: si es intencionado, `npm run snapshots` y revisar el diff en el mismo commit; regenerar es aceptar.
 - Turnos internos: sesión desechable «Faro · <cosa>» + `promptStructured` + `deleteSession` en `finally`. Todo `chrome.tabs.sendMessage` con `.catch(() => null)`. Un turno real se mira con `npm run turn`, nunca con un script ad hoc sobre opencode.db.
-- Registro: `log.ok/info/warn/error('Título corto', 'detalle · detalle')`. Cada título nuevo va entre «» en docs/INSTALL.md (el paso «docs» lo exige, `STRICT.titles`); la lista de los 104 con su significado vive allí y en docs/REFERENCIA.md §9.
-- UI sólo con `createElement`/`textContent`, nunca `innerHTML`. Familias: `nav-card`, `note-row`, `suggest-row`, `source-row`, `result-*`, `search-chip`, `today-*`, `model-*`, `.privacy`, `.screen-head` + `.icon-btn.back`, `.loc`. Cabecera: sólo cede el chip; `.top-actions` `flex: none`. Accesibilidad: todo anuncio por `announce()`, pantalla abierta = `#app` inerte + foco a su `h1`.
+- Registro: `log.ok/info/warn/error('Título corto', 'detalle · detalle')`. Cada título nuevo va entre «» en docs/INSTALL.md (el paso «docs» lo exige, `STRICT.titles`); la lista de los 106 con su significado vive allí y en docs/REFERENCIA.md §9.
+- UI sólo con `createElement`/`textContent`, nunca `innerHTML`. Familias: `nav-card`, `note-row`, `suggest-row`, `source-row`, `result-*`, `search-chip`, `today-*`, `model-*`, `dg-*` (H24), `.privacy`, `.screen-head` + `.icon-btn.back`, `.loc`. Cabecera: sólo cede el chip; `.top-actions` `flex: none`. Accesibilidad: todo anuncio por `announce()`, pantalla abierta = `#app` inerte + foco a su `h1`.
 - Tokens del CSS: px de la escala de `:root` (a mano sólo 0, 1 y 2); medidas de pieza en `EXCEPCIONES` y duraciones en `DURACIONES_PROPIAS`, cada una con su motivo (`panel-css.test.js` falla en las dos direcciones). Color nuevo con su pareja en `test/contrast-pairs.js`; un token de borde nunca es tinta. `--mark` es relleno con `--on-mark` encima, `--gold` acento de texto; `outline: none` prohibido; sin sombras salvo `.busy-card`.
 - Tests: `test/unit/<módulo>.test.js`, nombres en español, `SEGURIDAD:` para barreras, `EL CAMBIO:` para un rediseño. `panel.js`, `overlay.js` y `runner.js` por regex sobre su fuente (`panel-wiring`, `overlay-wiring` y `runner-wiring.test.js`), con `sinComentarios`, `funcion`, `una`, `orden` y `eq` sobre cuerpos enteros. `chrome`, `fetch`, `document` o `setInterval` se instalan DENTRO de cada prueba y se restauran en `finally`. Un pin de §10/PINES se copia del código, no se resume.
 
@@ -420,8 +425,9 @@ Los pasos completos, con el porqué de cada regla: docs/REFERENCIA.md §11.
 | H19 | «Quitar las claves de este sitio» | `…h19-quitar-claves` · 9f65b73 + 8bb5298 | 1431 |
 | H21 | Contexto y mapa por ámbito (`scopes.js`) | `…h21-multi-espacio` · 4a62170 + 9a7780a | 1478 |
 | H22 | Jira por proyecto: perfiles `byProject`, `linkedSpacesFor` y su selector | `plan/h22-jira-por-proyecto` · bd01fa2 + a7b781a | 1498 |
+| H24 | Diagramas: parser, layout y SVG propios, «Dibujar el flujo» | `plan/h24-diagramas` · (construcción al cerrar) | 1555 |
 
-Ramas `plan/…`. **Dónde vive:** 22 ramas apiladas sobre `40f56d7`, nada pusheado ni PR, `main` local en `523c25f`; H20 saltado (manual, con gasto); H22 en `plan/h22-jira-por-proyecto` · bd01fa2 (construido y verificado por el orquestador: banco 130/130, espejo 4 combinaciones) y su revisión adversaria encima (docs/plan/handoff/ESTADO.md); este mapa (Tarea 0, 2026-09-27) es la rama `plan/docs-mapa`, sobre `2684f14` y debajo de H22.
+Ramas `plan/…`. **Dónde vive:** 22 ramas apiladas sobre `40f56d7`, nada pusheado ni PR, `main` local en `523c25f`; H20 saltado (manual, con gasto); H22 en `plan/h22-jira-por-proyecto` · bd01fa2 (construido y verificado por el orquestador: banco 130/130, espejo 4 combinaciones) y su revisión adversaria encima (docs/plan/handoff/ESTADO.md); este mapa (Tarea 0, 2026-09-27) es la rama `plan/docs-mapa`, sobre `2684f14` y debajo de H22; H24 construido en `plan/h24-diagramas` sobre 9cfc93d, sin commit, pendiente de la verificación del orquestador y de su revisión adversaria (H23 va en su carril).
 
 **Límites que no son de ningún hito:**
 - Jira Cloud sin REST de Jira (410): todo por el MCP (`sinRestDeJira`).

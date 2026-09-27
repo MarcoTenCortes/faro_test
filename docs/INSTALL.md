@@ -797,6 +797,32 @@ Junto al selector de modelo, abajo, hay otras dos cosas:
   tienes, si el modelo no vuelve a buscar no aparece ninguna tarjeta de
   «Abrir la búsqueda en Jira» debajo de la respuesta: la de antes sigue arriba.
 
+- **Dibujar el flujo** (H24) — una respuesta de Jira que cita **tres
+  incidencias o más** lleva debajo un botón «Dibujar el flujo». Como «Preguntar
+  sobre estos», pulsarlo **no manda nada**: te deja escrita en el cuadro la
+  pregunta que pide el diagrama (un Mermaid «flowchart» con la clave de cada
+  incidencia como primera palabra de su nodo, como mucho 15 nodos, y
+  «:::riesgo», «:::hueco» o «:::contradiccion» en lo que falle); cámbiala o
+  bórrala, enviar lo haces tú, y bajo tu pregunta se dice «dibujar el flujo».
+  Cualquier respuesta que traiga un bloque ```mermaid **cerrado** se dibuja en
+  el chat —en Jira y en Confluence, lo pida el botón o no—: mientras llega a
+  trozos se ve el código, y al cerrarse el bloque aparece el diagrama. Faro lo
+  dibuja **él mismo**, sin Mermaid ni ninguna otra librería (lee sólo un
+  subconjunto de `flowchart`, y todo lo que escribió el modelo pasa por una
+  barrera: `click`, `style`, `classDef` y las directivas `%%{init}%%` se
+  rechazan). Un nodo cuya etiqueta empieza por una clave de incidencia es un
+  botón: al pulsarlo (o con Enter) Faro te lleva a esa incidencia **por el mismo
+  camino que una fila de la lista de una búsqueda**, sólo si la clave está en el
+  mapa del sitio; si no, lo dice dentro del diagrama. Un «[n]» de una
+  observación que existe sale como insignia y lleva a ella. Debajo del dibujo,
+  «Ver como lista» lo cuenta en texto (una fila por flecha) y «Copiar como
+  Mermaid» lo pone en el portapapeles, listo para pegarlo en Excalidraw («Más
+  herramientas» → «Mermaid a Excalidraw») o en cualquier sitio que lea Mermaid.
+  Si Faro no entiende el diagrama, deja el código tal cual y dice debajo por
+  qué («No he podido dibujarlo: línea 3: «click» no se admite»). Una respuesta
+  a «Dibujar el flujo» en Análisis no se subraya en la página: es un dibujo, no
+  un análisis.
+
 - **Búsquedas al instante** — en un **Jira propio (Data Center)**, con el chat
   vacío, bajo las tres sugerencias hay hasta cuatro pastillas: «Misma épica
   ENG-1», «Mismo sprint «S37 Infra»», «Mis abiertas de ENG», «Filtro: API en
@@ -1628,6 +1654,25 @@ corto y un detalle. Todos los títulos, por dónde salen:
   el chat (con sus «[n]»); el detalle son los caracteres copiados. Si el
   portapapeles falla, el propio botón lo dice («No se pudo») y no se apunta
   nada aquí.
+
+**Diagramas**
+
+- «Diagrama» — (H24) todo lo del diagrama de flujo del chat, con cinco
+  detalles. **Dibujado** (en verde): «N nodos · M aristas · X con clave · T
+  ms», un bloque ```mermaid cerrado se dibujó (cuántos nodos navegan, y lo que
+  costó leerlo, colocarlo y pintarlo). **No dibujado** (en gris): «no dibujado ·
+  <motivo>», el mismo motivo que sale en el chat bajo el código («línea 2:
+  «style» no se admite», «demasiados nodos: 34 de tope 30», «menos de dos
+  nodos»…). Uno y otro se apuntan **una vez por diagrama**: mientras la
+  respuesta llega a trozos el mismo bloque se repinta muchas veces. **Mermaid
+  copiado** (en verde): «Mermaid copiado · N caracteres», pulsaste «Copiar como
+  Mermaid» y el portapapeles lo aceptó (si falla, lo dice el botón y no se
+  apunta nada). **Sin marcas** (en gris): «sin marcas: la pregunta era dibujar
+  el flujo», en Análisis la respuesta a «Dibujar el flujo» no se subraya en la
+  página: lo que se ve es el diagrama, así que no sale ningún aviso en el chat
+  (y por eso no es un «Sin marcas», que siempre lleva el suyo). **Pregunta
+  preparada** (en gris): «pregunta preparada · sin mandar», pulsaste «Dibujar
+  el flujo» y la pregunta está escrita en el cuadro; no se ha mandado nada.
 
 **Páginas base**
 

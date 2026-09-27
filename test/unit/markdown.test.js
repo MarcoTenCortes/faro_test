@@ -147,6 +147,9 @@ test('SEGURIDAD: una negrita sin cerrar con miles de asteriscos sueltos no cuelg
 function documentoFalso() {
   const elemento = (tag) => ({
     tagName: tag,
+    // H24: `renderMarkdown` decide por `nodeType` si lo que devuelve
+    // `onCodeBlock` es un nodo (1 elemento, 3 texto, 11 fragmento, como el DOM).
+    nodeType: tag === '#fragment' ? 11 : 1,
     className: '',
     dataset: {},
     listeners: {},
@@ -165,7 +168,7 @@ function documentoFalso() {
       this.children = [texto(v)]
     },
   })
-  const texto = (v) => ({ tagName: '#text', textContent: String(v), children: [] })
+  const texto = (v) => ({ tagName: '#text', nodeType: 3, textContent: String(v), children: [] })
   return {
     createDocumentFragment: () => elemento('#fragment'),
     createElement: (tag) => elemento(String(tag).toLowerCase()),
@@ -305,5 +308,90 @@ test('S5: sin allowHref, lo de hoy no cambia (el banco y la vista previa no pasa
     const frag = renderMarkdown('mira [la política](https://evil.example/x)', { onLink: () => {} })
     eq(forma(frag), { '#fragment': [{ 'p.md-p': ['mira ', { a: ['la política'] }] }] })
     eq(frag.children[0].children[1].href, 'https://evil.example/x')
+  })
+})
+
+// --- H24: la valla dice si cerró, y el bloque de código tiene un gancho --------
+//
+// El diagrama sólo se dibuja con la valla CERRADA: durante el streaming una
+// valla abierta es código a medio escribir, y dibujarla daría un diagrama a
+// trozos que cambia en cada frame. Hasta H24 `parseBlocks` consumía hasta el
+// cierre o el final del texto sin distinguir un caso del otro (hecho M1: el
+// `i++` del cierre corría en los dos). `onCodeBlock` es el gancho por el que el
+// panel sustituye el `pre` por el dibujo; sin él, todo como siempre.
+
+test('markdown H24: el bloque de código dice si su valla cerró (closed), con ``` y con ~~~', () => {
+  const cerrada = parseBlocks('```mermaid\nflowchart LR\nA --> B\n```\ndespués')
+  eq(Object.keys(cerrada[0]).sort(), ['closed', 'lang', 'text', 'type'], 'claves EXACTAS del bloque de código')
+  eq(cerrada[0], { type: 'code', lang: 'mermaid', text: 'flowchart LR\nA --> B', closed: true })
+  eq(cerrada[1], { type: 'paragraph', text: 'después' }, 'lo de detrás de la valla sigue siendo prosa')
+  eq(parseBlocks('~~~\nx\n~~~')[0], { type: 'code', lang: '', text: 'x', closed: true }, 'con ~~~ también')
+  eq(parseBlocks('```\nx\n`````')[0].closed, true, 'más acentos que la apertura cierran si el carácter es el mismo')
+  eq(parseBlocks('```mermaid\nflowchart LR\nA --> B')[0], { type: 'code', lang: 'mermaid', text: 'flowchart LR\nA --> B', closed: false }, 'sin cierre: consume hasta el final y lo dice')
+  eq(parseBlocks('~~~\nx')[0].closed, false)
+  // Como hoy: una valla de ``` no la cierra una de ~~~ (ni con más), así que
+  // la de ~~~ es texto del bloque y éste sigue abierto hasta el final.
+  eq(parseBlocks('```\nx\n~~~~\ny')[0], { type: 'code', lang: '', text: 'x\n~~~~\ny', closed: false })
+  eq(parseBlocks('```\n```')[0], { type: 'code', lang: '', text: '', closed: true }, 'vacía y cerrada')
+  eq(parseBlocks('```')[0], { type: 'code', lang: '', text: '', closed: false }, 'sólo la apertura: abierta')
+})
+
+test('renderMarkdown H24: sin onCodeBlock el código se pinta como siempre, y un onCodeBlock que devuelve null deja el pre', () => {
+  conDocument(() => {
+    const textos = [
+      'antes\n\n```js\nconst a = 1\n```\n\ndespués',
+      '~~~\nsin lenguaje\n~~~',
+      '```mermaid\nflowchart LR\nA --> B',
+    ]
+    const esperadas = [
+      { '#fragment': [{ 'p.md-p': ['antes'] }, { 'pre.md-pre': [{ code: ['const a = 1'] }] }, { 'p.md-p': ['después'] }] },
+      { '#fragment': [{ 'pre.md-pre': [{ code: ['sin lenguaje'] }] }] },
+      { '#fragment': [{ 'pre.md-pre': [{ code: ['flowchart LR\nA --> B'] }] }] },
+    ]
+    const lenguajes = (frag) => frag.children.filter((c) => c.tagName === 'pre').map((pre) => pre.children[0].dataset.lang)
+    textos.forEach((texto, i) => {
+      const frag = renderMarkdown(texto, { onLink: () => {}, onNote: () => {}, allowHref: () => true })
+      eq(forma(frag), esperadas[i], `sin onCodeBlock, byte a byte lo de siempre (${i})`)
+      eq(lenguajes(frag), [['js', undefined, 'mermaid'][i]], 'data-lang sólo con lenguaje')
+    })
+    const recibidos = []
+    textos.forEach((texto, i) => {
+      const frag = renderMarkdown(texto, {
+        onCodeBlock: (block, pre) => {
+          recibidos.push([block, forma(pre)])
+          return i === 0 ? null : undefined
+        },
+      })
+      eq(forma(frag), esperadas[i], `null o undefined: el pre de siempre (${i})`)
+    })
+    eq(recibidos, [
+      [{ lang: 'js', text: 'const a = 1', closed: true }, { 'pre.md-pre': [{ code: ['const a = 1'] }] }],
+      [{ lang: '', text: 'sin lenguaje', closed: true }, { 'pre.md-pre': [{ code: ['sin lenguaje'] }] }],
+      [{ lang: 'mermaid', text: 'flowchart LR\nA --> B', closed: false }, { 'pre.md-pre': [{ code: ['flowchart LR\nA --> B'] }] }],
+    ], 'el gancho recibe {lang, text, closed} y el pre YA construido; la valla sin cerrar llega con closed: false')
+  })
+})
+
+test('renderMarkdown H24: un onCodeBlock que devuelve un nodo lo pone EN LUGAR del pre, y sólo en ese bloque', () => {
+  conDocument(() => {
+    const pres = []
+    const frag = renderMarkdown('uno\n\n```mermaid\nflowchart LR\nA --> B\n```\n\n```js\nx\n```', {
+      onCodeBlock: (block, pre) => {
+        pres.push(pre)
+        if (block.lang !== 'mermaid' || !block.closed) return null
+        const figura = document.createElement('figure')
+        figura.className = 'dg-wrap'
+        figura.textContent = 'dibujo de ' + block.text.split('\n')[1]
+        return figura
+      },
+    })
+    eq(forma(frag), {
+      '#fragment': [{ 'p.md-p': ['uno'] }, { 'figure.dg-wrap': ['dibujo de A --> B'] }, { 'pre.md-pre': [{ code: ['x'] }] }],
+    })
+    eq(pres.length, 2, 'una llamada por bloque de código')
+    assert(frag.children[2] === pres[1], 'el pre que se devolvió null es el mismo que se construyó')
+    // Lo que no es un nodo (una cadena, un número) no se cuela en el árbol.
+    const otra = renderMarkdown('```\nx\n```', { onCodeBlock: () => '<img src=x onerror=alert(1)>' })
+    eq(forma(otra), { '#fragment': [{ 'pre.md-pre': [{ code: ['x'] }] }] }, 'SEGURIDAD: una cadena no es un nodo: el pre')
   })
 })

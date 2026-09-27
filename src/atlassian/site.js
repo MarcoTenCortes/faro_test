@@ -351,8 +351,16 @@ export function sinInvisibles(text) {
   return String(text ?? '').replace(INVISIBLES, '')
 }
 
-/** Una línea, sin invisibles y sin espacios en los bordes. Pura. */
-function unaLinea(text) {
+/**
+ * Una línea, sin invisibles y sin espacios en los bordes. Pura.
+ *
+ * Se exporta desde H24 para las etiquetas de un diagrama (diagram-parse.js):
+ * lo que escribe el modelo dentro de un nodo acaba en el SVG del chat, y un
+ * RLO o un NEL ahí hacen lo mismo que en el chip de la cabecera. Una tercera
+ * copia de `ESPACIOS` sería una lista que se queda a medias el día que alguien
+ * añada un carácter a ésta.
+ */
+export function unaLinea(text) {
   return sinInvisibles(text).replace(ESPACIOS, ' ').trim()
 }
 

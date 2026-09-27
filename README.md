@@ -575,6 +575,15 @@ Veinte decisiones que sostienen el diseño:
      pedirlas a Jira. Debajo de tu pregunta se dice lo que fue: «con los 10
      resultados de una búsqueda previa». Van la clave, el estado, el tipo y el
      resumen; nunca de quién es una incidencia.
+   - **Y puedes pedir el flujo dibujado** (desde H24). Bajo una respuesta que
+     cita tres incidencias o más hay un botón, *Dibujar el flujo*: como el de
+     arriba, te deja la pregunta escrita y no manda nada. Cualquier respuesta
+     que traiga un bloque ```mermaid cerrado se dibuja en el chat —Faro lo
+     pinta él mismo, sin librerías y sin ejecutar nada de lo que escribió el
+     modelo—; cada nodo con su clave te lleva a la incidencia por el mismo
+     camino que una fila de la lista, «Ver como lista» lo cuenta en texto y
+     «Copiar como Mermaid» lo deja listo para pegar en Excalidraw. Si Faro no
+     entiende el diagrama, deja el código y dice por qué.
    - **El chat vacío ofrece hasta cuatro búsquedas al instante.** «Misma épica
      ENG-1», «Mis abiertas de ENG», «Filtro: API en revisión»… Las tres
      sugerencias de al lado son preguntas para el modelo; estas no pasan por él.
@@ -734,7 +743,7 @@ cuáles no), que desde H16 son tuyos y no de un sitio.
 ## Comprobaciones
 
 ```bash
-npm run check              # sintaxis + orden + manifest + 1498 pruebas unitarias + docs
+npm run check              # sintaxis + orden + manifest + 1555 pruebas unitarias + docs
 npm run check:docs         # sólo el paso docs: número de pruebas, títulos del registro, mensajes y ficheros del mapa
 npm run test:integration   # contra un opencode real que arranca la propia prueba
 npm run harness            # banco de pruebas visual en http://127.0.0.1:5175
@@ -1361,6 +1370,9 @@ src/
     rest-notice.js          cuándo se te avisa de que una lectura de la API no salió (una vez por sitio, sesión y motivo) y con qué palabras (puro)
     search-chips.js         las búsquedas al instante: qué consultas se ofrecen y cuáles ejecuta Faro (puro)
     notes.js                observaciones numeradas: el bloque JSON de anclas, su validación, la segunda pasada (puro)
+    diagram-parse.js        el diagrama Mermaid que escribe el modelo, leído con claves blancas; y copiarlo como Mermaid (puro, H24)
+    diagram-layout.js       dónde va cada caja y cada flecha del diagrama (puro, H24)
+    diagram-view.js         el diagrama pintado en SVG, sin innerHTML: nodos que abren su incidencia, «Ver como lista» (H24)
     issue-profile.js        qué ticket es: tipo y estado leídos de sus campos → qué comprobar en el análisis (puro)
     prompts.js              plantillas, incluido el bloque de lo señalado y la página en bloques
   background/               orquestador del recorrido paso a paso

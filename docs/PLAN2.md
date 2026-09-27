@@ -1565,6 +1565,26 @@ Reglas transversales, que salen de los dos juicios y valen para todos:
   `panel-css`/`contrast` en verde; espejo a 320.
 - **Riesgo**: medio. La tolerancia del parser a lo que escriben los modelos
   pequeños y el layout propio en grafos densos.
+- **Hecho el 2026-09-27** (rama `plan/h24-diagramas` sobre 9cfc93d, sin
+  commit todavía: pendiente de la verificación del orquestador y de su
+  revisión adversaria; contrato en `docs/plan/handoff/h24-contrato.md`): todo
+  lo de «Qué» menos lo que se deja a propósito —la viñeta del prompt, que
+  espera a `npm run turn` sobre un Análisis real (un turno de pago: Marco), y
+  «Descargar .excalidraw», que no hace falta porque Excalidraw importa el
+  `flowchart` pegado (verificado en el navegador el mismo día)—. Los tres
+  módulos (`diagram-parse.js` con `readFlowchart`/`toMermaid`/
+  `citedIssueKeys`, `diagram-layout.js`, `diagram-view.js`), `unaLinea`
+  exportada de site.js, `closed` y `onCodeBlock` en markdown.js,
+  `drawCodeBlock` en las cuatro llamadas, `abrirNodoDelDiagrama` por
+  `openIssueFromResults`, «Dibujar el flujo» con `state.pendingDiagram`, la
+  salida `esDiagrama` de `offerNotes` con el título «Diagrama» (no «Sin
+  marcas», para que el pin de §8.14 siga entero), `answerAnnouncement` sin
+  vallas, la familia `.dg-*`, el diagrama en «Jira · SIMPL-1234» del espejo.
+  Desvíos: DOS parejas de contraste nuevas y no cuatro (las otras dos ya se
+  medían); la vista toma las `x`/`y` de un nodo como su centro y el layout
+  las da como esquina (incidencia abierta al cerrar, docs/BITACORA.md §12.5).
+  1555 pruebas (+57), 167 mutaciones (64 + 39 + 64), todas cazadas, y las 40
+  instantáneas intactas. La bitácora, en docs/BITACORA.md §12.5.
 
 ### H25 · Condicionados: «Rotulador» con host de mezcla, y el grafo exacto de issuelinks
 

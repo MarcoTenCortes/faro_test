@@ -272,6 +272,9 @@ async function arrancar() {
     { preloadNote },
     { clockTime },
     { emptyContexts, linkedSpacesFor, withContext },
+    { readFlowchart, toMermaid },
+    { layoutDiagram },
+    { diagramNode, textMeasurer },
   ] = await Promise.all([
     import('/src/panel/setup.js'),
     import('/src/panel/markdown.js'),
@@ -290,6 +293,11 @@ async function arrancar() {
     import('/src/panel/prompts.js'),
     import('/src/shared/format.js'),
     import('/src/shared/scopes.js'),
+    // H24: el diagrama de la tercera respuesta de Jira lo leen, lo colocan y lo
+    // pintan los módulos REALES, como en el panel (`respuestaConDiagrama`).
+    import('/src/panel/diagram-parse.js'),
+    import('/src/panel/diagram-layout.js'),
+    import('/src/panel/diagram-view.js'),
   ])
 
   const $ = (id) => doc.getElementById(id)
@@ -1411,6 +1419,75 @@ async function arrancar() {
     chat.appendChild(b2)
   }
 
+  /**
+   * H24: la fila de «Dibujar el flujo» que el panel cuelga bajo una respuesta de
+   * Jira que cita tres incidencias o más, con la clase con la que nace allí
+   * (`diagramButton`: `ghost small` + `NEEDS_IDLE`).
+   */
+  function filaDibujarElFlujo() {
+    const fila = mk('div', 'nav-actions')
+    fila.appendChild(mk('button', 'ghost small needs-idle', 'Dibujar el flujo'))
+    return fila
+  }
+
+  /**
+   * H24: la respuesta a «Dibujar el flujo», con un ```mermaid de seis nodos (el
+   * del anexo 2-E: :::riesgo, :::hueco, :::contradiccion, un «&», aristas con
+   * etiqueta y un subgrafo) pintado con el `renderMarkdown` REAL y un
+   * `onCodeBlock` que hace lo que `drawCodeBlock` del panel: `readFlowchart` →
+   * `layoutDiagram` con la medida real → `diagramNode`, con las observaciones 1,
+   * 2 y 3 como existentes (sus insignias salen). Los clics sólo escriben en la
+   * consola. Declaraciones `function`, no `const`: la lección TDZ de H17.
+   */
+  function respuestaConDiagrama() {
+    const texto = [
+      'El flujo entre las seis incidencias; el riesgo se concentra en ENG-12 y en quién revoca la clave vieja.',
+      '',
+      '```mermaid',
+      'flowchart TD',
+      '  A[ENG-1 Épica: rotación de credenciales] --> B["ENG-7 Definir la API de rotación [1]"]',
+      '  B --> C["ENG-12 Backend de rotación [2]"]:::riesgo & D[OPS-2 Runbook de guardia]',
+      '  C -.->|depende de| E{ENG-20 ¿Quién revoca la clave vieja? [3]}:::hueco',
+      '  D --> E',
+      '  E -->|contradice| F[ENG-3 Tokens de 90 días]:::contradiccion',
+      '  A --> F',
+      '  subgraph S [Sprint 1]',
+      '    C',
+      '    D',
+      '  end',
+      '```',
+    ]
+    const b = mk('div', 'msg assistant')
+    const cuerpo = doc.createElement('div')
+    cuerpo.appendChild(
+      renderMarkdown(texto.join('\n'), {
+        onNote: (n) => console.log('ir a la observación', n),
+        onCodeBlock: dibujarEnElEspejo,
+      })
+    )
+    b.appendChild(cuerpo)
+    return b
+
+    function dibujarEnElEspejo(block, pre) {
+      if (block.lang !== 'mermaid' || !block.closed) return null
+      const d = readFlowchart(block.text)
+      if (!d.ok) {
+        console.warn('[espejo] diagrama sin dibujar:', d.errores[0])
+        return null
+      }
+      const fuente = doc.defaultView.getComputedStyle(chat).font || '12px sans-serif'
+      const layout = layoutDiagram(d, { measure: textMeasurer(fuente) })
+      return diagramNode(d, layout, {
+        onOpen: (ref) => console.log('[espejo] abrir', ref.kind, ref.id),
+        onNote: (n) => console.log('[espejo] ir a la observación', n),
+        onCopy: (mermaid) => console.log('[espejo] copiar como Mermaid', mermaid.length, 'caracteres'),
+        notes: new Set([1, 2, 3]),
+        mermaid: toMermaid(d),
+        uid: 'dg-espejo',
+      })
+    }
+  }
+
   function conversacionJira() {
     // Es la conversación larga: la ventana de la restauración vino llena, así
     // que arriba del todo va la fila que ofrece traer el resto (H6).
@@ -1477,6 +1554,9 @@ async function arrancar() {
       ])
     )
     b1.appendChild(prosa(texto, true))
+    // H24: «Dibujar el flujo», que el panel cuelga justo detrás de la prosa
+    // (antes de los avisos y de la tarjeta de observaciones).
+    b1.appendChild(filaDibujarElFlujo())
     b1.appendChild(
       tarjetaNotas({
         kicker: 'Marcado en la incidencia',
@@ -1514,6 +1594,17 @@ async function arrancar() {
     // conversación ya arrastra más de lo que conviene reenviar (H6).
     b1.appendChild(avisoConversacionPesada())
     chat.appendChild(b1)
+
+    // H24: el usuario pulsó «Dibujar el flujo» y mandó la pregunta que dejó
+    // escrita (la de `DIAGRAM_QUESTION` del panel), con su nota debajo; y la
+    // respuesta trae el diagrama, dibujado.
+    chat.appendChild(
+      burbujaUsuario(
+        'Dibuja el flujo entre las incidencias de tu última respuesta como un diagrama Mermaid «flowchart LR» dentro de un bloque ```mermaid: como mucho 15 nodos, cada nodo con la clave de la incidencia como primera palabra de su etiqueta y después su resumen corto; :::riesgo, :::hueco o :::contradiccion en lo que falle, y el número [n] de la observación que lo respalde. Sólo el diagrama y una frase.',
+        'dibujar el flujo'
+      )
+    )
+    chat.appendChild(respuestaConDiagrama())
 
     chat.appendChild(tarjetaPermiso(SITIOS.jira.host))
     chat.appendChild(avisoMcpSinConectar())
@@ -2424,6 +2515,10 @@ async function arrancar() {
     // H22: el selector del espacio enlazado, con una opción larga («Automático
     // (hoy DCPIAS, por el contexto)») que no puede empujar Ajustes a lo ancho.
     '#set-linked-space-field',
+    // H24: el diagrama de la tercera respuesta de Jira. Encoge con su viewBox
+    // (`max-width: 100%`); lo que esto caza es que algo de la figura —la lista,
+    // la fila de «Copiar como Mermaid»— la empuje a lo ancho.
+    '.dg-wrap',
     // H15: el consejo del MCP caído en las dos mitades de la pantalla de claves,
     // con el comando para copiar (su `code` desplaza a lo ancho dentro de su
     // caja; lo que esto caza es que la caja entera se salga).

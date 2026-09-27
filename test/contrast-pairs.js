@@ -53,6 +53,13 @@ export const TEXTO = [
   ['--danger', '--surface', 'aviso y error'],
   ['--danger', '--ground', 'el botón «Borrar» y un aviso en rojo sobre el fondo de una pantalla'],
   ['--danger', '--danger-bg', 'fila de error del registro'],
+  // H24: la etiqueta de un nodo del diagrama de tipo riesgo o contradicción, y
+  // la de uno de tipo hueco o supuesto. Lo demás que dibuja el diagrama ya se
+  // mide y no se repite: los bordes `--danger`, `--gold` y `--ok` sobre el fondo
+  // del chat (`--ground`) están arriba a 4,5, como texto, y el de un nodo normal
+  // y las aristas (`--hairline-strong` sobre `--ground`) en CONTROL.
+  ['--ink', '--danger-bg', 'etiqueta de un nodo de riesgo o contradicción del diagrama'],
+  ['--ink', '--gold-bg', 'etiqueta de un nodo de hueco o supuesto del diagrama'],
 ]
 
 /**

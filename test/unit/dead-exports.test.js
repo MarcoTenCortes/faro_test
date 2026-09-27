@@ -98,7 +98,6 @@ const pendientesPlanos = Object.fromEntries(
  */
 const EXPORTADAS_SIN_IMPORTAR = {
   'src/atlassian/index-store.js': ['rankByRelevance'],
-  'src/atlassian/site.js': ['validIssueKey'],
   'src/content/anchor-match.js': ['findFuzzyTokens', 'findFuzzy'],
   'src/content/anchor.js': ['findHeadingElement'],
   'src/content/digest.js': ['isBlock', 'tagLabel'],

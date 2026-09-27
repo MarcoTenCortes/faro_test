@@ -620,6 +620,25 @@ test('SEGURIDAD: el título de una pestaña entra en una línea, acotado y sin c
   eq(locationParts(SITIO_CONF, 'Gu\u202Eía de APIs - Ingeniería - Confluence').title, 'Guía de APIs - Ingeniería')
 })
 
+import { unaLinea } from '../../src/atlassian/site.js'
+
+test('SEGURIDAD: unaLinea, exportada para las etiquetas del diagrama (H24), deja una línea sin invisibles', () => {
+  // Compuestos con fromCharCode: escritos crudos no se ven, y con la barra y la
+  // u dentro de una regex los mangla el editor (L2-07).
+  const NEL = String.fromCharCode(0x85)
+  const LS = String.fromCharCode(0x2028)
+  const PS = String.fromCharCode(0x2029)
+  const RLO = String.fromCharCode(0x202e)
+  const ZWSP = String.fromCharCode(0x200b)
+  eq(unaLinea(`  uno${NEL}dos${LS}tres${PS}cuatro\r\n\tcinco  `), 'uno dos tres cuatro cinco', 'los saltos, NEL incluido, son un espacio')
+  eq(unaLinea(`EN${RLO}G-${ZWSP}1`), 'ENG-1', 'el RLO y el espacio de ancho cero se BORRAN, no se colapsan')
+  eq(unaLinea(`a ${ZWSP} b`), 'a b', 'y antes de colapsar: no queda un espacio doble')
+  eq(unaLinea('<img src=x onerror=alert(1)>'), '<img src=x onerror=alert(1)>', 'lo que se ve se queda tal cual')
+  eq([unaLinea(null), unaLinea(undefined), unaLinea(12)], ['', '', '12'], 'y aguanta lo que no es texto')
+  // Es la misma limpieza que la del título de la pestaña: una sola lista.
+  eq(unaLinea(`Guía${NEL}de APIs`), cleanTabTitle(`Guía${NEL}de APIs`))
+})
+
 test('locationParts: la clave identifica el sitio y el título de la pestaña es lo que cede', () => {
   eq(locationParts(SITIO_CONF, 'Guía de APIs - Ingeniería - Confluence'), {
     // Sin «Confluence · » delante: a 320 px con cinco botones no cabía ni sola.

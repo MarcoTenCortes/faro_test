@@ -1487,3 +1487,67 @@ html.faro-still .busy-bar i { animation: none; width: 100%; }
   transition: color var(--dur-1) ease;
 }
 .today-more:hover { color: var(--ink); }
+
+/* ----------------------------------------------------- Diagramas (H24) */
+
+/* El diagrama que `drawCodeBlock` pinta en lugar de un ```mermaid cerrado: un
+   SVG propio (diagram-view.js), no Mermaid. Aquí sólo colores y letra, sobre
+   tokens y en los dos temas; las medidas de las figuras (radios, insignias,
+   puntas) van como ATRIBUTOS del SVG desde la vista y el layout, porque aquí
+   sólo caben px de la escala. Los colores se ponen en el `<g>` del nodo y los
+   heredan su rect, su polygon o su ellipse: `fill` y `stroke` se heredan en
+   SVG, y así un tipo de observación cambia la figura sin nombrar cada forma.
+   La figura cabe a lo ancho encogiéndose (`max-width: 100%` con su viewBox);
+   `overflow-x: auto` es la red si algo no encoge. */
+.dg-wrap { margin: var(--s2) 0; overflow-x: auto; }
+.dg-svg { display: block; max-width: 100%; height: auto; }
+
+/* Los subgrafos, debajo de todo: un marco decorativo con su título. */
+.dg-sub { fill: none; stroke: var(--hairline); }
+.dg-sub text { fill: var(--muted); stroke: none; font-size: var(--text-2xs); }
+
+/* Las aristas: el borde de los controles, y el punteado y el grueso por CLASE
+   (la vista no escribe ningún estilo en línea). */
+.dg-edge { fill: none; stroke: var(--hairline-strong); stroke-width: 1; }
+.dg-edge-dotted { stroke-dasharray: 4 4; }
+.dg-edge-thick { stroke-width: 2; }
+/* La etiqueta de una arista, con un halo del color del chat: la línea que pasa
+   por debajo no la tacha. */
+.dg-edge-label {
+  fill: var(--muted);
+  font-size: var(--text-2xs);
+  stroke: var(--ground);
+  stroke-width: 3;
+  stroke-linejoin: round;
+  paint-order: stroke;
+}
+
+/* Los nodos, sobre una tarjeta; el texto sin trazo, que heredaría el del nodo. */
+.dg-node { fill: var(--surface); stroke: var(--hairline-strong); }
+.dg-label { fill: var(--ink); stroke: none; font-size: var(--text-xs); }
+
+/* Los tipos de observación de NOTE_KINDS, con los colores de la tarjeta de
+   observaciones: lo que falla en rojo, lo que falta o se supone en dorado. */
+.dg-riesgo { fill: var(--danger-bg); stroke: var(--danger); }
+.dg-contradiccion { fill: var(--danger-bg); stroke: var(--danger); }
+.dg-hueco { fill: var(--gold-bg); stroke: var(--gold); }
+.dg-supuesto { fill: var(--gold-bg); stroke: var(--gold); }
+.dg-dato { stroke: var(--ok); }
+
+/* Un nodo con clave es un botón: navega al pulsarlo (por validatePlan). Con el
+   teclado, el foco lo lleva la figura en ámbar, además del anillo de siempre. */
+.dg-link { cursor: pointer; }
+.dg-link:focus-visible { stroke: var(--mark); stroke-width: 2; }
+
+/* La insignia [n] de una observación que existe: la pastilla del chat. */
+.dg-note { cursor: pointer; }
+.dg-note circle { fill: var(--mark); stroke: none; }
+.dg-note text { fill: var(--on-mark); stroke: none; font-size: var(--text-2xs); }
+
+/* «Ver como lista», la alternativa en texto, y la fila de «Copiar como Mermaid». */
+.dg-list { font-size: var(--text-sm); color: var(--ink-2); }
+.dg-list summary { color: var(--muted); cursor: pointer; }
+.dg-actions { margin-top: var(--s2); }
+
+/* Lo que no se ha podido dibujar: el código de siempre con el motivo debajo. */
+.dg-fallback { margin: var(--s2) 0; }

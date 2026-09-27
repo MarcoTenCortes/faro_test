@@ -99,6 +99,11 @@ import {
   getModelChecks, recordModelChecks, clearModelChecks,
 } from '../shared/storage.js'
 import { renderMarkdown } from './markdown.js'
+// Los diagramas del chat (H24): un ```mermaid cerrado se lee con un parser
+// propio, se coloca y se pinta en SVG sin innerHTML (`drawCodeBlock`).
+import { readFlowchart, toMermaid, citedIssueKeys, DIAGRAM_LIMITS } from './diagram-parse.js'
+import { layoutDiagram } from './diagram-layout.js'
+import { diagramNode, textMeasurer } from './diagram-view.js'
 import { SKILLS, DEFAULT_SKILL, skillById } from './skills.js'
 import { pickLabel } from '../content/pick-payload.js'
 import { prettyTool, clockTime, formatBytes } from '../shared/format.js'
@@ -526,6 +531,11 @@ const state = {
   // panel puede haberse ido a otro sitio (§8.22). Nunca se guardan: son los
   // resultados de AHORA, y una lista de ayer no es una precarga, es un engaño.
   pendingPreload: null,
+  // «Dibujar el flujo» (H24): `{host}` o null. El botón deja la pregunta ESCRITA
+  // y apunta aquí que la próxima es para dibujar, con el host donde se pulsó;
+  // `send()` lo consume como la precarga, y `offerNotes` sabe así que una
+  // respuesta que es un diagrama no es un análisis que marcar. Sólo memoria.
+  pendingDiagram: null,
   // La intención de «Analizar» que dejó una fila de «hoy»: se navega y, cuando
   // la pestaña llega a esa página, se fija la Skill Análisis y se deja la
   // pregunta ESCRITA en el cuadro, sin mandarla (§8.20: Faro nunca manda una
@@ -656,6 +666,8 @@ async function refreshTab() {
     // el origen), y además `send()` descarta lo precargado de otro host con el
     // que capturó al pedir, que es la guarda que de verdad manda (§8.22).
     state.pendingPreload = null
+    // Y «Dibujar el flujo» (H24), por lo mismo: era sobre la respuesta de aquí.
+    state.pendingDiagram = null
   }
   state.tabId = tab.id
 
@@ -2698,7 +2710,7 @@ async function restoreConversation(testigo = state.bootToken, { all = false } = 
         if (porOriginal) {
           const cuerpo = porOriginal.bubble
           cuerpo.textContent = ''
-          cuerpo.append(renderMarkdown(prose, { onLink: openUrl, onNote: focusNote, allowHref: linkAllowed }))
+          cuerpo.append(renderMarkdown(prose, { onLink: openUrl, onNote: focusNote, onCodeBlock: drawCodeBlock, allowHref: linkAllowed }))
         }
         if (dueña) {
           state.noteRows = new Map()
@@ -3085,7 +3097,7 @@ function addAssistantMessage(text) {
   const d = document.createElement('div')
   d.className = 'msg assistant'
   markIfRestored(d)
-  d.appendChild(renderMarkdown(text, { onLink: openUrl, onNote: focusNote, allowHref: linkAllowed }))
+  d.appendChild(renderMarkdown(text, { onLink: openUrl, onNote: focusNote, onCodeBlock: drawCodeBlock, allowHref: linkAllowed }))
   el.chat.appendChild(d)
   return d
 }
@@ -3150,11 +3162,20 @@ function announce(text) {
   while (el.announcer.children.length > 4) el.announcer.firstChild.remove()
 }
 
-/** Lo que se anuncia al terminar un turno: que hay respuesta, cuántas observaciones, y su arranque. */
+/**
+ * Lo que se anuncia al terminar un turno: que hay respuesta, cuántas observaciones, y su arranque.
+ *
+ * El código no se lee en voz alta: desde H24 una respuesta puede traer un
+ * diagrama Mermaid, y leerle al lector de pantalla «flowchart LR A --> B» no
+ * dice nada (el diagrama tiene su propio título y su lista). Por eso fuera las
+ * vallas ``` y ~~~ cerradas, y una que quede abierta hasta el final.
+ */
 function answerAnnouncement(answer) {
   const n = numberedIn(answer).length
   const plano = String(answer || '')
     .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/~~~[\s\S]*?~~~/g, ' ')
+    .replace(/(```|~~~)[\s\S]*$/, ' ')
     .replace(/[*_`#>]+/g, '')
     .replace(/\s+/g, ' ')
     .trim()
@@ -3193,6 +3214,11 @@ async function send() {
   const preload = state.pendingPreload
   state.pendingPreload = null
   const preloadAlPedir = preload?.host === state.site.host ? preload : null
+  // Y «Dibujar el flujo» (H24), igual: la pregunta que dejó escrita el botón es
+  // ESTA, y sólo cuenta en el sitio donde se pulsó (§8.22).
+  const diagrama = state.pendingDiagram
+  state.pendingDiagram = null
+  const diagramaAlPedir = !!diagrama && diagrama.host === state.site.host
 
   el.input.value = ''
   autoGrow()
@@ -3294,6 +3320,9 @@ async function send() {
         // Lo precargado se dice igual que lo señalado y las páginas base: mandar
         // contexto sin que se vea sería mandarlo a espaldas de quien pregunta.
         preloadNote(preloadDelTurno),
+        // Y que la pregunta es la de «Dibujar el flujo» (H24): se dice como lo
+        // demás que el panel sabe del turno y el usuario no escribió.
+        diagramaAlPedir ? 'dibujar el flujo' : '',
       ]
         .filter(Boolean)
         .join(' · ')
@@ -3540,6 +3569,17 @@ async function send() {
     // Una vez, al final: mientras llegaba a trozos el chat estaba «ocupado».
     announce(answerAnnouncement(answer))
 
+    // «Dibujar el flujo» (H24): una respuesta de Jira que cita tres incidencias o
+    // más ofrece dibujarlas, y el botón sólo deja la pregunta escrita (§8.20).
+    // No con una respuesta que ya trae su diagrama. Ya se sabe que el panel
+    // sigue en el sitio que preguntó: la salida de `!mismoSitio` va arriba.
+    if (productoAlPedir === 'jira' && citedIssueKeys(answer).length >= DIAGRAM_LIMITS.offerMinKeys && !/^\s*(```|~~~)\s*mermaid/m.test(answer)) {
+      const fila = document.createElement('div')
+      fila.className = 'nav-actions'
+      fila.appendChild(diagramButton())
+      attachToBubble(bubble, fila)
+    }
+
     // Con páginas base: si no había quien las leyera, o si en alcance
     // exclusivo el modelo consultó fuera de la lista, se dice bajo la
     // respuesta. Con lo capturado al mandar, no con el estado de ahora.
@@ -3614,6 +3654,8 @@ async function send() {
       product: productoAlPedir,
       question: text,
       parts: turn.parts,
+      // Una respuesta a «Dibujar el flujo» no es un análisis que marcar (H24).
+      esDiagrama: diagramaAlPedir,
       // Si la numeración se adapta o se pone a posteriori, la burbuja se
       // repinta con la prosa nueva (y la memoria del turno la sigue).
       repaint: (prose) => {
@@ -3625,7 +3667,7 @@ async function send() {
         const destino = body.isConnected ? body : liveBubble(null)
         if (!destino) return
         destino.textContent = ''
-        destino.appendChild(renderMarkdown(prose, { onLink: openUrl, onNote: focusNote, allowHref: linkAllowed }))
+        destino.appendChild(renderMarkdown(prose, { onLink: openUrl, onNote: focusNote, onCodeBlock: drawCodeBlock, allowHref: linkAllowed }))
       },
     })
     // Sólo en Análisis: en los demás modos `offerNotes` no hace nada y la fase
@@ -3710,7 +3752,7 @@ function paintTurn(tracker, toolsBox, body, final = false) {
   }
   if (prose) {
     body.textContent = ''
-    body.appendChild(renderMarkdown(prose, { onLink: openUrl, onNote: focusNote, allowHref: linkAllowed }))
+    body.appendChild(renderMarkdown(prose, { onLink: openUrl, onNote: focusNote, onCodeBlock: drawCodeBlock, allowHref: linkAllowed }))
   }
   // Mientras se reconstruye a trozos, la burbuja está «ocupada» para el
   // lector de pantalla; lo que hay que decir se dice al final (A2).
@@ -5306,6 +5348,130 @@ async function openIssueFromResults(key, { site, card }) {
   }
 }
 
+// ------------------------------------------------------------ diagramas (H24)
+
+/**
+ * La pregunta que deja ESCRITA «Dibujar el flujo».
+ *
+ * Sin claves, sin host y sin título (§8.20, la misma regla que
+ * `PRELOAD_QUESTION`): «tu última respuesta» ya está en la sesión, y lo que se
+ * ofrece escrito acaba en un prompt en cuanto el usuario pulsa enviar. Pide lo
+ * que el parser sabe leer (`readFlowchart`): un `flowchart` en su valla, la
+ * clave como primera palabra de cada etiqueta —de ahí sale el nodo que navega—
+ * y las clases de `NOTE_KINDS`.
+ */
+const DIAGRAM_QUESTION = 'Dibuja el flujo entre las incidencias de tu última respuesta como un diagrama Mermaid «flowchart LR» dentro de un bloque ```mermaid: como mucho 15 nodos, cada nodo con la clave de la incidencia como primera palabra de su etiqueta y después su resumen corto; :::riesgo, :::hueco o :::contradiccion en lo que falle, y el número [n] de la observación que lo respalde. Sólo el diagrama y una frase.'
+
+/**
+ * «Dibujar el flujo»: el botón que cuelga de una respuesta de Jira que cita tres
+ * incidencias o más (H24).
+ *
+ * NO manda nada (§8.20), como «Preguntar sobre estos»: escribe la pregunta en el
+ * cuadro, deja el foco ahí y apunta con el host del momento que el turno
+ * siguiente es para dibujar (`state.pendingDiagram`, que consume `send()`). La
+ * viñeta en el prompt de Análisis se descartó a propósito (docs/PLAN2.md §8.10):
+ * las 40 instantáneas no cambian. `NEEDS_IDLE`, como los demás botones del chat:
+ * nace con el turno todavía en vuelo.
+ */
+function diagramButton() {
+  const b = document.createElement('button')
+  b.className = 'ghost small ' + NEEDS_IDLE
+  b.type = 'button'
+  b.textContent = 'Dibujar el flujo'
+  b.title = 'Deja escrita la pregunta que pide el diagrama: la mandas tú'
+  b.disabled = state.streaming
+  b.addEventListener('click', () => {
+    if (state.streaming) return
+    state.pendingDiagram = { host: state.site?.host || '' }
+    log.info('Diagrama', 'pregunta preparada · sin mandar')
+    el.input.value = DIAGRAM_QUESTION
+    autoGrow()
+    el.input.focus()
+    announce('Pregunta preparada: puedes cambiarla antes de enviarla.')
+  })
+  return b
+}
+
+/**
+ * El último texto de diagrama que se apuntó en el Registro: `paintTurn` repinta
+ * la burbuja entera en cada trozo del streaming, y el mismo diagrama se dibuja
+ * muchas veces; se apunta una.
+ */
+let ultimoDiagramaRegistrado = ''
+/** Los `uid` de los diagramas: dos en el mismo chat no comparten `marker` ni título. */
+let contadorDiagramas = 0
+/** El medidor de texto con la fuente del chat, creado una vez (`medirTextoDelPanel`). */
+let medidorDelPanel = null
+
+/**
+ * El `onCodeBlock` de las cuatro llamadas a `renderMarkdown`: la ÚNICA función
+ * del panel que dibuja un diagrama (H24).
+ *
+ * Sólo un ```mermaid con la valla CERRADA: mientras llega a trozos se ve el
+ * código, y un diagrama a medias no se dibuja. Todo lo que hay dentro lo
+ * escribió el modelo (§8.12): lo lee `readFlowchart`, con claves blancas, y lo
+ * pinta `diagramNode` sin innerHTML. Lo que no se entiende deja el bloque de
+ * código de siempre con el motivo DEBAJO (§8.14: un fallo silencioso no). Un
+ * nodo con clave no navega por su cuenta: `abrirNodoDelDiagrama` valida al hacer
+ * clic (§8.3). Las insignias [n], sólo de las observaciones que hay (`state.notes`).
+ */
+function drawCodeBlock(block, pre) {
+  if (block.lang !== 'mermaid' || !block.closed) return null
+  const t0 = performance.now()
+  const d = readFlowchart(block.text)
+  const nuevo = block.text !== ultimoDiagramaRegistrado
+  ultimoDiagramaRegistrado = block.text
+  if (!d.ok) {
+    if (nuevo) log.info('Diagrama', 'no dibujado · ' + d.errores[0])
+    const caja = document.createElement('div')
+    caja.className = 'dg-fallback'
+    caja.append(pre, noticeNode('No he podido dibujarlo: ' + d.errores[0]))
+    return caja
+  }
+  const layout = layoutDiagram(d, { measure: medirTextoDelPanel() })
+  const figure = diagramNode(d, layout, {
+    onOpen: abrirNodoDelDiagrama,
+    onNote: focusNote,
+    onCopy: copiarMermaid,
+    notes: new Set(state.notes.map((n) => n.n)),
+    mermaid: toMermaid(d),
+    uid: 'dg' + (++contadorDiagramas),
+  })
+  if (nuevo) log.ok('Diagrama', `${d.nodes.length} nodos · ${d.edges.length} aristas · ${d.nodes.filter((n) => n.ref).length} con clave · ${Math.round(performance.now() - t0)} ms`)
+  return figure
+}
+
+/**
+ * La anchura de un texto con la fuente REAL del chat, para que el layout parta
+ * las etiquetas como las va a pintar el navegador (§9: una sola medida). Se
+ * crea una vez por panel: la fuente no cambia con el tema.
+ */
+function medirTextoDelPanel() {
+  if (!medidorDelPanel) medidorDelPanel = textMeasurer(getComputedStyle(el.chat).font || '12px sans-serif')
+  return medidorDelPanel
+}
+
+/**
+ * Un nodo del diagrama con clave de incidencia, pulsado: el MISMO camino que una
+ * fila de la lista de Jira (`openIssueFromResults`: `validatePlan` contra el
+ * índice de ahora, el aviso en la figura si no está, `runPlan('direct')`). Ni
+ * una URL aquí. `runPlan` apaga todos los botones de la tarjeta —aquí, la
+ * figura— y un salto directo no los vuelve a encender: «Copiar como Mermaid» se
+ * quedaba muerto tras abrir un nodo.
+ */
+async function abrirNodoDelDiagrama(ref, figure) {
+  if (ref?.kind !== 'jira-issue' || !state.site) return
+  await openIssueFromResults(ref.id, { site: state.site, card: figure })
+  for (const b of figure.querySelectorAll('.dg-actions button')) b.disabled = false
+}
+
+/** «Copiar como Mermaid»: al portapapeles, y al Registro sólo si de verdad se copió. */
+async function copiarMermaid(texto, boton) {
+  if (!(await copyToClipboard(texto, boton))) return
+  log.ok('Diagrama', `Mermaid copiado · ${texto.length} caracteres`)
+  announce('Diagrama copiado como Mermaid.')
+}
+
 /**
  * Subraya en la página los puntos del análisis y los numera.
  *
@@ -5342,12 +5508,22 @@ async function offerNotes(
     question = '',
     parts = [],
     repaint = null,
+    esDiagrama = false,
   } = {}
 ) {
   // De qué se habla en los avisos y en la tarjeta: en Jira lo abierto es una
   // incidencia, y «esta página» ahí significa una página de Confluence.
   const abierta = product === 'jira' ? 'esta incidencia' : 'esta página'
   if (skill !== 'analisis') return
+  // La pregunta era «Dibujar el flujo» (H24): la respuesta es un diagrama, no un
+  // análisis, y sin esto la escalera acabaría en la pasada que trocea —un turno
+  // de pago— para buscar observaciones que no hay. Sin aviso en el chat porque
+  // lo visible es el diagrama dibujado; y con el título «Diagrama» y no «Sin
+  // marcas», que en este panel siempre lleva su aviso al lado (§8.14).
+  if (esDiagrama) {
+    log.info('Diagrama', 'sin marcas: la pregunta era dibujar el flujo')
+    return
+  }
   if (!state.site || !state.tabId || !state.client) return
   if (signal?.aborted) return
 
@@ -8722,6 +8898,8 @@ function wireEvents() {
     // olvidar, con unos resultados que ya no se ven (revisión adversaria de H12;
     // el mismo motivo que en `newSession`).
     state.pendingPreload = null
+    // Y «Dibujar el flujo» (H24), por lo mismo.
+    state.pendingDiagram = null
     state.sourceHistory = emptyHistory()
     state.references = { propio: null, enlazado: null, index: null, items: null }
     state.today = emptyToday()
@@ -10726,6 +10904,8 @@ async function newSession() {
   // botón se van con él. Dejarlo puesto metería en la primera pregunta de la
   // sesión nueva unos resultados que ya no se ven por ninguna parte.
   state.pendingPreload = null
+  // Y «Dibujar el flujo» (H24): la respuesta que había que dibujar se va con el chat.
+  state.pendingDiagram = null
   forgetNotes()
   log.ok('Sesión nueva', state.settings.crossSessionMemory ? 'la anterior quedó resumida' : '')
   state.sessionID = null

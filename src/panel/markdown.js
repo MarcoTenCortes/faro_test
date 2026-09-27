@@ -27,8 +27,12 @@ export function parseBlocks(src) {
       const body = []
       i++
       while (i < lines.length && !cierre.test(lines[i])) body.push(lines[i++])
+      // ¿Se vio la línea de cierre, o se acabó el texto? Se mira ANTES del
+      // `i++`, que corre en los dos casos (H24: un diagrama sólo se dibuja con
+      // la valla cerrada; durante el streaming, una abierta es código a medias).
+      const closed = i < lines.length
       i++ // cierre
-      blocks.push({ type: 'code', lang, text: body.join('\n') })
+      blocks.push({ type: 'code', lang, text: body.join('\n'), closed })
       continue
     }
 
@@ -181,14 +185,19 @@ export function isSafeHref(href) {
 /**
  * Construye el fragmento del DOM. Sólo usable en navegador.
  *
- * @param {{onLink?:Function, onNote?:Function, allowHref?:Function}} opts
+ * @param {{onLink?:Function, onNote?:Function, onCodeBlock?:Function, allowHref?:Function}} opts
  *        `onNote` recibe el número de una marca del análisis cuando se pulsa;
  *        sin él, `[3]` es texto. `allowHref(href)` decide si el enlace se
  *        puede abrir: el que diga que no NO se pinta como enlace (ver
  *        `blockedLink`); sin `allowHref`, todos se pintan (el banco y la
  *        vista previa del panel, que no tienen sitio contra el que mirar).
+ *        `onCodeBlock({lang, text, closed}, pre)` (H24) recibe cada bloque de
+ *        código con su `pre` ya construido: si devuelve un nodo, se pinta ESE
+ *        en lugar del `pre` (así dibuja el panel un diagrama Mermaid); si
+ *        devuelve `null`/`undefined` —o cualquier cosa que no sea un nodo—, el
+ *        `pre` de siempre. Sin `onCodeBlock`, byte a byte lo de antes de H24.
  */
-export function renderMarkdown(src, { onLink, onNote, allowHref } = {}) {
+export function renderMarkdown(src, { onLink, onNote, onCodeBlock, allowHref } = {}) {
   const frag = document.createDocumentFragment()
   const opts = { onLink, onNote, allowHref }
 
@@ -208,7 +217,8 @@ export function renderMarkdown(src, { onLink, onNote, allowHref } = {}) {
         code.textContent = block.text
         if (block.lang) code.dataset.lang = block.lang
         pre.appendChild(code)
-        frag.appendChild(pre)
+        const propio = onCodeBlock ? onCodeBlock({ lang: block.lang, text: block.text, closed: block.closed }, pre) : null
+        frag.appendChild(esNodo(propio) ? propio : pre)
         break
       }
       case 'quote': {
@@ -242,6 +252,16 @@ export function renderMarkdown(src, { onLink, onNote, allowHref } = {}) {
   }
 
   return frag
+}
+
+/**
+ * ¿Es un nodo del DOM lo que devolvió `onCodeBlock`? Por `nodeType` y no por
+ * `instanceof Node`, que en Node (las pruebas) no existe: así las pruebas
+ * recorren el MISMO camino que el panel. Una cadena nunca pasa: no se
+ * convierte en marcado ni en texto, se queda el `pre` (§8.12).
+ */
+function esNodo(valor) {
+  return !!valor && typeof valor === 'object' && typeof valor.nodeType === 'number'
 }
 
 /**
