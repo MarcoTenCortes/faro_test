@@ -2185,19 +2185,25 @@ const actions = {
     )
 
     // La insignia va DETRÁS de su cita, no encima ni en el margen. Desde H23
-    // (forma A, anexo 2-F) en SUPERÍNDICE: a 1 px del último carácter y 8 px por
-    // encima de la línea (overlay.js, `_paintNoteBadges`). Hasta entonces iba
-    // centrada en la línea (`right + 3`, `top + height / 2 - 8.5`) y tapaba las
-    // primeras letras de la palabra siguiente; que ya no tapa lo que se lee lo
-    // mide el tramo 64 contra la caja del carácter que sigue.
+    // (forma A, anexo 2-F) en SUPERÍNDICE: a 1 px del último carácter y 5 px por
+    // encima de la línea (overlay.js, `_paintNoteBadges`). Mide 13 px, así que
+    // acaba en `top + 8` y no baja de la mitad del carácter que sigue. Hasta la
+    // revisión adversaria de H23 medía 16 y subía 8, y medido en este banco se
+    // metía 6-10 px en la caja del carácter de la línea de ARRIBA (A2); antes de
+    // H23 iba centrada en la línea (`right + 3`, `top + height / 2 - 8.5`) y
+    // tapaba las primeras letras de la palabra siguiente. Lo que tapa hoy, por
+    // delante y por arriba, lo mide el tramo 64. Aquí se tolera 1 px en `left` y
+    // en `top`: el único error es el `Math.round` de overlay.js, ≤ 0,5 + 1/64
+    // (medido ≤ 0,34), y con 3 una vuelta a `right + 3` pasaba, y una a −8
+    // (|Δ| 2,66-3,34) pasaba dos de cada tres veces.
     const rangoUno = runner.overlay.notes.find((x) => x.n === 1)?.ranges[0]
     const finDeLaCita = [...(rangoUno?.getClientRects() || [])].pop()
     const insigniaUno = insignias[0]
     ok(
       'la insignia va justo detras del ultimo caracter de su cita',
       !!finDeLaCita &&
-        Math.abs(parseFloat(insigniaUno.style.left) - (finDeLaCita.right + 1)) <= 3 &&
-        Math.abs(parseFloat(insigniaUno.style.top) - Math.max(0, finDeLaCita.top - 8)) <= 3,
+        Math.abs(parseFloat(insigniaUno.style.left) - (finDeLaCita.right + 1)) <= 1 &&
+        Math.abs(parseFloat(insigniaUno.style.top) - Math.max(0, finDeLaCita.top - 5)) <= 1,
       finDeLaCita
         ? `cita acaba en ${Math.round(finDeLaCita.right)},${Math.round(finDeLaCita.top)} · insignia en ${insigniaUno.style.left},${insigniaUno.style.top}`
         : 'sin rectangulo'
@@ -2307,14 +2313,16 @@ const actions = {
     // de tinta y existe siempre: lo que tiene que irse es la ANIMACIÓN, no el
     // pseudo. Se espera a que termine («se dibuja» dura .45 s, escalonado 40 ms
     // por caja) y se comprueba que ninguna caja se queda con `sweep`, que su
-    // `::after` ya no anima y que sigue ahí con los 3 px del trazo.
+    // `::after` ya no anima y que sigue ahí con los 2 px del trazo (3 hasta la
+    // revisión adversaria de H23, que midió que tapaba 1,5-2,3 de los 3 px de
+    // los descendentes con Segoe 14: G03).
     await wait(1200)
     const conSweep = cajas.filter((d) => d.classList.contains('sweep')).length
     const animaciones = cajas.map((d) => getComputedStyle(d, '::after').animationName)
     const trazos = cajas.map((d) => getComputedStyle(d, '::after').height)
     ok(
       'codigo: el barrido no se queda aparcado y el trazo sigue dibujado',
-      cajas.length > 0 && conSweep === 0 && animaciones.every((a) => a === 'none') && trazos.every((h) => h === '3px'),
+      cajas.length > 0 && conSweep === 0 && animaciones.every((a) => a === 'none') && trazos.every((h) => h === '2px'),
       `${conSweep} con sweep · animación ${animaciones.join(' ')} · trazo ${trazos.join(' ')}`
     )
 
@@ -4318,20 +4326,55 @@ const actions = {
     //     `faro-quote-activa` con la activa, prioridad 1—, porque dos rellenos
     //     traslúcidos sobre la misma letra se apilan y en oscuro dejaban el
     //     texto por debajo de 4,5:1; el overlay dibuja encima sólo el TRAZO de
-    //     cada línea (3 px, 4 px la activa) en un `.quote-rect` transparente;
-    //     las insignias suben a superíndice para no tapar lo que se lee detrás
-    //     de la cita; la tinta se elige (azul o ámbar, «Color del subrayado» de
-    //     Ajustes) y con la página en tema oscuro «Señalar» pone el subrayador
-    //     de cuerpo claro. Sobre las observaciones de siempre de `page:200`: qué
-    //     Range es de qué nota, qué insignia lleva qué número y de qué color era
-    //     el trazo se leen de la página, no se escriben aquí.
+    //     cada línea (2 px, 3 px la activa; 3 y 4 hasta la revisión adversaria
+    //     de H23, que midió que tapaban los descendentes) en un `.quote-rect`
+    //     transparente; las insignias suben a superíndice (13 px, 5 px por
+    //     encima de la línea) para no tapar lo que se lee detrás de la cita ni
+    //     las letras de la línea de arriba; la tinta se elige (azul o ámbar,
+    //     «Color del subrayado» de Ajustes) y con la página en tema oscuro
+    //     «Señalar» pone el subrayador de cuerpo claro. Sobre las observaciones
+    //     de siempre de `page:200` y una fabricada: qué Range es de qué nota, qué
+    //     insignia lleva qué número y de qué color era el trazo se leen de la
+    //     página, no se escriben aquí.
     runner.clear()
     setSidebar('clasica')
     renderPage('page:200')
     await wait(320)
     const tintaAntes64 = runner.overlay.tint
     runner.setHighlightColor('azul')
-    const res64 = await runner.applyNotes({ notes: OBSERVACIONES })
+    // La fabricada: las tres de OBSERVACIONES acaban en la 1.ª línea de su
+    // párrafo, así que ninguna insignia tenía un párrafo encima y lo que tapa por
+    // arriba no lo medía nadie (revisión adversaria de H23, A2). Es la primera
+    // mitad de la 2.ª línea de «Adoptamos la rotación automática…», elegida por
+    // los rects de sus palabras —la línea depende del ancho, como el bloque de
+    // `observacionesDePaginaLarga` depende del digest—, nunca escrita a mano; y
+    // de ese párrafo porque es el que queda a la vista con la 2 enfocada. Lleva
+    // el 5: el 4 de OBSERVACIONES no está en la página.
+    const parrafo64 = [...document.querySelectorAll('#page-content p')].find((p) =>
+      p.textContent.startsWith('Adoptamos la rotación automática')
+    )
+    const texto64 = parrafo64?.firstChild
+    const lineas64 = []
+    for (const m of texto64?.nodeType === Node.TEXT_NODE ? texto64.data.matchAll(/\S+/g) : []) {
+      const r = document.createRange()
+      r.setStart(texto64, m.index)
+      r.setEnd(texto64, m.index + m[0].length)
+      const c = r.getClientRects()[0]
+      if (!c) continue
+      const ultima = lineas64[lineas64.length - 1]
+      if (ultima && Math.abs(ultima.top - c.top) < c.height / 2) ultima.palabras.push(m[0])
+      else lineas64.push({ top: c.top, palabras: [m[0]] })
+    }
+    const segunda64 = lineas64[1]?.palabras || []
+    const fabricada64 = segunda64.length
+      ? {
+          n: 5,
+          title: 'Una cita que acaba en la segunda linea',
+          kind: 'dato',
+          anchor: { kind: 'text-quote', exact: segunda64.slice(0, Math.ceil(segunda64.length / 2)).join(' ') },
+        }
+      : null
+    const res64 = await runner.applyNotes({ notes: fabricada64 ? [...OBSERVACIONES, fabricada64] : OBSERVACIONES })
     await wait(500)
     await runner.focusNote({ n: 2 })
     await wait(400)
@@ -4366,7 +4409,11 @@ const actions = {
     //     atrás sobre la cita. La caja de un carácter es la que da su Range (su
     //     área de contenido), no la de la línea. Una cita cuyo carácter
     //     siguiente ya cae en otra línea, o no se pinta, no cuenta; una sin
-    //     insignia, sí, y falla.
+    //     insignia, sí, y falla. El margen está medido con Segoe UI, la letra
+    //     del banco en Windows (caja de 19 px, y el `detail` dice la que hay):
+    //     con Arial o Helvetica la caja mide 16 y la insignia tapa 5 de los 8 px
+    //     del ojo de la palabra siguiente, y que esto falle ahí es decir la
+    //     verdad, no un umbral mal puesto (revisión adversaria de H23, B8).
     const caracterSiguiente64 = (rango) => {
       let nodo = rango.endContainer
       let desde = rango.endOffset
@@ -4402,7 +4449,7 @@ const actions = {
         cuenta: true,
         bien: b.bottom <= mitad && b.left >= caja.left - 1,
         texto:
-          `${nota.n}: «${siguiente.toString()}» caja ${caja.top.toFixed(1)}+${caja.height.toFixed(1)} · ` +
+          `${nota.n}: «${siguiente.toString()}» caja ${Math.round(caja.height)} px (${caja.top.toFixed(1)}+${caja.height.toFixed(1)}) · ` +
           `insignia ${b.top.toFixed(1)}–${b.bottom.toFixed(1)}, mitad ${mitad.toFixed(1)} (${sobra > 0 ? '+' : ''}${sobra.toFixed(1)}) · ` +
           `izquierda ${b.left.toFixed(1)} ≥ ${(caja.left - 1).toFixed(1)}`,
       }
@@ -4414,22 +4461,86 @@ const actions = {
       medidas64.map((m) => m.texto).join(' · ')
     )
 
+    //     (5) La otra mitad del (2), y por eso va aquí y no detrás del (4): el
+    //     superíndice sube sobre la línea de ARRIBA, y ahí sólo puede pisar los
+    //     descendentes, nunca el cuerpo de las letras (nació en la revisión
+    //     adversaria de H23, A2: la insignia de 16 px subida 8 se metía 6-10 px
+    //     en la caja del carácter de arriba). Se toma el carácter que queda
+    //     3 px encima de cada insignia —el anillo mide 2— y cuenta sólo si es de
+    //     OTRA línea: en una cita de 1.ª línea `caretRangeFromPoint` devuelve la
+    //     misma. Entonces el anillo (`b.top - 2`) no sube del 79 % de esa caja,
+    //     que en Segoe UI es su línea base, con medio píxel por el `Math.round`
+    //     de overlay.js. Medido (R2, 44 casos de 2.ª línea): con la insignia de
+    //     hoy sobra +0,41..+1,37 px; con la de antes faltaban 1,63-2,59. La
+    //     fabricada tiene que contar, porque es la única con texto encima: las
+    //     otras tres acaban en la 1.ª línea de su párrafo, y sobre la 3 lo que
+    //     queda es el hueco bajo el h3 (su caja acaba antes del punto que se
+    //     mira), así que sin ella el ok pasaría sin medir nada.
+    const caracterEn64 = (caret, y) => {
+      const nodo = caret?.startContainer
+      if (!nodo || nodo.nodeType !== Node.TEXT_NODE || !nodo.data.length) return null
+      const desde = Math.min(caret.startOffset, nodo.data.length - 1)
+      for (const i of [desde, desde - 1]) {
+        if (i < 0) continue
+        const r = document.createRange()
+        r.setStart(nodo, i)
+        r.setEnd(nodo, i + 1)
+        const caja = r.getBoundingClientRect()
+        if (caja.height > 0 && caja.top <= y && y <= caja.bottom) return r
+      }
+      return null
+    }
+    const arriba64 = notas64.map((nota) => {
+      const ultimoRango = nota.ranges[nota.ranges.length - 1]
+      const finCita = [...(ultimoRango?.getClientRects() || [])].filter((r) => r.width > 0 && r.height > 0).pop()
+      const insignia = insignias64.find((x) => x.dataset.n === String(nota.n))
+      if (!finCita || !insignia) return { n: nota.n, cuenta: false, texto: `${nota.n}: sin cita o sin insignia` }
+      const b = insignia.getBoundingClientRect()
+      const arriba = caracterEn64(document.caretRangeFromPoint(b.left + b.width / 2, b.top - 3), b.top - 3)
+      const cajaArriba = arriba?.getBoundingClientRect()
+      const otraLinea = !!cajaArriba && cajaArriba.bottom <= finCita.top + 0.5
+      if (!otraLinea) return { n: nota.n, cuenta: false, texto: `${nota.n}: sin otra línea encima` }
+      const umbral = cajaArriba.top + cajaArriba.height * 0.79 - 0.5
+      const margen = b.top - 2 - umbral
+      return {
+        n: nota.n,
+        cuenta: true,
+        bien: (b.top - 2) >= cajaArriba.top + cajaArriba.height * 0.79 - 0.5,
+        texto:
+          `${nota.n}: «${arriba.toString()}» de ${arriba.startContainer.parentElement?.tagName || '?'} arriba, ` +
+          `caja ${Math.round(cajaArriba.height)} px (${cajaArriba.top.toFixed(1)}+${cajaArriba.height.toFixed(1)}) · ` +
+          `anillo ${(b.top - 2).toFixed(1)} ≥ ${umbral.toFixed(2)} (${margen >= 0 ? '+' : ''}${margen.toFixed(2)})`,
+      }
+    })
+    const cuentanArriba64 = arriba64.filter((m) => m.cuenta)
+    ok(
+      'subrayado: la insignia en superindice no tapa las letras de la linea de arriba, solo sus descendentes',
+      cuentanArriba64.length > 0 &&
+        cuentanArriba64.every((m) => m.bien) &&
+        !!fabricada64 &&
+        cuentanArriba64.some((m) => m.n === fabricada64.n),
+      (fabricada64 ? `fabricada 5 «${fabricada64.anchor.exact}» · ` : 'SIN fabricada: el párrafo no tiene 2.ª línea · ') +
+        arriba64.map((m) => m.texto).join(' · ')
+    )
+
     //     (3) El trazo: la caja del overlay es transparente —el relleno vive en
     //     el highlight, debajo del texto— y su `::after` es la pastilla de
-    //     tinta, 3 px, y 4 px en la activa.
+    //     tinta, 2 px, y 3 px en la activa (3 y 4 hasta la revisión adversaria
+    //     de H23: el de 3 tapaba 1,5-2,3 de los 3 px de los descendentes con
+    //     Segoe 14, G03).
     const cajas64 = [...runner.overlay.el.quoteLayer.children]
     const normales64 = cajas64.filter((d) => !d.classList.contains('active'))
     const activas64 = cajas64.filter((d) => d.classList.contains('active'))
     const fondos64 = [...new Set(cajas64.map((d) => getComputedStyle(d).backgroundColor))]
     const alto64 = (d) => getComputedStyle(d, '::after').height
     ok(
-      'subrayado: el rectangulo del overlay es transparente y su trazo mide 3 px, 4 px en la activa',
+      'subrayado: el rectangulo del overlay es transparente y su trazo mide 2 px, 3 px en la activa',
       normales64.length > 0 &&
         activas64.length > 0 &&
         fondos64.length === 1 &&
         fondos64[0] === 'rgba(0, 0, 0, 0)' &&
-        normales64.every((d) => alto64(d) === '3px') &&
-        activas64.every((d) => alto64(d) === '4px'),
+        normales64.every((d) => alto64(d) === '2px') &&
+        activas64.every((d) => alto64(d) === '3px'),
       `${cajas64.length} cajas, ${activas64.length} de la activa · fondo ${fondos64.join(' | ')} · ` +
         `trazo ${[...new Set(normales64.map(alto64))].join('/')}, ${[...new Set(activas64.map(alto64))].join('/')} en la activa`
     )
@@ -4442,7 +4553,11 @@ const actions = {
     //     claro, otro cursor que el de la página clara— y al cancelar lo quita.
     //     El banco no tiene tema oscuro propio: se pone `data-color-mode`, que
     //     es lo que lee `_applyColorScheme` al montar, se le pide que lo relea,
-    //     y se deja como estaba pase lo que pase.
+    //     y se deja como estaba pase lo que pase: «Señalar» se cancela en su
+    //     propio `finally` (`cancel()` es idempotente; sin él, algo que lanzase
+    //     entre `start()` y `cancel()` dejaba `<html>` con `faro-picking`), y el
+    //     de fuera devuelve el tema, la tinta de antes y quita las notas
+    //     (revisión adversaria de H23, B4). El ok no depende de las notas.
     const host64 = document.getElementById('faro-overlay-host')
     const vistaTinta64 = () => ({
       clase: !!host64?.classList.contains('faro-tinta-ambar'),
@@ -4461,12 +4576,16 @@ const actions = {
     const senalarCon64 = async (modo) => {
       html64.setAttribute('data-color-mode', modo)
       runner.overlay._applyColorScheme()
-      const espera = picker.start()
-      const vista = { oscuro: html64.classList.contains('faro-picking-dark'), cursor: getComputedStyle(html64).cursor }
-      picker.cancel()
-      await espera
-      vista.quitado = !html64.classList.contains('faro-picking-dark') && !html64.classList.contains('faro-picking')
-      return vista
+      try {
+        const espera = picker.start()
+        const vista = { oscuro: html64.classList.contains('faro-picking-dark'), cursor: getComputedStyle(html64).cursor }
+        picker.cancel()
+        await espera
+        vista.quitado = !html64.classList.contains('faro-picking-dark') && !html64.classList.contains('faro-picking')
+        return vista
+      } finally {
+        picker.cancel()
+      }
     }
     let claro64 = null
     let oscuro64 = null
@@ -4477,6 +4596,8 @@ const actions = {
       if (modoAntes64 === null) html64.removeAttribute('data-color-mode')
       else html64.setAttribute('data-color-mode', modoAntes64)
       runner.overlay._applyColorScheme()
+      runner.setHighlightColor(tintaAntes64)
+      runner.clearNotes()
     }
     ok(
       'subrayado: la tinta ambar llega a la pagina y la azul la deja como estaba; en una pagina oscura, Señalar pone su cursor y lo quita',
@@ -4505,8 +4626,6 @@ const actions = {
         `en oscuro: faro-picking-dark ${oscuro64?.oscuro}, quitado ${oscuro64?.quitado}, ` +
         `cursor ${oscuro64 && claro64 && oscuro64.cursor !== claro64.cursor ? 'distinto del claro' : 'IGUAL que el claro'}`
     )
-    runner.setHighlightColor(tintaAntes64)
-    runner.clearNotes()
 
     setSidebar('clasica')
     renderPage('page:200')

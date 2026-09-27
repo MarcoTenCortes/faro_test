@@ -127,9 +127,13 @@ async function recordVisitFor(url, { title = '', pageId = '' } = {}) {
  * arranque que los empuje de rebote. El worker no ve pulsar «Listo»: lo que ve
  * es la escritura de `faro:settings`, y eso es esto.
  *
- * Sólo a la pestaña activa —es la única que el usuario está mirando, y la
- * siguiente recibirá los suyos al estar lista— y sin esperar respuesta:
- * `sendToTab` ya tolera que ahí no haya content script.
+ * Sólo a la pestaña activa, que es la única que el usuario está mirando, y sin
+ * esperar respuesta: `sendToTab` ya tolera que ahí no haya content script. Las
+ * demás los reciben cuando el panel vuelve a ellas: `contentStatus` los empuja
+ * detrás de cada PING que contesta, y `ensureContentScript` tras inyectar; una
+ * carga SIN recorrido no los recibe a propósito: arrancaría el content script
+ * entero (18 módulos, ~256 KB y un sondeo cada 700 ms) en cada página, justo lo
+ * que la revisión de H11 quitó del aviso.
  */
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local' || !changes || !(STORAGE_KEYS.settings in changes)) return
@@ -262,6 +266,9 @@ async function ensureContentScript(origin, tabId) {
         return { ok: false, error: 'no se pudo inyectar: ' + (err?.message || err) }
       }
     }
+    // El panel marca justo después de «Dar permiso», sin otra comprobación: la
+    // tinta y el estilo tienen que estar ya en la página (ver `contentStatus`).
+    await pushSettings(tabId).catch(() => null)
   }
 
   return { ok: true }
@@ -285,12 +292,26 @@ function watchStalledStep(tabId, index, ms = NAV_TIMING.stepStallMs) {
   }, ms)
 }
 
-/** ¿Puede Faro actuar sobre esta pestaña ahora mismo? */
+/**
+ * ¿Puede Faro actuar sobre esta pestaña ahora mismo? Y, si contesta, se le
+ * empujan los ajustes de la página.
+ *
+ * Es la puerta que el panel cruza SIEMPRE antes de marcar o de señalar
+ * (`ensureContentAccess`). Pasó de verdad (revisión adversaria de H23, A1): la
+ * tinta elegida no llegaba a una pestaña sin recorrido —`onContentReady` sale
+ * antes de `pushSettings` si no hay uno, y el `onChanged` sólo empuja a la
+ * activa—, así que un «Analizar» pintaba en azul aunque se hubiera elegido
+ * ámbar. Aquí el PING ya arrancó el content script, así que empujar no añade
+ * ningún arranque; con el `await`, SETTINGS llega antes que el ANNOTATE que
+ * viene detrás; y con el `.catch`, un almacén roto no hace creer al panel que
+ * la pestaña no está lista.
+ */
 async function contentStatus(tabId, origin) {
   const granted = origin
     ? await chrome.permissions.contains({ origins: [origin.replace(/\/+$/, '') + '/*'] }).catch(() => false)
     : false
   const ping = tabId != null ? await sendToTab(tabId, { type: MSG.PING }) : null
+  if (ping?.ok) await pushSettings(tabId).catch(() => null)
   return { granted, ready: !!ping?.ok }
 }
 

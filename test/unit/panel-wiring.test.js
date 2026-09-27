@@ -7064,7 +7064,7 @@ test('H23: el color del subrayado se elige en Ajustes y viaja a la página; los 
       '    </fieldset>',
       '    <fieldset class="field" id="set-color-field">',
       '      <legend>Color del subrayado</legend>',
-      '      <label class="check"><input type="radio" name="highlight-color" id="set-color-azul" value="azul"> Azul — la tinta de las marcas y de lo que te señala; la herramienta de «Señalar» es siempre azul</label>',
+      '      <label class="check"><input type="radio" name="highlight-color" id="set-color-azul" value="azul"> Azul — la tinta de las marcas y de la llegada; la herramienta de «Señalar» es siempre azul</label>',
       '      <label class="check"><input type="radio" name="highlight-color" id="set-color-ambar" value="ambar"> Ámbar — el color de Faro, el de antes; las insignias [n] van siempre en ámbar</label>',
       '    </fieldset>',
       '    <div class="field">',
@@ -7120,7 +7120,11 @@ test('H23: el color del subrayado se elige en Ajustes y viaja a la página; los 
 
   // (4) Los radios no mienten. «La herramienta de «Señalar» es siempre azul»: la
   // hoja del cursor y la selección no depende de la tinta. «Las insignias [n]
-  // van siempre en ámbar»: su regla no mira la tinta.
+  // van siempre en ámbar»: su regla no mira la tinta. «Y de la llegada»: el
+  // foco que guía en los pasos sigue en ámbar (`--faro-gold`), así que el radio
+  // no promete «lo que te señala» (revisión adversaria de H23, B6); lo que sí
+  // sigue a la tinta es la llegada, que va siempre sin oscurecer —`.spot.flat`
+  // o el subrayado—, con el velo y el filo de la tinta.
   assert(/rgba\(59, 130, 246, \.32\)/.test(PICK_CSS) && !/233, 172, 74|faro-tinta/.test(PICK_CSS), 'Señalar es azul con cualquier tinta')
   const overlaySin = OVERLAY_CSS.replace(/\/\*[\s\S]*?\*\//g, '')
   const insignia = /\n\.note-badge \{[^}]*\}/.exec(overlaySin)?.[0] || ''
@@ -7128,21 +7132,61 @@ test('H23: el color del subrayado se elige en Ajustes y viaja a la página; los 
   assert(/\n {2}background: var\(--faro-gold\);\n/.test(insignia), 'la insignia es ámbar: ' + insignia.trim().split('\n')[0])
   assert(/background: var\(--faro-gold-deep\);/.test(insigniaActiva), 'y la activa, ámbar profundo')
   assert(!/faro-tinta/.test(insignia + insigniaActiva), 'y ninguna de las dos sigue a la tinta')
+  const llegada = /\n\.spot\.flat,\n:host\(\.faro-marker\) \.spot \{[^}]*\}/.exec(overlaySin)?.[0] || ''
+  assert(/background: var\(--faro-tinta-velo\);/.test(llegada) && /0 0 0 1px var\(--faro-tinta\)/.test(llegada), 'la llegada sigue a la tinta')
 
   // (5) El espejo marca el azul, que es el de por defecto, junto al foco, y
-  // mide a lo ancho el bloque nuevo.
+  // mide a lo ancho la pantalla de Ajustes entera: un fieldset no se desborda,
+  // crece hasta su min-content, y `#set-color-field` no daba positivo ni con
+  // cuatro roturas inyectadas (revisión adversaria de H23, B3).
   const espejo = readFileSync(join(ROOT, 'harness/panel-preview.html'), 'utf8')
   una(espejo, "\n  $('set-hl-spotlight').checked = true\n  $('set-color-azul').checked = true\n", 'el espejo pinta Ajustes con el color de por defecto')
   const cajas = corte(espejo, 'const CAJAS = [', '\n  ]\n') + '\n'
-  una(cajas,"\n    '#set-color-field',\n", 'check() mide a lo ancho el bloque «Color del subrayado»')
+  una(cajas, "\n    '#screen-settings',\n", 'check() mide a lo ancho la pantalla de Ajustes, con el bloque «Color del subrayado» dentro')
 
   // (6) Y el banco lo comprueba en la página: su tramo 64 cambia la tinta y la
-  // devuelve, además de los highlights y el superíndice (docs.test.js ya exige
-  // la numeración 1..N; aquí, que el 64 es éste y hace sus cuatro ok).
+  // devuelve, además de los highlights y el superíndice, y los tramos 20, 22,
+  // 23 y 26 dicen lo de H23 (docs.test.js ya exige la numeración 1..N). Cada
+  // tramo se recorta ANTES de quitarle los comentarios —`sinComentarios` se
+  // lleva la marca `// N.`— y se mira SIN ellos: un literal que sólo vive en
+  // un comentario, o una llamada comentada, daba verde (revisión adversaria de
+  // H23, B2/B5/B7: seis mutaciones del banco seguían vivas).
   const banco = readFileSync(join(ROOT, 'harness/harness.js'), 'utf8')
-  const tramo64 = corte(banco, '\n    // 64. ', 'return { passed, total: results.length, results }')
-  eq((tramo64.match(/\bok\(/g) || []).length, 4, 'el tramo 64 hace cuatro comprobaciones')
-  for (const trozo of ["runner.setHighlightColor('ambar')", "runner.setHighlightColor('azul')", "CSS.highlights.get('faro-quote-activa')", 'faro-picking-dark']) {
-    assert(tramo64.includes(trozo), 'el tramo 64 mira ' + trozo)
-  }
+  const oks = (t) => (t.match(/\bok\(/g) || []).length
+  const t20 = sinComentarios(corte(banco, '\n    // 20. ', '\n    // 21. '))
+  const t22 = sinComentarios(corte(banco, '\n    // 22. ', '\n    // 23. '))
+  const t26 = sinComentarios(corte(banco, '\n    // 26. ', '\n    // 27. '))
+  const t64 = sinComentarios(corte(banco, '\n    // 64. ', 'return { passed, total: results.length, results }'))
+  const t23 = sinComentarios(corte(banco, '\n    // 23. ', '\n    // 24. '))
+
+  eq(oks(t64), 5, 'el tramo 64 hace cinco comprobaciones (la quinta, la línea de arriba)')
+  eq(t64.split("html64.classList.contains('faro-picking-dark')").length - 1, 2, 'el 64 mira faro-picking-dark al señalar y al cancelar')
+  assert(t64.includes("runner.setHighlightColor('ambar')"), 'el 64 pone la tinta ámbar, en código y no en un comentario')
+  eq(t64.split("runner.setHighlightColor('azul')").length - 1, 2, 'el 64 pone el azul al empezar y lo devuelve tras el ámbar')
+  assert(t64.includes('priority === 1'), 'el 64 mira la prioridad del highlight de la activa')
+  assert(t64.includes("CSS.highlights.get('faro-quote-activa')"), 'el 64 lee el highlight de la activa')
+  una(t64, "normales64.every((d) => alto64(d) === '2px') &&", 'el trazo mide 2 px')
+  una(t64, "activas64.every((d) => alto64(d) === '3px'),", 'y 3 px en la activa')
+  una(t64, 'document.caretRangeFromPoint(b.left + b.width / 2, b.top - 3)', 'la quinta mira el carácter de encima de cada insignia')
+  una(t64, 'const otraLinea = !!cajaArriba && cajaArriba.bottom <= finCita.top + 0.5', 'y sólo cuenta si es de otra línea')
+  una(t64, 'bien: (b.top - 2) >= cajaArriba.top + cajaArriba.height * 0.79 - 0.5,', 'el anillo no sube del 79 % de su caja, con medio píxel')
+  assert(t64.includes('cuentanArriba64.some((m) => m.n === fabricada64.n)'), 'y la fabricada, la que tiene un párrafo encima, cuenta')
+  eq(t64.split('finally {').length - 1, 2, 'dos finally: el de «Señalar» y el de fuera')
+  // Hasta el `}` que lo cierra (a cuatro espacios, como el `try`): hasta el
+  // final del tramo, sacar las dos llamadas justo detrás del bloque seguía en
+  // verde.
+  const finalDe64 = t64.slice(t64.lastIndexOf('} finally {'))
+  const finallyDeFuera = finalDe64.slice(0, finalDe64.indexOf('\n    }\n') + 1)
+  assert(
+    finallyDeFuera.includes('runner.setHighlightColor(tintaAntes64)') && finallyDeFuera.includes('runner.clearNotes()'),
+    'el finally de fuera devuelve la tinta y quita las notas: ' + finallyDeFuera.replace(/\s+/g, ' ')
+  )
+
+  eq(oks(t22), 4, 'el tramo 22 hace cuatro comprobaciones')
+  assert(t22.includes('html.faro-picking ::selection') && t22.includes(".startsWith('url(')"), 'el 22 mira la selección bajo html.faro-picking y el cursor url(')
+  assert(t26.includes('animationName'), 'el 26 mira la animación del trazo')
+  una(t26, "cajas.length > 0 && conSweep === 0 && animaciones.every((a) => a === 'none') && trazos.every((h) => h === '2px'),", 'el 26: sin sweep, sin animación y con el trazo de 2 px')
+  assert(!/amarillo/.test(t20), 'el tramo 20 ya no dice «amarillo» (fuera de su comentario)')
+  una(t23, 'Math.abs(parseFloat(insigniaUno.style.left) - (finDeLaCita.right + 1)) <= 1 &&', 'el 23 pone la insignia a 1 px del último carácter, con 1 px de tolerancia')
+  una(t23, 'Math.abs(parseFloat(insigniaUno.style.top) - Math.max(0, finDeLaCita.top - 5)) <= 1,', 'y 5 px por encima de la línea, con 1 px')
 })

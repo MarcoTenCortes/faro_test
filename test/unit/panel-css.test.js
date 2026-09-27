@@ -178,7 +178,9 @@ test('EL CAMBIO: el hover del overlay ya no baja de AA', () => {
   // haría fallar el test.
   const sinComentarios = OVERLAY_CSS.replace(/\/\*[\s\S]*?\*\//g, '')
   assert(!/#FFF7E8/i.test(sinComentarios), 'el crema del hover no puede volver')
-  for (const regla of ['.btn-primary:hover', '.note-badge:hover', '.note-badge.active']) {
+  // La insignia en reposo también: un `#FFFFFF` ahí sobre el ámbar dejaba el
+  // número a 2,01:1 y nada lo vigilaba (revisión adversaria de H23, A5).
+  for (const regla of ['.btn-primary:hover', '.note-badge', '.note-badge:hover', '.note-badge.active']) {
     const m = new RegExp(regla.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*\\{([^}]*)\\}').exec(sinComentarios)
     assert(m && /color:\s*#1B1405/i.test(m[1]), `${regla} tiene que llevar el texto oscuro`)
   }
@@ -444,12 +446,18 @@ test('H23: el texto de la página bajo la tinta llega a 4,5 en los dos temas, y 
   // todas (overlay-wiring.test.js lo ejecuta): apilada sobre la normal, en
   // oscuro bajaba a 3,88 (azul) y 3,31 (ámbar).
   eq(Object.keys(PAGINA), ['claro', 'oscuro'], 'los dos temas de una página de Atlassian')
+  // Los colores de Atlassian con los que se mide, escritos una vez: cambiar el
+  // fondo o el texto de la página cambia qué se exige (revisión adversaria de
+  // H23, A5).
+  eq(PAGINA, { claro: { fondo: '#FFFFFF', texto: '#172B4D', enlace: '#0C66E4' }, oscuro: { fondo: '#1D2125', texto: '#B6C2CF', enlace: '#579DFF' } })
   eq(TINTAS.length, 4, 'dos tintas × todas y la activa')
+  const alfas = {}
   for (const [tinta, nombre, que] of TINTAS) {
     const re = new RegExp('::highlight\\(' + nombre + '\\)\\s*\\{[^}]*background-color:\\s*(rgba?\\([^)]*\\))')
     const m = re.exec(highlightCss(tinta))
     assert(m, `la tinta ${tinta} (${nombre}) no está en highlightCss`)
     assert(parseColor(m[1]) && parseColor(m[1]).a < 1, `${tinta} · ${nombre}: un relleno traslúcido, ${m[1]}`)
+    alfas[`${tinta} · ${nombre}`] = parseColor(m[1]).a
     for (const [tema, p] of Object.entries(PAGINA)) {
       const fondo = blendOver(m[1], null, p.fondo)
       const texto = contrastRatio(p.texto, fondo)
@@ -457,6 +465,11 @@ test('H23: el texto de la página bajo la tinta llega a 4,5 en los dos temas, y 
       // El enlace de Atlassian se anota (npm run contrast lo imprime), no se exige.
       assert(contrastRatio(p.enlace, fondo) !== null, `${tinta} · ${nombre} · ${tema}: el enlace se puede medir`)
     }
+  }
+  // La activa se distingue por llevar MÁS tinta que las demás. Se compara el
+  // alfa, no el contraste con el papel: el ámbar de la activa es de otro tono.
+  for (const tinta of ['azul', 'ambar']) {
+    assert(alfas[`${tinta} · faro-quote-activa`] > alfas[`${tinta} · faro-quote`], `${tinta}: la activa lleva más tinta que las demás`)
   }
   eq(highlightCss('rojo'), highlightCss('azul'), 'lo que no es ámbar es azul')
   assert(highlightCss('ambar') !== highlightCss('azul'), 'y las dos tintas son dos rellenos')

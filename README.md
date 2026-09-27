@@ -754,13 +754,13 @@ cuáles no), que desde H16 son tuyos y no de un sitio.
 ## Comprobaciones
 
 ```bash
-npm run check              # sintaxis + orden + manifest + 1498 pruebas unitarias + docs
+npm run check              # sintaxis + orden + manifest + 1505 pruebas unitarias + docs
 npm run check:docs         # sólo el paso docs: número de pruebas, títulos del registro, mensajes y ficheros del mapa
 npm run test:integration   # contra un opencode real que arranca la propia prueba
 npm run harness            # banco de pruebas visual en http://127.0.0.1:5175
 npm run turn -- --n 1      # el último turno real (pregunta, sistema, herramientas, respuesta) desde una copia de opencode.db
 npm run bench              # el metro: cuánto pesa el system de cada escenario y cuánto tardan los módulos puros
-npm run contrast           # el contraste de cada pareja de colores, por tema: informa, y falla si alguna baja de 4,5 (texto) o 3 (control)
+npm run contrast           # el contraste de cada pareja de colores, por tema: informa, y falla si alguna baja de 4,5 (texto) o 3 (control) (lo «anotado» de TINTAS no cuenta)
 npm run sandbox            # escribe de verdad en la configuración de un opencode PROPIO y aislado, y comprueba lo que Faro escribe ahí (Windows)
 npm run snapshots          # regenera las instantáneas de los prompts (test/fixtures/prompts) cuando un cambio de prompt es intencionado
 ```
@@ -939,8 +939,9 @@ Con el banco levantado hay dos páginas:
   selección azul sólo existe mientras dura; que la observación que miras va en
   su propio resaltado, con prioridad, y no se repite en el de las demás; que
   cada número queda en superíndice, sin tapar la mitad de abajo del carácter
-  que sigue a su cita (medido contra la caja de ese carácter); que la caja de
-  cada línea es transparente con un trazo de 3 px, 4 en la activa; y que
+  que sigue a su cita ni las letras de la línea de arriba, de la que como mucho
+  pisa los descendentes (medido contra la caja de esos caracteres); que la caja
+  de cada línea es transparente con un trazo de 2 px, 3 en la activa; y que
   cambiar la tinta a ámbar y volver al azul llega a la página y la deja como
   estaba, y con la página en oscuro «Señalar» pone su otro cursor y lo quita.
 
@@ -976,7 +977,10 @@ Con el banco levantado hay dos páginas:
   bordes decorativos salen marcados «exenta» con su número, y el test comprueba
   que sigan por debajo de 3. Las parejas no se declaran en el informe: viven en
   `test/contrast-pairs.js`, que es la misma lista que pina `panel-css.test.js`,
-  el que sí corre en `npm run check`.
+  el que sí corre en `npm run check`. Desde H23 hay una quinta tabla, TINTAS: el
+  texto de una página de Atlassian bajo el relleno de cada tinta, que se exige
+  ≥4,5 en claro y en oscuro; el enlace bajo la tinta y el trazo de la marca
+  salen «anotado» y no cuentan como fallo.
 
 - **`npm run sandbox`** comprueba lo que Faro escribe en la configuración de
   opencode, escribiendo DE VERDAD —y por eso nunca en el tuyo—: arranca un

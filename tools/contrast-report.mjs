@@ -36,7 +36,10 @@
  * del relleno de una marca (el `::highlight` de `highlightCss`, leído de ahí y
  * no copiado), por tinta, estado y tema. Ése se exige (4,5); el enlace de
  * Atlassian bajo la tinta y el trazo de la marca contra el fondo se imprimen
- * «anotado» y no cuentan (docs/PLAN2.md §3.6).
+ * «anotado» y no cuentan (docs/PLAN2.md §3.6). Desde la revisión adversaria de
+ * H23, el trazo lleva además su columna «sobre su relleno» (el trazo encima de
+ * su propio relleno mezclado con el fondo), también anotada: ahí es donde se vio
+ * que el trazo oscuro de la activa en azul bajaba a 2,49.
  *
  *   node tools/contrast-report.mjs        (= npm run contrast)
  */
@@ -241,6 +244,7 @@ function filasDeTintas() {
         pareja,
         colores: `${p.texto} / ${hex(rgba)} sobre ${p.fondo} = ${fondo}`,
         enlace: `${numero(contrastRatio(p.enlace, fondo))} anotado`,
+        sobreRelleno: '—',
         que: `texto de la página bajo el ${que}`,
       })
     }
@@ -248,9 +252,14 @@ function filasDeTintas() {
   for (const tinta of [...new Set(TINTAS.map(([t]) => t))]) {
     for (const [tema, p] of Object.entries(PAGINA)) {
       const tokens = tokensDeTinta(tinta, tema)
-      for (const [token, que] of [
-        ['--faro-tinta', 'trazo de una marca'],
-        ['--faro-tinta-fuerte', 'trazo de la marca activa'],
+      // Cada trazo va pegado al fondo de la caja de la línea, o sea ENCIMA de su
+      // propio relleno: el de una marca sobre `faro-quote` y el de la activa
+      // sobre `faro-quote-activa`. Contra el fondo de la página no se veía que
+      // el trazo oscuro de la activa bajaba a 2,49 sobre su relleno (revisión
+      // adversaria de H23, A15).
+      for (const [token, que, bajo] of [
+        ['--faro-tinta', 'trazo de una marca', 'faro-quote'],
+        ['--faro-tinta-fuerte', 'trazo de la marca activa', 'faro-quote-activa'],
       ]) {
         const color = resolver(token, tokens)
         const pareja = `${tinta} · ${token} · ${tema}`
@@ -258,12 +267,15 @@ function filasDeTintas() {
           filas.push({ falta: `no existe ${token}`, pareja, que })
           continue
         }
+        const debajo = relleno(tinta, bajo)
+        const mezcla = debajo ? blendOver(debajo, null, p.fondo) : null
         filas.push({
           ratio: contrastRatio(color.color, p.fondo),
           nivel: 'anotado (control)',
           pareja,
           colores: `${hex(color.color)} / ${p.fondo}`,
           enlace: '—',
+          sobreRelleno: mezcla ? `${numero(contrastRatio(color.color, mezcla))} sobre ${mezcla}` : `no está ${bajo}`,
           que: `${que}, contra el fondo de la página`,
         })
       }
@@ -278,7 +290,7 @@ function seccionTintas(titulo, fuente, filas) {
   const cuerpo = []
   for (const f of filas) {
     if (f.falta) {
-      cuerpo.push([{ t: '—', color: RED }, { t: 'falta', color: RED }, f.pareja, { t: f.falta, color: RED }, '', f.que])
+      cuerpo.push([{ t: '—', color: RED }, { t: 'falta', color: RED }, f.pareja, { t: f.falta, color: RED }, '', '', f.que])
       fallos.push(`${titulo} · ${f.pareja} (${f.falta}) · ${f.que}`)
       continue
     }
@@ -290,12 +302,13 @@ function seccionTintas(titulo, fuente, filas) {
       f.pareja,
       { t: f.colores, dim: true },
       { t: f.enlace, dim: true },
+      { t: f.sobreRelleno, dim: true },
       f.que,
     ])
     if (f.nivel === 'falla') fallos.push(`${titulo} · ${f.pareja} (${numero(f.ratio)}, pide ${numero(UMBRAL.texto)}) · ${f.que}`)
   }
   console.log(`\n${BOLD}${titulo}${OFF} ${DIM}· ${fuente}${OFF}`)
-  for (const linea of tabla(['ratio', 'nivel', 'tinta · highlight · tema', 'colores', 'enlace', 'qué pinta'], cuerpo, { derecha: [0] })) {
+  for (const linea of tabla(['ratio', 'nivel', 'tinta · highlight · tema', 'colores', 'enlace', 'sobre su relleno', 'qué pinta'], cuerpo, { derecha: [0] })) {
     console.log(linea)
   }
   return fallos
@@ -386,7 +399,8 @@ function main() {
       `ninguno de los tres es lo único que identifica su control, y el test comprueba que siguen por debajo.\n` +
       `TINTAS: el relleno de una marca va DEBAJO del texto (::highlight), así que lo que se lee es la letra de la\n` +
       `página sobre la tinta mezclada con su fondo, y eso se exige. El enlace de Atlassian bajo la tinta y el\n` +
-      `trazo de la marca contra el fondo van «anotado»: se imprimen y no cuentan (docs/PLAN2.md §3.6).${OFF}`
+      `trazo de la marca contra el fondo van «anotado»: se imprimen y no cuentan (docs/PLAN2.md §3.6). «sobre su\n` +
+      `relleno» es el trazo encima de su propio relleno (va pegado al fondo de la caja), también anotado.${OFF}`
   )
 
   if (fallos.length) {

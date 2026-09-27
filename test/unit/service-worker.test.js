@@ -55,6 +55,8 @@ function makeChrome() {
      * escrituras (revisión adversaria de H11).
      */
     lecturas: [],
+    /** Cada `scripting.executeScript`: la pestaña a la que se le puso el content script. */
+    inyecciones: [],
   }
 
   globalThis.chrome = {
@@ -110,7 +112,16 @@ function makeChrome() {
       },
     },
     permissions: { contains: async () => true, request: async () => true },
-    scripting: { getRegisteredContentScripts: async () => [], registerContentScripts: async () => {} },
+    scripting: {
+      getRegisteredContentScripts: async () => [],
+      registerContentScripts: async () => {},
+      // Las inyecciones, apuntadas: con ellas se sabe que los ajustes salen
+      // DETRÁS del content script recién puesto (revisión adversaria de H23).
+      executeScript: async (o) => {
+        state.inyecciones.push(o)
+        return []
+      },
+    },
   }
 
   return {
@@ -684,4 +695,121 @@ test('H11: el diario no puede tumbar un recorrido', async () => {
   } finally {
     globalThis.chrome.storage.local.get = bueno
   }
+})
+
+// ------------------------------------------------------- revisión de H23
+//
+// La tinta no llegaba a una pestaña sin recorrido: `onContentReady` sale antes
+// de `pushSettings` si no hay un recorrido en marcha, y el `onChanged` sólo
+// empuja a la pestaña ACTIVA, así que un «Analizar» pintaba en azul aunque se
+// hubiera elegido ámbar (A1). Los ajustes van por la puerta que el panel cruza
+// siempre antes de marcar o señalar, `CONTENT_STATUS`, y tras inyectar el
+// content script; una carga sin recorrido sigue sin recibirlos, a propósito.
+
+/** Los ajustes de la página que no son los de fábrica, y la contraseña al lado. */
+const AJUSTES_AMBAR = {
+  reduceMotion: true,
+  highlightStyle: 'marker',
+  highlightColor: 'ambar',
+  stepDelayMs: 1200,
+  password: 'secreta',
+}
+
+test('H23 revisión: la pestaña que el panel comprueba recibe los ajustes de la página, con o sin recorrido', async () => {
+  const rig = makeChrome()
+  await loadWorker(rig)
+  rig.state.local['faro:settings'] = AJUSTES_AMBAR
+  rig.state.contentReply = (msg) => (msg.type === MSG.PING ? { ok: true } : null)
+  // El almacén tarda: si el SW no esperara a los ajustes, el panel tendría la
+  // respuesta —y mandaría su ANNOTATE— antes de que salieran.
+  const bueno = globalThis.chrome.storage.local.get
+  globalThis.chrome.storage.local.get = async (k) => {
+    await esperar(5)
+    return bueno(k)
+  }
+  try {
+    // Sin recorrido: la pestaña 3 no tiene ninguno en marcha.
+    const res = await rig.send({ type: MSG.CONTENT_STATUS, tabId: 3, origin: 'https://acme.atlassian.net' })
+    eq(res, { granted: true, ready: true })
+    eq(rig.state.sentWithTab.map((s) => s.msg.type), ['faro:ping', 'faro:settings'], 'primero el PING y, si contesta, los ajustes, ANTES de contestar')
+    const empujados = rig.state.sentWithTab.filter((s) => s.msg.type === MSG.SETTINGS)
+    eq(empujados.length, 1, 'un solo SETTINGS')
+    eq(empujados[0].tabId, 3, 'a la pestaña comprobada')
+    eq(empujados[0].msg.highlightColor, 'ambar', 'con la tinta elegida')
+    eq(empujados[0].msg.highlightStyle, 'marker')
+    eq(empujados[0].msg.reduceMotion, true)
+    // SEGURIDAD: lo mismo que en el empuje de H6: la contraseña no viaja.
+    eq(Object.keys(empujados[0].msg).sort(), ['highlightColor', 'highlightStyle', 'reduceMotion', 'timing', 'type'])
+
+    // Con un recorrido a medias (el salto directo espera a que la pestaña avise):
+    // la comprobación empuja igual, y no retoma ni ancla nada.
+    const directo = { ...PLAN, mode: 'direct', steps: [] }
+    await rig.send({ type: MSG.NAVIGATE_DIRECT, tabId: 1, plan: directo })
+    rig.state.sentWithTab.length = 0
+    await rig.send({ type: MSG.CONTENT_STATUS, tabId: 1, origin: 'https://acme.atlassian.net' })
+    eq(rig.state.sentWithTab.map((s) => [s.tabId, s.msg.type]), [[1, 'faro:ping'], [1, 'faro:settings']])
+  } finally {
+    globalThis.chrome.storage.local.get = bueno
+    await rig.send({ type: MSG.CANCEL_PLAN, tabId: 1 })
+  }
+})
+
+test('H23 revisión: la pestaña que el panel comprueba y no contesta no recibe ajustes', async () => {
+  const rig = makeChrome()
+  await loadWorker(rig)
+  rig.state.local['faro:settings'] = AJUSTES_AMBAR
+  rig.state.contentReply = () => null // sin content script
+
+  const res = await rig.send({ type: MSG.CONTENT_STATUS, tabId: 3, origin: 'https://acme.atlassian.net' })
+  eq(res, { granted: true, ready: false })
+  eq(rig.state.sentWithTab.map((s) => s.msg.type), ['faro:ping'], 'sólo el PING: a una pestaña muda no se le empuja nada')
+})
+
+test('H23 revisión: la pestaña que el panel comprueba sigue lista aunque el almacén falle', async () => {
+  // Empujar los ajustes es un extra: si leerlos falla, el panel tiene que seguir
+  // sabiendo que la pestaña está lista (sin el `.catch`, contestaba un error).
+  const rig = makeChrome()
+  await loadWorker(rig)
+  rig.state.contentReply = (msg) => (msg.type === MSG.PING ? { ok: true } : null)
+  const bueno = globalThis.chrome.storage.local.get
+  globalThis.chrome.storage.local.get = async () => {
+    throw new Error('almacén lleno')
+  }
+  try {
+    const res = await rig.send({ type: MSG.CONTENT_STATUS, tabId: 3, origin: 'https://acme.atlassian.net' })
+    eq(res, { granted: true, ready: true })
+  } finally {
+    globalThis.chrome.storage.local.get = bueno
+  }
+})
+
+test('H23 revisión: tras inyectar el content script, los ajustes van detrás', async () => {
+  // «Dar permiso» en un host propio: el SW registra el script e inyecta en la
+  // pestaña abierta, y el panel marca justo después sin otra comprobación.
+  const rig = makeChrome()
+  await loadWorker(rig)
+  rig.state.local['faro:settings'] = AJUSTES_AMBAR
+  rig.state.contentReply = (msg) => (msg.type === MSG.PING ? (rig.state.inyecciones.length ? { ok: true } : null) : null)
+
+  const res = await rig.send({ type: MSG.REQUEST_HOST_PERMISSION, origin: 'https://confluence.simplprogramme.eu', tabId: 3 })
+  eq(res, { ok: true })
+  eq(rig.state.inyecciones.map((o) => o.target), [{ tabId: 3 }], 'se inyecta en la pestaña abierta')
+  eq(rig.state.sentWithTab.map((s) => s.msg.type), ['faro:ping', 'faro:settings'], 'y los ajustes salen detrás')
+  const [ajustes] = rig.state.sentWithTab.filter((s) => s.msg.type === MSG.SETTINGS)
+  eq([ajustes.tabId, ajustes.msg.highlightColor], [3, 'ambar'])
+})
+
+test('H23 revisión: una carga sin recorrido no despierta el content script entero', async () => {
+  // Decisión de H11 que la revisión de H23 conserva: el content script arranca
+  // entero con el PRIMER mensaje que recibe, así que un SETTINGS en cada carga
+  // de cada página de un host registrado lo arrancaría siempre (18 módulos y un
+  // sondeo cada 700 ms). El aviso de «lista» sólo apunta la visita.
+  const rig = makeChrome()
+  await loadWorker(rig)
+  rig.state.local['faro:settings'] = AJUSTES_AMBAR
+  rig.state.contentReply = (msg) => (msg.type === MSG.PING ? { ok: true } : null)
+
+  const res = await rig.send({ type: MSG.CONTENT_READY, url: rig.state.tabs[3].url, pageId: '200' }, { tab: { id: 3, title: 'ADR-014' } })
+  eq(res, { ok: true })
+  eq(rig.state.sentWithTab, [], 'ni un mensaje a la pestaña')
 })

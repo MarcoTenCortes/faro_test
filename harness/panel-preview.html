@@ -2407,8 +2407,12 @@ async function arrancar() {
     '#remove-keys-leftovers',
     // H23: el bloque «Color del subrayado» de Ajustes. Sus dos radios son las
     // frases más largas de la sección Navegación y a 320 px parten en varias
-    // líneas; lo que esto caza es que el fieldset se salga a lo ancho.
-    '#set-color-field',
+    // líneas. Se mide la pantalla entera y no el bloque: un fieldset no se
+    // desborda: crece hasta su min-content y lo que crece lo desplaza la
+    // pantalla, que es lo que se mide aquí (revisión adversaria de H23, B3:
+    // `#set-color-field` no daba positivo ni con cuatro roturas inyectadas).
+    // Cubre también los otros dos fieldset de Ajustes.
+    '#screen-settings',
   ]
 
   function check() {

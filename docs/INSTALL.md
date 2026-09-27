@@ -835,17 +835,20 @@ Junto al selector de modelo, abajo, hay otras dos cosas:
   la tinta elegida y rodea las imágenes, sin oscurecer nada. Al LLEGAR, y en las
   marcas de un análisis, siempre se subraya.
 
-- **Ajustes → Color del subrayado** — la **tinta** de las marcas: **Azul** (por
+- **Ajustes → Color del subrayado** — la **tinta** de las marcas y de la llegada: **Azul** (por
   defecto) o **Ámbar**, el color de Faro que las marcas llevaban antes. Una
   marca es un relleno suave DEBAJO del texto (la letra de la página se sigue
   leyendo, por encima de 4,5:1 en claro y en oscuro) y un trazo fino bajo cada
   línea que se dibuja de izquierda a derecha una vez; la observación que estás
   mirando lleva el relleno un poco más fuerte y el trazo más grueso. Los números
   `[n]` de un análisis y los botones de Faro («Usar esto», el del cartel) van
-  **siempre en ámbar**, y la herramienta de «Señalar» siempre en azul: el
-  ajuste sólo cambia las marcas. Se aplica al momento, sin rearrancar el panel:
-  la página se entera por el service worker, como del resto de ajustes de la
-  página.
+  **siempre en ámbar**, y la herramienta de «Señalar» siempre en azul; el
+  foco que oscurece la página en los pasos sigue en ámbar: el ajuste cambia las
+  marcas, la llegada y, con *Subrayado*, el velo de cada paso. Se aplica al
+  momento, sin rearrancar el panel: la página se entera por el service worker,
+  como del resto de ajustes de la página —la pestaña activa en el acto, y otra
+  pestaña ya abierta en cuanto el panel vuelve a ella, antes de marcar o de
+  señalar—.
 
 - **Elegir modelo** — el desplegable de abajo, junto a la Skill. Lista los
   modelos que **tu** opencode tiene conectados (`GET /config/providers`: los
@@ -1284,7 +1287,7 @@ de modelo.
 
 `npm run harness` levanta en <http://127.0.0.1:5175> una Confluence y un Jira de
 mentira con las piezas reales encima. El botón **Autocomprobación completa**
-recorre hoy **64 tramos numerados (135 comprobaciones)**; hay que correrla con el panel del navegador a
+recorre hoy **64 tramos numerados (136 comprobaciones)**; hay que correrla con el panel del navegador a
 la vista y a 1280×900, porque con la ventana oculta Chrome estrangula los
 temporizadores y no ejecuta los fotogramas.
 
@@ -1294,18 +1297,22 @@ siempre de la página 200: que la observación activa va en su propio resaltado
 (`faro-quote`), y que entre los dos están todas —dos rellenos traslúcidos sobre
 la misma letra se suman, y en oscuro el texto se quedaba por debajo de 4,5:1—;
 que cada número `[n]` es un superíndice que no tapa la mitad de abajo del
-carácter que sigue a su cita, medido contra la caja de ESE carácter; que la
-caja de cada línea es transparente —el relleno vive en el resaltado, debajo
-del texto— y su trazo mide 3 px, 4 en la activa; y que la tinta ámbar llega a
-la página y la azul la deja como estaba, y que con la página en tema oscuro
-«Señalar» pone su cursor claro y al cancelar lo quita. Con él cambiaron cuatro
+carácter que sigue a su cita, medido contra la caja de ESE carácter, ni las
+letras de la línea de ARRIBA, de la que como mucho pisa los descendentes
+(medido sobre una cita fabricada que acaba en la 2.ª línea de su párrafo,
+porque las de siempre acaban todas en la 1.ª); que la caja de cada línea es
+transparente —el relleno vive en el resaltado, debajo del texto— y su trazo
+mide 2 px, 3 en la activa; y que la tinta ámbar llega a la página y la azul la
+deja como estaba, y que con la página en tema oscuro «Señalar» pone su otro
+cursor (el `oscuro`, de cuerpo más claro) y al cancelar lo quita. Con él cambiaron cuatro
 tramos de antes: el 20 ya no dice «en amarillo»; el 22 comprueba además que
 mientras se señala el cursor es el subrayador (una imagen `data:` con el de
 texto de respaldo, que se va al acabar) y que la selección azul sólo vive bajo
 `html.faro-picking`, sin ninguna dirección de la extensión; el 23 pone el
-número a 1 px del final de la cita y 8 px por encima de la línea; y el 26 ya
-no espera que el `::after` desaparezca (ahora ES el trazo) sino que la
-animación se haya ido y el trazo siga ahí, con sus 3 px. En la consola,
+número a 1 px del final de la cita y 5 px por encima de la línea (con 1 px de
+tolerancia en cada eje); y el 26 ya no espera que el `::after` desaparezca
+(ahora ES el trazo) sino que la animación se haya ido y el trazo siga ahí, con
+sus 2 px. En la consola,
 `await faroHarness.cursor()` da el módulo del cursor (el SVG, su URL y la
 regla), para mirarlo a otro tamaño o con el otro tema.
 

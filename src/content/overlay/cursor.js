@@ -12,8 +12,9 @@
  * hoja `#faro-pick-style` se cuelga del `<head>` de la página, y la URL de un
  * recurso de la extensión escrita ahí dejaría a la vista de la página el GUID
  * de sesión que `use_dynamic_url` existe para esconder (S7). Comprobado el
- * 2026-09-27 en los dos sitios reales: su CSP sólo manda `frame-ancestors`,
- * sin `img-src` ni `default-src`, así que un cursor `data:` no queda bloqueado.
+ * 2026-09-27 en los dos sitios reales (sin sesión: login y dashboard): su CSP
+ * sólo manda `frame-ancestors`, sin `img-src` ni `default-src`, así que un
+ * cursor `data:` no queda bloqueado.
  *
  * El SVG lleva los atributos entre comillas SIMPLES y ni un salto de línea, y
  * de él sólo se codifican los cinco caracteres que romperían la URL o la regla

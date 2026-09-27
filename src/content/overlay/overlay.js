@@ -28,11 +28,11 @@
  *
  * Qué pinta cada capa, desde H23 (forma A, docs/PLAN2.md §3.6): el RELLENO de
  * una marca es un `::highlight()` del documento, debajo del texto, con dos
- * nombres —`faro-quote` para todas y `faro-quote-activa` para la que estás
- * mirando—; el overlay dibuja encima sólo el TRAZO de cada línea (un
- * `.quote-rect` transparente con su `::after`) y las insignias, que suben a
- * superíndice para no tapar la palabra siguiente. El color es la tinta que
- * elige el usuario (`setTint`), azul o ámbar.
+ * nombres —`faro-quote` para todas menos la activa y `faro-quote-activa` para
+ * la que estás mirando (disjuntos)—; el overlay dibuja encima sólo el TRAZO de
+ * cada línea (un `.quote-rect` transparente con su `::after`) y las insignias,
+ * que suben a superíndice para no tapar la palabra siguiente. El color es la
+ * tinta que elige el usuario (`setTint`), azul o ámbar.
  */
 
 import { OVERLAY_CSS, highlightCss, PICK_CSS } from './styles.js'
@@ -40,11 +40,12 @@ import { rectsOf, clipRects } from './rects.js'
 
 const HOST_ID = 'faro-overlay-host'
 const HIGHLIGHT_NAME = 'faro-quote'
-// La observación activa, en su propio highlight y con prioridad 1. Sus Range
-// NO están también en el de todas: comprobado el 2026-09-27 en Chrome, dos
-// highlights traslúcidos sobre la misma letra pintan los DOS fondos, uno encima
-// del otro, y en el tema oscuro la activa apilada dejaba el texto por debajo de
-// 4,5:1 (3,88 en azul y 3,31 en ámbar, medido con test/contrast.js).
+// La observación activa, en su propio highlight y con prioridad 1. Su texto NO
+// está también en el de todas (`fuera` lo resta): comprobado el 2026-09-27 en
+// Chrome, dos highlights traslúcidos sobre la misma letra pintan los DOS fondos,
+// uno encima del otro —la prioridad sólo decide cuál va arriba—, y en el tema
+// oscuro la activa apilada dejaba el texto por debajo de 4,5:1 (3,88 en azul y
+// 3,31 en ámbar, medido con test/contrast.js).
 const HIGHLIGHT_ACTIVE_NAME = 'faro-quote-activa'
 const SVG_NS = 'http://www.w3.org/2000/svg'
 
@@ -302,7 +303,7 @@ export class Overlay {
   /**
    * Coloca el foco sobre un rectángulo del viewport.
    *
-   * Con `scrim: false` no se oscurece nada: queda un subrayado amarillo con
+   * Con `scrim: false` no se oscurece nada: queda un velo de la tinta con
    * filete. Es lo que se usa al LLEGAR a un destino, donde el oscurecido tapa
    * justo lo que has venido a leer.
    *
@@ -441,8 +442,11 @@ export class Overlay {
     card.style.left = '0px'
     const cw = card.offsetWidth || 300
     const ch = card.offsetHeight || 120
-    const vw = window.innerWidth
-    const vh = window.innerHeight
+    // Sin las barras de desplazamiento, como las insignias (`_repaint`): con
+    // `innerWidth` (que la incluye) el margen de 14 px del cartel pegado a la
+    // derecha caía debajo de la barra, de 15.
+    const vw = document.documentElement.clientWidth
+    const vh = document.documentElement.clientHeight
     const M = 14
 
     let top
@@ -569,9 +573,12 @@ export class Overlay {
 
   /**
    * El relleno de las marcas, debajo del texto: `faro-quote` con todas menos la
-   * activa y `faro-quote-activa` con la activa, con prioridad 1 por si su texto
-   * coincide con el de otra observación. Cada Range está en UN highlight: los
-   * dos rellenos son traslúcidos y, apilados, se suman.
+   * activa y `faro-quote-activa` con la activa, con prioridad 1. La prioridad
+   * sólo decide cuál de los dos fondos va ENCIMA: el mismo texto en los dos
+   * highlights pinta DOS fondos traslúcidos, que se suman. Por eso la activa se
+   * RESTA de las demás (`fuera`), y no basta con sacar el mismo Range: dos
+   * observaciones cubren a menudo el mismo texto con Range distintos (revisión
+   * adversaria de H23, A4).
    *
    * @param {Range[]} ranges todos los de la página
    * @param {Range[]} activos los de la observación activa (ninguno en una cita)
@@ -579,7 +586,7 @@ export class Overlay {
   _setHighlight(ranges, activos = []) {
     if (!('highlights' in CSS) || typeof Highlight !== 'function') return
     try {
-      const resto = activos.length ? ranges.filter((r) => !activos.includes(r)) : ranges
+      const resto = activos.length ? ranges.flatMap((r) => (activos.includes(r) ? [] : fuera(r, activos))) : ranges
       CSS.highlights.set(HIGHLIGHT_NAME, new Highlight(...resto))
       if (activos.length) {
         const activa = new Highlight(...activos)
@@ -642,12 +649,23 @@ export class Overlay {
     return out
   }
 
-  /** Mide una vez y pinta las dos capas con esa misma medida. */
+  /**
+   * Mide una vez y pinta las dos capas con esa misma medida.
+   *
+   * El ancho que acota las insignias es el de la página SIN la barra de
+   * desplazamiento: `window.innerWidth` la incluye (1258 frente a 1243 en el
+   * pane, revisión adversaria de H23, A12) y una cita que acababa en el borde
+   * dejaba su número debajo de la barra. Se lee aquí, UNA vez, después de medir
+   * y antes de escribir: leído después de que `_paintQuoteRects` escriba,
+   * obliga a maquetar la página en cada repintado (300 rondas: 620-635 ms
+   * frente a 312-375).
+   */
   _repaint(sweep) {
     const medidas = this._measureGroups()
+    const ancho = document.documentElement.clientWidth
     this.stats.paints++
     this._paintQuoteRects(sweep, medidas)
-    this._paintNoteBadges(sweep, medidas)
+    this._paintNoteBadges(sweep, medidas, ancho)
   }
 
   /**
@@ -726,14 +744,17 @@ export class Overlay {
   /**
    * El número de cada observación, detrás del último carácter de su cita y en
    * superíndice. Pasó de verdad (anexo 2-F): centrada en la línea, la insignia
-   * tapaba las dos o tres primeras letras de la palabra siguiente. Subida 8 px
-   * (el plan decía 6; con Segoe UI 14 px a 6 acababa 0-1 px por debajo de la
-   * mitad del carácter siguiente, medido en el banco), su mitad de arriba cae en
-   * el hueco sobre la línea;
-   * la de abajo todavía puede rozar lo alto de la primera letra que sigue, y
-   * cuánto es cosa del banco, que mide cajas de verdad.
+   * tapaba las dos o tres primeras letras de la palabra siguiente. Mide 13 px
+   * (styles.js) y sube 5, así que acaba en `top + 8`: no baja de la mitad del
+   * carácter siguiente (el tramo 64 del banco lo mide, con Segoe UI 14 px y su
+   * caja de 19). Hacia arriba, medido en el banco (revisión adversaria de H23,
+   * A2): la de 16 px subida 8 tapaba 6-10 px de la caja del carácter de la
+   * línea de ARRIBA; con 13 y 5, el anillo se queda entre 0,88 px por debajo y
+   * 0,08 por encima de la línea base de arriba, en sus descendentes. Lo alto de
+   * la primera letra que sigue todavía lo roza el anillo, y cuánto es cosa del
+   * banco, que mide cajas de verdad.
    */
-  _paintNoteBadges(animate, medidas) {
+  _paintNoteBadges(animate, medidas, ancho) {
     const layer = this.el.noteLayer
     if (!layer) return
 
@@ -741,13 +762,15 @@ export class Overlay {
     const items = []
     for (const m of medidas) {
       if (!m.n || !m.ultimo) continue
-      // Pegada al final de la cita, sin salirse de la ventana ni por arriba, y
-      // sin pisar a otra insignia: dos citas que acaban a la misma altura ponían
-      // sus números uno encima del otro y sólo se leía el de arriba.
+      // Pegada al final de la cita, sin salirse de la página (`ancho`, sin la
+      // barra: ver `_repaint`) ni por arriba, y sin pisar a otra insignia: dos
+      // citas que acaban a la misma altura ponían sus números uno encima del
+      // otro y sólo se leía el de arriba.
       const sitio = libre(
-        Math.min(m.ultimo.left + m.ultimo.width + 1, window.innerWidth - 24),
-        Math.max(0, m.ultimo.top - 8),
-        ocupados
+        Math.min(m.ultimo.left + m.ultimo.width + 1, ancho - 24),
+        Math.max(0, m.ultimo.top - 5),
+        ocupados,
+        ancho
       )
       ocupados.push(sitio)
       items.push({ n: m.n, title: m.title, sitio })
@@ -898,12 +921,16 @@ export class Overlay {
   setPicking(on) {
     const html = document.documentElement
     if (on) {
-      if (!document.getElementById('faro-pick-style')) {
-        const s = document.createElement('style')
+      let s = document.getElementById('faro-pick-style')
+      if (!s) {
+        s = document.createElement('style')
         s.id = 'faro-pick-style'
-        s.textContent = PICK_CSS
         document.head?.appendChild(s)
       }
+      // Se reescribe si la dejó otra versión, como la del relleno en
+      // `_applyTint`: la de antes de H23 usa el mismo id con la cruz, y un
+      // content script nuevo inyectado sin recargar se la encuentra puesta.
+      if (s && s.textContent !== PICK_CSS) s.textContent = PICK_CSS
       html.classList.add('faro-picking')
       html.classList.toggle('faro-picking-dark', !!this.host?.classList.contains('faro-dark'))
     } else {
@@ -993,17 +1020,61 @@ function css(el, prop, value) {
 }
 
 /**
- * Un hueco de 16x16 (más su anillo) que no pise a los ya puestos. Se aparta a
- * la derecha, sin salirse de la ventana.
+ * Lo que queda de un Range de las demás fuera de los de la activa: él mismo si
+ * no se tocan, nada si lo cubren, y el trozo de delante y/o el de detrás si se
+ * solapan. Hace falta porque dos `::highlight` traslúcidos sobre la misma letra
+ * pintan los DOS fondos (medido en Chrome 152: en oscuro el texto bajaba a
+ * 3,88 en azul y 3,31 en ámbar), y dos Range DISTINTOS cubren el mismo texto más
+ * a menudo de lo que parece: dos observaciones del mismo bloque con la cita
+ * vacía («marca el bloque entero») o una cita dentro del bloque entero de otra.
+ * Dentro de UN highlight el solape se pinta una sola vez. El Range de la nota no
+ * se toca: los trozos son copias (`cloneRange`). Si una comparación lanza (un
+ * Range de otro documento), ese trozo se queda entero, como antes.
  */
-function libre(left, top, ocupados) {
+function fuera(r, activos) {
+  let trozos = [r]
+  for (const a of activos) {
+    const siguen = []
+    for (const t of trozos) {
+      try {
+        // Acaba antes de que empiece la activa, o empieza cuando ya acabó.
+        if (t.compareBoundaryPoints(Range.START_TO_END, a) <= 0 || t.compareBoundaryPoints(Range.END_TO_START, a) >= 0) {
+          siguen.push(t)
+          continue
+        }
+        if (t.compareBoundaryPoints(Range.START_TO_START, a) < 0) {
+          const antes = t.cloneRange()
+          antes.setEnd(a.startContainer, a.startOffset)
+          siguen.push(antes)
+        }
+        if (t.compareBoundaryPoints(Range.END_TO_END, a) > 0) {
+          const despues = t.cloneRange()
+          despues.setStart(a.endContainer, a.endOffset)
+          siguen.push(despues)
+        }
+      } catch {
+        siguen.push(t)
+      }
+    }
+    trozos = siguen
+  }
+  return trozos
+}
+
+/**
+ * Un hueco para una insignia de 13x13 (17 con su anillo; `CHOCA` le deja 2 px
+ * de aire) que no pise a las ya puestas. Se aparta a la derecha, sin salirse
+ * de la página: `ancho` es el que `_repaint` leyó sin la barra de
+ * desplazamiento.
+ */
+function libre(left, top, ocupados, ancho) {
   const CHOCA = 19
   let x = left
   for (let i = 0; i < 8; i++) {
     if (!ocupados.some((o) => Math.abs(o.left - x) < CHOCA && Math.abs(o.top - top) < CHOCA)) break
     x += CHOCA
   }
-  return { left: Math.min(x, window.innerWidth - 24), top }
+  return { left: Math.min(x, ancho - 24), top }
 }
 
 /**

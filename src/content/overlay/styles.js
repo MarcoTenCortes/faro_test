@@ -53,12 +53,12 @@ export const OVERLAY_CSS = `
   --faro-scrim: rgba(8, 8, 11, .66);
   --faro-shadow: 0 12px 32px -10px rgba(0, 0, 0, .7), 0 2px 6px rgba(0, 0, 0, .4);
   --faro-tinta: #60A5FA;
-  --faro-tinta-fuerte: #3B82F6;
+  --faro-tinta-fuerte: #93C5FD;
 }
 
 /* La tinta a elegir (el ajuste «Color del subrayado»): el ámbar de antes de H23.
    El trazo claro sobre blanco se queda en 2,94 y el de la activa en 5,92; en
-   oscuro, 8,07 y 5,51 (lo imprime «npm run contrast»). El relleno, el que lleva la
+   oscuro, 8,07 y 10,23 (lo imprime «npm run contrast»). El relleno, el que lleva la
    letra encima, vive en highlightCss() y se exige en panel-css.test.js. */
 :host(.faro-tinta-ambar) {
   --faro-tinta: #C98A22;
@@ -68,7 +68,7 @@ export const OVERLAY_CSS = `
 }
 :host(.faro-tinta-ambar.faro-dark) {
   --faro-tinta: #E9AC4A;
-  --faro-tinta-fuerte: #C98A22;
+  --faro-tinta-fuerte: #F3C77A;
 }
 
 * { box-sizing: border-box; }
@@ -253,9 +253,12 @@ button:focus-visible { outline: 2px solid var(--faro-gold); outline-offset: 2px;
    el tema oscuro el texto marcado bajaba de 8,95:1 a 3,63:1 (anexo 2-F). Ahora
    el relleno vive sólo en ::highlight(faro-quote), que se pinta DEBAJO del
    texto (highlightCss, en el documento), y aquí queda el trazo: una pastilla de
-   3 px pegada al borde inferior de la caja de la línea, que ya incluye el
-   espacio de los descendentes, así que el trazo queda bajo la letra y no la
-   tapa. El rectángulo es transparente. */
+   2 px pegada al borde inferior de la caja de la línea, que ya incluye el
+   espacio de los descendentes. Medido en el banco (revisión adversaria de H23,
+   A3): el trazo normal (2 px) pisa las puntas de los descendentes, 0,5-1,3 de
+   3 px en Segoe 14 y 2 de 4 en 16; el de la activa (3 px), 1,5-2,3 de 3 y 3 de
+   4 —lo mismo que el normal de antes de la revisión—; nunca sube a la letra.
+   El rectángulo es transparente. */
 .quote-layer { position: fixed; inset: 0; pointer-events: none; }
 .quote-rect {
   position: fixed;
@@ -278,13 +281,15 @@ button:focus-visible { outline: 2px solid var(--faro-gold); outline-offset: 2px;
   position: absolute;
   left: 0; right: 0;
   bottom: 0;
-  height: 3px;
+  height: 2px;
   border-radius: 2px;
   background: var(--faro-tinta);
   transform-origin: left center;
 }
-/* La observación que estás mirando ahora mismo: un trazo más grueso y oscuro. */
-.quote-rect.active::after { height: 4px; background: var(--faro-tinta-fuerte); }
+/* La observación que estás mirando ahora mismo: un trazo más grueso y de más
+   contraste: en claro más oscuro, en oscuro más CLARO (con #3B82F6 bajaba a
+   4,40 sobre la página y 2,49 sobre su propio relleno). */
+.quote-rect.active::after { height: 3px; background: var(--faro-tinta-fuerte); }
 
 /* Se dibuja de izquierda a derecha, una sola vez: el barrido blanco de antes
    era un fogonazo sobre cualquier fondo oscuro. El escalonado de cada caja lo
@@ -337,26 +342,33 @@ button:focus-visible { outline: 2px solid var(--faro-gold); outline-offset: 2px;
    pie. Al final de la cita y no en el margen, a propósito: en un panel estrecho
    o con la barra lateral abierta el margen no existe.
 
-   Desde H23 van en SUPERÍNDICE (overlay.js las sube 8 px sobre la línea):
-   centradas en la línea tapaban las dos o tres primeras letras de la palabra
-   siguiente (anexo 2-F). Miden 16 px y llevan un anillo de 2 px del color del
-   papel, que las despega del texto y de la línea de arriba. Siguen en ámbar:
-   son la marca de Faro, la misma pastilla [n] que el chat. */
+   Desde H23 van en SUPERÍNDICE: centradas en la línea tapaban las dos o tres
+   primeras letras de la palabra siguiente (anexo 2-F). Miden 13 px, llevan un
+   anillo de 2 px del color del papel que las despega del texto, y overlay.js
+   las sube 5 px sobre la línea, así que acaban en «top + 8». Medido en el
+   banco con Segoe UI 14 px (revisión adversaria de H23, A2): con 16 px y
+   subidas 8, lo de antes, tapaban 6-10 px de la caja del carácter de la línea
+   de ARRIBA; así el anillo se queda entre 0,88 px por debajo y 0,08 por encima
+   de la línea base de arriba, en sus descendentes, y los cuerpos de las letras
+   sólo se pisan con un interlineado apretado (2 px con 14/20, 3 con «normal»,
+   nada con 16/24). La cifra en negrita a 9,5 px se dibuja con las mismas siete
+   filas que a 10. Siguen en ámbar: son la marca de Faro, la misma pastilla [n]
+   que el chat. */
 
 .note-layer { position: fixed; inset: 0; pointer-events: none; }
 
 .note-badge {
   position: fixed;
-  min-width: 16px;
-  height: 16px;
-  padding: 0 4px;
+  min-width: 13px;
+  height: 13px;
+  padding: 0 3px;
   border: 1px solid var(--faro-gold-deep);
-  border-radius: 8px;
+  border-radius: 7px;
   background: var(--faro-gold);
   color: #1B1405;
-  font-size: 10px;
+  font-size: 9.5px;
   font-weight: 700;
-  line-height: 14px;
+  line-height: 11px;
   text-align: center;
   font-variant-numeric: tabular-nums;
   box-shadow: 0 0 0 2px var(--faro-paper), 0 1px 3px rgba(19, 18, 24, .35);
@@ -498,7 +510,7 @@ button:focus-visible { outline: 2px solid var(--faro-gold); outline-offset: 2px;
 :host(.faro-still) .quote-rect.sweep::after { animation: none; }
 
 /* Alto contraste de Windows: los colores de Faro se sustituyen por los del
-   sistema, y un trazo de 3 px de «Highlight» solo se perdería. La caja entera
+   sistema, y un trazo de 2 px de «Highlight» solo se perdería. La caja entera
    se rodea, y la insignia conserva los suyos porque su texto ya se lee. */
 @media (forced-colors: active) {
   .quote-rect { outline: 2px solid Highlight; outline-offset: 1px; }
@@ -527,7 +539,8 @@ button:focus-visible { outline: 2px solid var(--faro-gold); outline-offset: 2px;
  * La observación activa va en SU highlight, `faro-quote-activa`, con prioridad
  * 1, y fuera del de las demás: dos rellenos traslúcidos sobre la misma letra se
  * suman, y en oscuro la activa apilada sobre la normal bajaba a 3,88:1 (azul)
- * y 3,31:1 (ámbar). Cada Range pinta un relleno y sólo uno.
+ * y 3,31:1 (ámbar). Ninguna letra pinta dos rellenos: overlay.js resta el texto
+ * de la activa de los Range de las demás (`fuera`), aunque sean otros Range.
  */
 const RELLENO = Object.freeze({
   azul: Object.freeze(['rgba(59, 130, 246, .28)', 'rgba(59, 130, 246, .40)']),
@@ -545,9 +558,6 @@ export function highlightCss(tinta) {
 ::highlight(faro-quote-activa) { background-color: ${activa}; color: inherit; }
 `
 }
-
-/** La de por defecto, la azul; se conserva para quien la importe. */
-export const HIGHLIGHT_CSS = highlightCss('azul')
 
 /**
  * Cursor y selección del modo de «Señalar».

@@ -40,7 +40,7 @@
 import { test, eq, assert } from '../harness.js'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { OVERLAY_CSS, HIGHLIGHT_CSS, PICK_CSS, highlightCss } from '../../src/content/overlay/styles.js'
+import { OVERLAY_CSS, PICK_CSS, highlightCss } from '../../src/content/overlay/styles.js'
 import { cursorRule } from '../../src/content/overlay/cursor.js'
 import { Overlay } from '../../src/content/overlay/overlay.js'
 
@@ -120,7 +120,7 @@ test('overlay: hideCard() no suelta onCancel (el recorrido sigue con el foco pue
 
 // --- P1 (H6): repintar por frames, medir una vez y reutilizar los nodos -----
 
-const PINTAN = ['_paintQuoteRects(sweep, medidas) {', '_paintNoteBadges(animate, medidas) {', '_paintOutlines(animate) {']
+const PINTAN = ['_paintQuoteRects(sweep, medidas) {', '_paintNoteBadges(animate, medidas, ancho) {', '_paintOutlines(animate) {']
 
 test('P1: una ráfaga de scroll se junta en UN frame, y el repintado a mano cancela el pendiente', () => {
   // `scroll` con captura en window llega por cada contenedor que se desplaza y
@@ -166,7 +166,7 @@ test('P1: la clase «on» se pone al instante salvo en el primer pintado con bar
   const rects = cuerpo('_paintQuoteRects(sweep, medidas) {')
   assert(/if \(nuevo && sweep\)/.test(rects), 'sólo un nodo nuevo de un pintado con barrido espera a un frame')
   assert(rects.includes("nodo.classList.add('on')"), 'los demás se encienden al instante')
-  const badges = cuerpo('_paintNoteBadges(animate, medidas) {')
+  const badges = cuerpo('_paintNoteBadges(animate, medidas, ancho) {')
   assert(/if \(nuevo && animate\)/.test(badges), 'las insignias, igual')
 })
 
@@ -179,7 +179,7 @@ test('P1: la geometría de cada observación se mide UNA vez para las dos capas'
   assert(med.includes('rectsOf(') && med.includes('clipRects('), 'medir es leer las cajas de los Range y recortarlas')
   assert(med.includes('!g.clipEl.isConnected'), 'un contenedor de recorte que ya no está en la página se vuelve a buscar')
 
-  for (const firma of ['_paintQuoteRects(sweep, medidas) {', '_paintNoteBadges(animate, medidas) {']) {
+  for (const firma of ['_paintQuoteRects(sweep, medidas) {', '_paintNoteBadges(animate, medidas, ancho) {']) {
     const c = cuerpo(firma)
     for (const caro of ['rectsOf(', 'clipRects(', 'clipElementFor(', 'inCode(']) {
       assert(!c.includes(caro), `«${firma}» no vuelve a medir con ${caro}: recibe las medidas`)
@@ -187,7 +187,7 @@ test('P1: la geometría de cada observación se mide UNA vez para las dos capas'
   }
   const rep = cuerpo('_repaint(sweep) {')
   assert(rep.includes('const medidas = this._measureGroups()'), '_repaint mide una vez…')
-  assert(rep.includes('this._paintQuoteRects(sweep, medidas)') && rep.includes('this._paintNoteBadges(sweep, medidas)'), '…y se la pasa a las dos capas')
+  assert(rep.includes('this._paintQuoteRects(sweep, medidas)') && rep.includes('this._paintNoteBadges(sweep, medidas, ancho)'), '…y se la pasa a las dos capas')
 })
 
 // --- H23: el subrayado (forma A) -------------------------------------------
@@ -272,7 +272,7 @@ function nodoFalso(tag) {
  * mismo proceso que las demás).
  */
 function conFalsos(fn) {
-  const nombres = ['CSS', 'Highlight', 'document', 'window', 'requestAnimationFrame']
+  const nombres = ['CSS', 'Highlight', 'Range', 'document', 'window', 'requestAnimationFrame']
   const antes = Object.fromEntries(nombres.map((k) => [k, Object.getOwnPropertyDescriptor(globalThis, k)]))
   const porId = new Map()
   const head = nodoFalso('head')
@@ -290,6 +290,9 @@ function conFalsos(fn) {
         this.priority = 0
       }
     },
+    // Las cuatro constantes con las que `fuera` compara (los valores del DOM):
+    // en Node no hay `Range`, y sin ellas la resta lanzaría dentro del `try`.
+    Range: { START_TO_START: 0, START_TO_END: 1, END_TO_END: 2, END_TO_START: 3 },
     document: {
       documentElement: html,
       head,
@@ -355,11 +358,25 @@ test('H23: el trazo de la marca se dibuja, se anula en los DOS apagados sin desa
   const caja = bloque(OVERLAY_SIN, '.quote-rect {')
   for (const d of ['background: transparent;', 'overflow: hidden;', 'opacity: 0;']) assert(caja.includes(d), `.quote-rect lleva ${d}`)
   assert(!/gradient|box-shadow/.test(caja), 'sin degradado ni trazo inset: el trazo es el ::after')
+  // Y ninguna regla del rectángulo (salvo su trazo) vuelve a darle fondo: un
+  // `background-color` detrás del `transparent` ponía el relleno otra vez
+  // ENCIMA de la letra y todo seguía en verde (revisión adversaria de H23, A5).
+  let fondos = 0
+  for (const [, sel, c] of OVERLAY_SIN.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    if (!sel.includes('.quote-rect') || sel.includes('::after')) continue
+    for (const d of c.match(/(?<![-\w])background(-[\w-]+)?\s*:[^;]*;/g) || []) {
+      eq(d, 'background: transparent;', sel.trim())
+      fondos++
+    }
+  }
+  assert(fondos >= 2, `el rectángulo y el de código declaran su fondo transparente (${fondos})`)
   const trazo = bloque(OVERLAY_SIN, '.quote-rect::after {')
-  for (const d of ['content: "";', 'bottom: 0;', 'height: 3px;', 'border-radius: 2px;', 'background: var(--faro-tinta);', 'transform-origin: left center;']) {
+  // EL CAMBIO (revisión adversaria de H23, A3): 2 px y 3 la activa, pegados al
+  // fondo de la caja. Con 3 y 4 el trazo tapaba medio descendente, o entero.
+  for (const d of ['content: "";', 'bottom: 0;', 'height: 2px;', 'border-radius: 2px;', 'background: var(--faro-tinta);', 'transform-origin: left center;']) {
     assert(trazo.includes(d), `el trazo lleva ${d}`)
   }
-  assert(OVERLAY_SIN.includes('.quote-rect.active::after { height: 4px; background: var(--faro-tinta-fuerte); }'), 'la activa, 4 px y la tinta fuerte')
+  assert(OVERLAY_SIN.includes('.quote-rect.active::after { height: 3px; background: var(--faro-tinta-fuerte); }'), 'la activa, 3 px y la tinta fuerte')
   assert(OVERLAY_SIN.includes('.quote-rect.on-code { background: transparent; }'), 'en código, sólo el trazo')
 
   // El «se dibuja» sustituye al barrido blanco.
@@ -392,7 +409,7 @@ test('H23: el relleno va en dos highlights, la activa con prioridad 1 y FUERA de
   assert(overlay.includes("const HIGHLIGHT_ACTIVE_NAME = 'faro-quote-activa'"), 'y el de la activa')
   const pone = cuerpo('_setHighlight(ranges, activos = []) {')
   for (const t of [
-    'const resto = activos.length ? ranges.filter((r) => !activos.includes(r)) : ranges',
+    'const resto = activos.length ? ranges.flatMap((r) => (activos.includes(r) ? [] : fuera(r, activos))) : ranges',
     'CSS.highlights.set(HIGHLIGHT_NAME, new Highlight(...resto))',
     'activa.priority = 1',
     'CSS.highlights.set(HIGHLIGHT_ACTIVE_NAME, activa)',
@@ -408,7 +425,18 @@ test('H23: el relleno va en dos highlights, la activa con prioridad 1 y FUERA de
   assert(foco.indexOf('this._repaint(false)') > foco.indexOf('this._setHighlight('), 'y repinta el trazo después')
   assert(cuerpo('highlightRanges(ranges, { sweep = true } = {}) {').includes('this._setHighlight(this.quoteRanges)\n'), 'una cita no tiene activa')
   assert(cuerpo('_activeRanges() {').includes('this.notes.find((x) => x.n === this.activeNote)'), 'la activa es la nota con ese número')
-  eq(HIGHLIGHT_CSS, highlightCss('azul'), 'la hoja de por defecto es la azul')
+  // El relleno se pone al anotar, al destacar y al subrayar una cita, y NADA del
+  // camino del scroll lo vuelve a poner: rehacerlo en `_repaint` crearía dos
+  // Highlight por frame (revisión adversaria de H23, A5).
+  eq((overlay.match(/this\._setHighlight\(/g) || []).length, 3, 'sólo annotate, focusNote y highlightRanges ponen el relleno: nada del camino del scroll')
+
+  // Cada regla del relleno deja la letra de la página como está: un `color`
+  // propio dentro de un ::highlight repintaría el texto de Atlassian.
+  for (const tinta of ['azul', 'ambar']) {
+    const reglas = [...highlightCss(tinta).matchAll(/::highlight\(([\w-]+)\)\s*\{([^}]*)\}/g)]
+    eq(reglas.map((r) => r[1]), ['faro-quote', 'faro-quote-activa'], `${tinta}: los dos highlights`)
+    for (const [, nombre, c] of reglas) eq(c.match(/(?<![-\w])color\s*:[^;]*;/g), ['color: inherit;'], `${tinta} · ${nombre}: el color, heredado`)
+  }
 
   // Y ejecutado, con un CSS.highlights de mentira.
   conFalsos(({ CSS }) => {
@@ -416,6 +444,14 @@ test('H23: el relleno va en dos highlights, la activa con prioridad 1 y FUERA de
     const o = new Overlay()
     o.notes = [{ n: 1, ranges: [a] }, { n: 2, ranges: [b, c] }]
     o.quoteRanges = [a, b, c]
+    // Los Range de la activa: ninguno sin activa ni con una que no existe (con
+    // `this.quoteRanges` de respaldo, la activa se llevaría TODO el relleno).
+    eq(o._activeRanges(), [], 'sin activa, ninguno')
+    o.activeNote = 9
+    eq(o._activeRanges(), [], 'una activa que no existe, ninguno')
+    o.activeNote = 2
+    eq(o._activeRanges(), [b, c], 'la 2, los suyos')
+    o.activeNote = 0
     assert(o.focusNote(2), 'la 2 existe')
     eq(CSS.highlights.get('faro-quote-activa').ranges, [b, c], 'la activa tiene los Range de la 2')
     eq(CSS.highlights.get('faro-quote-activa').priority, 1, 'con prioridad 1')
@@ -431,6 +467,80 @@ test('H23: el relleno va en dos highlights, la activa con prioridad 1 y FUERA de
     o._setHighlight([a, b], [b])
     o.clearHighlight()
     eq([...CSS.highlights.keys()], [], 'clearHighlight no deja ninguno de los dos')
+  })
+})
+
+test('H23 revisión: ninguna letra lleva los dos rellenos, aunque dos observaciones la cubran con Range distintos', () => {
+  const resta = funcion('function fuera(r, activos) {')
+  for (const t of ['Range.START_TO_END, a) <= 0', 'Range.END_TO_START, a) >= 0', 'const antes = t.cloneRange()', 'const despues = t.cloneRange()', 'siguen.push(t)']) {
+    assert(resta.includes(t), `fuera: ${t}`)
+  }
+  assert(cuerpo('_setHighlight(ranges, activos = []) {').includes('ranges.flatMap((r) => (activos.includes(r) ? [] : fuera(r, activos)))'), '_setHighlight resta la activa del resto')
+
+  conFalsos(({ CSS }) => {
+    // Un nodo de texto de mentira y Range sobre él con lo que usa `fuera`: los
+    // puntos se comparan como en el DOM (START_TO_END = fin de éste contra el
+    // principio del otro; END_TO_START = principio de éste contra el fin del otro).
+    const TEXTO = 'Alfa beta gamma delta'
+    const nodo = {}
+    const rango = (ini, fin) => ({
+      startContainer: nodo,
+      startOffset: ini,
+      endContainer: nodo,
+      endOffset: fin,
+      compareBoundaryPoints(how, s) {
+        const [mio, suyo] = [[this.startOffset, s.startOffset], [this.endOffset, s.startOffset], [this.endOffset, s.endOffset], [this.startOffset, s.endOffset]][how]
+        return Math.sign(mio - suyo)
+      },
+      cloneRange() {
+        return rango(this.startOffset, this.endOffset)
+      },
+      setStart(_n, o) {
+        this.startOffset = o
+      },
+      setEnd(_n, o) {
+        this.endOffset = o
+      },
+    })
+    const textos = (nombre) => (CSS.highlights.get(nombre)?.ranges || []).map((r) => TEXTO.slice(r.startOffset, r.endOffset))
+    const con = (notas, n) => {
+      const o = new Overlay()
+      o.notes = notas
+      o.quoteRanges = notas.flatMap((x) => x.ranges)
+      o.activeNote = n
+      o._setHighlight(o.quoteRanges, o._activeRanges())
+      return o
+    }
+
+    // Dos observaciones del mismo bloque con la cita vacía: el bloque entero, dos veces.
+    con([{ n: 1, ranges: [rango(0, 21)] }, { n: 2, ranges: [rango(0, 21)] }], 2)
+    eq(textos('faro-quote-activa'), ['Alfa beta gamma delta'], 'la activa, entera')
+    eq(textos('faro-quote'), [], 'y la otra, con los mismos extremos, no pinta debajo')
+
+    // Una cita dentro del bloque entero de otra, en los dos sentidos.
+    const bloque = rango(0, 21)
+    const cita = rango(5, 15)
+    const o = con([{ n: 1, ranges: [bloque] }, { n: 2, ranges: [cita] }], 2)
+    eq(textos('faro-quote-activa'), ['beta gamma'])
+    eq(textos('faro-quote'), ['Alfa ', ' delta'], 'el bloque, sin el trozo de la activa')
+    eq([bloque.startOffset, bloque.endOffset], [0, 21], 'el Range de la nota no se toca: los trozos son copias')
+    o.activeNote = 1
+    o._setHighlight(o.quoteRanges, o._activeRanges())
+    eq(textos('faro-quote'), [], 'la cita cae dentro del bloque activo')
+
+    // Solapadas de lado, y sin tocarse (el mismo Range, no una copia).
+    con([{ n: 1, ranges: [rango(0, 15)] }, { n: 2, ranges: [rango(10, 21)] }], 2)
+    eq(textos('faro-quote'), ['Alfa beta '])
+    const suelto = rango(0, 4)
+    con([{ n: 1, ranges: [suelto] }, { n: 2, ranges: [rango(10, 15)] }], 2)
+    assert(CSS.highlights.get('faro-quote').ranges[0] === suelto, 'sin solape, el Range de siempre')
+
+    // Un Range de otro documento lanza WrongDocumentError: se queda entero y la activa cambia igual.
+    const ajeno = { compareBoundaryPoints() { throw new Error('WrongDocumentError') } }
+    con([{ n: 1, ranges: [ajeno] }, { n: 2, ranges: [rango(10, 15)] }], 2)
+    const todas = CSS.highlights.get('faro-quote').ranges
+    assert(todas.length === 1 && todas[0] === ajeno, 'el que lanza se queda como estaba')
+    eq(textos('faro-quote-activa'), ['gamma'], 'y la activa no se queda en la de antes')
   })
 })
 
@@ -476,11 +586,19 @@ test('H23: «Señalar» con la página en oscuro pone faro-picking-dark, y apaga
 
   conFalsos(({ document }) => {
     const html = document.documentElement
+    // La hoja que dejó una versión de antes de H23 con el mismo id (la cruz):
+    // un content script nuevo inyectado sin recargar la pestaña («Dar
+    // permiso») se la encuentra puesta (revisión adversaria de H23, A14).
+    const vieja = nodoFalso('style')
+    vieja.id = 'faro-pick-style'
+    vieja.textContent = 'html.faro-picking, html.faro-picking * { cursor: crosshair !important; }'
+    document.head.appendChild(vieja)
     const o = new Overlay()
     o.host = nodoFalso('div')
     o.host.classList.add('faro-dark')
     o.setPicking(true)
     assert(html.classList.contains('faro-picking') && html.classList.contains('faro-picking-dark'), 'oscuro: las dos')
+    eq(document.head.children.length, 1, 'una vez, y reescrita si es de otra versión')
     eq(document.getElementById('faro-pick-style').textContent, PICK_CSS, 'con la hoja del cursor')
     o.setPicking(false)
     assert(!html.classList.contains('faro-picking') && !html.classList.contains('faro-picking-dark'), 'apagado: ninguna')
@@ -492,13 +610,39 @@ test('H23: «Señalar» con la página en oscuro pone faro-picking-dark, y apaga
 })
 
 test('H23: las insignias van en superíndice detrás de la cita, sin salirse de la ventana ni pisarse', () => {
-  const b = cuerpo('_paintNoteBadges(animate, medidas) {')
-  assert(b.includes('Math.min(m.ultimo.left + m.ultimo.width + 1, window.innerWidth - 24)'), 'a 1 px del final de la cita')
-  assert(b.includes('Math.max(0, m.ultimo.top - 8)'), '8 px por encima de la línea (medido en el banco: con 6 la insignia acababa 0-1 px por debajo de la mitad del carácter siguiente con Segoe UI 14 px), sin salirse por arriba')
-  const l = funcion('function libre(left, top, ocupados) {')
-  assert(l.includes('const CHOCA = 19') && l.includes('Math.min(x, window.innerWidth - 24)'), 'libre() sigue apartándolas y las deja dentro')
+  const b = cuerpo('_paintNoteBadges(animate, medidas, ancho) {')
+  assert(b.includes('Math.min(m.ultimo.left + m.ultimo.width + 1, ancho - 24)'), 'a 1 px del final de la cita')
+  // EL CAMBIO (revisión adversaria de H23, A2): 5 px y no 8, con la insignia de
+  // 13 px: medido en el banco con Segoe UI 14 px, la de 16 subida 8 tapaba 6-10
+  // px de la caja del carácter de la línea de ARRIBA; así su anillo se queda
+  // entre 0,88 px por debajo y 0,08 por encima de la línea base de arriba, y su
+  // borde de abajo sigue en `top + 8`.
+  assert(b.includes('Math.max(0, m.ultimo.top - 5)'), '5 px por encima de la línea, sin salirse por arriba')
+  const pastilla = bloque(OVERLAY_SIN, '.note-badge {')
+  for (const d of ['min-width: 13px;', 'height: 13px;', 'padding: 0 3px;', 'border-radius: 7px;', 'font-size: 9.5px;', 'line-height: 11px;']) {
+    assert(pastilla.includes(d), `la insignia de 13 px lleva ${d}`)
+  }
+  const l = funcion('function libre(left, top, ocupados, ancho) {')
+  assert(l.includes('const CHOCA = 19') && l.includes('Math.min(x, ancho - 24)'), 'libre() sigue apartándolas y las deja dentro')
+  // EL CAMBIO (revisión adversaria de H23, A12): el ancho es el de la página SIN
+  // la barra de desplazamiento —`window.innerWidth` la incluye (1258 frente a
+  // 1243 en el pane) y una cita que acababa en el borde dejaba la insignia
+  // debajo de la barra—, y se lee UNA vez por repintado, después de medir y
+  // antes de escribir: leído después de pintar, obliga a maquetar cada vez.
+  for (const [nombre, c] of [['_paintNoteBadges', b], ['libre', l]]) assert(!/innerWidth/.test(c), `${nombre} no lee window.innerWidth`)
+  const rep = cuerpo('_repaint(sweep) {')
+  const [mide, lee, escribe] = ['this._measureGroups()', 'document.documentElement.clientWidth', 'this._paintQuoteRects('].map((t) => rep.indexOf(t))
+  assert(mide >= 0 && lee > mide && escribe > lee, '_repaint lee el ancho entre medir y escribir')
+  eq(rep.split('clientWidth').length - 1, 1, 'una sola vez por repintado')
+  const carta = cuerpo('_placeCard(near) {')
+  assert(carta.includes('const vw = document.documentElement.clientWidth') && carta.includes('const vh = document.documentElement.clientHeight'), 'el cartel, igual: sin las barras')
+  assert(!/inner(Width|Height)/.test(carta), 'y sin window.innerWidth ni innerHeight')
 
-  conFalsos(() => {
+  conFalsos(({ document, window }) => {
+    // 1015 con la barra y 1000 sin ella: si alguien vuelve a `innerWidth`, la
+    // del borde sale en 991 (bajo la barra) y no en 976.
+    document.documentElement.clientWidth = 1000
+    window.innerWidth = 1015
     const o = new Overlay()
     o.el = { noteLayer: nodoFalso('div') }
     const linea = (left, top, width = 50) => ({ left, top, width, height: 17 })
@@ -508,15 +652,22 @@ test('H23: las insignias van en superíndice detrás de la cita, sin salirse de 
       { n: 3, rects: [], ultimo: linea(990, 3) },
       { n: 4, rects: [], ultimo: null },
     ]
-    o._paintNoteBadges(false, medidas)
-    const sitios = o.el.noteLayer.children.map((x) => [x.dataset.n, x.style.left, x.style.top])
-    eq(sitios, [
-      ['1', '151px', '192px'],
-      ['2', '170px', '192px'],
+    const esperado = [
+      ['1', '151px', '195px'],
+      ['2', '170px', '195px'],
       ['3', '976px', '0px'],
-    ], 'superíndice; la segunda, apartada; la del borde, dentro; sin cita, sin insignia')
+    ]
+    o._paintNoteBadges(false, medidas, 1000)
+    const sitios = () => o.el.noteLayer.children.map((x) => [x.dataset.n, x.style.left, x.style.top])
+    eq(sitios(), esperado, 'superíndice; la segunda, apartada; la del borde, dentro; sin cita, sin insignia')
     eq(o.el.noteLayer.children[0].title, '1 · uno')
     eq(o.el.noteLayer.children[1].title, 'Observación 2')
+
+    // Y por el camino de verdad: `_repaint` lee el ancho del <html>.
+    o.el = { noteLayer: nodoFalso('div'), quoteLayer: nodoFalso('div') }
+    o._measureGroups = () => medidas
+    o._repaint(false)
+    eq(sitios(), esperado, '_repaint pasa el ancho sin la barra')
   })
 })
 
@@ -585,4 +736,35 @@ test('H23: el trazo no se ve entero antes de dibujarse: el retardo va en --faro-
   } finally {
     Object.defineProperty(globalThis, 'setTimeout', antes)
   }
+})
+
+test('H23 revisión: la herramienta de «Señalar» es azul, lo que sigue la tinta la sigue, y la barra cede', () => {
+  // Nueve cambios del CSS de H23 que ningún pin vigilaba (revisión adversaria de
+  // H23, A5-A11): la barra que no cedía a 364 px, lo que tiene que seguir siendo
+  // azul elija el usuario la tinta que elija, y lo que tiene que seguirla.
+  const pista = bloque(OVERLAY_SIN, '.pick-hint {')
+  assert(pista.includes('flex: 0 1 auto;') && pista.includes('min-width: 0;'), 'la pista cede antes que el texto elegido')
+  eq(bloque(OVERLAY_SIN, '@media (max-width: 480px) {'), '@media (max-width: 480px) {\n  .pick-hint { display: none; }\n  .pick-bar { max-width: 96vw; }\n}', 'por debajo de 480 px la pista se va y la barra se ensancha')
+  assert(bloque(OVERLAY_SIN, '.pick-bar {').includes('flex-wrap: wrap;'), 'la barra envuelve en vez de salirse')
+
+  // La herramienta, siempre azul: el faro de la barra y el recuadro de una imagen.
+  eq(bloque(OVERLAY_SIN, '.pick-bar .beacon {'), '.pick-bar .beacon { border-color: #3B82F6; }')
+  eq(bloque(OVERLAY_SIN, '.pick-bar .beacon::after {'), '.pick-bar .beacon::after { background: #3B82F6; }')
+  eq(bloque(OVERLAY_SIN, ':host(.faro-dark) .pick-bar .beacon {'), ':host(.faro-dark) .pick-bar .beacon { border-color: #60A5FA; }')
+  eq(bloque(OVERLAY_SIN, ':host(.faro-dark) .pick-bar .beacon::after {'), ':host(.faro-dark) .pick-bar .beacon::after { background: #60A5FA; }')
+  const encima = bloque(OVERLAY_SIN, '.pick-hover {')
+  assert(encima.includes('border: 1px solid #3B82F6;') && encima.includes('background: rgba(59, 130, 246, .10);'), 'el recuadro al pasar por una imagen, azul')
+
+  // Lo que es resultado sigue la tinta, y en esos tres bloques no queda ámbar a
+  // mano (la insignia activa y los :host del ámbar sí lo llevan, y son suyos).
+  for (const cabecera of ['.img-outline {', '.spot.flat,', '@keyframes faro-marker-breathe {']) {
+    const b = bloque(OVERLAY_SIN, cabecera)
+    assert(b.includes('var(--faro-tinta'), `${cabecera} sigue la tinta`)
+    assert(!b.includes('rgba(233, 172, 74') && !b.includes('--faro-gold'), `${cabecera} sin el ámbar escrito a mano`)
+  }
+
+  // La insignia: el anillo del color del papel, y entra creciendo desde .6.
+  const insignia = bloque(OVERLAY_SIN, '.note-badge {')
+  assert(insignia.includes('box-shadow: 0 0 0 2px var(--faro-paper),') && insignia.includes('transform: scale(.6);'), 'la insignia, con su anillo y pequeña')
+  assert(OVERLAY_SIN.includes('.note-badge.on { opacity: 1; transform: scale(1); }'), 'y encendida, a su tamaño')
 })
