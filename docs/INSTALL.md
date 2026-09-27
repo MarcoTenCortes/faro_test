@@ -515,8 +515,11 @@ Si usas un Confluence con varios espacios —por ejemplo SIMPL y DCPIAS—:
   Confluence enlazado y un proyecto delante. «Automático (hoy X, por el
   contexto)» dice qué elegiría Faro sin ti y por qué; «Todo el sitio» y cada
   espacio con contexto son las otras opciones, y debajo una línea dice qué viaja
-  ahora. Lo que eliges se guarda por proyecto en este sitio y se apunta en el
-  Registro («Espacio enlazado»).
+  ahora. Lo que eliges se guarda por proyecto en este sitio —siempre bajo el
+  proyecto que nombra el selector: si con Ajustes abierto la pestaña pasa a
+  otro proyecto, el selector pasa a ése— y se apunta en el Registro («Espacio
+  enlazado»). Con dos ventanas del mismo Jira, una no borra lo que eligió la
+  otra.
 - **El perfil del proyecto es también por proyecto** (H22): Faro guarda uno por
   cada proyecto de tu Jira (hasta 20 por sitio, los más recientes), así que
   volver a un proyecto que ya contó no lo vuelve a contar. El perfil que tenías

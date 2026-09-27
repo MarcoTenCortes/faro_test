@@ -519,11 +519,14 @@ test('H22: normalizeLinkedSpaces — proyecto → espacio, con claves blancas, t
   eq(Object.getPrototypeOf(proto), Object.prototype, 'el prototipo no se toca')
   for (const basura of [null, undefined, 7, 'ENG', [], ['ENG'], true]) eq(normalizeLinkedSpaces(basura), {}, JSON.stringify(basura) ?? String(basura))
   // Tope: SCOPE_LIMITS.maxScopes, por orden de clave.
+  // EL CAMBIO (revisión H22): 50 entradas (P59..P10, insertadas al revés) y no 40, que era justo el tope y no probaba nada.
   const muchos = {}
-  for (let i = SCOPE_LIMITS.maxScopes + 9; i >= 10; i--) muchos['P' + i] = 'ENG'
+  for (let i = SCOPE_LIMITS.maxScopes + 19; i >= 10; i--) muchos['P' + i] = 'ENG'
   const topado = normalizeLinkedSpaces(muchos)
   eq(Object.keys(topado).length, SCOPE_LIMITS.maxScopes)
   eq(Object.keys(topado)[0], 'P10', 'los primeros por clave, no por inserción')
+  eq(Object.keys(topado).at(-1), 'P49', 'se caen los últimos por clave')
+  assert(!('P50' in topado) && !('P59' in topado), 'lo que pasa del tope no entra')
 })
 
 test('H22: withLinkedSpace pone, sustituye o quita la entrada de un proyecto, sin mutar', () => {
@@ -535,6 +538,30 @@ test('H22: withLinkedSpace pone, sustituye o quita la entrada de un proyecto, si
   eq(withLinkedSpace(base, 'SIMPL-12', 'ENG'), { SIMPL: 'DCPIAS' }, 'un proyecto que no vale no escribe nada')
   eq(withLinkedSpace('basura', 'OPS', 'ENG'), { OPS: 'ENG' })
   eq(base, { SIMPL: 'DCPIAS' }, 'lo que recibe no cambia')
+})
+
+test('H22 revisión: lo recién elegido no lo tira el tope, y el tope de normalizeLinkedSpaces se prueba de verdad', () => {
+  const lleno = {}
+  for (let i = 0; i < SCOPE_LIMITS.maxScopes; i++) lleno['A' + String(i).padStart(2, '0')] = 'ENG'
+  congelar(lleno)
+  const claves = Object.keys(lleno)
+  eq(claves.length, SCOPE_LIMITS.maxScopes, 'el mapa, lleno')
+  // Un proyecto NUEVO que ordena detrás de todos: se queda, y se cae la última de las demás.
+  const r = withLinkedSpace(lleno, 'ZZZ', 'DCPIAS')
+  eq(r.ZZZ, 'DCPIAS', 'lo recién elegido se guarda')
+  eq(Object.keys(r).length, SCOPE_LIMITS.maxScopes)
+  eq(Object.keys(r), [...claves.slice(0, -1), 'ZZZ'], 'se cayó A39 y nadie más')
+  // Cambiar una entrada que YA existía no echa a nadie.
+  const cambiada = withLinkedSpace(lleno, 'A05', 'OPS')
+  eq(Object.keys(cambiada), claves, 'cambiar una que estaba no echa a nadie')
+  eq(cambiada.A05, 'OPS')
+  // Quitar con el mapa lleno no echa a nadie: ni un proyecto que no estaba, ni uno que estaba (sólo se va él).
+  eq(withLinkedSpace(lleno, 'ZZZ', ''), lleno, 'quitar uno que no está no echa a nadie')
+  eq(Object.keys(withLinkedSpace(lleno, 'A05', '')), claves.filter((k) => k !== 'A05'), 'quitar uno que está sólo lo quita a él')
+  eq(Object.keys(lleno).length, SCOPE_LIMITS.maxScopes, 'lo que recibe no cambia')
+  // Dos claves que acaban en la misma mayúscula: gana la canónica, en los dos órdenes.
+  eq(normalizeLinkedSpaces(JSON.parse('{"ENG":"OPS","eng":"ZZZ"}')), { ENG: 'OPS' }, 'gana la canónica')
+  eq(normalizeLinkedSpaces(JSON.parse('{"eng":"ZZZ","ENG":"OPS"}')), { ENG: 'OPS' }, 'gana la canónica, aunque llegue detrás')
 })
 
 test('H21: scopes.js no toca document, window ni chrome, y no hace peticiones', () => {

@@ -448,7 +448,10 @@ test('EL CAMBIO: en Jira la tarjeta abre la búsqueda que hizo el modelo, y el i
   // El contexto de un proyecto de Jira se construye sabiendo qué Confluence
   // hay enlazado, para buscar ahí si los tickets están documentados.
   const contexto = JS.slice(JS.indexOf('async function generateContext'), JS.indexOf('async function uploadContext'))
-  assert(/linkedContext: state\.linkedContext,/.test(contexto))
+  // EL CAMBIO (revisión H22): el enlazado que recibe el indexador es el
+  // CAPTURADO al empezar (`enlazado`, G03), no el `state.linkedContext` de
+  // ahora, que cambiar de proyecto reasigna mientras se indexa.
+  assert(/linkedContext: enlazado,/.test(contexto), 'el indexador recibe el enlazado capturado al empezar')
   assert(htmlIds.has('context-generate-text'), 'la pantalla de contexto dice qué se recorre según el producto')
   const pantalla = JS.slice(JS.indexOf('function showContextScreen'), JS.indexOf('async function showMemoryScreen'))
   assert(/context-generate-text/.test(pantalla) && /tipos de incidencia/.test(pantalla))
@@ -2675,7 +2678,9 @@ test('H9: el perfil entra en el prompt y en los chips, y se va con el sitio', ()
   const pestana = sinComentarios(JS.slice(JS.indexOf('async function refreshTab'), JS.indexOf('async function bootForSite')))
   const cambio = pestana.slice(pestana.indexOf('if (changedHost) {'), pestana.indexOf('state.site = site'))
   // EL CAMBIO (H22): se vacía el contenedor de TODOS los proyectos del host.
-  assert(/state\.profiles = emptyProfiles\(\)/.test(cambio), 'al cambiar de host se vacía, como el índice y las últimas búsquedas')
+  // EL CAMBIO (revisión H22, G13): la línea ENTERA con su sangría; la regex
+  // suelta seguía verde con un `if (false) ` delante del vaciado.
+  assert(cambio.includes('\n    state.profiles = emptyProfiles()\n'), 'al cambiar de host se vacía, como el índice y las últimas búsquedas')
   const eventos = sinComentarios(JS.slice(JS.indexOf('function wireEvents'), JS.indexOf('async function saveKeys')))
   // Hasta el manejador SIGUIENTE y no hasta el final de wireEvents: el corte
   // viejo buscaba un comentario («// --- memoria») en un fuente SIN comentarios,
@@ -2685,7 +2690,7 @@ test('H9: el perfil entra en el prompt y en los chips, y se va con el sitio', ()
   const hastaOlvidar = eventos.indexOf("$('mem-enabled')", desdeOlvidar)
   assert(desdeOlvidar > 0 && hastaOlvidar > desdeOlvidar, 'el manejador de «Olvidar este sitio» se puede recortar')
   const olvidar = eventos.slice(desdeOlvidar, hastaOlvidar)
-  assert(/forgetEverythingFor\(host\)/.test(olvidar) && /state\.profiles = emptyProfiles\(\)/.test(olvidar), 'olvidar el sitio se lleva también lo contado de sus proyectos')
+  assert(/forgetEverythingFor\(host\)/.test(olvidar) && olvidar.includes('\n    state.profiles = emptyProfiles()\n'), 'olvidar el sitio se lleva también lo contado de sus proyectos')
   // Y la tregua del recuento (H22): si no, el proyecto que ya se había pedido no
   // se volvería a contar hasta recargar el panel.
   assert(/state\.profileAsked = ''/.test(olvidar), 'y la tregua del recuento, que era de lo olvidado')
@@ -2967,8 +2972,10 @@ test('H10: el historial se apunta al terminar un análisis, y sólo bajo el host
   // El estado sólo recoge lo que quedó guardado, y sólo si el panel sigue ahí:
   // escribir tarda, y una versión optimista habría que deshacerla.
   assert(/catch \(err\)/.test(apuntar) && /'no se pudo guardar · '/.test(apuntar), 'una cuota llena no se lleva la respuesta')
+  // EL CAMBIO (revisión H22): la guarda abre un bloque, porque con lo guardado
+  // se vuelve a elegir el enlazado (G10); la guarda es la misma.
   assert(
-    /if \(\(state\.site\?\.host \?\? state\.lastHost\) === host\) state\.sourceHistory = guardado/.test(apuntar),
+    /if \(\(state\.site\?\.host \?\? state\.lastHost\) === host\) \{\s*state\.sourceHistory = guardado\n/.test(apuntar),
     'y lo guardado no entra en el estado de otro sitio (§8.22)'
   )
 
@@ -7130,11 +7137,17 @@ test('H22: el perfil es por proyecto dentro del host, se funde al contar y volve
   // el arranque lo lee del paquete, lo vacían el cambio de host y el olvido, y
   // lo que vuelve de contar entra en los dos llamantes de countProfile.
   una(LIMPIO, '\n  profiles: emptyProfiles(),\n', 'el estado nace con el contenedor vacío')
+  // EL CAMBIO (revisión H22, G13): anclada al principio de la línea, porque con
+  // `\b` una escritura con un `if (false) ` delante seguía en la lista. La de
+  // `restIndexFor`, que va detrás de su guarda en la MISMA línea, se pina
+  // aparte con su línea entera (abajo, en (5)), y la cuenta de todas las
+  // escrituras dice que no hay otra condicional.
   eq(
-    [...JS_SIN.matchAll(/\bstate\.profiles = ([^\n]+)\n/g)].map((m) => m[1]).sort(),
-    ['emptyProfiles()', 'emptyProfiles()', 'normalizeProfiles(bundle.extras?.profile)', 'r.profiles', 'r.profiles'],
+    [...JS_SIN.matchAll(/^\s*state\.profiles = ([^\n]+)\n/gm)].map((m) => m[1]).sort(),
+    ['emptyProfiles()', 'emptyProfiles()', 'normalizeProfiles(bundle.extras?.profile)', 'r.profiles'],
     'los perfiles sólo entran normalizados, vacíos o de lo que countProfile acaba de fundir y guardar'
   )
+  eq(JS_SIN.split('state.profiles = ').length - 1, 5, 'cinco escrituras de state.profiles: cuatro solas en su línea y la de restIndexFor tras su guarda')
 
   // (4) countProfile FUNDE con relectura justo antes de escribir, como los
   // contextos (H21), y no toca el estado: eso lo decide quien llama (§8.22).
@@ -7169,13 +7182,18 @@ test('H22: el perfil es por proyecto dentro del host, se funde al contar y volve
     'el contenedor de este host: el de memoria, o del almacén con el panel en otro sitio'
   )
   una(rest, '\n    if ((state.site?.host ?? state.lastHost) === host) state.profiles = r.profiles\n', 'y lo contado entra sólo en ese sitio')
+  // Revisión H22 (G13): lo que llega al indexador es el perfil RECIÉN contado,
+  // no el que hubiera en el estado.
+  una(rest, "\n    return { index: null, profile: r.profile, aviso: '' }\n", 'lo que se devuelve al indexador es el perfil RECIÉN contado')
 
   // (6) Volver a un proyecto ya contado no recuenta: la rama de refreshTab es la
   // de siempre y ahora `currentProfile(site)` encuentra el suyo en el mapa.
   una(
     corte(LIMPIO, 'async function refreshTab(', 'async function bootForSite('),
     "\n  else if (site.product === 'jira' && site.projectKey && !currentProfile(site) && state.profileAsked !== `${site.host}:${site.projectKey}`) {\n",
-    'sólo se cuenta un proyecto que no tiene perfil, una vez por proyecto'
+    // EL CAMBIO (revisión H22, G16): `state.profileAsked` es UNA cadena, el
+    // último proyecto pedido, así que la promesa se dice con verdad.
+    'sólo se cuenta un proyecto que no tiene perfil, y no dos veces seguidas'
   )
 
   // (7) Olvidar el sitio suelta también la tregua del recuento.
@@ -7295,7 +7313,9 @@ test('H22: el Confluence enlazado viaja por proyecto, lo elegido en Ajustes mand
     assert(!/\bawait\b|\basync\b|chrome\.storage|getSite|getSiteBundle|getContexts\(/.test(trozo), nombre + ' no espera ni lee el almacén')
   }
   // Quién la llama: el final de loadLinkedContext, applyScope y el selector.
-  eq(LIMPIO.split('applyLinkedScope(').length - 1, 4, 'la definición y sus tres llamantes')
+  // EL CAMBIO (revisión H22, G10): y también «Olvidar el historial» y el apunte
+  // de un análisis nuevo en el historial, que cambian lo que dice la regla (b).
+  eq(LIMPIO.split('applyLinkedScope(').length - 1, 6, 'la definición y sus cinco llamantes')
   una(funcion('function applyScope('), '\n  applyLinkedScope()\n', 'applyScope la llama: cambiar de proyecto recalcula sin leer nada')
   una(
     funcion('async function loadLinkedContext('),
@@ -7355,6 +7375,19 @@ test('H22: el Confluence enlazado viaja por proyecto, lo elegido en Ajustes mand
   )
   una(corte(corte(LIMPIO, 'async function refreshTab(', 'async function bootForSite('), '  if (changedHost) {\n', 'state.mcpConnected = false'), '\n    state.linkedSpaces = {}\n', 'el cambio de host lo vacía')
   una(corte(LIMPIO, "$('btn-forget').addEventListener", "$('mem-enabled').addEventListener"), '\n    state.linkedSpaces = {}\n', 'y olvidar el sitio también')
+  // Revisión H22 (G14): el ORDEN de lectura en el arranque. `applyLinkedScope`,
+  // al final de `loadLinkedContext`, elige con lo elegido a mano, el historial y
+  // los contextos: si alguno se leyera DETRÁS, elegiría con los del sitio de antes.
+  orden(
+    funcion('async function bootForSite('),
+    [
+      'state.contexts = normalizeContexts(bundle.contextRaw, state.contextLegacy)',
+      'state.linkedSpaces = normalizeLinkedSpaces(bundle.site?.linkedSpaces)',
+      'state.sourceHistory = normalizeHistory(bundle.extras?.sourceHistory',
+      'state.linkedContext = await loadLinkedContext(saved)',
+    ],
+    'applyLinkedScope (al final de loadLinkedContext) elige con lo elegido a mano, el historial y los contextos de ESTE sitio: los tres van antes del paso 4'
+  )
 
   // (5) El selector de Ajustes: en «Este sitio», antes de los botones.
   const ajustes = HTML.slice(HTML.indexOf('id="screen-settings"'), HTML.indexOf('id="screen-memory"'))
@@ -7369,6 +7402,8 @@ test('H22: el Confluence enlazado viaja por proyecto, lo elegido en Ajustes mand
   orden(ajustes, ['id="settings-site-info"', 'id="set-linked-space-field"', 'id="btn-reindex"'], 'el selector va en «Este sitio», antes de los botones')
   assert(CSS_LIMPIO.includes('.field input[type="search"], .field select {'), 'el select se pinta como los campos')
   assert(CSS_LIMPIO.includes('.field input:focus, .field select:focus { border-color: var(--mark); }'), 'y con el mismo foco')
+  // EL CAMBIO (revisión H22, G02): el selector apunta el proyecto que PINTÓ
+  // (`select.dataset.proyecto`), que es bajo el que se guarda al cambiarlo.
   eq(
     funcion('function paintLinkedSpaceSetting('),
     lineas(
@@ -7385,6 +7420,7 @@ test('H22: el Confluence enlazado viaja por proyecto, lo elegido en Ajustes mand
       "    .filter((k) => k.startsWith('space:'))",
       "    .map((k) => k.slice('space:'.length))",
       "  const select = $('set-linked-space')",
+      '  select.dataset.proyecto = proyecto',
       "  select.textContent = ''",
       '  const opcion = (valor, texto) => {',
       "    const o = document.createElement('option')",
@@ -7432,25 +7468,10 @@ test('H22: el Confluence enlazado viaja por proyecto, lo elegido en Ajustes mand
   )
   // El manejador: el mapa ENTERO por withLinkedSpace, guardado bajo el host
   // capturado, la guarda §8.22, y después se vuelve a elegir, se registra y se dice.
-  eq(
-    funcion('async function onLinkedSpaceChange('),
-    lineas(
-      'async function onLinkedSpaceChange(ev) {',
-      "  const host = state.site?.host || ''",
-      "  const proyecto = state.site?.product === 'jira' ? validProjectKey(state.site.projectKey) : ''",
-      '  if (!host || !proyecto || !state.linkedContext) return',
-      '  const mapa = withLinkedSpace(state.linkedSpaces, proyecto, ev.target.value)',
-      '  await saveSite(host, { linkedSpaces: mapa })',
-      '  if ((state.site?.host ?? state.lastHost) !== host) return',
-      '  state.linkedSpaces = mapa',
-      '  applyLinkedScope()',
-      '  paintLinkedSpaceSetting()',
-      "  log.info('Espacio enlazado', `${host} · ${proyecto} → ${mapa[proyecto] || 'automático'}`)",
-      "  announce(`${proyecto}: ${$('set-linked-space-hint').textContent}`)",
-      '}'
-    ),
-    'el selector escribe el mapa normalizado, con la guarda §8.22, y lo registra y lo dice'
-  )
+  // EL CAMBIO (revisión H22, G02 y G11): el cuerpo cambió —el proyecto que se
+  // pintó, el mapa releído antes de escribir y la guarda de host Y proyecto tras
+  // cada espera— y se pina ENTERO en «H22 revisión: los cuerpos que deciden en
+  // el selector, generateContext y el historial».
   eq(JS_SIN.split("'Espacio enlazado'").length - 1, 1, 'el título nuevo sale en un solo sitio')
   eq(LIMPIO.split('linkedSpaces: ').length - 1, 2, 'el mapa sólo se escribe en el registro desde el selector (y nace en el estado)')
   una(
@@ -7473,6 +7494,130 @@ test('H22: el Confluence enlazado viaja por proyecto, lo elegido en Ajustes mand
     assert(selector.includes(literal), 'el espejo no dice «' + literal + '»')
     assert(LIMPIO.includes(literal), 'el panel no dice «' + literal + '»')
   }
-  assert(espejo.split('pintarSelectorEnlazado()').length - 1 >= 2, 'se pinta al arrancar y al cambiar de conversación')
+  // EL CAMBIO (revisión H22, G15): el `>= 2` dejaba pasar una llamada de menos
+  // si alguien añadía otra en otro sitio. La cuenta EXACTA, y cada llamada en su
+  // sitio: al cambiar de conversación detrás de la pantalla de «hoy», y al
+  // arrancar antes de mostrar la pantalla.
+  eq(espejo.split('pintarSelectorEnlazado()').length - 1, 3, 'la definición y dos llamadas')
+  orden(corte(espejo, 'function pintarConversacion() {', '\n  }\n'), ['pintarPantallaHoy()', 'pintarSelectorEnlazado()'], 'al cambiar de conversación se pinta el selector')
+  orden(
+    corte(espejo, '// ------------------------------------------------------------- arranque', 'window.faroPreview = {'),
+    ['pintarPantallaHoy()', 'pintarSelectorEnlazado()', "mostrarPantalla('')"],
+    'y al arrancar, antes de mostrar la pantalla'
+  )
+  // Y el texto atado al valor: marcado «Automático», con el espacio que eligió la
+  // pura, y el hint dice ese mismo espacio, no uno fijo.
+  assert(selector.includes("o.selected = valor === ''"), 'marcado Automático')
+  assert(selector.includes("const espacio = auto.key.slice('space:'.length)"), 'el espacio sale de lo que eligió linkedSpacesFor')
+  assert(selector.includes("['', `Automático (hoy ${espacio}, por el contexto)`],"), 'Automático dice el espacio calculado')
+  assert(
+    selector.includes("$('set-linked-space-hint').textContent = `Viaja el contexto del espacio «${espacio}» de confluence.simplprogramme.eu.`"),
+    'el hint dice el espacio calculado, no uno fijo'
+  )
   assert(corte(espejo, 'const CAJAS = [', 'function check()').includes("'#set-linked-space-field'"), 'check() mide el selector a lo ancho')
+})
+
+test('H22 revisión: los cuerpos que deciden en el selector, generateContext y el historial', () => {
+  // La revisión adversaria de H22 encontró tres huecos de §8.22 en el panel: el
+  // selector de Ajustes guardaba bajo el proyecto de `state.site` —con Ajustes
+  // abierto y la pestaña ya en otro proyecto, la elección caía en el que no se
+  // veía— y sobre el mapa de memoria, no el guardado (G02, G11); el indexado
+  // pasaba a `buildContext` el `state.linkedContext` de DESPUÉS de segundos de
+  // API, que cambiar de proyecto reasigna (G03); y «Olvidar el historial» y un
+  // análisis nuevo cambiaban lo que dice la regla (b) sin volver a elegir (G10).
+  // Cuerpos ENTEROS y líneas enteras, como en «H21 revisión».
+  const JS_SIN = sinComentarios(JS)
+  const LIMPIO = JS_SIN.split('\n')
+    .filter((l) => l.trim())
+    .join('\n')
+  const corte = (src, desde, hasta) => {
+    const i = src.indexOf(desde)
+    assert(i >= 0, 'falta la marca de inicio del recorte: ' + desde)
+    const j = src.indexOf(hasta, i + desde.length)
+    assert(j > i, 'falta la marca de final del recorte (o va antes): ' + hasta)
+    return src.slice(i, j)
+  }
+  const funcion = (firma) => corte(LIMPIO, firma, '\n}\n') + '\n}'
+  const una = (src, linea, msg) => eq(src.split(linea).length - 1, 1, msg + ': «' + linea.trim() + '»')
+  const lineas = (...ls) => ls.join('\n')
+  const orden = (src, marcas, msg) => {
+    let desde = 0
+    for (const m of marcas) {
+      const i = src.indexOf(m, desde)
+      assert(i >= 0, `${msg}: falta, o va antes de lo que debe, «${m}»`)
+      desde = i + m.length
+    }
+  }
+
+  // (1) El selector (G02, G11), ENTERO: el proyecto es el que se PINTÓ; con otro
+  // delante no se escribe y se repinta; la base es el mapa RELEÍDO; y host Y
+  // proyecto se comprueban tras cada espera antes de tocar el estado.
+  eq(
+    funcion('async function onLinkedSpaceChange('),
+    lineas(
+      'async function onLinkedSpaceChange(ev) {',
+      "  const host = state.site?.host || ''",
+      "  const proyecto = ev.target.dataset.proyecto || ''",
+      '  const valor = ev.target.value',
+      "  if (state.site?.product !== 'jira' || validProjectKey(state.site?.projectKey) !== proyecto) {",
+      '    paintLinkedSpaceSetting()',
+      '    return',
+      '  }',
+      '  if (!host || !proyecto || !state.linkedContext) return',
+      '  const guardado = normalizeLinkedSpaces((await getSite(host))?.linkedSpaces)',
+      '  if ((state.site?.host ?? state.lastHost) !== host || validProjectKey(state.site?.projectKey) !== proyecto) return',
+      '  const mapa = withLinkedSpace(guardado, proyecto, valor)',
+      '  await saveSite(host, { linkedSpaces: mapa })',
+      '  if ((state.site?.host ?? state.lastHost) !== host || validProjectKey(state.site?.projectKey) !== proyecto) return',
+      '  state.linkedSpaces = mapa',
+      '  applyLinkedScope()',
+      '  paintLinkedSpaceSetting()',
+      "  log.info('Espacio enlazado', `${host} · ${proyecto} → ${mapa[proyecto] || 'automático'}`)",
+      "  announce(`${proyecto}: ${$('set-linked-space-hint').textContent}`)",
+      '}'
+    ),
+    'el selector guarda bajo el proyecto que pintó, sobre el mapa releído, con la guarda §8.22 de host y proyecto tras cada espera, y lo registra y lo dice'
+  )
+  una(funcion('function paintLinkedSpaceSetting('), '\n  select.dataset.proyecto = proyecto\n', 'el selector apunta el proyecto que pinta')
+
+  // (2) Ajustes abierto no se queda con el proyecto (ni el ámbito) de antes: la
+  // línea del repintado va JUSTO detrás de la de applyScope(), con su misma
+  // condición y sólo con la pantalla abierta.
+  const pestana = corte(LIMPIO, 'async function refreshTab(', 'async function bootForSite(')
+  const repinta =
+    "\n  if ((changedScope || (volviaDeFuera && !changedHost)) && !$('screen-settings').classList.contains('hidden')) { paintLinkedSpaceSetting(); paintScopeList(); paintSettingsSiteInfo() }\n"
+  una(pestana, repinta, 'con Ajustes abierto, el selector, la lista de ámbitos y la línea del sitio se repintan')
+  orden(pestana, ['\n  if (changedScope || (volviaDeFuera && !changedHost)) applyScope()\n', repinta.trim()], 'el repintado va detrás de applyScope()')
+  una(pestana, '\n  if (changedScope || (volviaDeFuera && !changedHost)) applyScope()' + repinta, 'y justo detrás')
+
+  // (3) generateContext (G03): el enlazado se CAPTURA antes del primer await, y
+  // es esa copia la que llega a buildContext; detrás de la API, nadie vuelve a
+  // leer state.linkedContext.
+  const generar = funcion('async function generateContext(')
+  const captura = "\n  const enlazado = sitio.product === 'jira' && state.linkedContext ? { ...state.linkedContext } : null\n"
+  una(generar, captura, 'el enlazado se captura al empezar, copiado')
+  assert(generar.indexOf(captura) < generar.indexOf('await '), 'la captura va antes del primer await')
+  orden(generar, [captura.trim(), 'await restIndexFor('], 'y antes de la API')
+  una(generar, '\n      linkedContext: enlazado,\n', 'buildContext recibe el capturado')
+  assert(!generar.slice(generar.indexOf('await restIndexFor(')).includes('state.linkedContext'), 'detrás de la API nadie lee state.linkedContext en generateContext')
+
+  // (4) El historial (G10): olvidarlo y apuntar un análisis nuevo vuelven a
+  // elegir el enlazado, sin leer nada; el apunte, sólo con el panel en ese host.
+  una(
+    funcion('async function forgetSourceHistory('),
+    '\n  state.sourceHistory = emptyHistory()\n  applyLinkedScope()\n',
+    'olvidar el historial vuelve a elegir el enlazado'
+  )
+  const apunte = funcion('async function recordAnalysisTurn(')
+  una(
+    apunte,
+    lineas(
+      '\n  if ((state.site?.host ?? state.lastHost) === host) {',
+      '    state.sourceHistory = guardado',
+      '    applyLinkedScope()',
+      '  }\n'
+    ),
+    'lo guardado entra en el estado y vuelve a elegir el enlazado, sólo en ese host (§8.22)'
+  )
+  eq(apunte.split('applyLinkedScope(').length - 1, 1, 'y sólo ahí dentro')
 })

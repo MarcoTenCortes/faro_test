@@ -50,7 +50,7 @@ Cinco piezas: la página (Jira/Confluence) · la extensión · opencode · el LL
 ## 2. Arrancar y comprobar
 
 ```bash
-npm run check              # sintaxis + TDZ + manifest + 1495 pruebas unitarias + docs (sólo si las unitarias pasan)
+npm run check              # sintaxis + TDZ + manifest + 1498 pruebas unitarias + docs (sólo si las unitarias pasan)
 npm run check:docs         # sólo el paso docs, informe entero; sale con 1 si hay errores
 npm run test:integration   # su propio opencode serve (4123) y el cliente real; GASTA turnos de pago
 npm run harness            # Confluence de mentira en http://127.0.0.1:5175 (preview_start "harness")
@@ -75,8 +75,8 @@ npm run snapshots          # regenera test/fixtures/prompts/*.txt; sólo con un 
   `tools/instalar.ps1` deja uv y mcp-atlassian y `tools/arrancar-opencode.ps1` lo arranca.
 - Banco: `http://127.0.0.1:5175/`, botón **Autocomprobación completa** (o
   `await faroHarness.actions.selfcheck()`), con el Browser pane VISIBLE a
-  1280×900: oculto no hay frames y caen la 27 y la 41. Hoy 63 tramos, 130 `ok(`,
-  129 resultados. Con el pane oculto se sustituye `window.requestAnimationFrame`
+  1280×900: oculto no hay frames y caen la 27 y la 41. Hoy 63 tramos, 131 `ok(`,
+  130 resultados. Con el pane oculto se sustituye `window.requestAnimationFrame`
   por un `setTimeout` de 16 ms, y se dice.
 - Espejo del panel: `harness/panel-preview.html` (el `panel.html` real en un
   iframe; seis conversaciones, diez pantallas). `window.faroPreview.check()` a
@@ -419,9 +419,9 @@ Los pasos completos, con el porqué de cada regla: docs/REFERENCIA.md §11.
 | H18 | MCP por `PATCH /global/config`, sandbox | `…h18-mcp-automatico` · 80e7ce9 + 8188813 | 1416 |
 | H19 | «Quitar las claves de este sitio» | `…h19-quitar-claves` · 9f65b73 + 8bb5298 | 1431 |
 | H21 | Contexto y mapa por ámbito (`scopes.js`) | `…h21-multi-espacio` · 4a62170 + 9a7780a | 1478 |
-| H22 | Jira por proyecto: perfiles `byProject`, `linkedSpacesFor` y su selector | `plan/h22-jira-por-proyecto` · (construcción al cerrar) | 1495 |
+| H22 | Jira por proyecto: perfiles `byProject`, `linkedSpacesFor` y su selector | `plan/h22-jira-por-proyecto` · bd01fa2 + (revisión al cerrar) | 1498 |
 
-Ramas `plan/…`. **Dónde vive:** 22 ramas apiladas sobre `40f56d7`, nada pusheado ni PR, `main` local en `523c25f`; H20 saltado (manual, con gasto); H22 construido en `plan/h22-jira-por-proyecto` sobre el WIP d8df6d7, sin commit, pendiente de la verificación del orquestador y de su revisión adversaria (docs/plan/handoff/ESTADO.md); este mapa (Tarea 0, 2026-09-27) es la rama `plan/docs-mapa`, sobre `2684f14` y debajo de H22.
+Ramas `plan/…`. **Dónde vive:** 22 ramas apiladas sobre `40f56d7`, nada pusheado ni PR, `main` local en `523c25f`; H20 saltado (manual, con gasto); H22 en `plan/h22-jira-por-proyecto` · bd01fa2 (construido y verificado por el orquestador: banco 130/130, espejo 4 combinaciones) y su revisión adversaria encima (docs/plan/handoff/ESTADO.md); este mapa (Tarea 0, 2026-09-27) es la rama `plan/docs-mapa`, sobre `2684f14` y debajo de H22.
 
 **Límites que no son de ningún hito:**
 - Jira Cloud sin REST de Jira (410): todo por el MCP (`sinRestDeJira`).

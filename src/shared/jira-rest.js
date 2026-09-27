@@ -943,9 +943,10 @@ export function emptyProfiles() {
  *   pasa `normalizeProfile` y dice ser de ESE proyecto; lo demás se cae. Si dos
  *   claves acaban en la misma mayúscula, gana la de `at` más reciente.
  * - Tope `JIRA_REST_LIMITS.profileProjects`, conservando los contados más
- *   recientemente y en el orden en que estaban. Un `at` del futuro cuenta como
- *   ahora AL ELEGIR (si no, un reloj adelantado lo haría inmortal), pero el dato
- *   no se toca: la antigüedad del perfil la decide quien lo usa.
+ *   recientemente y en el orden en que estaban. Un `at` del futuro se trae a
+ *   ahora, como `normalizeActivity` y `normalizeContexts`: si no, un reloj
+ *   adelantado lo haría inmortal en el tope y en el desalojo de `withProfile`
+ *   (revisión adversaria de H22, G08).
  * - Otra versión, una lista o basura: vacío.
  */
 export function normalizeProfiles(raw, { now = Date.now() } = {}) {
@@ -955,6 +956,7 @@ export function normalizeProfiles(raw, { now = Date.now() } = {}) {
     if (raw.version === PROFILE_VERSION) {
       const suelto = normalizeProfile(raw)
       if (!suelto || !suelto.projectKey) return emptyProfiles()
+      if (suelto.at > ahora) suelto.at = Math.round(ahora)
       return { version: PROFILES_VERSION, byProject: { [suelto.projectKey]: suelto } }
     }
     if (!esContenedor(raw)) return emptyProfiles()
@@ -968,6 +970,7 @@ export function normalizeProfiles(raw, { now = Date.now() } = {}) {
       if (!key) continue
       const perfil = normalizeProfile(origen[k])
       if (!perfil || perfil.projectKey !== key) continue
+      if (perfil.at > ahora) perfil.at = Math.round(ahora)
       if (dondeEsta.has(key)) {
         const i = dondeEsta.get(key)
         if (perfil.at > entradas[i].perfil.at) entradas[i] = { key, perfil }
@@ -1002,10 +1005,11 @@ export function normalizeProfiles(raw, { now = Date.now() } = {}) {
  * muta. Un perfil que no vale (sin proyecto, de otra versión, basura) deja el
  * contenedor como estaba, normalizado. Lo recién contado no lo tira el tope:
  * si hace falta sitio se cae el más viejo de los DEMÁS (la lección de
- * `withContext`, revisión adversaria de H21). Pura.
+ * `withContext`, revisión adversaria de H21), por el `at` YA acotado a `now`
+ * (el de `normalizeProfiles`: uno del futuro no gana a los recientes). Pura.
  */
-export function withProfile(profiles, perfil) {
-  const base = normalizeProfiles(profiles)
+export function withProfile(profiles, perfil, { now = Date.now() } = {}) {
+  const base = normalizeProfiles(profiles, { now })
   const nuevo = normalizeProfile(perfil)
   if (!nuevo || !nuevo.projectKey) return base
   const byProject = { ...base.byProject, [nuevo.projectKey]: nuevo }
@@ -1014,11 +1018,11 @@ export function withProfile(profiles, perfil) {
   if (claves.length > tope) {
     const otras = claves
       .filter((k) => k !== nuevo.projectKey)
-      .map((k, i) => ({ k, i, at: byProject[k].at }))
+      .map((k, i) => ({ k, i, at: base.byProject[k].at }))
       .sort((a, b) => b.at - a.at || a.i - b.i)
     for (const { k } of otras.slice(tope - 1)) delete byProject[k]
   }
-  return normalizeProfiles({ version: PROFILES_VERSION, byProject })
+  return normalizeProfiles({ version: PROFILES_VERSION, byProject }, { now })
 }
 
 /**

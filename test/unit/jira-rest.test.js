@@ -929,8 +929,8 @@ test('H22: el tope de proyectos con perfil conserva los más recientes, y withPr
   deHoy.FUT = profileFromSample(MUESTRA, { projectKey: 'FUT', now: ahora + 10 ** 9 })
   const conFuturo = normalizeProfiles({ version: 1, byProject: deHoy }, { now: ahora })
   eq(Object.keys(conFuturo.byProject), Object.keys(deHoy).slice(0, N), 'el del futuro compite como ahora, y pierde por posición')
-  // Y el dato no se toca: sólo cuenta como ahora al elegir.
-  eq(normalizeProfiles({ version: 1, byProject: { FUT: deHoy.FUT } }, { now: ahora }).byProject.FUT.at, ahora + 10 ** 9)
+  // EL CAMBIO (revisión H22): el dato ya no se queda en el futuro; se trae a ahora, como normalizeActivity y normalizeContexts.
+  eq(normalizeProfiles({ version: 1, byProject: { FUT: deHoy.FUT } }, { now: ahora }).byProject.FUT.at, ahora, 'un at del futuro se trae a ahora')
 
   // withProfile: el recién contado se queda aunque sea el más viejo de todos.
   const lleno = normalizeProfiles({ version: 1, byProject })
@@ -939,6 +939,43 @@ test('H22: el tope de proyectos con perfil conserva los más recientes, y withPr
   eq(Object.keys(con.byProject).length, N)
   assert(Object.hasOwn(con.byProject, 'NUEVO'), 'lo recién escrito no lo tira el tope')
   assert(!Object.hasOwn(con.byProject, 'P' + (N - 1)), 'se cae el más viejo de los DEMÁS')
+})
+
+test('H22 revisión: un at del futuro se trae a ahora, y la mayúscula canónica gana', () => {
+  const N = JIRA_REST_LIMITS.profileProjects
+  const ahora = 1789000000000
+  const dia = 24 * 60 * 60 * 1000
+  const simpl = profileFromSample(MUESTRA, { projectKey: 'SIMPL', now: ahora + 365 * dia })
+  const una = normalizeProfiles(JSON.parse(JSON.stringify({ version: 1, byProject: { SIMPL: simpl } })), { now: ahora })
+  eq(una.byProject.SIMPL.at, ahora, 'un at de dentro de un año se trae a ahora')
+  eq(simpl.at, ahora + 365 * dia, 'lo que recibe no cambia')
+  eq(normalizeProfiles(una, { now: ahora }), una, 'dos pasadas dan lo mismo')
+  // El perfil suelto de antes, también: si no, la segunda pasada no daría lo mismo.
+  const suelto = normalizeProfiles(JSON.parse(JSON.stringify(simpl)), { now: ahora })
+  eq(suelto.byProject.SIMPL.at, ahora, 'el suelto que migra, también')
+  eq(normalizeProfiles(suelto, { now: ahora }), suelto, 'dos pasadas dan lo mismo, desde el suelto')
+  // Con 21 perfiles, uno del futuro: el futuro NO gana a los recientes por el tope.
+  const deHoy = {}
+  for (let i = 0; i < N - 1; i++) deHoy['H' + i] = profileFromSample(MUESTRA, { projectKey: 'H' + i, now: ahora })
+  deHoy.FUT = profileFromSample(MUESTRA, { projectKey: 'FUT', now: ahora + 365 * dia })
+  eq(Object.keys(deHoy).length, N, 'lleno: diecinueve de hoy y uno del futuro')
+  const nuevo = profileFromSample(MUESTRA, { projectKey: 'NUEVO', now: ahora })
+  const con = withProfile(JSON.parse(JSON.stringify({ version: 1, byProject: deHoy })), nuevo, { now: ahora })
+  eq(Object.keys(con.byProject).length, N)
+  assert(Object.hasOwn(con.byProject, 'NUEVO'), 'lo recién contado se queda')
+  assert(!Object.hasOwn(con.byProject, 'FUT'), 'el del futuro compite como ahora al desalojar, y pierde por posición')
+  assert(Object.hasOwn(con.byProject, 'H' + (N - 2)), 'ninguno de los de hoy se cae por él')
+  eq(withProfile(con, nuevo, { now: ahora }), con, 'dos pasadas dan lo mismo')
+  const { FUT, ...sinFuturo } = deHoy
+  const veintiuno = { ...sinFuturo, H19: profileFromSample(MUESTRA, { projectKey: 'H19', now: ahora }), FUT }
+  eq(Object.keys(veintiuno).length, N + 1)
+  const topado = normalizeProfiles(JSON.parse(JSON.stringify({ version: 1, byProject: veintiuno })), { now: ahora })
+  assert(!Object.hasOwn(topado.byProject, 'FUT') && Object.hasOwn(topado.byProject, 'H19'), 'en el tope, el del futuro tampoco gana a los de hoy')
+  // Dos claves que acaban en la misma mayúscula: gana la de at más reciente, en los dos órdenes.
+  const a = profileFromSample(MUESTRA, { projectKey: 'ENG', now: 9 })
+  const b = profileFromSample(MUESTRA, { projectKey: 'ENG', now: 3 })
+  eq(normalizeProfiles(JSON.parse(JSON.stringify({ version: 1, byProject: { eng: a, ENG: b } }))).byProject.ENG.at, 9, 'misma mayúscula: gana el at más reciente')
+  eq(normalizeProfiles(JSON.parse(JSON.stringify({ version: 1, byProject: { ENG: b, eng: a } }))).byProject.ENG.at, 9, 'misma mayúscula: gana el at más reciente, en el otro orden')
 })
 
 test('H22: withProfile no muta, pone o sustituye bajo su proyecto, y con un perfil que no vale devuelve el mismo contenido', () => {

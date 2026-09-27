@@ -1478,9 +1478,9 @@ Reglas transversales, que salen de los dos juicios y valen para todos:
   verdad; dos proyectos que no se pisan; migración; `profileAsked` como
   tregua; los pines 2530-2656 de `panel-wiring` actualizados.
 - **Riesgo**: bajo-medio.
-- **Hecho el 2026-09-27** (rama `plan/h22-jira-por-proyecto`, sin commit de
-  cierre todavía: pendiente de la verificación del orquestador y de su
-  revisión adversaria): todo lo de «Qué» y, de §3.4, lo que H21 dejó para
+- **Hecho el 2026-09-27** (rama `plan/h22-jira-por-proyecto`, commit bd01fa2,
+  verificado por el orquestador —banco 130/130, espejo 4 combinaciones— y con
+  su revisión adversaria aplicada (docs/BITACORA.md §12.5)): todo lo de «Qué» y, de §3.4, lo que H21 dejó para
   aquí: `linkedSpacesFor` con las reglas (a)-(c) (y `linkedContextFor`
   borrada), `normalizeLinkedSpaces`/`withLinkedSpace` y el selector «Este
   proyecto se documenta en el espacio» en Ajustes (`sites[host].linkedSpaces`,
@@ -1489,7 +1489,12 @@ Reglas transversales, que salen de los dos juicios y valen para todos:
   ningún contexto, el título «Espacio enlazado» y la promesa del historial
   reescrita con verdad. Desvío: la elección manual MANDA (arriba, en §3.4).
   1495 pruebas (+17), 23 + 30 mutaciones (52 cazadas, una viva equivalente),
-  las 39 instantáneas intactas y una nueva. La bitácora, en docs/BITACORA.md
+  las 39 instantáneas intactas y una nueva. Su revisión adversaria (16 grupos,
+  15 confirmados y 1 refutado): 1498 pruebas (+3), el host de la línea del
+  enlazado por `linkedHostLabel`, el selector bajo el proyecto que pintó y
+  sobre el mapa releído, el enlazado capturado al indexar, lo recién elegido
+  que no tira el tope, un `at` del futuro traído a ahora, el historial que
+  vuelve a elegir, y pines que vigilan. La bitácora, en docs/BITACORA.md
   §12.5.
 
 ### H23 · Subrayado (forma A): cursor subrayador azul, selección azul, marcas legibles, insignias que no tapan y barra que cabe

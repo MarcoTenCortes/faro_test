@@ -499,7 +499,12 @@ export function normalizeLinkedSpaces(raw) {
 /**
  * Un mapa NUEVO, normalizado, con el espacio de `projectKey` puesto; un
  * `spaceKey` vacío («automático») o que no vale QUITA la entrada, y un proyecto
- * que no vale devuelve el mapa como estaba. No muta. Pura.
+ * que no vale devuelve el mapa como estaba. Lo recién elegido no lo tira el
+ * tope: se cae la última de las demás por orden de clave (la lección de
+ * `withContext`, revisión adversaria de H21). Sin esto, con el mapa lleno, un
+ * proyecto nuevo que ordena detrás de todos se caía en el `normalizeLinkedSpaces`
+ * del final y el selector no guardaba nada (revisión adversaria de H22, G04).
+ * No muta. Pura.
  */
 export function withLinkedSpace(map, projectKey, spaceKey) {
   const base = normalizeLinkedSpaces(map)
@@ -507,6 +512,9 @@ export function withLinkedSpace(map, projectKey, spaceKey) {
   if (!proyecto) return base
   const out = { ...base }
   const espacio = spaceKey === '*' ? '*' : claveDeEspacio(spaceKey)
+  if (espacio && !Object.hasOwn(out, proyecto) && Object.keys(out).length >= SCOPE_LIMITS.maxScopes) {
+    for (const k of ordenadas(Object.keys(out)).filter((k) => k !== proyecto).slice(SCOPE_LIMITS.maxScopes - 1)) delete out[k]
+  }
   if (espacio) out[proyecto] = espacio
   else delete out[proyecto]
   return normalizeLinkedSpaces(out)

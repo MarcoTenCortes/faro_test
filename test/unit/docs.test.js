@@ -321,4 +321,12 @@ test('el selfcheck del banco numera 1..N sin huecos', () => {
   assert(tramos.some((t) => t.n === '28b'), 'la búsqueda de páginas por título es la 28b')
   const vacios = tramos.filter((t) => t.comprobaciones === 0).map((t) => t.n)
   eq(vacios, [], 'cada tramo numerado hace al menos un ok(')
+  // CLAUDE.md §2 dice cuántos `ok(` y cuántos resultados da el banco: el total
+  // es uno menos porque dos `ok(` son las dos ramas de un mismo `if`
+  // (docs/REFERENCIA.md §2). Sin este pin, H22 añadió un `ok(` y el número de
+  // CLAUDE.md se quedó atrás (revisión adversaria de H22, G05).
+  const n = tramos.reduce((s, t) => s + t.comprobaciones, 0)
+  const claude = leer('CLAUDE.md').replace(/\s+/g, ' ')
+  assert(claude.includes(`${n} \`ok(\``), `CLAUDE.md §2 dice los ${n} \`ok(\` del selfcheck del banco`)
+  assert(claude.includes(`${n - 1} resultados`), `CLAUDE.md §2 dice los ${n - 1} resultados del banco (uno menos que los ok(: dos son las ramas de un mismo if)`)
 })

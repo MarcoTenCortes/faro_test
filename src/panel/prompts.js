@@ -484,12 +484,13 @@ export function otherScopesLine(keys) {
  * no se le dé ninguno. Va FUERA de bloque porque la dice Faro, así que
  * SEGURIDAD: cada clave por `claveEnLinea` (entera, con forma de clave, sin
  * repetir, como mucho `SCOPE_LIMITS.keysShown` y «y N más») y el host por
- * `dato()`, en una línea y sin invisibles. Sin host o sin ninguna clave válida,
- * ''. Recibe las claves SIN el «space:» delante (las `otras` de
- * `linkedSpacesFor`). Pura.
+ * `linkedHostLabel`, como la cabecera del enlazado: una sola idea de qué es el
+ * host en el prompt (una sola palabra, sin espacios ni comillas; revisión
+ * adversaria de H22, G01). Sin host o sin ninguna clave válida, ''. Recibe las
+ * claves SIN el «space:» delante (las `otras` de `linkedSpacesFor`). Pura.
  */
 export function linkedScopesLine(host, keys) {
-  const h = dato(host)
+  const h = linkedHostLabel(host)
   if (!h) return ''
   const validas = []
   for (const k of Array.isArray(keys) ? keys : []) {

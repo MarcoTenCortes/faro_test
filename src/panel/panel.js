@@ -799,6 +799,11 @@ async function refreshTab() {
   // se pudo salir desde un espacio y volver a otro. Recalcular es barato y
   // siempre da lo mismo para el mismo ámbito.
   if (changedScope || (volviaDeFuera && !changedHost)) applyScope()
+  // Con Ajustes abierto, el selector del enlazado, la lista de ámbitos y la
+  // línea de «Este sitio» se repintan: la pantalla no se queda con el proyecto
+  // (ni el ámbito) de antes, que era el que el selector guardaba (revisión
+  // adversaria de H22, G02).
+  if ((changedScope || (volviaDeFuera && !changedHost)) && !$('screen-settings').classList.contains('hidden')) { paintLinkedSpaceSetting(); paintScopeList(); paintSettingsSiteInfo() }
   // Y si el chat está vacío, su estado vacío es del ámbito de antes (la línea
   // «aún no tiene mapa», las páginas del espacio): se repinta, SIN volver a
   // anunciar «Listo para escuchar» (A2), que cambiar de espacio no es abrir el
@@ -843,9 +848,12 @@ async function refreshTab() {
   // contado encuentra el suyo en `currentProfile(site)` y no se recuenta nada;
   // sólo se cuenta el de un proyecto que todavía no tiene, en segundo plano y
   // con las mismas condiciones del arranque (permiso ya concedido, restTools,
-  // Data Center). `refreshTab` corre en cada cambio de pestaña y de URL, así que se pregunta UNA
-  // vez por proyecto (`state.profileAsked`): una API que no contesta no puede
-  // convertirse en una petición por cada clic.
+  // Data Center). `refreshTab` corre en cada cambio de pestaña y de URL, así que
+  // se pregunta UNA vez SEGUIDA por proyecto (`state.profileAsked`, el último
+  // proyecto pedido): volver al mismo sin pasar por otro sin perfil no vuelve a
+  // pedir; alternar entre dos proyectos sin perfil con la API fallando pide una
+  // vez por salto (límite asumido). Una API que no contesta no puede convertirse
+  // en una petición por cada clic.
   else if (site.product === 'jira' && site.projectKey && !currentProfile(site) && state.profileAsked !== `${site.host}:${site.projectKey}`) {
     refreshProfileSoon(state.bootToken)
   }
@@ -2100,7 +2108,9 @@ function linkedSignals(enlazado, proyecto) {
  * (c) el único con contexto, y el de todo el sitio—. SÍNCRONA y sin leer el
  * almacén: todo lo que necesita ya está en memoria, así que cambiar de proyecto
  * (`applyScope`) lo recalcula al instante. La llaman el final de
- * `loadLinkedContext`, `applyScope` y el selector de Ajustes. Sin un sitio de
+ * `loadLinkedContext`, `applyScope`, el selector de Ajustes y, desde la revisión
+ * adversaria de H22 (G10), «Olvidar el historial» y el apunte de un análisis
+ * nuevo en el historial. Sin un sitio de
  * Jira o sin enlazado, no hace nada. Devuelve el mismo objeto.
  */
 function applyLinkedScope(enlazado = state.linkedContext) {
@@ -6505,8 +6515,13 @@ async function recordAnalysisTurn({
     return
   }
   // Y sólo entra en el estado si el panel sigue en ese host: escribir en disco
-  // tarda, y el de otro sitio no es éste (§8.22).
-  if ((state.site?.host ?? state.lastHost) === host) state.sourceHistory = guardado
+  // tarda, y el de otro sitio no es éste (§8.22). Y con él se vuelve a elegir
+  // el enlazado: la entrada nueva puede cambiar lo que dice la regla (b)
+  // (revisión adversaria de H22, G10).
+  if ((state.site?.host ?? state.lastHost) === host) {
+    state.sourceHistory = guardado
+    applyLinkedScope()
+  }
   log.ok(
     'Historial de páginas base',
     `${entrada.issueKey || 'página ' + entrada.pageId} · ${entrada.family || 'sin familia'} · ` +
@@ -6756,6 +6771,10 @@ async function forgetSourceHistory() {
   const n = state.sourceHistory.entries.length
   await clearSourceHistory(state.site.host)
   state.sourceHistory = emptyHistory()
+  // Sin historial, la regla (b) de `linkedSpacesFor` ya no tiene de dónde
+  // elegir: se vuelve a elegir el enlazado ahora, sin leer nada (revisión
+  // adversaria de H22, G10).
+  applyLinkedScope()
   log.info('Historial de páginas base', `borrado · ${n} entradas de ${state.site.host}`)
   repaintSuggested()
   const texto = 'Historial borrado: las sugerencias ya no se apoyan en análisis anteriores.'
@@ -7840,6 +7859,7 @@ function paintLinkedSpaceSetting() {
     .filter((k) => k.startsWith('space:'))
     .map((k) => k.slice('space:'.length))
   const select = $('set-linked-space')
+  select.dataset.proyecto = proyecto
   select.textContent = ''
   const opcion = (valor, texto) => {
     const o = document.createElement('option')
@@ -7860,14 +7880,27 @@ function paintLinkedSpaceSetting() {
  * escribe con la entrada nueva —`withLinkedSpace`, que lo normaliza y quita la
  * entrada con «Automático»—, y sólo si el panel sigue en ese host entra en el
  * estado y se vuelve a elegir qué contexto viaja (§8.22). Se registra y se dice.
+ * El proyecto es el que el selector PINTÓ (`dataset.proyecto`), no el de
+ * `state.site`: con Ajustes abierto y otra pestaña de otro proyecto, guardaba la
+ * elección bajo el proyecto equivocado (revisión adversaria de H22, G02). Y la
+ * base es el mapa RELEÍDO del almacén justo antes de escribir, no el de memoria,
+ * que otro panel pudo cambiar (G11); host y proyecto se comprueban tras cada
+ * `await`.
  */
 async function onLinkedSpaceChange(ev) {
   const host = state.site?.host || ''
-  const proyecto = state.site?.product === 'jira' ? validProjectKey(state.site.projectKey) : ''
+  const proyecto = ev.target.dataset.proyecto || ''
+  const valor = ev.target.value
+  if (state.site?.product !== 'jira' || validProjectKey(state.site?.projectKey) !== proyecto) {
+    paintLinkedSpaceSetting()
+    return
+  }
   if (!host || !proyecto || !state.linkedContext) return
-  const mapa = withLinkedSpace(state.linkedSpaces, proyecto, ev.target.value)
+  const guardado = normalizeLinkedSpaces((await getSite(host))?.linkedSpaces)
+  if ((state.site?.host ?? state.lastHost) !== host || validProjectKey(state.site?.projectKey) !== proyecto) return
+  const mapa = withLinkedSpace(guardado, proyecto, valor)
   await saveSite(host, { linkedSpaces: mapa })
-  if ((state.site?.host ?? state.lastHost) !== host) return
+  if ((state.site?.host ?? state.lastHost) !== host || validProjectKey(state.site?.projectKey) !== proyecto) return
   state.linkedSpaces = mapa
   applyLinkedScope()
   paintLinkedSpaceSetting()
@@ -10192,6 +10225,12 @@ async function generateContext({ keepContext = false } = {}) {
   // Y el ÁMBITO (H21): el espacio o el proyecto de la pestaña al empezar. El
   // contexto que salga de aquí es SUYO, se quede el usuario donde se quede.
   const scopeKey = scopeKeyOf(sitio)
+  // Y el contexto del Confluence enlazado que viaja desde este proyecto, también
+  // AHORA (§8.22): entre `restIndexFor` y `buildContext` pasan segundos, y
+  // cambiar de proyecto reasigna `contextMd`/`contextScope` del objeto
+  // compartido. Copia superficial: `applyLinkedScope` sólo reasigna claves de
+  // primer nivel (revisión adversaria de H22, G03).
+  const enlazado = sitio.product === 'jira' && state.linkedContext ? { ...state.linkedContext } : null
   const controller = new AbortController()
   state.indexingAbort = controller
   hideScreens()
@@ -10239,7 +10278,8 @@ async function generateContext({ keepContext = false } = {}) {
       model: state.model,
       // Desde Jira, el indexador sabe qué Confluence hay enlazado y qué
       // cuenta su contexto: es donde buscar si los tickets están documentados.
-      linkedContext: state.linkedContext,
+      // El capturado al empezar, no el de ahora.
+      linkedContext: enlazado,
       // Con el árbol ya leído, las fases 2 y 3 no se le piden al modelo; con
       // el perfil contado, tampoco la muestra de Jira (los dos van al prompt).
       restIndex: rest.index,
