@@ -438,6 +438,28 @@
             return
           }
 
+          case MSG.ISSUE_LINKS: {
+            // Las relaciones reales entre las incidencias de un diagrama (H25).
+            // Del panel sólo llegan CLAVES —las del índice, cosechadas de la
+            // salida de una herramienta—, nunca una consulta: aquí se vuelven a
+            // validar una a una y van a la plantilla fija `linksJql`. Sin dos
+            // válidas no es una consulta y no se pide nada. site.js ya lo cargó
+            // `sitioJira`: pedirlo otra vez no trae nada nuevo.
+            const [jira, sitio, { validIssueKey }] = await Promise.all([
+              import(url('src/shared/jira-rest.js')),
+              sitioJira(msg),
+              import(url('src/atlassian/site.js')),
+            ])
+            const pedidas = msg.keys
+            const claves = Array.isArray(pedidas) ? pedidas.map((k) => validIssueKey(k)).filter(Boolean) : []
+            if (!jira.linksJql(claves)) {
+              sendResponse({ ok: false, reason: 'consulta no permitida' })
+              return
+            }
+            sendResponse(await jira.fetchIssueLinks((u, o) => fetch(u, o), sitio, claves))
+            return
+          }
+
           case MSG.ANNOTATE:
             sendResponse(await runner.applyNotes(msg))
             return

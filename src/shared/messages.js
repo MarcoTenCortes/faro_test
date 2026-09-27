@@ -43,6 +43,11 @@ export const MSG = {
   RECENT_PAGES: 'faro:recent-pages',
   SPACE_PAGES: 'faro:space-pages',
   FAVOURITE_FILTERS: 'faro:favourite-filters',
+  // H25: las relaciones reales entre las incidencias de un diagrama. Viaja una
+  // lista de CLAVES del índice del panel (`keys`) y nada más: ni la consulta,
+  // ni el origen, ni una ruta. El content script las revalida y las mete en la
+  // plantilla fija `linksJql`; sin dos válidas no pide nada.
+  ISSUE_LINKS: 'faro:issue-links',
 
   // content script -> service worker / panel
   CONTENT_READY: 'faro:content-ready',

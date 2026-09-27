@@ -1681,6 +1681,29 @@ Reglas transversales, que salen de los dos juicios y valen para todos:
   con issuelinks.
 - **Riesgo**: medio-alto en (a) por la GPU sin medir y la detección del tema;
   medio en (b) por §8.12.
+- **Hecho el 2026-09-27: (b) sí, (a) descartada** (rama `plan/h25-issuelinks`
+  sobre f9a4195, sin commit todavía: pendiente de la verificación del
+  orquestador y de su revisión adversaria; contrato en
+  `docs/plan/handoff/h25-contrato.md`, hechos en `h25-hechos.json`). Marco
+  delegó la decisión en el orquestador. **(a), el «Rotulador», se DESCARTA**:
+  una segunda raíz en el documento (§8.11), GPU en cada frame de scroll sin
+  medir, multiply/screen que falla en zonas de tema mixto y un criterio de
+  aceptación —verse en el tema oscuro REAL de Marco— que no se puede cumplir
+  desde aquí, con H23 dejando ya las marcas legibles; se reabre sólo si Marco
+  lo pide tras ver H23 en real (docs/BITACORA.md §12.4). **(b) se hace**:
+  «Contrastar con Jira» bajo un diagrama de un Jira DC con `restTools` y dos
+  claves o más del índice lee las `issuelinks` reales (`linksJql`,
+  `parseIssueLinks`, `fetchIssueLinks`) y las dibuja como un segundo
+  diagrama, «Según Jira» (`diagram-links.js`), con la comparación; lo leído
+  se pinta y no va a ningún prompt ni se guarda; CLAUDE.md §8.12, §8.19 y
+  §8.27 precisados con esa procedencia. Desvíos: un mensaje NUEVO,
+  `MSG.ISSUE_LINKS`, y no un `kind` de `RECENT_ISSUES` (la misma barrera, y
+  así no se tocan el pin de `readToday` ni los kinds de `todayTargets`); los
+  tramos son 65 y 66 (1..N sin huecos); `dagre` no se vendoriza (el layout
+  propio basta con ≤30 nodos). 1635 pruebas (+28), banco 66 tramos / 149
+  `ok(` / 148 resultados, las 40 instantáneas intactas. Sin verificar: la
+  forma real de `issuelinks` en el Jira de Marco, y el botón y la figura en
+  la extensión cargada. La bitácora, en docs/BITACORA.md §12.5.
 
 ### H26 · Cierre
 

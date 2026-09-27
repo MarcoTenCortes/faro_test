@@ -841,6 +841,34 @@ Junto al selector de modelo, abajo, hay otras dos cosas:
   a «Dibujar el flujo» en Análisis no se subraya en la página: es un dibujo, no
   un análisis.
 
+- **Contrastar con Jira** (H25) — el diagrama lo dibuja el modelo, y una
+  flecha «ENG-7 → ENG-3» es lo que **cree** que hay. En un **Jira propio (Data
+  Center)**, con «Consultar la API de Jira y Confluence con mi sesión»
+  encendido en Ajustes y con **dos
+  incidencias o más del diagrama que ya estén en el mapa del sitio**, junto a
+  «Copiar como Mermaid» sale el botón «Contrastar con Jira». Al pulsarlo, Faro
+  lee de tu Jira, con tu sesión del navegador y sin pasar por el modelo, las
+  **relaciones de verdad** entre esas incidencias («blocks», «relates to»,
+  «duplicates»…, con su sentido), y debajo dibuja un segundo diagrama, **«Según
+  Jira»**: las mismas cajas, con las flechas que tiene Jira. Encima, un
+  resumen («Según Jira: 3 relaciones entre 4 incidencias · coinciden 2 · sólo
+  el modelo 1 · sólo Jira 1»), y debajo, en texto, cada diferencia: «El modelo
+  dibujó ENG-20 → ENG-3 y Jira no lo tiene», «Jira tiene ENG-7 blocks ENG-3 y
+  el modelo no lo dibujó», o «Coinciden todas»; si alguna incidencia no se pudo
+  contrastar, «Sin contrastar: ENG-1». La comparación no mira el sentido de
+  la flecha (el modelo no lo distingue y Jira sí). **Qué lee y qué no**: sólo
+  las claves del diagrama que ya estaban en el mapa (las que salieron de una
+  búsqueda o de una lectura de Jira, nunca las que el modelo escribió sin
+  más), y de cada una sus relaciones, su resumen, su tipo y su estado; nada de
+  personas. Lo leído **se pinta y no va al modelo**, ni se guarda: al reabrir
+  el panel el segundo diagrama ya no está, y se vuelve a contrastar a demanda.
+  **Cuándo no sale el botón**: en Jira Cloud (allí no hay API de Jira, todo va
+  por el MCP), en Confluence, con esa casilla de Ajustes apagada o con menos de dos
+  incidencias del mapa. Si algo falla, lo dice bajo el diagrama («Sin acceso a
+  la pestaña de Jira», «Hacen falta al menos dos incidencias del índice para
+  contrastar», la sesión caducada o lo que respondió Jira) y queda en el
+  registro como «Relaciones de Jira».
+
 - **Búsquedas al instante** — en un **Jira propio (Data Center)**, con el chat
   vacío, bajo las tres sugerencias hay hasta cuatro pastillas: «Misma épica
   ENG-1», «Mismo sprint «S37 Infra»», «Mis abiertas de ENG», «Filtro: API en
@@ -1347,11 +1375,29 @@ de modelo.
 
 `npm run harness` levanta en <http://127.0.0.1:5175> una Confluence y un Jira de
 mentira con las piezas reales encima. El botón **Autocomprobación completa**
-recorre hoy **64 tramos numerados (137 comprobaciones)**; hay que correrla con el panel del navegador a
+recorre hoy **66 tramos numerados (148 comprobaciones)**; hay que correrla con el panel del navegador a
 la vista y a 1280×900, porque con la ventana oculta Chrome estrangula los
 temporizadores y no ejecuta los fotogramas.
 
-El último (64) es **el subrayado** (H23), sobre las tres observaciones de
+Los dos últimos (65 y 66) son **«Contrastar con Jira»** (H25). La Jira de
+mentira tiene ahora relaciones de verdad entre incidencias (`issueLinks` de
+`harness/issues.json`, dirigidas y con su tipo: ENG-7 «blocks» ENG-3, ENG-7
+«relates to» ENG-12, ENG-12 «blocks» ENG-20, más dos que salen del conjunto,
+ENG-20 → ENG-25 y OPS-2 → ENG-12), y la API falsa entiende `issuekey in (ENG-7,
+ENG-3, …)` con una lista de claves y devuelve `fields=issuelinks` con la forma
+de la API v2 (`outwardIssue` en un extremo, `inwardIssue` en el otro). El 65
+(seis comprobaciones) lee esas relaciones con el módulo real: las exactas de la
+fixture en UNA petición de plantilla, las claves validadas y sin repetir, nada
+pedido con menos de dos claves o en Cloud, la sesión caducada dicha como tal, y
+la relación con un extremo que no se pidió, fuera. El 66 (cinco) hace lo que
+hace el panel al pulsar el botón, con los módulos reales del diagrama: un
+diagrama del modelo con cuatro incidencias y una que no existe (ENG-999), la
+lectura con sólo las claves conocidas, el diagrama «Según Jira» con los nodos
+del modelo y las flechas de Jira, su ida y vuelta por Mermaid, la figura con
+tantas cajas como claves y tantas flechas como relaciones, y que ENG-999 no
+llega a ninguna petición.
+
+El 64 es **el subrayado** (H23), sobre las tres observaciones de
 siempre de la página 200: que la observación activa va en su propio resaltado
 (`faro-quote-activa`, con prioridad 1) y NO se repite en el de las demás
 (`faro-quote`), y que entre los dos están todas —dos rellenos traslúcidos sobre
@@ -1737,6 +1783,20 @@ corto y un detalle. Todos los títulos, por dónde salen:
   (y por eso no es un «Sin marcas», que siempre lleva el suyo). **Pregunta
   preparada** (en gris): «pregunta preparada · sin mandar», pulsaste «Dibujar
   el flujo» y la pregunta está escrita en el cuadro; no se ha mandado nada.
+- «Relaciones de Jira» — (H25) pulsaste «Contrastar con Jira» bajo un
+  diagrama, con tres detalles. **Leídas** (en verde): el mismo resumen que el
+  pie de la figura «Según Jira» («Según Jira: 3 relaciones entre 4 incidencias
+  · coinciden 2 · sólo el modelo 1 · sólo Jira 1», o «sin relaciones en Jira
+  entre N incidencias») y lo que tardó, en ms. **No leídas** (en amarillo):
+  «<motivo> · <frase>», el código del fallo (`cloud`, `claves`, `sesion`,
+  `jql`, `permiso`, `red`, `api`, `forma`, `apagado`…) y la misma frase que
+  sale bajo el diagrama («Hacen falta al menos dos incidencias del índice para
+  contrastar», «Sin acceso a la pestaña de Jira», lo que dijo Jira de la
+  consulta…); si el mismo motivo ya se dijo en esta sesión, sólo queda aquí.
+  **Descartadas** (en gris): «lo leído de <host> llegó con el diagrama
+  repintado o el panel en otro sitio», la respuesta llegó cuando la figura ya
+  no estaba (el chat se repintó) o el panel había cambiado de sitio o de
+  conversación, y no se pinta nada.
 
 **Páginas base**
 

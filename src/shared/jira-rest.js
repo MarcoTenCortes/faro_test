@@ -9,14 +9,17 @@
  * reenvía en cada turno (CLAUDE.md §7). Esto es el mismo patrón para Jira, y
  * UNO para las tres áreas que lo necesitan: la lista de una búsqueda (H8), la
  * muestra y el perfil de un proyecto (H9), los enlaces remotos de una incidencia
- * (H10) y lo que viste y lo tuyo (H11). Decisión §8.19 de CLAUDE.md.
+ * (H10), lo que viste y lo tuyo (H11) y las relaciones reales entre las
+ * incidencias de un diagrama (H25: el modelo dibuja lo que CREE que se relaciona,
+ * y Jira sabe lo que se relaciona de verdad, con su tipo y su sentido).
+ * Decisión §8.19 de CLAUDE.md.
  *
  * DE DÓNDE PUEDE VENIR UNA CONSULTA (y de ningún otro sitio, CLAUDE.md §8.12):
  *  1. De una PLANTILLA FIJA de este módulo (`historyJql`, `mineJql`,
- *     `projectJql`, `relatedJql`, `sampleQuery`), cuyos únicos parámetros son
- *     una clave que pasa `validProjectKey`/`validIssueKey` y un número de días
- *     entero dentro de tope. Lo que no valida devuelve null, y sin consulta no
- *     hay petición.
+ *     `projectJql`, `relatedJql`, `sampleQuery`, `linksJql`), cuyos únicos
+ *     parámetros son una clave que pasa `validProjectKey`/`validIssueKey` (o una
+ *     lista de ellas, en `linksJql`) y un número de días entero dentro de tope.
+ *     Lo que no valida devuelve null, y sin consulta no hay petición.
  *  2. De la llamada REAL que el modelo ya hizo a `jira_search` por el MCP (el
  *     `state.input.jql` que `jqlDestination` lee hoy), nunca de su prosa.
  *  3. De un chip construido aquí con valores escapados por `jqlQuote`, o de un
@@ -49,7 +52,8 @@
  * QUÉ NO SALE DE AQUÍ A UN PROMPT: `assignee`/`reporter` son los únicos datos de
  * persona que se leen (hacen falta para «asignada a ti»), y `profileFromSample`
  * —lo único de este módulo que acaba delimitado en un `system`— no los mira
- * siquiera.
+ * siquiera. Las relaciones de `fetchIssueLinks` (H25) se PINTAN junto al
+ * diagrama y no van a ningún prompt (§8.19).
  *
  * LOS NOMBRES NO SIRVEN PARA PREGUNTAR, LOS IDS SÍ (H14, comprobado en el Jira
  * Data Center real del usuario, con la interfaz en español): Jira TRADUCE al
@@ -111,6 +115,18 @@ export const JIRA_REST_LIMITS = {
    * al pasarse se conservan los contados más recientemente.
    */
   profileProjects: 20,
+  /**
+   * Las relaciones entre las incidencias de un diagrama (H25). `linkKeys` son
+   * las claves de UNA consulta: una fila por clave, así que es el mismo número
+   * que `maxResults` y cabe en una sola petición. `issueLinks` y `linkTypeChars`
+   * son lo que el panel puede dibujar después: las aristas y lo largo de su
+   * etiqueta de `DIAGRAM_LIMITS` (diagram-parse.js). No se importan de allí
+   * porque este módulo lo carga el content script y `panel/` no se expone a la
+   * página (§8.21); que no diverjan lo pina jira-rest.test.js.
+   */
+  linkKeys: 30,
+  issueLinks: 60,
+  linkTypeChars: 40,
 }
 
 /**
@@ -163,6 +179,10 @@ export const JIRA_FIELDS = [
   'labels',
   'components',
   'parent',
+  // H25: las relaciones de cada incidencia, que pide `fetchIssueLinks`.
+  // `parseSearchIssues` no lo lee y SEARCH_FIELDS no lo lleva: una búsqueda
+  // normal sigue sin traerlo.
+  'issuelinks',
 ]
 
 /** Lo que se pide de una búsqueda normal: lo que la lista y el ranking necesitan. */
@@ -184,6 +204,13 @@ export const SEARCH_FIELDS = [
  * `lastViewed`: el perfil no lleva personas, así que tampoco se traen.
  */
 export const SAMPLE_FIELDS = ['summary', 'issuetype', 'status', 'priority', 'labels', 'components']
+
+/**
+ * Lo que se pide para contrastar un diagrama con Jira (H25): las relaciones y lo
+ * justo para nombrar cada incidencia. Sin personas: lo leído se pinta al lado del
+ * diagrama y no hace falta saber de quién es nada.
+ */
+export const LINK_FIELDS = ['issuelinks', 'summary', 'issuetype', 'status']
 
 /** Las categorías de estado que Jira define; cualquier otra cosa no es una categoría. */
 const STATUS_CATEGORIES = ['new', 'indeterminate', 'done', 'undefined']
@@ -317,6 +344,41 @@ export function relatedJql(issueKey) {
 export function sampleQuery(projectKey) {
   const key = validProjectKey(projectKey)
   return key ? `project = ${key} ORDER BY updated DESC` : null
+}
+
+/**
+ * Las incidencias de un diagrama, para leer sus relaciones (H25). Pura.
+ *
+ * Es una plantilla fija como las demás: su único parámetro es una LISTA de
+ * claves, y cada una pasa `validIssueKey` —que sólo deja `[A-Z][A-Z0-9_]*-\d+`—,
+ * así que van sin comillas y sin `jqlQuote`, como la de `relatedJql`. Nada del
+ * diagrama del modelo llega aquí salvo claves: quien llama las toma del ÍNDICE
+ * (cosechadas de la salida de una herramienta, nunca de la prosa), y el content
+ * script las vuelve a validar antes de llamar. Sin repetir, en el orden en que
+ * llegan y con tope `linkKeys`. Con menos de dos no hay grafo que contrastar, y
+ * sin consulta no hay petición.
+ *
+ * @param {Array<string>} keys
+ * @returns {string|null}
+ */
+export function linksJql(keys) {
+  const claves = clavesDeEnlaces(keys)
+  return claves.length >= 2 ? `issuekey in (${claves.join(', ')})` : null
+}
+
+/**
+ * Las claves de una consulta de relaciones: válidas, sin repetir, en su orden y
+ * con tope. Una sola función para la consulta, el tamaño de la página y el
+ * conjunto con el que se filtra la respuesta, para que los tres no diverjan.
+ */
+function clavesDeEnlaces(keys) {
+  const claves = []
+  for (const k of Array.isArray(keys) ? keys : []) {
+    if (claves.length >= JIRA_REST_LIMITS.linkKeys) break
+    const key = validIssueKey(k)
+    if (key && !claves.includes(key)) claves.push(key)
+  }
+  return claves
 }
 
 /**
@@ -588,6 +650,82 @@ function hostDe(url) {
   }
 }
 
+/**
+ * De la respuesta de `/rest/api/2/search` con `fields=issuelinks,…` a las
+ * relaciones DIRIGIDAS entre las incidencias pedidas (H25). Pura.
+ *
+ * La forma es la publicada de la API v2 —cada `fields.issuelinks[]` es
+ * `{id, type: {id, name, inward, outward}, outwardIssue?, inwardIssue?}`—; no
+ * se ha visto todavía en el Jira del usuario (BITACORA §12.2 «H25»), así que
+ * todo lo que no tenga esa forma se cae sin romper nada.
+ *
+ * Una relación la ven SUS DOS extremos: ENG-7 «blocks» ENG-3 viene en ENG-7 con
+ * `outwardIssue` ENG-3 y en ENG-3 con `inwardIssue` ENG-7. Las dos se escriben
+ * en el sentido de `outward` (`from` → `to`, «blocks») y se funden en UNA por
+ * `from|to|name`. Sólo cuentan las que unen dos claves DEL CONJUNTO pedido que
+ * además vinieron en la respuesta: una relación con un extremo fuera no se
+ * puede dibujar entre los nodos del diagrama y se descarta sin gastar tope. Nada de personas: ni `assignee` ni
+ * `reporter`, aunque vinieran.
+ *
+ * @param {{keys: Array<string>}} opts las claves que se pidieron
+ * @returns {{nodes: Array<{key, summary, type, statusCategory}>,
+ *            links: Array<{from, to, type, name, id}>}|null} null sin `issues`
+ */
+export function parseIssueLinks(json, { keys } = {}) {
+  if (!json || typeof json !== 'object' || !Array.isArray(json.issues)) return null
+  const pedidas = clavesDeEnlaces(keys)
+  const porClave = new Map()
+  // Sin tope propio: sólo entran claves pedidas, y ésas ya vienen con el de
+  // `linkKeys` (`clavesDeEnlaces`).
+  for (const raw of json.issues) {
+    if (!raw || typeof raw !== 'object') continue
+    const key = validIssueKey(raw.key)
+    if (!key || !pedidas.includes(key) || porClave.has(key)) continue
+    porClave.set(key, raw.fields && typeof raw.fields === 'object' ? raw.fields : {})
+  }
+
+  // Los nodos en el orden en que se pidieron, que es el del diagrama.
+  const nodes = pedidas
+    .filter((key) => porClave.has(key))
+    .map((key) => {
+      const f = porClave.get(key)
+      return {
+        key,
+        summary: linea(f.summary, JIRA_REST_LIMITS.summaryChars),
+        type: nombre(f.issuetype),
+        statusCategory: categoria(f.status?.statusCategory),
+      }
+    })
+
+  const links = []
+  const vistas = new Set()
+  for (const [key, f] of porClave) {
+    for (const raw of Array.isArray(f.issuelinks) ? f.issuelinks : []) {
+      if (links.length >= JIRA_REST_LIMITS.issueLinks) break
+      if (!raw || typeof raw !== 'object') continue
+      let from = ''
+      let to = ''
+      if (raw.outwardIssue && typeof raw.outwardIssue === 'object') {
+        from = key
+        to = validIssueKey(raw.outwardIssue.key)
+      } else if (raw.inwardIssue && typeof raw.inwardIssue === 'object') {
+        from = validIssueKey(raw.inwardIssue.key)
+        to = key
+      }
+      // Los dos extremos tienen que ser incidencias pedidas QUE VINIERON: así
+      // toda relación une dos nodos de la salida y se puede dibujar tal cual.
+      if (!from || !to || from === to || !porClave.has(from) || !porClave.has(to)) continue
+      const name = linea(raw.type?.name, JIRA_REST_LIMITS.linkTypeChars)
+      const clave = `${from}|${to}|${name}`
+      if (vistas.has(clave)) continue
+      vistas.add(clave)
+      // El id sólo dígitos, como los de un tipo o un estado (`fieldId`).
+      links.push({ from, to, type: linea(raw.type?.outward, JIRA_REST_LIMITS.linkTypeChars), name, id: fieldId(raw.id) })
+    }
+  }
+  return { nodes, links }
+}
+
 // ------------------------------------------------------------------- fetch
 
 /**
@@ -745,6 +883,57 @@ export async function fetchRemoteLinks(
   const links = parseRemoteLinks(r.json, { hosts })
   if (!links) return { ok: false, reason: 'forma', detail: 'la respuesta de la API no tiene la forma esperada', status: r.status }
   return { ok: true, links, ms: Math.round(nowMs() - t0) }
+}
+
+/**
+ * Las relaciones reales entre unas incidencias (H25), para dibujarlas al lado
+ * del diagrama del modelo.
+ *
+ * El patrón de los otros lectores: en Cloud nada, sin origen o sin fetch nada, y
+ * sin DOS claves válidas nada (`'claves'`, antes de pedir). La consulta es la
+ * plantilla `linksJql`, con una fila por clave (`maxResults` = n.º de claves) y
+ * los campos `LINK_FIELDS`. Un 404 con ruta de contexto se reintenta UNA vez en
+ * la raíz, como en `searchIssues`; la degradación de `lastViewed` no aplica,
+ * porque la consulta no lo menciona.
+ *
+ * @param {Array<string>} keys claves del ÍNDICE del panel, revalidadas aquí
+ * @returns {Promise<{ok:true, nodes:Array, links:Array, via:'jql', prefix:string, ms:number}
+ *          |{ok:false, reason:string, detail?:string, status?:number, messages?:string[]}>}
+ */
+export async function fetchIssueLinks(
+  fetchFn,
+  site,
+  keys,
+  { prefix, timeoutMs = JIRA_REST_LIMITS.timeoutMs, credentials = 'same-origin' } = {}
+) {
+  const t0 = nowMs()
+  const enCloud = sinRestDeJira(site)
+  if (enCloud) return enCloud
+  const base = origenDe(site)
+  if (!base) return { ok: false, reason: 'origen', detail: 'origen desconocido' }
+  if (typeof fetchFn !== 'function') return { ok: false, reason: 'sin-fetch', detail: 'sin fetch' }
+  const jql = linksJql(keys)
+  if (!jql) return { ok: false, reason: 'claves', detail: 'hacen falta al menos dos claves de incidencia válidas' }
+  const claves = clavesDeEnlaces(keys)
+
+  const opts = { timeoutMs, credentials, base, errorBody: true }
+  let prefijo = cleanPrefix(prefix ?? site?.jiraPrefix)
+  // Como mucho dos peticiones: la buena y la de la raíz.
+  for (let intento = 0; intento < 2; intento++) {
+    const ruta = searchPath(site, jql, { limit: claves.length, fields: LINK_FIELDS, prefix: prefijo })
+    const r = await getJson(fetchFn, base + ruta, opts)
+    if (r.ok) {
+      const leido = parseIssueLinks(r.json, { keys: claves })
+      if (!leido) return { ok: false, reason: 'forma', detail: 'la respuesta de la API no tiene la forma esperada', status: r.status }
+      return { ok: true, nodes: leido.nodes, links: leido.links, via: 'jql', prefix: prefijo, ms: Math.round(nowMs() - t0) }
+    }
+    if (r.status === 404 && prefijo) {
+      prefijo = ''
+      continue
+    }
+    return fallo(r)
+  }
+  return { ok: false, reason: 'api', detail: 'la API no contestó ni con la ruta de contexto ni en la raíz' }
 }
 
 // ----------------------------------------------- perfil de un proyecto

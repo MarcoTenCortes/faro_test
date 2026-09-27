@@ -20,6 +20,7 @@
 import { test, eq, assert } from '../harness.js'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { MSG } from '../../src/shared/messages.js'
 
 const ROOT = join(import.meta.dirname, '..', '..')
 
@@ -109,8 +110,9 @@ test('SEGURIDAD: el origen y la ruta de contexto salen de la pestaña, nunca del
 test('SEGURIDAD: toda petición del content script sale por el fetch que se le pasa a un módulo REST', () => {
   // Ningún `fetch('…')` propio: la única forma es la flecha que se entrega a
   // getJson, que es quien comprueba el origen de la URL ya montada.
+  // EL CAMBIO (H25): de ocho a nueve, con el de las relaciones de un diagrama.
   const propias = cuenta(JS, 'fetch(')
-  assert(propias >= 8, 'los ocho lectores REST siguen ahí (siete de H7 y el remotelink de H10)')
+  assert(propias >= 9, 'los nueve lectores REST siguen ahí (siete de H7, el remotelink de H10 y las relaciones de H25)')
   eq(cuenta(JS, '(u, o) => fetch(u, o)'), propias, 'un fetch que no es la flecha de un lector REST')
 })
 
@@ -157,6 +159,48 @@ test('el árbol de un espacio no acepta topes por mensaje: los pone el módulo',
   for (const tope of ['maxPages', 'maxRequests', 'timeoutMs']) {
     assert(!caso.includes(tope), `${tope} no viaja en el mensaje`)
   }
+})
+
+// --------------------------------------------------------------------- H25
+// Las relaciones reales entre las incidencias de un diagrama. jira-rest.js
+// garantiza que `linksJql` sólo escribe claves validadas; lo que sólo puede
+// garantizar este `case` es que del mensaje no se lee más que la lista de
+// claves, que se revalidan AQUÍ antes de nada, y que sin dos no se pide.
+
+test('H25 SEGURIDAD: las relaciones de un diagrama sólo viajan como claves, se revalidan en la pestaña y sin dos válidas no se pide nada', () => {
+  const caso = entre('case MSG.ISSUE_LINKS: {', 'case MSG.ANNOTATE:')
+  assert(caso.includes("import(url('src/shared/jira-rest.js'))"), 'import perezoso del módulo REST')
+  assert(caso.includes('sitioJira(msg)'), 'el sitio se deduce de la pestaña, como en las demás lecturas')
+  assert(caso.includes('const pedidas = msg.keys'), 'del mensaje sólo se leen las claves')
+  assert(
+    caso.includes('const claves = Array.isArray(pedidas) ? pedidas.map((k) => validIssueKey(k)).filter(Boolean) : []'),
+    'cada clave pasa validIssueKey en el content script'
+  )
+  const guarda = caso.indexOf('if (!jira.linksJql(claves)) {')
+  const rechazo = caso.indexOf("sendResponse({ ok: false, reason: 'consulta no permitida' })")
+  const peticion = caso.indexOf('jira.fetchIssueLinks(')
+  assert(guarda >= 0 && rechazo > guarda && peticion > rechazo, 'el rechazo va ANTES de pedir nada')
+  assert(
+    caso.includes('sendResponse(await jira.fetchIssueLinks((u, o) => fetch(u, o), sitio, claves))'),
+    'se piden las claves YA validadas, no las del mensaje'
+  )
+  // Del mensaje no sale ninguna consulta, ni tope, ni campos: los pone el módulo.
+  for (const prohibido of ['msg.jql', 'msg.fields', 'msg.limit', 'msg.issueKey', 'msg.kind']) {
+    assert(!caso.includes(prohibido), `${prohibido} no puede llegar a las relaciones`)
+  }
+  // `msg.keys` se lee UNA vez en todo el fichero, y es aquí.
+  eq(cuenta(JS, 'msg.keys'), 1)
+  eq(cuenta(caso, 'msg.keys'), 1)
+})
+
+test('H25: todo mensaje empieza por «faro:», que es lo único que el content script escucha, y ninguno repite valor', () => {
+  // Nadie más pina los valores de MSG: un ISSUE_LINKS sin el prefijo lo tiraría
+  // el filtro del listener sin decir nada, y el panel sólo vería un `null`.
+  assert(JS.includes("!msg.type.startsWith('faro:')"), 'el filtro del listener')
+  const valores = Object.values(MSG)
+  for (const [nombre, valor] of Object.entries(MSG)) assert(/^faro:[a-z-]+$/.test(valor), `${nombre} = ${valor}`)
+  eq(new Set(valores).size, valores.length, 'dos mensajes con el mismo valor se confundirían')
+  eq(MSG.ISSUE_LINKS, 'faro:issue-links')
 })
 
 // --------------------------------------------------------------------- H11

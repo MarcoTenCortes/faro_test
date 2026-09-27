@@ -48,7 +48,14 @@ import {
   suggestedQueries,
   normalizeRecentJql,
   rememberJql,
+  LINK_FIELDS,
+  linksJql,
+  parseIssueLinks,
+  fetchIssueLinks,
 } from '../../src/shared/jira-rest.js'
+import { DIAGRAM_LIMITS } from '../../src/panel/diagram-parse.js'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 
 const ORIGIN = 'https://jira.simplprogramme.eu'
 const SITE = { origin: ORIGIN, cloud: false, jiraPrefix: '' }
@@ -727,6 +734,278 @@ test('los tres lectores respetan el tope de tiempo que se les da', async () => {
   eq((await fetchFavouriteFilters(colgado, SITE, { timeoutMs: 5 })).detail, 'sin respuesta en 5 ms')
   eq((await fetchRemoteLinks(colgado, SITE, 'SIMPL-1', { timeoutMs: 5 })).detail, 'sin respuesta en 5 ms')
   eq(JIRA_REST_LIMITS.timeoutMs, 6000, 'el de por defecto')
+})
+
+// ------------------------------------------------------------------- H25
+// Las relaciones reales entre las incidencias de un diagrama. La consulta es
+// una lista de claves en una plantilla fija; lo que vuelve se queda en las
+// relaciones entre las claves pedidas, en el sentido de `outward`.
+
+const BLOCKS = { id: '10000', name: 'Blocks', inward: 'is blocked by', outward: 'blocks' }
+const RELATES = { id: '10003', name: 'Relates', inward: 'relates to', outward: 'relates to' }
+const DUPLICATE = { id: '10002', name: 'Duplicate', inward: 'is duplicated by', outward: 'duplicates' }
+const otra = (key) => ({ id: '1', key, fields: { summary: 'Otra', status: { name: 'Open' }, issuetype: { name: 'Task' } } })
+
+/**
+ * Una respuesta de `/rest/api/2/search?fields=issuelinks,…` con la forma de la
+ * API v2 publicada (no hay fixture del Jira del usuario: BITACORA §12.2 «H25»).
+ */
+const RESPUESTA_ENLACES = {
+  total: 3,
+  issues: [
+    {
+      key: 'ENG-7',
+      fields: {
+        summary: 'Consentimiento v2',
+        issuetype: { id: '10001', name: 'Story' },
+        status: { id: '3', name: 'In Progress', statusCategory: { key: 'indeterminate' } },
+        assignee: { name: 'ana', displayName: 'Ana Pérez' },
+        reporter: { name: 'luis', displayName: 'Luis Gómez' },
+        issuelinks: [
+          { id: '20001', type: BLOCKS, outwardIssue: otra('ENG-3') },
+          { id: '20002', type: RELATES, outwardIssue: otra('ENG-12') },
+          // Un extremo que no se pidió: fuera, sin gastar tope.
+          { id: '20009', type: BLOCKS, outwardIssue: otra('ENG-99') },
+        ],
+      },
+    },
+    {
+      key: 'ENG-3',
+      fields: {
+        summary: 'Rotar credenciales',
+        issuetype: { id: '10002', name: 'Task' },
+        status: { id: '6', name: 'Done', statusCategory: { key: 'done' } },
+        issuelinks: [
+          // La MISMA relación que la 20001, vista desde el otro extremo.
+          { id: '20001', type: BLOCKS, inwardIssue: otra('ENG-7') },
+          // Sólo la trae este lado: el sentido sale de `inwardIssue`.
+          { id: '20004', type: DUPLICATE, inwardIssue: otra('ENG-12') },
+        ],
+      },
+    },
+    {
+      key: 'ENG-12',
+      fields: {
+        summary: 'Federación',
+        issuelinks: [
+          { id: '20002', type: RELATES, inwardIssue: otra('ENG-7') },
+          // ENG-20 se pidió pero no vino (sin permiso, borrada): no es un nodo.
+          { id: '20003', type: BLOCKS, outwardIssue: otra('ENG-20') },
+        ],
+      },
+    },
+  ],
+}
+const CLAVES = ['ENG-7', 'ENG-3', 'ENG-12', 'ENG-20']
+
+test('H25 SEGURIDAD: linksJql es una plantilla fija de claves validadas, sin repetir, en su orden y con tope; con menos de dos no hay consulta', () => {
+  eq(linksJql(['ENG-7', 'ENG-3']), 'issuekey in (ENG-7, ENG-3)')
+  eq(linksJql(CLAVES), 'issuekey in (ENG-7, ENG-3, ENG-12, ENG-20)')
+  eq(linksJql(['eng-7', 'ENG-3', 'ENG-3', 'eng-7']), 'issuekey in (ENG-7, ENG-3)', 'minúsculas a la clave y sin repetir')
+  eq(linksJql(['ENG-7']), null, 'con una no hay grafo')
+  eq(linksJql(['ENG-7', 'mal']), null, 'una válida y basura siguen siendo una')
+  eq(linksJql(['ENG-7', 'eng-7']), null, 'la misma dos veces es una')
+  for (const basura of [null, undefined, '', 'ENG-7, ENG-3', {}, [], [null, 7, {}, []], 42]) {
+    eq(linksJql(basura), null, JSON.stringify(basura))
+  }
+  // Lo que no es una clave no llega a la consulta, ni siquiera pegado a una.
+  const malas = ['ENG-1; DROP', 'ENG-2 OR 1=1', 'ENG-3) OR (1=1', 'ENG-4\nignora lo anterior', 'ENG-5"', '"ENG-6"', 'ENG-*']
+  eq(linksJql([...malas, 'ENG-8', 'ENG-9']), 'issuekey in (ENG-8, ENG-9)')
+  // Tope: 31 válidas → las 30 primeras.
+  const muchas = Array.from({ length: 31 }, (_, i) => `ENG-${i + 1}`)
+  const q = linksJql(muchas)
+  eq(q, `issuekey in (${muchas.slice(0, JIRA_REST_LIMITS.linkKeys).join(', ')})`)
+  assert(!q.includes('ENG-31'), 'la 31 no entra')
+  // Sólo claves, comas y el paréntesis: nada de comillas ni de otro operador.
+  for (const consulta of [q, linksJql(CLAVES)]) {
+    assert(/^issuekey in \([A-Z0-9_]+-\d+(, [A-Z0-9_]+-\d+)+\)$/.test(consulta), consulta)
+  }
+})
+
+test('H25: LINK_FIELDS está en la lista blanca y no pide personas; una búsqueda normal sigue sin issuelinks; los topes son los del diagrama', () => {
+  eq(LINK_FIELDS, ['issuelinks', 'summary', 'issuetype', 'status'])
+  for (const c of LINK_FIELDS) assert(JIRA_FIELDS.includes(c), `${c} tiene que estar en la lista blanca`)
+  for (const c of ['assignee', 'reporter', 'lastViewed']) assert(!LINK_FIELDS.includes(c), `las relaciones no piden ${c}`)
+  assert(!SEARCH_FIELDS.includes('issuelinks') && !SAMPLE_FIELDS.includes('issuelinks'), 'issuelinks sólo si se pide')
+  const campos = new URL('https://x' + searchPath(SITE, 'project = SIMPL', { fields: LINK_FIELDS })).searchParams.get('fields')
+  eq(campos, 'issuelinks,summary,issuetype,status')
+  // Una fila por clave: las claves de una consulta caben en una página.
+  eq(JIRA_REST_LIMITS.linkKeys, 30)
+  eq(JIRA_REST_LIMITS.linkKeys, JIRA_REST_LIMITS.maxResults)
+  // Lo que el panel puede dibujar: que no diverja de diagram-parse.js.
+  eq(JIRA_REST_LIMITS.issueLinks, 60)
+  eq(JIRA_REST_LIMITS.issueLinks, DIAGRAM_LIMITS.edges)
+  eq(JIRA_REST_LIMITS.linkTypeChars, DIAGRAM_LIMITS.edgeLabelMax)
+})
+
+test('H25: la cabecera de jira-rest.js nombra CADA plantilla fija, linksJql incluida', () => {
+  const src = readFileSync(join(import.meta.dirname, '..', '..', 'src', 'shared', 'jira-rest.js'), 'utf8')
+  // El paréntesis de «1. De una PLANTILLA FIJA de este módulo (…)», y sólo él.
+  const desde = src.indexOf('1. De una PLANTILLA FIJA de este módulo (')
+  const lista = src.slice(desde, src.indexOf(')', desde))
+  assert(desde >= 0 && lista.length > 0, 'la lista de plantillas fijas de la cabecera')
+  // Las que viven en la sección de plantillas y ESCRIBEN una consulta (la otra de
+  // allí, `withoutLastViewedOrder`, transforma una que ya existe).
+  const seccion = src.slice(src.indexOf('plantillas fijas de JQL'), src.indexOf('// ------------------------------------------------------------------- rutas'))
+  const exportadas = [...seccion.matchAll(/^export function (\w+Jql|sampleQuery)\(/gm)].map((m) => m[1])
+  eq(exportadas, ['historyJql', 'mineJql', 'projectJql', 'relatedJql', 'sampleQuery', 'linksJql'])
+  for (const f of exportadas) assert(lista.includes('`' + f + '`'), `la cabecera no nombra ${f}`)
+})
+
+test('H25: parseIssueLinks — las relaciones DIRIGIDAS entre las claves pedidas, UNA aunque la vean sus dos extremos', () => {
+  const r = parseIssueLinks(RESPUESTA_ENLACES, { keys: CLAVES })
+  eq(Object.keys(r).sort(), ['links', 'nodes'])
+  eq(r.nodes, [
+    { key: 'ENG-7', summary: 'Consentimiento v2', type: 'Story', statusCategory: 'indeterminate' },
+    { key: 'ENG-3', summary: 'Rotar credenciales', type: 'Task', statusCategory: 'done' },
+    { key: 'ENG-12', summary: 'Federación', type: '', statusCategory: '' },
+  ])
+  eq(r.links, [
+    { from: 'ENG-7', to: 'ENG-3', type: 'blocks', name: 'Blocks', id: '20001' },
+    { from: 'ENG-7', to: 'ENG-12', type: 'relates to', name: 'Relates', id: '20002' },
+    // Sólo la traía ENG-3 como `inwardIssue`: ENG-12 «duplicates» ENG-3.
+    { from: 'ENG-12', to: 'ENG-3', type: 'duplicates', name: 'Duplicate', id: '20004' },
+  ])
+  for (const l of r.links) eq(Object.keys(l).sort(), ['from', 'id', 'name', 'to', 'type'])
+  // ENG-99 no se pidió y ENG-20 no vino: ninguna relación con ellas.
+  assert(!JSON.stringify(r).includes('ENG-99') && !JSON.stringify(r).includes('ENG-20'), 'un extremo fuera no entra')
+  // Sin personas aunque vengan.
+  for (const persona of ['ana', 'Ana Pérez', 'luis', 'Luis Gómez', 'assignee', 'reporter']) {
+    assert(!JSON.stringify(r).includes(persona), `no debería salir ${persona}`)
+  }
+  // Los nodos van en el orden en que se PIDIERON, no en el de la respuesta.
+  eq(parseIssueLinks(RESPUESTA_ENLACES, { keys: ['ENG-12', 'ENG-3', 'ENG-7'] }).nodes.map((n) => n.key), ['ENG-12', 'ENG-3', 'ENG-7'])
+  // Una incidencia de la respuesta que no se pidió no es un nodo ni aporta relaciones.
+  const conIntrusa = { issues: [...RESPUESTA_ENLACES.issues, { key: 'ENG-50', fields: { issuelinks: [{ id: '1', type: BLOCKS, outwardIssue: otra('ENG-7') }] } }] }
+  const r2 = parseIssueLinks(conIntrusa, { keys: CLAVES })
+  eq(r2, r, 'ENG-50 no cambia nada')
+  // Pidiendo sólo dos, sólo la relación entre esas dos.
+  eq(parseIssueLinks(RESPUESTA_ENLACES, { keys: ['ENG-7', 'ENG-12'] }).links, [
+    { from: 'ENG-7', to: 'ENG-12', type: 'relates to', name: 'Relates', id: '20002' },
+  ])
+})
+
+test('H25 SEGURIDAD: parseIssueLinks — sin forma es null, el id sólo dígitos, los textos acotados y con tope', () => {
+  for (const malo of [null, undefined, 'x', 7, [], {}, { issues: {} }, { issues: 'ENG-7' }]) {
+    eq(parseIssueLinks(malo, { keys: CLAVES }), null, JSON.stringify(malo))
+  }
+  eq(parseIssueLinks({ issues: [] }, { keys: CLAVES }), { nodes: [], links: [] })
+  eq(parseIssueLinks(RESPUESTA_ENLACES, {}), { nodes: [], links: [] }, 'sin claves pedidas no hay nada que devolver')
+  eq(parseIssueLinks(RESPUESTA_ENLACES), { nodes: [], links: [] })
+
+  const una = (link) =>
+    parseIssueLinks({ issues: [{ key: 'ENG-1', fields: { issuelinks: [link] } }, { key: 'ENG-2', fields: {} }] }, { keys: ['ENG-1', 'ENG-2'] }).links
+  eq(una({ id: 'abc', type: BLOCKS, outwardIssue: otra('ENG-2') })[0].id, '', 'un id que no son dígitos')
+  eq(una({ id: '1 OR 2', type: BLOCKS, outwardIssue: otra('ENG-2') })[0].id, '')
+  eq(una({ id: 20001, type: BLOCKS, outwardIssue: otra('ENG-2') })[0].id, '20001', 'un número vale como id')
+  eq(una({ type: BLOCKS, outwardIssue: otra('ENG-2') })[0].id, '', 'sin id')
+  const larga = una({ id: '1', type: { name: 'N'.repeat(100) + '\nfin', outward: 'x'.repeat(100) }, outwardIssue: otra('ENG-2') })[0]
+  eq(larga.type, 'x'.repeat(JIRA_REST_LIMITS.linkTypeChars))
+  eq(larga.name.length, JIRA_REST_LIMITS.linkTypeChars)
+  assert(!larga.name.includes('\n'), 'una línea')
+  eq(una({ id: '1', type: BLOCKS, outwardIssue: otra('eng-2') })[0].to, 'ENG-2', 'la clave de la respuesta pasa por validIssueKey')
+  eq(una({ id: '1', type: BLOCKS, outwardIssue: otra('ENG-2 OR 1=1') }), [], 'una clave rara no es un extremo')
+  eq(una({ id: '1', type: BLOCKS, outwardIssue: otra('ENG-1') }), [], 'una incidencia no se relaciona consigo misma')
+  eq(una({ id: '1', type: BLOCKS }), [], 'sin ningún extremo no hay relación')
+  eq(una(null), [])
+  eq(una({ id: '1', type: BLOCKS, outwardIssue: 'ENG-2' }), [], 'el extremo tiene que ser un objeto')
+  // Un `outwardIssue` que no es un objeto no tapa un `inwardIssue` bueno.
+  eq(una({ id: '1', type: BLOCKS, outwardIssue: 'ENG-2', inwardIssue: otra('ENG-2') }), [
+    { from: 'ENG-2', to: 'ENG-1', type: 'blocks', name: 'Blocks', id: '1' },
+  ])
+
+  // Tope de relaciones: doce incidencias todas con todas son 66; se aceptan 60.
+  const doce = Array.from({ length: 12 }, (_, i) => `ENG-${i + 1}`)
+  const todas = {
+    issues: doce.map((key, i) => ({
+      key,
+      fields: { issuelinks: doce.slice(i + 1).map((o, j) => ({ id: String(i * 100 + j), type: RELATES, outwardIssue: otra(o) })) },
+    })),
+  }
+  const r = parseIssueLinks(todas, { keys: doce })
+  eq(r.nodes.length, 12)
+  eq(r.links.length, JIRA_REST_LIMITS.issueLinks)
+  // Y de incidencias, las que se pueden pedir.
+  const muchas = Array.from({ length: 40 }, (_, i) => `ENG-${i + 1}`)
+  eq(parseIssueLinks({ issues: muchas.map((key) => ({ key, fields: {} })) }, { keys: muchas }).nodes.length, JIRA_REST_LIMITS.linkKeys)
+})
+
+test('H25: fetchIssueLinks — UNA petición GET al mismo origen con la plantilla, una fila por clave y los campos de las relaciones', async () => {
+  const { fn, calls } = espia({ '/rest/api/2/search': RESPUESTA_ENLACES })
+  const r = await fetchIssueLinks(fn, SITE, ['eng-7', 'ENG-3', 'ENG-3', 'ENG-12', 'ENG-20', 'x y'])
+  eq(Object.keys(r).sort(), ['links', 'ms', 'nodes', 'ok', 'prefix', 'via'])
+  eq(r.ok, true)
+  eq(r.via, 'jql')
+  eq(r.prefix, '')
+  assert(Number.isFinite(r.ms) && r.ms >= 0, 'trae cuánto tardó')
+  eq(r.nodes.map((n) => n.key), ['ENG-7', 'ENG-3', 'ENG-12'])
+  eq(r.links, parseIssueLinks(RESPUESTA_ENLACES, { keys: CLAVES }).links)
+  eq(calls.length, 1)
+  eq(calls[0].opts.method, 'GET')
+  eq(calls[0].opts.credentials, 'same-origin')
+  eq(new URL(calls[0].url).origin, ORIGIN)
+  eq(new URL(calls[0].url).pathname, '/rest/api/2/search')
+  eq(jqlDe(calls[0]), 'issuekey in (ENG-7, ENG-3, ENG-12, ENG-20)')
+  const params = new URL(calls[0].url).searchParams
+  eq(params.get('fields'), 'issuelinks,summary,issuetype,status')
+  eq(params.get('maxResults'), '4', 'una fila por clave válida')
+})
+
+test('H25 SEGURIDAD: fetchIssueLinks no pide nada en Cloud, sin origen, sin fetch o sin dos claves válidas', async () => {
+  const { fn, calls } = espia({ '/rest': RESPUESTA_ENLACES })
+  const cloud = await fetchIssueLinks(fn, { origin: 'https://acme.atlassian.net', cloud: true }, CLAVES)
+  eq(cloud.ok, false)
+  eq(cloud.reason, 'cloud')
+  for (const claves of [['ENG-7'], ['ENG-7', 'mal'], ['ENG-7', 'eng-7'], [], null, 'ENG-7, ENG-3', ['ENG-1; DROP', 'ENG-2 OR 1=1']]) {
+    eq(await fetchIssueLinks(fn, SITE, claves), { ok: false, reason: 'claves', detail: 'hacen falta al menos dos claves de incidencia válidas' }, JSON.stringify(claves))
+  }
+  eq((await fetchIssueLinks(fn, { origin: 'javascript:alert(1)', cloud: false }, CLAVES)).reason, 'origen')
+  eq((await fetchIssueLinks(fn, { origin: 'https://u@evil.example', cloud: false }, CLAVES)).reason, 'origen')
+  eq((await fetchIssueLinks(null, SITE, CLAVES)).reason, 'sin-fetch')
+  eq(calls.length, 0, 'ninguna de ésas llega a pedir')
+
+  // Venga el prefijo que venga, la petición no sale del origen del sitio.
+  for (const jiraPrefix of ['@evil.example', '//evil.example', 'https://evil.example', '/jira/..', '/%2e%2e', '/x/y']) {
+    const { fn: f2, calls: c2 } = espia({ '/rest': RESPUESTA_ENLACES, '/jira': RESPUESTA_ENLACES })
+    await fetchIssueLinks(f2, { origin: ORIGIN, cloud: false, jiraPrefix }, CLAVES)
+    assert(c2.length >= 1)
+    for (const c of c2) eq(new URL(c.url).origin, ORIGIN, `${JSON.stringify(jiraPrefix)} → ${c.url}`)
+  }
+})
+
+test('H25: fetchIssueLinks — 401/403 son «sesion», un 400 trae el servidor, un 404 con prefijo se reintenta UNA vez en la raíz, y sin forma es «forma»', async () => {
+  for (const status of [401, 403]) {
+    const { fn, calls } = espia({ '/rest/api/2/search': status })
+    eq((await fetchIssueLinks(fn, SITE, CLAVES)).reason, 'sesion', String(status))
+    eq(calls.length, 1, 'no se reintenta')
+  }
+  const { fn: f400, calls: c400 } = espia({ '/rest/api/2/search': { status: 400, body: { errorMessages: ["An issue with key 'ENG-20' does not exist"] } } })
+  const r400 = await fetchIssueLinks(f400, SITE, CLAVES)
+  eq(r400.reason, 'jql')
+  eq(r400.messages, ["An issue with key 'ENG-20' does not exist"])
+  eq(c400.length, 1, 'un 400 no se reintenta')
+
+  const { fn, calls } = espia({ '/jira/rest/api/2/search': 404, '/rest/api/2/search': RESPUESTA_ENLACES })
+  const r = await fetchIssueLinks(fn, SITE_CTX, CLAVES)
+  eq(r.ok, true)
+  eq(r.prefix, '', 'y dice con qué prefijo salió')
+  eq(calls.length, 2)
+  eq(ruta(calls[0]).startsWith('/jira/rest/api/2/search?'), true)
+  eq(ruta(calls[1]).startsWith('/rest/api/2/search?'), true)
+  eq(jqlDe(calls[1]), jqlDe(calls[0]), 'la misma consulta')
+  const { fn: raiz, calls: cr } = espia({ '/rest/api/2/search': 404 })
+  eq((await fetchIssueLinks(raiz, SITE, CLAVES)).reason, 'ruta')
+  eq(cr.length, 1, 'sin prefijo no hay nada que reintentar')
+
+  const { fn: roto } = espia({ '/rest/api/2/search': { total: 3 } })
+  eq((await fetchIssueLinks(roto, SITE, CLAVES)).reason, 'forma')
+  const colgado = (url, opts) =>
+    new Promise((_, reject) => {
+      opts.signal.addEventListener('abort', () => reject(Object.assign(new Error('x'), { name: 'AbortError' })))
+    })
+  const lento = await fetchIssueLinks(colgado, SITE, CLAVES, { timeoutMs: 5 })
+  eq(lento.reason, 'red')
+  eq(lento.detail, 'sin respuesta en 5 ms')
 })
 
 // ------------------------------------------------------- perfil del proyecto

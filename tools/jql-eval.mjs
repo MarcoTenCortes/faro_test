@@ -17,11 +17,20 @@
  * es justo lo que hace falta probar, porque el panel enseña ese mensaje tal cual
  * y nunca decide por su cuenta qué está mal en una consulta.
  *
- * Lo que NO es: un motor de JQL. No hay `NOT`, ni `!=`, ni `IN (…)` con listas,
- * ni rangos de fechas absolutos, ni precedencia real entre `AND` y `OR` más allá
- * de la que dan los paréntesis (se evalúa de izquierda a derecha, y las
- * plantillas van siempre con paréntesis). Si un hito necesita más, se añade la
- * cláusula aquí y su prueba al lado.
+ * Lo que NO es: un motor de JQL. No hay `NOT`, ni `!=`, ni `IN (…)` con listas
+ * de otra cosa que claves, ni rangos de fechas absolutos, ni precedencia real
+ * entre `AND` y `OR` más allá de la que dan los paréntesis (se evalúa de
+ * izquierda a derecha, y las plantillas van siempre con paréntesis). Si un hito
+ * necesita más, se añade la cláusula aquí y su prueba al lado.
+ *
+ * DESDE H25 SABE DE RELACIONES. La plantilla `linksJql` de jira-rest.js escribe
+ * `issuekey in (K1, K2, …)`, así que `key`/`issue`/`issuekey in (…)` admite una
+ * LISTA de claves (cada una con forma de clave; vacía o con basura, 400). Y con
+ * `fields=issuelinks` cada incidencia trae sus relaciones con la forma de la API
+ * v2 —`{id, type:{id, name, inward, outward}, outwardIssue|inwardIssue}`—
+ * sacadas del `issueLinks` DIRIGIDO de la fixture: `outwardIssue` en la de
+ * `from`, `inwardIssue` en la de `to`. `linkedIssues()` sigue leyendo el `links`
+ * plano, que la fixture mantiene coherente con `issueLinks`.
  *
  * DESDE H14 SABE DE IDS, y de que un nombre traducido no vale. En el Jira real
  * del usuario, con la interfaz en español, la API devuelve «Tarea» donde JQL
@@ -54,6 +63,9 @@ const CAMPOS_IGUALDAD = new Set([
 
 /** Campos por los que se puede ordenar. */
 const CAMPOS_ORDEN = new Set(['updated', 'lastviewed', 'created', 'key', 'priority'])
+
+/** La forma de una clave de incidencia en una lista `in (…)` (H25). */
+const FORMA_DE_CLAVE = /^[A-Za-z][A-Za-z0-9_]*-\d+$/
 
 /** Funciones que existen en esta Jira de mentira. */
 const FUNCIONES = new Set(['currentuser', 'issuehistory', 'watchedissues', 'linkedissues'])
@@ -177,6 +189,34 @@ export function parseJql(jql) {
     return { ok: true, nodo: { clase: 'funcion', nombre: clave, args } }
   }
 
+  /**
+   * `(K1, K2, …)` detrás de `issuekey in`: claves con forma de clave separadas
+   * por comas, al menos una. Lo demás es un 400, como en Jira, para que una
+   * plantilla que escriba otra cosa caiga aquí y no pase en verde.
+   */
+  function listaDeClaves(campo) {
+    i++ // (
+    const claves = []
+    for (;;) {
+      const tok = mira()
+      if (!tok) return error('Error in the JQL Query: falta cerrar la lista de claves.')
+      if ((tok.tipo !== 'palabra' && tok.tipo !== 'texto') || !FORMA_DE_CLAVE.test(tok.valor)) {
+        return error(`Error in the JQL Query: «${tok.valor}» no es una clave de incidencia.`)
+      }
+      claves.push(tok.valor.toUpperCase())
+      i++
+      if (mira()?.tipo === ',') {
+        i++
+        continue
+      }
+      if (mira()?.tipo === ')') {
+        i++
+        return { ok: true, nodo: { clase: 'claves', campo, claves } }
+      }
+      return error('Error in the JQL Query: falta una coma o cerrar la lista de claves.')
+    }
+  }
+
   function clausula() {
     const tok = mira()
     if (!tok || tok.tipo === ')') return error('Error in the JQL Query: falta una condición.')
@@ -187,10 +227,16 @@ export function parseJql(jql) {
     const siguiente = mira()
     if (siguiente?.tipo === 'palabra' && siguiente.valor.toLowerCase() === 'in') {
       i++
+      const deClave = clave === 'issuekey' || clave === 'issue' || clave === 'key'
+      // H25: `issuekey in (K1, K2, …)`, la plantilla de linksJql.
+      if (mira()?.tipo === '(') {
+        if (!deClave) return error(`Field '${campo}' does not exist or you do not have permission to view it.`)
+        return listaDeClaves(clave)
+      }
       const v = valor()
       if (!v.ok) return v
-      if (v.nodo.clase !== 'funcion') return error(`Error in the JQL Query: «${campo} in» sólo admite una función en esta Jira de pruebas.`)
-      if (clave !== 'issuekey' && clave !== 'issue' && clave !== 'key') {
+      if (v.nodo.clase !== 'funcion') return error(`Error in the JQL Query: «${campo} in» sólo admite una función o una lista de claves en esta Jira de pruebas.`)
+      if (!deClave) {
         return error(`Field '${campo}' does not exist or you do not have permission to view it.`)
       }
       return { ok: true, nodo: { clase: 'en', campo: clave, funcion: v.nodo } }
@@ -436,6 +482,7 @@ export function casa(issue, nodo, ctx) {
     return casaIgual(issue, nodo.campo, esperado, ctx)
   }
   if (nodo.clase === 'fecha') return casaFecha(issue, nodo)
+  if (nodo.clase === 'claves') return nodo.claves.includes(String(issue.key).toUpperCase())
   if (nodo.clase === 'en') {
     const f = nodo.funcion
     if (f.nombre === 'issuehistory') return !!issue.history
@@ -532,8 +579,12 @@ function iso(horas, ahora) {
  * usuario, que es lo que hace la API de verdad: si Jira traduce ese valor, el
  * nombre llega traducido y el id es lo único que sirve para volver a preguntar
  * por él (H14). Sin `catalog` el id va vacío y el nombre es el de la fixture.
+ *
+ * `issuelinks` (H25) sale de `enlaces` = `{tipos, lista, issues}` (el
+ * `linkTypes`, el `issueLinks` y las incidencias de la fixture); sin él, pedido,
+ * es una lista vacía, que es lo que da Jira a una incidencia sin relaciones.
  */
-export function issueJson(issue, campos, { people = {}, now = Date.now(), catalog = null } = {}) {
+export function issueJson(issue, campos, { people = {}, now = Date.now(), catalog = null, enlaces = null } = {}) {
   const pedidos = new Set((campos && campos.length ? campos : CAMPOS_POR_DEFECTO).map((c) => String(c).trim()))
   const fields = {}
   const pon = (nombre, valor) => {
@@ -559,7 +610,37 @@ export function issueJson(issue, campos, { people = {}, now = Date.now(), catalo
   pon('lastViewed', iso(issue.lastViewedHoursAgo, now))
   pon('parent', issue.parent ? { key: issue.parent } : null)
   pon('epic', issue.epic ? { key: issue.epic } : null)
+  if (pedidos.has('issuelinks')) fields.issuelinks = relacionesDe(issue.key, enlaces, catalog)
   return { id: idDe(issue.key), key: issue.key, fields }
+}
+
+/**
+ * Las relaciones de una incidencia con la forma de `fields.issuelinks` de la API
+ * v2 (H25): donde es `from` la otra va en `outwardIssue`, donde es `to` en
+ * `inwardIssue`, en el orden de `issueLinks`. De la otra incidencia viaja lo
+ * que da Jira ahí —resumen, estado y tipo—, sin personas. Una relación con un
+ * tipo o un extremo que la fixture no tiene no sale (la fixture no la tiene:
+ * lo pina serve-harness.test.js).
+ */
+function relacionesDe(key, enlaces, catalog) {
+  const tipos = enlaces?.tipos || {}
+  const lista = Array.isArray(enlaces?.lista) ? enlaces.lista : []
+  const issues = Array.isArray(enlaces?.issues) ? enlaces.issues : []
+  const out = []
+  for (const l of lista) {
+    const lado = l.from === key ? 'outwardIssue' : l.to === key ? 'inwardIssue' : ''
+    if (!lado || !Object.hasOwn(tipos, l.type)) continue
+    const otra = issues.find((x) => x.key === (lado === 'outwardIssue' ? l.to : l.from))
+    if (!otra) continue
+    const t = tipos[l.type]
+    const suya = issueJson(otra, ['summary', 'status', 'issuetype'], { catalog })
+    out.push({
+      id: String(l.id),
+      type: { id: String(t.id), name: l.type, inward: t.inward, outward: t.outward },
+      [lado]: { id: suya.id, key: suya.key, fields: suya.fields },
+    })
+  }
+  return out
 }
 
 /**
@@ -579,6 +660,7 @@ export function searchResponse(fixture, { jql, fields, maxResults, startAt, now 
     .split(',')
     .map((c) => c.trim())
     .filter(Boolean)
+  const enlaces = { tipos: fixture?.linkTypes, lista: fixture?.issueLinks, issues }
   return {
     status: 200,
     body: {
@@ -586,7 +668,7 @@ export function searchResponse(fixture, { jql, fields, maxResults, startAt, now 
       startAt: desde,
       maxResults: tope,
       total: r.issues.length,
-      issues: r.issues.slice(desde, desde + tope).map((issue) => issueJson(issue, campos, { people: fixture?.people, now, catalog })),
+      issues: r.issues.slice(desde, desde + tope).map((issue) => issueJson(issue, campos, { people: fixture?.people, now, catalog, enlaces })),
     },
   }
 }

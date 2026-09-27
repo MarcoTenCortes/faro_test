@@ -275,6 +275,7 @@ async function arrancar() {
     { readFlowchart, toMermaid },
     { layoutDiagram },
     { diagramNode, textMeasurer },
+    { jiraDiagram, resumenJira },
   ] = await Promise.all([
     import('/src/panel/setup.js'),
     import('/src/panel/markdown.js'),
@@ -298,6 +299,9 @@ async function arrancar() {
     import('/src/panel/diagram-parse.js'),
     import('/src/panel/diagram-layout.js'),
     import('/src/panel/diagram-view.js'),
+    // H25: la figura «Según Jira» de debajo la monta el módulo REAL de la
+    // comparación (`figuraSegunJira`), con una respuesta de la API fija.
+    import('/src/panel/diagram-links.js'),
   ])
 
   const $ = (id) => doc.getElementById(id)
@@ -1457,6 +1461,8 @@ async function arrancar() {
       '  end',
       '```',
     ]
+    // El diagrama leído, para la figura «Según Jira» de H25.
+    let dibujado = null
     const b = mk('div', 'msg assistant')
     const cuerpo = doc.createElement('div')
     cuerpo.appendChild(
@@ -1466,6 +1472,15 @@ async function arrancar() {
       })
     )
     b.appendChild(cuerpo)
+    // H25: el panel cuelga «Contrastar con Jira» en la fila de acciones del
+    // diagrama (`linksButton`) y, tras pulsarlo, la figura «Según Jira» justo
+    // detrás (`contrastarConJira`: `figura.after(figuraJira)`). Aquí se pintan
+    // los dos a la vez, como si ya se hubiera pulsado.
+    const figura = cuerpo.querySelector('.dg-wrap')
+    if (figura && dibujado) {
+      figura.querySelector('.dg-actions')?.appendChild(botonContrastar())
+      figura.after(figuraSegunJira(dibujado))
+    }
     return b
 
     function dibujarEnElEspejo(block, pre) {
@@ -1476,6 +1491,7 @@ async function arrancar() {
         console.warn('[espejo] diagrama sin dibujar:', d.errores[0])
         return null
       }
+      dibujado = d
       const fuente = doc.defaultView.getComputedStyle(chat).font || '12px sans-serif'
       const layout = layoutDiagram(d, { measure: textMeasurer(fuente) })
       return diagramNode(d, layout, {
@@ -1487,6 +1503,83 @@ async function arrancar() {
         uid: 'dg-espejo',
       })
     }
+  }
+
+  /**
+   * H25: el botón que `linksButton` del panel cuelga en la fila de acciones de
+   * un diagrama de Jira DC con dos claves del índice o más, con su clase y su
+   * `title`.
+   */
+  function botonContrastar() {
+    const boton = mk('button', 'ghost small', 'Contrastar con Jira')
+    boton.type = 'button'
+    boton.title = 'Lee las relaciones reales de estas incidencias por la API de Jira y las dibuja debajo'
+    boton.addEventListener('click', () => console.log('[espejo] contrastar con Jira'))
+    return boton
+  }
+
+  /**
+   * H25: la figura «Según Jira» que `contrastarConJira` pone debajo del
+   * diagrama del modelo, montada con `jiraDiagram`/`resumenJira` REALES y la
+   * misma composición que el panel (clase `dg-jira`, el pie `dg-caption` antes
+   * del dibujo y la lista `dg-diff` detrás de las acciones). La respuesta de la
+   * API es fija, con la forma de `fetchIssueLinks`: tres relaciones entre
+   * ENG-7, ENG-12, ENG-20 y ENG-3, dos que coinciden con el modelo, una que
+   * sólo tiene Jira (ENG-7 blocks ENG-3), una flecha que sólo dibujó el modelo
+   * (ENG-20 → ENG-3) y dos claves sin contrastar (ENG-1 y OPS-2).
+   */
+  function figuraSegunJira(d) {
+    const r = {
+      ok: true,
+      nodes: [
+        { key: 'ENG-7', summary: 'Definir la API de rotación', type: 'Historia', statusCategory: 'indeterminate' },
+        { key: 'ENG-12', summary: 'Backend de rotación', type: 'Tarea', statusCategory: 'indeterminate' },
+        { key: 'ENG-20', summary: '¿Quién revoca la clave vieja?', type: 'Tarea', statusCategory: 'new' },
+        { key: 'ENG-3', summary: 'Tokens de 90 días', type: 'Historia', statusCategory: 'done' },
+      ],
+      links: [
+        { from: 'ENG-7', to: 'ENG-3', type: 'blocks', name: 'Blocks', id: '20001' },
+        { from: 'ENG-7', to: 'ENG-12', type: 'relates to', name: 'Relates', id: '20002' },
+        { from: 'ENG-12', to: 'ENG-20', type: 'blocks', name: 'Blocks', id: '20003' },
+      ],
+      via: 'jql',
+      prefix: '',
+      ms: 41,
+    }
+    const { diagram, comparacion } = jiraDiagram(d, r)
+    if (!diagram) {
+      console.warn('[espejo] «Según Jira» sin diagrama')
+      return mk('div', 'notice', 'Hacen falta al menos dos incidencias del índice para contrastar.')
+    }
+    const fuente = doc.defaultView.getComputedStyle(chat).font || '12px sans-serif'
+    const layout = layoutDiagram(diagram, { measure: textMeasurer(fuente) })
+    const figuraJira = diagramNode(diagram, layout, {
+      onOpen: (ref) => console.log('[espejo] abrir', ref.kind, ref.id),
+      onCopy: (mermaid) => console.log('[espejo] copiar como Mermaid', mermaid.length, 'caracteres'),
+      mermaid: toMermaid(diagram),
+      uid: 'dg-espejo-jira',
+    })
+    figuraJira.classList.add('dg-jira')
+    figuraJira.prepend(mk('figcaption', 'dg-caption', resumenJira(comparacion)))
+    const diferencias = mk('ul', 'dg-diff')
+    for (const texto of filasDeLaComparacion(comparacion)) diferencias.appendChild(mk('li', null, texto))
+    figuraJira.appendChild(diferencias)
+    return figuraJira
+  }
+
+  // Copia letra a letra de `filasDeLaComparacion` de panel.js (lo pina
+  // panel-wiring.test.js): el panel no se puede importar aquí, y las frases de
+  // las diferencias no pueden decir cosas distintas en los dos sitios.
+  function filasDeLaComparacion(comparacion) {
+    const filas = [
+      ...comparacion.soloModelo.map((a) => `El modelo dibujó ${a.from} → ${a.to}${a.label ? ` (${a.label})` : ''} y Jira no lo tiene`),
+      ...comparacion.soloJira.map((r) => `Jira tiene ${r.from} ${r.type || '→'} ${r.to} y el modelo no lo dibujó`),
+    ]
+    if (!filas.length) filas.push('Coinciden todas')
+    const fuera = comparacion.fuera
+    if (fuera.length === 1) filas.push(`Sin contrastar: ${fuera[0]} (no está en el índice o Jira no la ha devuelto)`)
+    if (fuera.length > 1) filas.push(`Sin contrastar: ${fuera.join(', ')} (no están en el índice o Jira no las ha devuelto)`)
+    return filas
   }
 
   function conversacionJira() {

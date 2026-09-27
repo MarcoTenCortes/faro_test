@@ -7,7 +7,7 @@
  * contraparte visible de §8.14. Aquí se ejecuta de verdad.
  */
 import { test, eq, assert } from '../harness.js'
-import { REST_REASON_ALWAYS, restFailureDue, jqlFailText } from '../../src/panel/rest-notice.js'
+import { REST_REASON_ALWAYS, restFailureDue, jqlFailText, linksFailText } from '../../src/panel/rest-notice.js'
 
 const HOST = 'jira.simplprogramme.eu'
 
@@ -66,4 +66,31 @@ test('jqlFailText: el motivo en palabras del usuario, con lo que dijo el SERVIDO
   eq(jqlFailText(undefined, HOST), 'La pestaña no ha contestado.')
   eq(jqlFailText({ ok: false, reason: 'forma', detail: 'la respuesta no tiene issues' }, HOST), 'No he podido leer la lista (la respuesta no tiene issues).')
   eq(jqlFailText({ ok: false }, HOST), 'No he podido leer la lista (sin motivo).')
+})
+
+test('H25: linksFailText — por qué no se contrastó el diagrama con Jira, por motivo', () => {
+  eq(linksFailText({ ok: false, reason: 'cloud' }, HOST), 'En Jira Cloud no leo relaciones por la API (todo va por el MCP).')
+  eq(linksFailText({ ok: false, reason: 'claves' }, HOST), 'Hacen falta al menos dos incidencias del índice para contrastar.')
+  eq(linksFailText({ ok: false, reason: 'sesion', status: 401 }, HOST), jqlFailText({ ok: false, reason: 'sesion' }, HOST), 'la sesión, con la frase de la lista')
+  eq(linksFailText({ ok: false, reason: 'sesion' }, HOST), `Tu sesión de ${HOST} no vale para su API: recarga la pestaña y vuelve a entrar.`)
+  eq(linksFailText({ ok: false, reason: 'permiso' }, HOST), 'Sin acceso a la pestaña de Jira.')
+  // Sin red, o una pestaña que no contesta (el `.catch(() => null)` del panel).
+  eq(linksFailText({ ok: false, reason: 'red' }, HOST), 'No he podido leer las relaciones de Jira (sin respuesta).')
+  eq(linksFailText({ ok: false, reason: 'red', detail: 'sin respuesta en 6000 ms' }, HOST), 'No he podido leer las relaciones de Jira (sin respuesta en 6000 ms).')
+  eq(linksFailText(null, HOST), 'No he podido leer las relaciones de Jira (sin respuesta).')
+  eq(linksFailText(undefined, HOST), 'No he podido leer las relaciones de Jira (sin respuesta).')
+  // Un 400 enseña lo que dijo el SERVIDOR: la consulta es la plantilla, no de nadie.
+  eq(
+    linksFailText({ ok: false, reason: 'jql', messages: ["An issue with key 'ENG-99' does not exist for field 'issuekey'.", 7] }, HOST),
+    "Jira no acepta la consulta de relaciones: An issue with key 'ENG-99' does not exist for field 'issuekey'."
+  )
+  eq(linksFailText({ ok: false, reason: 'jql' }, HOST), 'Jira no acepta la consulta de relaciones: la ha rechazado sin decir por qué.')
+  // Lo genérico, con el detalle o el código; el rechazo del content script incluido.
+  eq(linksFailText({ ok: false, reason: 'consulta no permitida' }, HOST), 'No he podido leer las relaciones de Jira (consulta no permitida).')
+  eq(linksFailText({ ok: false, reason: 'forma', detail: 'la respuesta de la API no tiene la forma esperada' }, HOST), 'No he podido leer las relaciones de Jira (la respuesta de la API no tiene la forma esperada).')
+  eq(linksFailText({ ok: false }, HOST), 'No he podido leer las relaciones de Jira (sin motivo).')
+  // Y la tregua es la de siempre, con el motivo tal cual.
+  const avisado = new Set()
+  eq(restFailureDue(avisado, 'claves', HOST, 'ses_1'), true)
+  eq(restFailureDue(avisado, 'claves', HOST, 'ses_1'), false)
 })

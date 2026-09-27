@@ -1,0 +1,1553 @@
+{
+ "hito": "H25b",
+ "fecha": "2026-09-27",
+ "base": "f9a4195",
+ "lectores": [
+  {
+   "lector": "lector-rest",
+   "hechos": [
+    {
+     "id": "rest-1",
+     "tema": "topes REST de Jira",
+     "fichero": "src/shared/jira-rest.js",
+     "lineas": "76-80",
+     "hecho": "JIRA_REST_LIMITS es el objeto único de topes de toda lectura REST de Jira: 10 resultados por defecto, 30 como máximo aceptado, 6000 ms de plazo.",
+     "cita": "export const JIRA_REST_LIMITS = {\n  defaultResults: 10,\n  maxResults: 30,"
+    },
+    {
+     "id": "rest-2",
+     "tema": "topes REST de Jira",
+     "fichero": "src/shared/jira-rest.js",
+     "lineas": "90-94",
+     "hecho": "También fija listMax 10 (etiquetas/componentes por incidencia), filters 20 y links 20 (enlaces remotos que se aceptan de una respuesta). No hay ningún tope de «claves por consulta» ni de issuelinks.",
+     "cita": "listMax: 10,\n  filters: 20,\n  links: 20,"
+    },
+    {
+     "id": "rest-3",
+     "tema": "topes JQL",
+     "fichero": "src/shared/jira-rest.js",
+     "lineas": "121-124",
+     "hecho": "JQL_LIMITS sólo tiene maxChars 2000; es el único tope de la longitud de una consulta.",
+     "cita": "export const JQL_LIMITS = {\n  maxChars: 2000,\n}"
+    },
+    {
+     "id": "rest-4",
+     "tema": "campos de lista blanca",
+     "fichero": "src/shared/jira-rest.js",
+     "lineas": "152-166",
+     "hecho": "JIRA_FIELDS es la lista blanca de campos que se pueden pedir (summary, issuetype, status, priority, resolution, updated, created, lastViewed, assignee, reporter, labels, components, parent). 'issuelinks' NO está.",
+     "cita": "export const JIRA_FIELDS = [\n  'summary',\n  ... 'parent',"
+    },
+    {
+     "id": "rest-5",
+     "tema": "campos de lista blanca",
+     "fichero": "src/shared/jira-rest.js",
+     "lineas": "254-258",
+     "hecho": "fieldsFor filtra los campos pedidos contra JIRA_FIELDS; si no queda ninguno devuelve SEARCH_FIELDS. Pedir hoy fields=['issuelinks'] caería en SEARCH_FIELDS sin issuelinks.",
+     "cita": "const lista = (...).filter((f) => JIRA_FIELDS.includes(f))\n  const unicos = [...new Set(lista)]\n  return unicos.length ? unicos : SEARCH_FIELDS"
+    },
+    {
+     "id": "rest-6",
+     "tema": "campos por defecto",
+     "fichero": "src/shared/jira-rest.js",
+     "lineas": "169-180",
+     "hecho": "SEARCH_FIELDS (lo que se pide sin decir otra cosa) es summary, issuetype, status, priority, updated, lastViewed, assignee, reporter, labels, components.",
+     "cita": "export const SEARCH_FIELDS = [\n  'summary',\n  ... 'components',"
+    },
+    {
+     "id": "rest-7",
+     "tema": "test de lista blanca",
+     "fichero": "test/unit/jira-rest.test.js",
+     "lineas": "218-223",
+     "hecho": "El test pina que un campo fuera de la lista (*all, comment, description) cae en SEARCH_FIELDS y que SEARCH_FIELDS y SAMPLE_FIELDS están contenidos en JIRA_FIELDS.",
+     "cita": "eq(campos({ fields: ['*all', 'comment', 'description', '../x'] }), SEARCH_FIELDS.join(','), 'ninguno vale → los de siempre')\nfor (const c of SEARCH_FIELDS) assert(JIRA_FIELDS.includes(c), ...)"
+    },
+    {
+     "id": "rest-8",
+     "tema": "limpieza",
+     "fichero": "src/shared/jira-rest.js",
+     "lineas": "229-232",
+     "hecho": "cleanJql: una línea, sin controles C0/DEL/C1 y con tope JQL_LIMITS.maxChars; '' si no es string.",
+     "cita": "if (typeof value !== 'string') return ''\n  return value.replace(CONTROL, ' ').replace(/\\s+/g, ' ').trim().slice(0, JQL_LIMITS.maxChars)"
+    },
+    {
+     "id": "rest-9",
+     "tema": "limpieza",
+     "fichero": "src/shared/jira-rest.js",
+     "lineas": "242-245",
+     "hecho": "jqlQuote devuelve el valor ya entrecomillado, escapando primero la barra y luego la comilla, con tope quoteMax 120.",
+     "cita": "const limpio = linea(value, JIRA_REST_LIMITS.quoteMax)\n  return '\"' + limpio.replace(/\\\\/g, '\\\\\\\\').replace(/\"/g, '\\\\\"') + '\"'"
+    },
+    {
+     "id": "rest-10",
+     "tema": "topes",
+     "fichero": "src/shared/jira-rest.js",
+     "lineas": "248-251",
+     "hecho": "clampResults acepta un entero 1..maxResults (30), también como texto; cualquier otra cosa da defaultResults (10).",
+     "cita": "const n = Number(limit)\n  return Number.isInteger(n) && n >= 1 && n <= JIRA_REST_LIMITS.maxResults ? n : JIRA_REST_LIMITS.defaultResults"
+    },
+    {
+     "id": "rest-11",
+     "tema": "plantillas fijas",
+     "fichero": "src/shared/jira-rest.js",
+     "lineas": "14-19",
+     "hecho": "La cabecera enumera las plantillas fijas (historyJql, mineJql, projectJql, relatedJql, sampleQuery): sus únicos parámetros son una clave validada o días enteros, y lo que no valida devuelve null (sin consulta no hay petición).",
+     "cita": "1. De una PLANTILLA FIJA de este módulo (`historyJql`, `mineJql`,\n *     `projectJql`, `relatedJql`, `sampleQuery`), cuyos únicos parámetros son"
+    },
+    {
+     "id": "rest-12",
+     "tema": "plantillas fijas",
+     "fichero": "src/shared/jira-rest.js",
+     "lineas": "283-305",
+     "hecho": "historyJql() es un literal sin parámetros; mineJql(days) y projectJql(projectKey, days) devuelven null si cleanDays (1..30) o validProjectKey fallan.",
+     "cita": "return 'issuekey in issueHistory() ORDER BY lastViewed DESC'\n...\n  if (!key || !d) return null\n  return `project = ${key} AND updated >= -${d}d ORDER BY updated DESC`"
+    },
+    {
+     "id": "rest-13",
+     "tema": "plantilla related (el último kind añadido)",
+     "fichero": "src/shared/jira-rest.js",
+     "lineas": "311-314",
+     "hecho": "relatedJql(issueKey) pasa la clave por validIssueKey y escribe `issue in linkedIssues(KEY)`, sin tipo de enlace; null sin clave válida.",
+     "cita": "const key = validIssueKey(issueKey)\n  return key ? `issue in linkedIssues(${key})` : null"
+    },
+    {
+     "id": "rest-14",
+     "tema": "plantillas fijas",
+     "fichero": "src/shared/jira-rest.js",
+     "lineas": "317-320",
+     "hecho": "sampleQuery(projectKey) es `project = KEY ORDER BY updated DESC` con validProjectKey.",
+     "cita": "const key = validProjectKey(projectKey)\n  return key ? `project = ${key} ORDER BY updated DESC` : null"
+    },
+    {
+     "id": "rest-15",
+     "tema": "ruta de búsqueda",
+     "fichero": "src/shared/jira-rest.js",
+     "lineas": "350-358",
+     "hecho": "searchPath monta `<prefijo>/rest/api/2/search?jql=<codificado>&fields=<lista blanca>&maxResults=<clamp>`; null si cleanJql deja la consulta vacía.",
+     "cita": "`${p}/rest/api/2/search?jql=${encodeURIComponent(consulta)}` +\n    `&fields=${fieldsFor(fields).join(',')}&maxResults=${clampResults(limit)}`"
+    },
+    {
+     "id": "rest-16",
+     "tema": "modelo de lectura con parse y barrera",
+     "fichero": "src/shared/jira-rest.js",
+     "lineas": "366-370",
+     "hecho": "remoteLinksPath valida la clave con validIssueKey (null si no) y la codifica en `/rest/api/2/issue/<KEY>/remotelink` con el prefijo re-validado.",
+     "cita": "const key = validIssueKey(issueKey)\n  if (!key) return null\n  return `${cleanPrefix(prefix)}/rest/api/2/issue/${encodeURIComponent(key)}/remotelink`"
+    },
+    {
+     "id": "rest-17",
+     "tema": "prefijo",
+     "fichero": "src/shared/jira-rest.js",
+     "lineas": "268-272",
+     "hecho": "cleanPrefix re-valida en la puerta la ruta de contexto recibida pasándola por la MISMA jiraContextPath con '/browse/' detrás.",
+     "cita": "const p = str(prefix).replace(/\\/+$/, '')\n  if (!p) return ''\n  return jiraContextPath(p + '/browse/')"
+    },
+    {
+     "id": "rest-18",
+     "tema": "parseSearchIssues",
+     "fichero": "src/shared/jira-rest.js",
+     "lineas": "442-452",
+     "hecho": "parseSearchIssues exige json.issues como array (null si no), corta en maxResults (30), valida cada key con validIssueKey, descarta repetidas y lee de raw.fields.",
+     "cita": "if (!json || typeof json !== 'object' || !Array.isArray(json.issues)) return null\n    const key = validIssueKey(raw.key)\n    if (!key || vistas.has(key)) continue"
+    },
+    {
+     "id": "rest-19",
+     "tema": "parseSearchIssues: campos leídos",
+     "fichero": "src/shared/jira-rest.js",
+     "lineas": "453-479",
+     "hecho": "Cada fila es {key, summary, type, typeId, status, statusId, statusCategory, priority, priorityId, assignee, reporter, updatedAt, lastViewedAt, labels, components, epicKey, parentKey}. Ignora cualquier otro campo de fields: un fields.issuelinks se descartaría sin leerse. Las claves de épica y padre pasan por validIssueKey.",
+     "cita": "epicKey: validIssueKey(f.epic?.key),\n      parentKey: validIssueKey(f.parent?.key),\n    })"
+    },
+    {
+     "id": "rest-20",
+     "tema": "validación de ids",
+     "fichero": "src/shared/jira-rest.js",
+     "lineas": "390-393",
+     "hecho": "fieldId: los ids de tipo/estado/prioridad sólo pasan si son 1..19 dígitos (FIELD_ID, línea 202); si no, ''.",
+     "cita": "const id = String(v ?? '').trim()\n  return FIELD_ID.test(id) ? id : ''"
+    },
+    {
+     "id": "rest-21",
+     "tema": "modelo de parse con barrera",
+     "fichero": "src/shared/jira-rest.js",
+     "lineas": "550-570",
+     "hecho": "parseRemoteLinks exige un array (null si no), corta en JIRA_REST_LIMITS.links, sólo acepta pageId numérico y application.type com.atlassian.confluence, filtra por hosts permitidos y quita duplicados; devuelve {pageId, title, url}.",
+     "cita": "if (!Array.isArray(json)) return null\n    if (out.length >= JIRA_REST_LIMITS.links) break\n    if (permitidos.length && !permitidos.includes(hostDe(url))) continue"
+    },
+    {
+     "id": "rest-22",
+     "tema": "sinRestDeJira",
+     "fichero": "src/shared/jira-rest.js",
+     "lineas": "599-602",
+     "hecho": "sinRestDeJira (sin exportar) es la ÚNICA comprobación de Cloud del módulo: con site.cloud devuelve {ok:false, reason:'cloud', detail} y el lector no pide nada.",
+     "cita": "function sinRestDeJira(site) {\n  if (!site?.cloud) return null\n  return { ok: false, reason: 'cloud', detail: 'Jira Cloud retiró GET /rest/api/2/search: en Cloud todo va por el MCP' }"
+    },
+    {
+     "id": "rest-23",
+     "tema": "forma del fallo",
+     "fichero": "src/shared/jira-rest.js",
+     "lineas": "611-621",
+     "hecho": "razonDe traduce el status de getJson: 401/403 → 'sesion', 400 → 'jql', 404 → 'ruta', sin status → 'red', otro → 'api'. fallo() devuelve {ok:false, reason, detail, status, messages}.",
+     "cita": "if (r.status === 401 || r.status === 403) return 'sesion'\n  if (r.status === 400) return 'jql'\nreturn { ok: false, reason: razonDe(r), detail: r.reason, status: r.status, messages: r.errors || [], ...extra }"
+    },
+    {
+     "id": "rest-24",
+     "tema": "searchIssues: firma y guardas",
+     "fichero": "src/shared/jira-rest.js",
+     "lineas": "633-645",
+     "hecho": "searchIssues(fetchFn, site, jql, {limit, fields, prefix, timeoutMs, credentials}) corta antes de pedir: Cloud → reason 'cloud', origen sin forma → 'origen', sin fetch → 'sin-fetch', consulta vacía → 'jql'.",
+     "cita": "const enCloud = sinRestDeJira(site)\n  if (enCloud) return enCloud\n  if (!base) return { ok: false, reason: 'origen', detail: 'origen desconocido' }"
+    },
+    {
+     "id": "rest-25",
+     "tema": "searchIssues: éxito y forma",
+     "fichero": "src/shared/jira-rest.js",
+     "lineas": "660-671",
+     "hecho": "Como mucho tres peticiones por getJson con errorBody; si parseSearchIssues da null devuelve reason 'forma'; si no, {ok:true, issues, total, via, prefix, ms}.",
+     "cita": "const r = await getJson(fetchFn, base + ruta, opts)\n      if (!issues) {\n        return { ok: false, reason: 'forma', detail: 'la respuesta de la API no tiene la forma esperada', status: r.status }"
+    },
+    {
+     "id": "rest-26",
+     "tema": "searchIssues: degradaciones",
+     "fichero": "src/shared/jira-rest.js",
+     "lineas": "674-690",
+     "hecho": "Degradaciones una vez cada una: un 400 con lastViewed se reintenta sin ese ORDER BY ni el campo; un 404 con prefijo se reintenta en la raíz.",
+     "cita": "if (r.status === 400 && !sinLastViewed && mencionaLastViewed(consulta)) {\n    if (r.status === 404 && prefijo) {\n      prefijo = ''"
+    },
+    {
+     "id": "rest-27",
+     "tema": "modelo fetch con barrera",
+     "fichero": "src/shared/jira-rest.js",
+     "lineas": "728-748",
+     "hecho": "fetchRemoteLinks repite el patrón: sinRestDeJira → origenDe → fetch → ruta con clave válida ('clave' si no) → getJson → fallo(r) o parse ('forma' si null) → {ok:true, links, ms}.",
+     "cita": "if (!ruta) return { ok: false, reason: 'clave', detail: 'clave de incidencia inválida' }\n  const links = parseRemoteLinks(r.json, { hosts })\n  return { ok: true, links, ms: Math.round(nowMs() - t0) }"
+    },
+    {
+     "id": "rest-28",
+     "tema": "getJson, la única puerta",
+     "fichero": "src/shared/rest-get.js",
+     "lineas": "92-96",
+     "hecho": "getJson(fetchFn, url, {timeoutMs, credentials, base, errorBody}) rechaza sin pedir una url vacía ('ruta inválida') y una URL ya montada de otro origen ('la petición saldría del sitio'), las dos con status 0.",
+     "cita": "if (!url) return { ok: false, status: 0, reason: 'ruta inválida' }\n  if (!sameOrigin(url, base)) return { ok: false, status: 0, reason: 'la petición saldría del sitio' }"
+    },
+    {
+     "id": "rest-29",
+     "tema": "getJson, la única puerta",
+     "fichero": "src/shared/rest-get.js",
+     "lineas": "101-118",
+     "hecho": "Sólo GET con Accept JSON y AbortController; un error HTTP devuelve {ok:false, status, reason:'la API respondió N'} y, con errorBody, errors (errorMessages del servidor, 3 como máximo y 200 caracteres cada uno: REST_ERROR_LIMITS, línea 31).",
+     "cita": "method: 'GET',\n      credentials,\n      headers: { Accept: 'application/json' },"
+    },
+    {
+     "id": "rest-30",
+     "tema": "getJson, la única puerta",
+     "fichero": "src/shared/rest-get.js",
+     "lineas": "119-128",
+     "hecho": "Nunca lanza: un cuerpo que no es JSON da 'la respuesta no es JSON'; un abort da 'sin respuesta en N ms'; el éxito es {ok:true, status, json}.",
+     "cita": "return { ok: true, status: res.status, json: JSON.parse(text) }\n      return { ok: false, status: res.status, reason: 'la respuesta no es JSON' }"
+    },
+    {
+     "id": "rest-31",
+     "tema": "bootstrap: el sitio sale de la pestaña",
+     "fichero": "src/content/bootstrap.js",
+     "lineas": "113-120",
+     "hecho": "sitioJira(msg) importa site.js de forma perezosa y construye el sitio con location.origin y jiraContextPath(location.pathname); cloud vale si lo dice el mensaje O parseAtlassianUrl(location.href).",
+     "cita": "origin: location.origin,\n      jiraPrefix: jiraContextPath(location.pathname),\n      cloud: !!msg.cloud || !!parseAtlassianUrl(location.href)?.cloud,"
+    },
+    {
+     "id": "rest-32",
+     "tema": "bootstrap: elección de plantilla",
+     "fichero": "src/content/bootstrap.js",
+     "lineas": "127-140",
+     "hecho": "jqlDePlantilla(jira, msg) elige por msg.kind entre history, mine, project y related; related llama a jira.relatedJql(msg.issueKey) y el default devuelve null. Aquí no se construye ninguna consulta.",
+     "cita": "case 'related':\n        return jira.relatedJql(msg.issueKey)\n      default:\n        return null"
+    },
+    {
+     "id": "rest-33",
+     "tema": "bootstrap: días por defecto",
+     "fichero": "src/content/bootstrap.js",
+     "lineas": "85-87",
+     "hecho": "DIAS_POR_DEFECTO {mine: 7, project: 3}; dias() acepta un entero ≥1 y si no usa el valor por defecto (el tope lo pone la plantilla).",
+     "cita": "const DIAS_POR_DEFECTO = { mine: 7, project: 3 }\n  const dias = (v, porDefecto) => (Number.isInteger(v) && v >= 1 ? v : porDefecto)"
+    },
+    {
+     "id": "rest-34",
+     "tema": "bootstrap: case RECENT_ISSUES",
+     "fichero": "src/content/bootstrap.js",
+     "lineas": "391-404",
+     "hecho": "El case MSG.RECENT_ISSUES importa jira-rest.js perezosamente junto a sitioJira, saca la jql de jqlDePlantilla, contesta {ok:false, reason:'consulta no permitida'} sin pedir nada si sale null y, si no, llama a searchIssues sólo con {limit: msg.limit}: no pasa fields.",
+     "cita": "const jql = jqlDePlantilla(jira, msg)\n            if (!jql) {\n              sendResponse({ ok: false, reason: 'consulta no permitida' })"
+    },
+    {
+     "id": "rest-35",
+     "tema": "bootstrap: case RECENT_ISSUES",
+     "fichero": "src/content/bootstrap.js",
+     "lineas": "402",
+     "hecho": "Llamada exacta a la petición de RECENT_ISSUES: la respuesta es tal cual la de searchIssues.",
+     "cita": "sendResponse(await jira.searchIssues((u, o) => fetch(u, o), sitio, jql, { limit: msg.limit }))"
+    },
+    {
+     "id": "rest-36",
+     "tema": "bootstrap: case JQL_SEARCH",
+     "fichero": "src/content/bootstrap.js",
+     "lineas": "376-389",
+     "hecho": "JQL_SEARCH es el único case que lee msg.jql, y pasa limit y fields del mensaje a searchIssues (fields filtrado luego por la lista blanca).",
+     "cita": "const [jira, sitio] = await Promise.all([import(url('src/shared/jira-rest.js')), sitioJira(msg)])\n              await jira.searchIssues((u, o) => fetch(u, o), sitio, msg.jql, { limit: msg.limit, fields: msg.fields })"
+    },
+    {
+     "id": "rest-37",
+     "tema": "bootstrap: validación de la clave",
+     "fichero": "src/content/bootstrap.js",
+     "lineas": "135-136",
+     "hecho": "En el content script no hay un validIssueKey propio para RECENT_ISSUES: la clave msg.issueKey se valida dentro de jira.relatedJql (validIssueKey de site.js, importada en jira-rest.js:70).",
+     "cita": "case 'related':\n        return jira.relatedJql(msg.issueKey)"
+    },
+    {
+     "id": "rest-38",
+     "tema": "site.js: claves",
+     "fichero": "src/atlassian/site.js",
+     "lineas": "235-244",
+     "hecho": "validIssueKey: mayúsculas y /^[A-Z][A-Z0-9_]{0,19}-\\d{1,9}$/, si no ''. validProjectKey: /^[A-Z][A-Z0-9_]{0,19}$/.",
+     "cita": "return /^[A-Z][A-Z0-9_]{0,19}-\\d{1,9}$/.test(k) ? k : ''\n  return /^[A-Z][A-Z0-9_]{0,19}$/.test(k) ? k : ''"
+    },
+    {
+     "id": "rest-39",
+     "tema": "site.js: Cloud vs DC",
+     "fichero": "src/atlassian/site.js",
+     "lineas": "22-25",
+     "hecho": "parseAtlassianUrl decide cloud SÓLO por el host *.atlassian.net; el Jira DC del usuario (jira.simplprogramme.eu) da cloud:false.",
+     "cita": "const cloud = /\\.atlassian\\.net$/i.test(host)\n  const out = { host, origin: u.origin, product: 'unknown', cloud }"
+    },
+    {
+     "id": "rest-40",
+     "tema": "site.js: jiraPrefix",
+     "fichero": "src/atlassian/site.js",
+     "lineas": "89-101",
+     "hecho": "En /browse/KEY (con ruta de contexto o sin ella), product 'jira', jiraPrefix = ctx, issueKey validada y projectKey = lo que va antes del guion.",
+     "cita": "const ctx = jiraContextPath(path)\n    out.jiraPrefix = ctx\n      out.projectKey = clave.split('-')[0]"
+    },
+    {
+     "id": "rest-41",
+     "tema": "site.js: jiraContextPath",
+     "fichero": "src/atlassian/site.js",
+     "lineas": "224-232",
+     "hecho": "jiraContextPath devuelve '' o UN segmento («/jira») sólo si detrás va una ruta de JIRA_ROUTES (browse|projects|issues|secure|rest|plugins, línea 184).",
+     "cita": "const seg = p.slice(1, corte)\n  if (!CTX_SEGMENT.test(seg)) return ''\n  return JIRA_ROUTES.test(p.slice(corte)) ? '/' + seg : ''"
+    },
+    {
+     "id": "rest-42",
+     "tema": "mensajes",
+     "fichero": "src/shared/messages.js",
+     "lineas": "41-45",
+     "hecho": "Los valores de los cinco MSG de H7: JQL_SEARCH 'faro:jql-search', RECENT_ISSUES 'faro:recent-issues', RECENT_PAGES, SPACE_PAGES, FAVOURITE_FILTERS. sendToTab está en la línea 59.",
+     "cita": "JQL_SEARCH: 'faro:jql-search',\n  RECENT_ISSUES: 'faro:recent-issues',"
+    },
+    {
+     "id": "rest-43",
+     "tema": "pines de bootstrap",
+     "fichero": "test/unit/bootstrap-wiring.test.js",
+     "lineas": "46-60",
+     "hecho": "Se pina que el case RECENT_ISSUES saca la jql de jqlDePlantilla, que el rechazo va ANTES de jira.searchIssues(, que contiene 'sitio, jql, {' y que no lee msg.jql; msg.jql aparece exactamente 1 vez en bootstrap (en JQL_SEARCH).",
+     "cita": "assert(rechazo >= 0 && peticion > rechazo, 'el rechazo va ANTES de pedir nada')\n  assert(caso.includes('sitio, jql, {'), 'lo que se ejecuta es la plantilla, no otra cosa')\n  eq(cuenta(JS, 'msg.jql'), 1)"
+    },
+    {
+     "id": "rest-44",
+     "tema": "pines de bootstrap",
+     "fichero": "test/unit/bootstrap-wiring.test.js",
+     "lineas": "73-79",
+     "hecho": "jqlDePlantilla debe contener las cuatro plantillas y 'default: return null', y no puede tener acentos graves ni concatenaciones «' +».",
+     "cita": "for (const fija of ['jira.historyJql()', 'jira.mineJql(', 'jira.projectJql(msg.projectKey,', 'jira.relatedJql(msg.issueKey)']) {\n  assert(!jql.includes('`') && !/['\"]\\s*\\+/.test(jql), 'aquí no se CONSTRUYE ninguna consulta: sólo se elige')"
+    },
+    {
+     "id": "rest-45",
+     "tema": "pin de H7 (msg.host)",
+     "fichero": "test/unit/bootstrap-wiring.test.js",
+     "lineas": "104-106",
+     "hecho": "msg.origin, msg.jiraPrefix, msg.url, msg.path y msg.host tienen que aparecer 0 veces en bootstrap.js sin comentarios.",
+     "cita": "for (const prohibido of ['msg.origin', 'msg.jiraPrefix', 'msg.url', 'msg.path', 'msg.host']) {\n    eq(cuenta(JS, prohibido), 0, `${prohibido} no puede decidir a dónde se pide`)"
+    },
+    {
+     "id": "rest-46",
+     "tema": "pines de bootstrap",
+     "fichero": "test/unit/bootstrap-wiring.test.js",
+     "lineas": "109-115",
+     "hecho": "Todo fetch( de bootstrap tiene que ser la flecha '(u, o) => fetch(u, o)' y hay al menos 8.",
+     "cita": "assert(propias >= 8, 'los ocho lectores REST siguen ahí (siete de H7 y el remotelink de H10)')\n  eq(cuenta(JS, '(u, o) => fetch(u, o)'), propias, ...)"
+    },
+    {
+     "id": "rest-47",
+     "tema": "recuentos",
+     "fichero": "docs/PINES.md",
+     "lineas": "28-33",
+     "hecho": "Recuentos: jira-rest.test.js registra 46 pruebas, bootstrap-wiring.test.js 9 y serve-harness.test.js 23 (grep -c '^test(' coincide con las líneas de PINES).",
+     "cita": "`jira-rest.test.js` (H7 + H8 + ... + H22 y su revisión adversaria; 46 pruebas\n`serve-harness.test.js` (H7 + H14 + H21 y su revisión adversaria; 23 pruebas"
+    },
+    {
+     "id": "rest-48",
+     "tema": "tests del kind related",
+     "fichero": "test/unit/jira-rest.test.js",
+     "lineas": "167, 176-178",
+     "hecho": "El kind related se pinó en jira-rest.test.js con un eq del literal y un bucle de claves malas que tienen que dar null.",
+     "cita": "eq(relatedJql('abc-1'), 'issue in linkedIssues(ABC-1)')\n  for (const malo of ['x', 'ENG', 'ENG-', 'ENG-1 OR 1=1', '', null, undefined, {}, 'eng-1x']) {\n    eq(relatedJql(malo), null, ...)"
+    },
+    {
+     "id": "rest-49",
+     "tema": "emisor único en el panel",
+     "fichero": "test/unit/panel-wiring.test.js",
+     "lineas": "3198-3215",
+     "hecho": "En el panel, MSG.RECENT_ISSUES aparece exactamente 1 vez (en readToday); el mensaje no puede llevar jql, cql, origin:, url:, path: ni host:, y projectKey/issueKey salen del sitio capturado.",
+     "cita": "for (const prohibido of ['jql', 'cql', 'origin:', 'url:', 'path:', 'host:']) {\n  assert(/projectKey: sitio\\.projectKey/.test(porPestana) && /issueKey: sitio\\.issueKey/.test(porPestana), ...)\n  eq((JS.match(/MSG\\.RECENT_ISSUES/g) || []).length, 1, 'MSG.RECENT_ISSUES se manda desde un solo sitio')"
+    },
+    {
+     "id": "rest-50",
+     "tema": "emisor del panel",
+     "fichero": "src/panel/panel.js",
+     "lineas": "11254-11264",
+     "hecho": "readToday construye el mensaje RECENT_ISSUES con kind, limit defaultResults, cloud y el parámetro de cada kind (days, projectKey, issueKey) sacado del sitio capturado.",
+     "cita": "type: MSG.RECENT_ISSUES,\n          kind,\n          ...(kind === 'related' ? { issueKey: sitio.issueKey } : {}),"
+    },
+    {
+     "id": "rest-51",
+     "tema": "JQL_SEARCH, dos emisores",
+     "fichero": "test/unit/panel-wiring.test.js",
+     "lineas": "2274",
+     "hecho": "MSG.JQL_SEARCH aparece exactamente dos veces en el panel sin comentarios (attachJqlResults y countProfile).",
+     "cita": "eq(JS_SIN.match(/MSG\\.JQL_SEARCH/g).length, 2, 'el mensaje se manda desde dos sitios del panel, y cada uno tiene nombre')"
+    },
+    {
+     "id": "rest-52",
+     "tema": "Cloud en el panel",
+     "fichero": "src/panel/panel.js",
+     "lineas": "5150, 5174-5177",
+     "hecho": "attachJqlResults: con restTools apagado sale sin avisar; con site.cloud avisa ('cloud') y no manda nada. El panel no importa sinRestDeJira (no está exportada): comprueba site.cloud por su cuenta.",
+     "cita": "if (!state.settings.restTools) return null\n  if (site.cloud) {\n    fallo('cloud', 'En Jira Cloud no puedo consultar la API con tu sesión: la lista la tiene el buscador de Jira.')"
+    },
+    {
+     "id": "rest-53",
+     "tema": "Cloud en el panel",
+     "fichero": "src/panel/panel.js",
+     "lineas": "2944, 10402-10404",
+     "hecho": "loadSearchChipSources sale sin restTools, fuera de Jira o en Cloud; restIndexFor/countProfile devuelve falla('cloud', …) en Jira Cloud antes de pedir.",
+     "cita": "if (!state.settings.restTools || state.site?.product !== 'jira' || state.site?.cloud) return\n    if (sitio.cloud) {\n      return falla('cloud', 'En Jira Cloud no puedo consultar la API con tu sesión.')"
+    },
+    {
+     "id": "rest-54",
+     "tema": "today: kinds",
+     "fichero": "src/panel/today.js",
+     "lineas": "186, 323",
+     "hecho": "Los kinds de Jira de «hoy» son history, mine, project y related; related sólo se pide con una issueKey válida del sitio.",
+     "cita": "jira: ['history', 'mine', 'project', 'related'],\n    if (validIssueKey(site.issueKey)) kinds.push('related')"
+    },
+    {
+     "id": "rest-55",
+     "tema": "Jira de mentira: lo que entiende",
+     "fichero": "tools/jql-eval.mjs",
+     "lineas": "20, 188-196",
+     "hecho": "El evaluador no admite `IN (…)` con listas: «campo in» sólo acepta una función y sólo sobre issuekey/issue/key. Hoy `key in (A, B)` sería un 400.",
+     "cita": "No hay `NOT`, ni `!=`, ni `IN (…)` con listas,\n      if (v.nodo.clase !== 'funcion') return error(`Error in the JQL Query: «${campo} in» sólo admite una función en esta Jira de pruebas.`)"
+    },
+    {
+     "id": "rest-56",
+     "tema": "Jira de mentira: funciones",
+     "fichero": "tools/jql-eval.mjs",
+     "lineas": "59",
+     "hecho": "Funciones blancas: currentUser, issueHistory, watchedIssues y linkedIssues; cualquier otra da 400 «Unable to find JQL function».",
+     "cita": "const FUNCIONES = new Set(['currentuser', 'issuehistory', 'watchedissues', 'linkedissues'])"
+    },
+    {
+     "id": "rest-57",
+     "tema": "Jira de mentira: linkedIssues",
+     "fichero": "tools/jql-eval.mjs",
+     "lineas": "344-348, 486-487",
+     "hecho": "linkedIssues(K) se resuelve con el array plano `links` de la fixture en los dos sentidos (las de K y las que apuntan a K); sólo se resuelve la primera linkedIssues del filtro (buscarLinked).",
+     "cita": "const suyas = issues.find((x) => x.key === key)?.links || []\n  return new Set([...suyas.map((k) => k.toUpperCase()), ...issues.filter((x) => (x.links || []).some((k) => igual(k, key))).map((x) => x.key)])"
+    },
+    {
+     "id": "rest-58",
+     "tema": "Jira de mentira: forma de la respuesta",
+     "fichero": "tools/jql-eval.mjs",
+     "lineas": "536-562",
+     "hecho": "issueJson emite sólo los campos pedidos entre summary, issuetype, status, priority, resolution, assignee, reporter, labels, components, updated, created, lastViewed, parent y epic, y devuelve {id, key, fields}. NO emite issuelinks.",
+     "cita": "pon('parent', issue.parent ? { key: issue.parent } : null)\n  pon('epic', issue.epic ? { key: issue.epic } : null)\n  return { id: idDe(issue.key), key: issue.key, fields }"
+    },
+    {
+     "id": "rest-59",
+     "tema": "Jira de mentira: envoltorio",
+     "fichero": "tools/jql-eval.mjs",
+     "lineas": "571-591",
+     "hecho": "searchResponse devuelve {status:200, body:{expand, startAt, maxResults (tope 100, 50 por defecto), total, issues}} o {status:400, body:{errorMessages, errors:{}}}.",
+     "cita": "if (!r.ok) return { status: 400, body: { errorMessages: r.errorMessages, errors: {} } }\n  const tope = ... ? Math.min(Number(maxResults), 100) : 50"
+    },
+    {
+     "id": "rest-60",
+     "tema": "banco: rutas",
+     "fichero": "tools/serve-harness.js",
+     "lineas": "111-138",
+     "hecho": "El servidor del banco atiende /rest/api/2/search (con jql, fields, maxResults y startAt de la URL), /rest/api/2/filter/favourite y /rest/api/2/issue/KEY/remotelink (404 si la clave no está en la fixture). No hay ruta /rest/api/2/issue/KEY ni issuelinks.",
+     "cita": "if (resto === '/rest/api/2/search') {\n  const remoto = /^\\/rest\\/api\\/2\\/issue\\/([A-Za-z][A-Za-z0-9_]*-\\d+)\\/remotelink$/.exec(resto)"
+    },
+    {
+     "id": "rest-61",
+     "tema": "fixture: enlaces",
+     "fichero": "harness/issues.json",
+     "lineas": "33, 37",
+     "hecho": "En la fixture sólo dos incidencias tienen links, un array plano de claves sin tipo ni dirección: ENG-3 → [ENG-7] y ENG-7 → [ENG-3, ENG-12]. Las otras 38 (ENG-1..28 y OPS-1..12) tienen links: [].",
+     "cita": "{ \"key\": \"ENG-3\", ... \"links\": [\"ENG-7\"] },\n{ \"key\": \"ENG-7\", ... \"links\": [\"ENG-3\", \"ENG-12\"] },"
+    },
+    {
+     "id": "rest-62",
+     "tema": "test del banco: linkedIssues",
+     "fichero": "test/unit/serve-harness.test.js",
+     "lineas": "126-127",
+     "hecho": "Está pinado que relatedJql('ENG-7') sobre la fixture da ENG-3 y ENG-12 (simétrico, sin la propia, sin distinguir mayúsculas).",
+     "cita": "eq(claves(relatedJql('ENG-7')), ['ENG-3', 'ENG-12'], 'linkedIssues es simétrico y no se devuelve a sí misma')"
+    },
+    {
+     "id": "rest-63",
+     "tema": "fixtures REST",
+     "fichero": "test/fixtures",
+     "lineas": "—",
+     "hecho": "test/fixtures sólo tiene models/ (providers.json, rechazos.json) y prompts/ (escenarios.js y 39 .txt): no hay ninguna fixture de la REST de Jira. La respuesta de search de los tests es la constante RESPUESTA de jira-rest.test.js (líneas 78-111), sin issuelinks. «issuelinks» no aparece en src/, test/, tools/ ni harness/: sólo en docs (PLAN2.md, ESTADO.md, anexo-2-juicios.md, anexo-2-E-diagramas.md).",
+     "cita": "const RESPUESTA = {\n  total: 31422,\n  issues: ["
+    },
+    {
+     "id": "rest-64",
+     "tema": "contexto del plan",
+     "fichero": "docs/PLAN2.md",
+     "lineas": "840-846",
+     "hecho": "El plan deja la consulta por API de claves del diagrama para H25 como kind nuevo de RECENT_ISSUES, con la plantilla elegida por kind en bootstrap.js, validIssueKey en el content script y sólo proyectos conocidos; recuerda que §8.12 pina dos emisores de JQL_SEARCH.",
+     "cita": "en H25 como `kind` nuevo de `RECENT_ISSUES`, plantilla elegida por `kind`\n  en `bootstrap.js`, `validIssueKey` en el content script y sólo proyectos\n  conocidos."
+    }
+   ],
+   "dudas": [
+    "No hay en el repo ninguna fixture real de GET /rest/api/2/search con fields=issuelinks (ni de GET /issue/KEY): la forma exacta de fields.issuelinks del Jira DC del usuario (se espera [{id, type:{name, inward, outward}, inwardIssue|outwardIssue:{key, fields:{summary,status,...}}}]) está SIN VERIFICAR en su instancia.",
+    "parseSearchIssues descarta hoy cualquier campo que no conoce: el contrato tiene que decidir si el parseo de issuelinks va en parseSearchIssues (con otra clave blanca en la fila) o en un parse aparte (parseIssueLinks), y con qué tope por incidencia (no existe ninguno en JIRA_REST_LIMITS).",
+    "'issuelinks' no está en JIRA_FIELDS y el case RECENT_ISSUES no pasa fields a searchIssues: hay que decidir si el kind nuevo fija sus campos en el content script o en jira-rest.js (no por mensaje), y si 'issuelinks' entra en la lista blanca general, que JQL_SEARCH también podría pedir.",
+    "La Jira de mentira no admite `key in (A, B, …)` (tools/jql-eval.mjs:20, 192): la plantilla del kind nuevo, sea `key in (...)` o varias linkedIssues(), necesita una cláusula nueva en jql-eval.mjs con su prueba en serve-harness.test.js, y issueJson tiene que emitir issuelinks a partir del array plano `links`, que no lleva tipo ni dirección.",
+    "No hay tope de claves por consulta: habrá que fijar cuántas claves del índice entran en una plantilla (y relacionarlo con maxResults 30 y con JQL_LIMITS.maxChars 2000).",
+    "sinRestDeJira no está exportada; el panel comprueba site.cloud por su cuenta en cada emisor (attachJqlResults, loadSearchChipSources, restIndexFor) y readToday depende de todayTargets. No he leído cómo decide readToday Cloud para Jira antes de mandar RECENT_ISSUES.",
+    "El pin panel-wiring.test.js:3215 exige que MSG.RECENT_ISSUES aparezca UNA sola vez en panel.js: un segundo emisor (el del diagrama «Según Jira») lo rompería. Hay que decidir si se relaja el pin o si se reutiliza el único punto de emisión.",
+    "La fixture sólo enlaza ENG-3↔ENG-7↔ENG-12: los tramos 66/67 pueden necesitar más enlaces (con tipo) en harness/issues.json, y eso toca los recuentos de serve-harness.test.js y del tramo de 'hoy' que usan related."
+   ]
+  },
+  {
+   "lector": "lector-panel",
+   "hechos": [
+    {
+     "id": "panel-1",
+     "tema": "drawCodeBlock",
+     "fichero": "src/panel/panel.js",
+     "lineas": "5449-5451",
+     "hecho": "drawCodeBlock(block, pre) sólo actúa con una valla mermaid (sin distinguir mayúsculas) y CERRADA; si no, devuelve null y markdown pinta el pre. Parsea con readFlowchart(block.text).",
+     "cita": "function drawCodeBlock(block, pre) {\n  if (block.lang.toLowerCase() !== 'mermaid' || !block.closed) return null\n  const d = readFlowchart(block.text)"
+    },
+    {
+     "id": "panel-2",
+     "tema": "drawCodeBlock",
+     "fichero": "src/panel/panel.js",
+     "lineas": "5452-5460",
+     "hecho": "Registro «Diagrama» una vez por texto (Set diagramasRegistrados); un fallo devuelve div.dg-fallback con el pre y un noticeNode con errores[0].",
+     "cita": "const nuevo = !diagramasRegistrados.has(block.text)\n    caja.className = 'dg-fallback'\n    caja.append(pre, noticeNode('No he podido dibujarlo: ' + d.errores[0]))"
+    },
+    {
+     "id": "panel-3",
+     "tema": "drawCodeBlock",
+     "fichero": "src/panel/panel.js",
+     "lineas": "5462-5473",
+     "hecho": "La figura sale de layoutDiagram con el medidor del panel y diagramNode con onOpen=abrirNodoDelDiagrama, onNote=focusNote, onCopy=copiarMermaid, notes de state.notes, mermaid=toMermaid(d), uid 'dg'+contador y kinds=KIND_LABELS. drawCodeBlock no captura sitio ni host: devuelve la figura sin más.",
+     "cita": "const layout = layoutDiagram(d, { measure: medirTextoDelPanel() })\n    onOpen: abrirNodoDelDiagrama,\n    uid: 'dg' + (++contadorDiagramas),"
+    },
+    {
+     "id": "panel-4",
+     "tema": "drawCodeBlock",
+     "fichero": "src/panel/panel.js",
+     "lineas": "5473-5474",
+     "hecho": "Registro de éxito: nodos, aristas, nodos con clave y ms; devuelve la figura (un único nodo DOM, que sustituye al pre).",
+     "cita": "if (nuevo) log.ok('Diagrama', `${d.nodes.length} nodos · ${d.edges.length} aristas · ${d.nodes.filter((n) => n.ref).length} con clave · ${Math.round(performance.now() - t0)} ms`)\n  return figure"
+    },
+    {
+     "id": "panel-5",
+     "tema": "markdown onCodeBlock",
+     "fichero": "src/panel/markdown.js",
+     "lineas": "233-234",
+     "hecho": "renderMarkdown llama onCodeBlock({lang,text,closed}, pre) y pinta el nodo devuelto en lugar del pre si es un nodo DOM (esNodo por nodeType); drawCodeBlock puede devolver cualquier contenedor con varias figuras.",
+     "cita": "const propio = onCodeBlock ? onCodeBlock({ lang: block.lang, text: block.text, closed: block.closed }, pre) : null\n        frag.appendChild(esNodo(propio) ? propio : pre)"
+    },
+    {
+     "id": "panel-6",
+     "tema": "drawCodeBlock llamadas",
+     "fichero": "src/panel/panel.js",
+     "lineas": "2713, 3100, 3692, 3777",
+     "hecho": "Las cuatro llamadas a renderMarkdown del panel pasan onCodeBlock: drawCodeBlock con el mismo objeto de opciones (incluida restoreConversation / repaint del streaming).",
+     "cita": "renderMarkdown(prose, { onLink: openUrl, onNote: focusNote, onCodeBlock: drawCodeBlock, allowHref: linkAllowed })"
+    },
+    {
+     "id": "panel-7",
+     "tema": "diagram-view acciones",
+     "fichero": "src/panel/diagram-view.js",
+     "lineas": "96, 112-118",
+     "hecho": "diagramNode(diagram, layout, {onOpen,onNote,onCopy,notes,mermaid,uid,kinds}) devuelve figure.dg-wrap con el SVG, la lista equivalente y, sólo si hay mermaid, la fila de acciones. No hay opción para caption ni para botones extra.",
+     "cita": "figure.appendChild(dibujo(vista, l))\n  figure.appendChild(listaEquivalente(vista))\n  if (texto) figure.appendChild(acciones(texto, onCopy))"
+    },
+    {
+     "id": "panel-8",
+     "tema": "diagram-view acciones",
+     "fichero": "src/panel/diagram-view.js",
+     "lineas": "437-448",
+     "hecho": "La fila de acciones es div.dg-actions.nav-actions con un único botón ghost small «Copiar como Mermaid»; es el último hijo de la figura, así que un botón más puede colgarse con figure.querySelector('.dg-actions').appendChild(...).",
+     "cita": "fila.className = 'dg-actions nav-actions'\n  boton.className = 'ghost small'\n  boton.textContent = 'Copiar como Mermaid'"
+    },
+    {
+     "id": "panel-9",
+     "tema": "diagram-view onOpen",
+     "fichero": "src/panel/diagram-view.js",
+     "lineas": "20-23",
+     "hecho": "Un nodo con ref es un botón que llama onOpen(ref, figure); la vista no decide la navegación.",
+     "cita": "un nodo con `ref` es un botón que\n * llama a `onOpen(ref, figure)`, y es el panel quien valida la clave contra el\n * índice de ESE momento al hacer clic"
+    },
+    {
+     "id": "panel-10",
+     "tema": "diagram-view título",
+     "fichero": "src/panel/diagram-view.js",
+     "lineas": "155-160",
+     "hecho": "El SVG lleva title/desc con ids `${uid}-t`/`${uid}-d` (aria-labelledby); dos diagramas en el mismo chat necesitan uid distintos.",
+     "cita": "'aria-labelledby': `${uid}-t ${uid}-d`,\n  const titulo = svg('title', { id: `${uid}-t` })\n  titulo.textContent = tituloDe(vista.nodes)"
+    },
+    {
+     "id": "panel-11",
+     "tema": "abrirNodoDelDiagrama",
+     "fichero": "src/panel/panel.js",
+     "lineas": "5494-5498",
+     "hecho": "Un nodo sólo navega si ref.kind es 'jira-issue' y hay state.site; va por openIssueFromResults con state.site del momento del clic y la figura como tarjeta, y vuelve a encender los botones de .dg-actions.",
+     "cita": "if (ref?.kind !== 'jira-issue' || !state.site) return\n  await openIssueFromResults(ref.id, { site: state.site, card: figure })\n  for (const b of figure.querySelectorAll('.dg-actions button')) b.disabled = false"
+    },
+    {
+     "id": "panel-12",
+     "tema": "openIssueFromResults",
+     "fichero": "src/panel/panel.js",
+     "lineas": "5345-5349",
+     "hecho": "La clave se valida contra state.index en ese momento con validatePlan; destino {kind:'jira-issue', id:key}, modo direct.",
+     "cita": "const r = validatePlan(\n    { navigate: true, mode: 'direct', destination: { kind: 'jira-issue', id: key } },\n    { index: state.index, origin: site.origin, host: site.host, here: state.tabUrl, site }"
+    },
+    {
+     "id": "panel-13",
+     "tema": "openIssueFromResults",
+     "fichero": "src/panel/panel.js",
+     "lineas": "5350-5358",
+     "hecho": "Si el plan no vale: log.warn «Navegación fallida», noticeNode(aviso, true) dentro de la tarjeta/figura y announce; si vale, runPlan(r.plan,'direct',card).",
+     "cita": "log.warn('Navegación fallida', `${key} · ${motivo}`)\n    card.appendChild(noticeNode(aviso, true))\n  await runPlan(r.plan, 'direct', card)"
+    },
+    {
+     "id": "panel-14",
+     "tema": "validatePlan",
+     "fichero": "src/nav/validate.js",
+     "lineas": "51-62",
+     "hecho": "validatePlan falla sin índice o si resolveTarget no encuentra el destino, con el motivo «no está en el índice de este sitio».",
+     "cita": "if (!index) return fail('Todavía no hay índice para este sitio.')\n  const destination = resolveTarget(index, origin, raw.destination || {})\n        ? `El destino «${clean(String(raw.destination.id), 60)}» no está en el índice de este sitio.`"
+    },
+    {
+     "id": "panel-15",
+     "tema": "índice",
+     "fichero": "src/atlassian/index-store.js",
+     "lineas": "21-31",
+     "hecho": "Índice v3: {version:3, host, scope, updated, spaces, pages, projects, issues}; issues es un objeto por clave.",
+     "cita": "version: INDEX_VERSION,\n    projects: {},\n    issues: {},"
+    },
+    {
+     "id": "panel-16",
+     "tema": "índice",
+     "fichero": "src/atlassian/index-store.js",
+     "lineas": "114-125",
+     "hecho": "Cada issue del índice guarda sólo {key, title, projectKey, path}; no guarda relaciones ni issuelinks. La clave tiene que casar con /^[A-Z][A-Z0-9_]*-\\d+$/.",
+     "cita": "if (!/^[A-Z][A-Z0-9_]*-\\d+$/.test(key)) continue\n    out.issues[key] = {\n      key,"
+    },
+    {
+     "id": "panel-17",
+     "tema": "índice",
+     "fichero": "src/atlassian/index-store.js",
+     "lineas": "245-246",
+     "hecho": "No existe hasIssue: resolveTarget busca un jira-issue como index.issues?.[id.toUpperCase()]; planner.js usa esa misma forma directa (index?.issues?.[key.toUpperCase()]).",
+     "cita": "case 'jira-issue':\n      entry = index.issues?.[id.toUpperCase()]"
+    },
+    {
+     "id": "panel-18",
+     "tema": "cosecha M4",
+     "fichero": "src/panel/indexer.js",
+     "lineas": "451-458",
+     "hecho": "extractEntities cosecha claves sueltas de la SALIDA DE LAS HERRAMIENTAS (collectToolText), y sólo si su proyecto es conocido o vienen en una ruta /browse/.",
+     "cita": "const conocidos = knownProjects(site, index, blob)\n    if (!conocidos.has(key.split('-')[0]) && !enRuta.has(key)) continue\n    issues.set(key, { key, summary: key, url: `/browse/${key}` })"
+    },
+    {
+     "id": "panel-19",
+     "tema": "cosecha M4",
+     "fichero": "src/panel/indexer.js",
+     "lineas": "528-537",
+     "hecho": "collectToolText sólo lee partes de tipo 'tool' (output, input y metadata), nunca la prosa del modelo; tope 400000 caracteres.",
+     "cita": "if (p?.type !== 'tool') continue\n    if (typeof state.output === 'string') out.push(state.output)\n  return out.join('\\n').slice(0, 400000)"
+    },
+    {
+     "id": "panel-20",
+     "tema": "knownProjects",
+     "fichero": "src/panel/indexer.js",
+     "lineas": "497-508",
+     "hecho": "knownProjects: el proyecto de la pestaña, index.projects, el proyecto de cada index.issues y los JSON_KEY_PROJECT de la salida de herramientas.",
+     "cita": "add(site?.projectKey)\n  for (const k of Object.keys(index?.projects || {})) add(k)\n  for (const is of Object.values(index?.issues || {})) add(is?.projectKey || String(is?.key || '').split('-')[0])"
+    },
+    {
+     "id": "panel-21",
+     "tema": "knownProjectsFor",
+     "fichero": "src/panel/indexer.js",
+     "lineas": "521-523",
+     "hecho": "knownProjectsFor(parts,{site,index,allowedHosts}) es knownProjects sobre la salida de herramientas con dropForeignUrls; devuelve un Set.",
+     "cita": "export function knownProjectsFor(parts, { site, index = null, allowedHosts = [] } = {}) {\n  return knownProjects(site, index, dropForeignUrls(collectToolText(parts), [site?.host, ...asStrings(allowedHosts)]))"
+    },
+    {
+     "id": "panel-22",
+     "tema": "cosecha REST",
+     "fichero": "src/panel/indexer.js",
+     "lineas": "296",
+     "hecho": "harvestFromSearch(issues,{site,index}) mete en el índice lo que devolvió searchIssues (ya validado por parseSearchIssues); lo usa attachJqlResults antes de pintar filas.",
+     "cita": "export function harvestFromSearch(issues, { site, index }) {"
+    },
+    {
+     "id": "panel-23",
+     "tema": "oferta Dibujar el flujo",
+     "fichero": "src/panel/panel.js",
+     "lineas": "3594-3602",
+     "hecho": "La oferta sale en send() tras el pintado: proyectos conocidos = knownProjectsFor del turno + claves de state.profiles.byProject; exige producto jira, ≥ offerMinKeys claves y que la respuesta no traiga ya un ```mermaid; fila .nav-actions.dg-offer colgada con attachToBubble.",
+     "cita": "...knownProjectsFor(turn.parts, { site: sitioAlPedir, index: state.index, allowedHosts: linkedHost() ? [linkedHost()] : [] }),\n    if (productoAlPedir === 'jira' && offerDiagramKeys(answer, proyectosDelTurno).length >= DIAGRAM_LIMITS.offerMinKeys && !/^\\s*(```|~~~)\\s*mermaid/im.test(answer)) {\n      fila.className = 'nav-actions dg-offer'"
+    },
+    {
+     "id": "panel-24",
+     "tema": "diagramButton",
+     "fichero": "src/panel/panel.js",
+     "lineas": "5398-5414",
+     "hecho": "diagramButton no manda nada: pone state.pendingDiagram = {host} con el host del clic, escribe DIAGRAM_QUESTION en el cuadro y enfoca; clase NEEDS_IDLE.",
+     "cita": "b.className = 'ghost small ' + NEEDS_IDLE\n    state.pendingDiagram = { host: state.site?.host || '' }\n    el.input.value = DIAGRAM_QUESTION"
+    },
+    {
+     "id": "panel-25",
+     "tema": "send y diagrama",
+     "fichero": "src/panel/panel.js",
+     "lineas": "3223-3229",
+     "hecho": "send() consume pendingDiagram: diagramaAlPedir es verdadero con la pregunta intacta o si el host armado es el de ahora y el texto pide mermaid; cada envío retira todas las .dg-offer.",
+     "cita": "const diagramaAlPedir = text === DIAGRAM_QUESTION || (!!diagrama && diagrama.host === state.site.host && /mermaid/i.test(text))\n  for (const f of el.chat.querySelectorAll('.dg-offer')) f.remove()"
+    },
+    {
+     "id": "panel-26",
+     "tema": "captura al pedir en send",
+     "fichero": "src/panel/panel.js",
+     "lineas": "3253, 3271, 3487",
+     "hecho": "send() captura productoAlPedir y sitioAlPedir antes del turno y, al volver, mismoSitio compara host y sesión capturados con los de ahora.",
+     "cita": "const productoAlPedir = state.site.product\n  const sitioAlPedir = state.site\n    const mismoSitio = (state.site?.host ?? state.lastHost) === hostAlPedir && state.sessionID === sesionAlPedir"
+    },
+    {
+     "id": "panel-27",
+     "tema": "offerNotes esDiagrama",
+     "fichero": "src/panel/panel.js",
+     "lineas": "5555-5558",
+     "hecho": "Una respuesta a «Dibujar el flujo» no se subraya: offerNotes sale con log.info('Diagrama', ...).",
+     "cita": "if (esDiagrama) {\n    log.info('Diagrama', 'sin marcas: la pregunta era dibujar el flujo')\n    return"
+    },
+    {
+     "id": "panel-28",
+     "tema": "readToday",
+     "fichero": "src/panel/panel.js",
+     "lineas": "11230, 11251-11253",
+     "hecho": "readToday(target, kind, {sitio, ids, tabId}) recibe el sitio y la pestaña ya capturados por quien llama; sin tabId o sin acceso al content script devuelve {ok:false, reason:'permiso'} sin mandar nada.",
+     "cita": "async function readToday(target, kind, { sitio, ids = [], tabId = state.tabId } = {}) {\n  if (tabId == null || !(await ensureContentAccess({ announce: false }))) {\n    return { ok: false, reason: 'permiso', detail: `sin permiso sobre ${target.host}` }"
+    },
+    {
+     "id": "panel-29",
+     "tema": "readToday mensaje",
+     "fichero": "src/panel/panel.js",
+     "lineas": "11254-11264",
+     "hecho": "El mensaje de Jira es {type: MSG.RECENT_ISSUES, kind, limit, cloud} y parámetros por kind sacados del sitio capturado (days, projectKey, issueKey para 'related'); nunca JQL, origen ni URL.",
+     "cita": "type: MSG.RECENT_ISSUES,\n          kind,\n          ...(kind === 'related' ? { issueKey: sitio.issueKey } : {}),"
+    },
+    {
+     "id": "panel-30",
+     "tema": "readToday envío",
+     "fichero": "src/panel/panel.js",
+     "lineas": "11279",
+     "hecho": "El envío es chrome.tabs.sendMessage con .catch(() => null) y cae en {ok:false, reason:'sin respuesta'}; no usa sendToTab.",
+     "cita": "return (await chrome.tabs.sendMessage(tabId, msg).catch(() => null)) || { ok: false, reason: 'sin respuesta' }"
+    },
+    {
+     "id": "panel-31",
+     "tema": "readToday fallos",
+     "fichero": "src/panel/panel.js",
+     "lineas": "11193-11204",
+     "hecho": "fetchTodayTarget convierte cada {ok:false} en un error {product, host, kind, reason, detail, messages}; readToday nunca lanza.",
+     "cita": "if (!r?.ok) {\n      errors.push({\n        reason: r?.reason || 'sin respuesta',"
+    },
+    {
+     "id": "panel-32",
+     "tema": "loadToday interruptores",
+     "fichero": "src/panel/panel.js",
+     "lineas": "11035-11047",
+     "hecho": "loadToday captura sitio, host, tabId y sessionID antes de cualquier await, y no pide nada si restTools o todaySuggestions están apagados.",
+     "cita": "const tabId = state.tabId\n  const sessionID = state.sessionID\n  if (!state.settings.restTools || !state.settings.todaySuggestions) return"
+    },
+    {
+     "id": "panel-33",
+     "tema": "loadToday comprobación al volver",
+     "fichero": "src/panel/panel.js",
+     "lineas": "11136-11139",
+     "hecho": "Al volver de las lecturas, loadToday comprueba el testigo del arranque y el host; si el panel se fue, registra «Qué mirar hoy no disponible» y no pinta.",
+     "cita": "if (state.bootToken !== testigo || (state.site?.host ?? state.lastHost) !== host) {\n      log.info('Qué mirar hoy no disponible', `lo leído de ${host} llegó con el panel en otro sitio`)\n      return"
+    },
+    {
+     "id": "panel-34",
+     "tema": "sinRestDeJira",
+     "fichero": "src/shared/jira-rest.js",
+     "lineas": "599-602",
+     "hecho": "sinRestDeJira(site) vive en jira-rest.js (content script) y devuelve {ok:false, reason:'cloud'} en Cloud; en el panel, «hoy» excluye Jira Cloud en todayTargets (today.js:318) y attachJqlResults con site.cloud.",
+     "cita": "function sinRestDeJira(site) {\n  if (!site?.cloud) return null\n  return { ok: false, reason: 'cloud', detail: 'Jira Cloud retiró GET /rest/api/2/search: en Cloud todo va por el MCP' }"
+    },
+    {
+     "id": "panel-35",
+     "tema": "attachJqlResults interruptores",
+     "fichero": "src/panel/panel.js",
+     "lineas": "5146-5150",
+     "hecho": "attachJqlResults recibe {site, sessionID, tabId} capturados (por defecto los de ahora), sólo actúa en Jira y sale sin avisar con restTools apagado.",
+     "cita": "async function attachJqlResults(card, busqueda, { site = state.site, sessionID = state.sessionID, tabId = state.tabId } = {}) {\n  if (!card || !site || site.product !== 'jira') return null\n  if (!state.settings.restTools) return null"
+    },
+    {
+     "id": "panel-36",
+     "tema": "attachJqlResults estado y aviso",
+     "fichero": "src/panel/panel.js",
+     "lineas": "5154-5170",
+     "hecho": "Pinta un div.nav-text.result-status «Comprobando…» antes de .nav-actions; el fallo quita el estado, registra un warn y, si restFailureDue lo permite, cuelga un noticeNode dentro de la tarjeta y lo anuncia.",
+     "cita": "estado.className = 'nav-text result-status'\n    if (restFailureDue(state.restWarned, reason, site.host, sessionID)) {\n      card.appendChild(noticeNode(aviso))"
+    },
+    {
+     "id": "panel-37",
+     "tema": "attachJqlResults Cloud y permiso",
+     "fichero": "src/panel/panel.js",
+     "lineas": "5174-5184",
+     "hecho": "En Cloud falla con 'cloud' sin pedir; sin tabId o sin content script falla con 'permiso'.",
+     "cita": "if (site.cloud) {\n    fallo('cloud', 'En Jira Cloud no puedo consultar la API con tu sesión: la lista la tiene el buscador de Jira.')\n  if (tabId == null || !(await ensureContentAccess({ announce: false }))) {"
+    },
+    {
+     "id": "panel-38",
+     "tema": "attachJqlResults al volver",
+     "fichero": "src/panel/panel.js",
+     "lineas": "5190-5203",
+     "hecho": "Al volver comprueba card.isConnected y que host y sesión sigan siendo los capturados (§8.22) antes de pintar o cosechar.",
+     "cita": "if (!card.isConnected) return null\n  if ((state.site?.host ?? state.lastHost) !== site.host || (sessionID && state.sessionID !== sessionID)) {"
+    },
+    {
+     "id": "panel-39",
+     "tema": "attachJqlResults fallo",
+     "fichero": "src/panel/panel.js",
+     "lineas": "5205-5208",
+     "hecho": "Un {ok:false} se traduce con jqlFailText(r, host).",
+     "cita": "if (!r?.ok) {\n    fallo(r?.reason || 'sin respuesta', jqlFailText(r, site.host))\n    return null"
+    },
+    {
+     "id": "panel-40",
+     "tema": "rest-notice",
+     "fichero": "src/panel/rest-notice.js",
+     "lineas": "restFailureDue",
+     "hecho": "restFailureDue(warned, reason, host, sessionID) marca y devuelve true la primera vez por host·sesión·motivo; 'jql' (REST_REASON_ALWAYS) se avisa siempre; sin Set, siempre true.",
+     "cita": "if (REST_REASON_ALWAYS.includes(motivo)) return true\n  const clave = `${host || ''}:${sessionID || ''}:${motivo}`\n  if (warned.has(clave)) return false"
+    },
+    {
+     "id": "panel-41",
+     "tema": "rest-notice textos",
+     "fichero": "src/panel/rest-notice.js",
+     "lineas": "jqlFailText",
+     "hecho": "jqlFailText da textos para 'jql', 'sesion', 'red', sin respuesta (r nulo) y un genérico «No he podido leer la lista (…)».",
+     "cita": "if (reason === 'sesion') return `Tu sesión de ${host} no vale para su API: recarga la pestaña y vuelve a entrar.`\n  if (!r) return 'La pestaña no ha contestado.'"
+    },
+    {
+     "id": "panel-42",
+     "tema": "estado",
+     "fichero": "src/panel/panel.js",
+     "lineas": "266-274, 470, 490, 538",
+     "hecho": "Campos del estado que tocan H25: settings (con restTools), site, lastHost, tabId, index, turnAbort, restWarned (Set) y pendingDiagram.",
+     "cita": "settings: { ...DEFAULT_SETTINGS },\n  index: null,\n  restWarned: new Set(),"
+    },
+    {
+     "id": "panel-43",
+     "tema": "DIAGRAM_LIMITS",
+     "fichero": "src/panel/diagram-parse.js",
+     "lineas": "30-39",
+     "hecho": "Límites: srcMax 6000, nodes 30, edges 60, labelMax 80, edgeLabelMax 40, idMax 32, subgraphs 6, offerMinKeys 3.",
+     "cita": "nodes: 30,\n  edges: 60,\n  labelMax: 80,"
+    },
+    {
+     "id": "panel-44",
+     "tema": "validateDiagram entrada",
+     "fichero": "src/panel/diagram-parse.js",
+     "lineas": "607-617",
+     "hecho": "validateDiagram acepta un objeto a mano {ok, direction, nodes, edges, subgraphs, errores}; ok:false o errores no vacío lo tumban; una dirección fuera de TD/LR/RL/BT queda en 'TD'.",
+     "cita": "const { ok, direction: dir, nodes: rn, edges: re, subgraphs: rs, errores: rerr } = raw\n  const direction = direccion(dir) || 'TD'\n  if (ok === false || previos.length) {"
+    },
+    {
+     "id": "panel-45",
+     "tema": "validateDiagram topes",
+     "fichero": "src/panel/diagram-parse.js",
+     "lineas": "622-631",
+     "hecho": "Pasarse de nodes, edges o subgraphs en crudo hace fallar TODO el diagrama (no recorta): hay que recortar antes de validar.",
+     "cita": "if (nodosCrudos.length > DIAGRAM_LIMITS.nodes) {\n    topes.push(`demasiados nodos: ${nodosCrudos.length} de tope ${DIAGRAM_LIMITS.nodes}`)\n  if (topes.length) return fallo(topes, direction)"
+    },
+    {
+     "id": "panel-46",
+     "tema": "validateDiagram nodos",
+     "fichero": "src/panel/diagram-parse.js",
+     "lineas": "639-653",
+     "hecho": "Por nodo: id válido y sin repetir, label recortada a labelMax, forma de DIAGRAM_SHAPES o 'rect', kind de NOTE_KINDS o ''. ref y note NO se aceptan de la entrada: salen de la etiqueta (referencia/numeroDeNota), y sub sólo si el subgrafo existe.",
+     "cita": "kind: typeof kind === 'string' && NOTE_KINDS.includes(kind) ? kind : '',\n      ref: referencia(label),\n      note: numeroDeNota(label),"
+    },
+    {
+     "id": "panel-47",
+     "tema": "ref jira-issue",
+     "fichero": "src/panel/diagram-parse.js",
+     "lineas": "570-574",
+     "hecho": "ref sale de la primera palabra de la etiqueta (sin . , : ; al final) pasada por validIssueKey → {kind:'jira-issue', id}; para que un nodo navegue, la etiqueta tiene que empezar por la clave.",
+     "cita": "const primera = label.split(' ')[0].replace(/[.,:;]+$/, '')\n  const clave = validIssueKey(primera)\n  return clave ? { kind: 'jira-issue', id: clave } : null"
+    },
+    {
+     "id": "panel-48",
+     "tema": "id de nodo",
+     "fichero": "src/panel/diagram-parse.js",
+     "lineas": "62-63, 165-172",
+     "hecho": "Un id válido es [A-Za-z0-9_]+ con guiones sólo entre medias, ≤32 y no reservado, así que una clave como ENG-7 vale como id.",
+     "cita": "const ID = '[A-Za-z0-9_]+(?:-[A-Za-z0-9_]+)*'\n    id.length <= DIAGRAM_LIMITS.idMax &&\n    !RESERVADAS.includes(id.toLowerCase())"
+    },
+    {
+     "id": "panel-49",
+     "tema": "validateDiagram aristas",
+     "fichero": "src/panel/diagram-parse.js",
+     "lineas": "658-671",
+     "hecho": "Una arista se descarta en silencio si from/to no son ids de nodo; su label se recorta a edgeLabelMax, style en solid/dotted/thick (si no, solid), arrow en arrow/none/cross/circle (si no, arrow). Con menos de dos nodos falla.",
+     "cita": "if (!ids.has(from) || !ids.has(to)) continue\n      label: recorte(e.label, DIAGRAM_LIMITS.edgeLabelMax),\n  if (nodes.length < 2) return fallo(['menos de dos nodos'], direction)"
+    },
+    {
+     "id": "panel-50",
+     "tema": "toMermaid",
+     "fichero": "src/panel/diagram-parse.js",
+     "lineas": "toMermaid",
+     "hecho": "toMermaid(diagram) valida primero y devuelve '' si no vale; escribe nodos con la etiqueta entre comillas, subgrafos y aristas con operador por estilo y punta; readFlowchart(toMermaid(d)) es d (pinado).",
+     "cita": "const d = validateDiagram(diagram)\n  if (!d.ok) return ''\n  const out = [`flowchart ${d.direction}`]"
+    },
+    {
+     "id": "panel-51",
+     "tema": "layoutDiagram",
+     "fichero": "src/panel/diagram-layout.js",
+     "lineas": "59-68",
+     "hecho": "layoutDiagram(diagram, {measure}) devuelve {width,height,nodes,edges,subgraphs} con nodes y edges en el mismo orden que el diagrama; con ok:false o sin nodos, todo a cero. measure por defecto: longitud × 6,6 px.",
+     "cita": "export function layoutDiagram(diagram, { measure = (t) => t.length * LAYOUT_LIMITS.charW } = {}) {"
+    },
+    {
+     "id": "panel-52",
+     "tema": "CSS",
+     "fichero": "src/panel/panel.css",
+     "lineas": "1506-1563",
+     "hecho": "Reglas .dg-*: .dg-wrap (margen s2, overflow-x auto), .dg-svg, .dg-edge (con -dotted y -thick), .dg-node y las cinco clases de kind, .dg-link, .dg-note, .dg-list, .dg-actions (margin-top s2) y .dg-fallback. No hay regla de caption (.dg-caption ni figcaption).",
+     "cita": ".dg-wrap { margin: var(--s2) 0; overflow-x: auto; }\n.dg-edge-dotted { stroke-dasharray: 4 4; }\n.dg-actions { margin-top: var(--s2); }"
+    },
+    {
+     "id": "panel-53",
+     "tema": "CSS",
+     "fichero": "src/panel/panel.css",
+     "lineas": "490, 503, 511-544",
+     "hecho": ".nav-text (texto sm ink-2), .nav-actions (flex con gap s2) y la familia .result-status/.result-list/.result-row/.result-key/.result-body/.result-title/.result-meta ya existen y están cubiertas por test.",
+     "cita": ".nav-text { font-size: var(--text-sm); color: var(--ink-2); margin-bottom: var(--s2); }\n.nav-actions { display: flex; flex-wrap: wrap; gap: var(--s2); }\n.result-list { display: flex; flex-direction: column; margin: 0 0 var(--s2); }"
+    },
+    {
+     "id": "panel-54",
+     "tema": "pin RECENT_ISSUES",
+     "fichero": "test/unit/panel-wiring.test.js",
+     "lineas": "3215",
+     "hecho": "Pin: MSG.RECENT_ISSUES aparece exactamente UNA vez en todo panel.js (JS en crudo, comentarios incluidos); un segundo emisor o una mención en un comentario lo rompe.",
+     "cita": "eq((JS.match(/MSG\\.RECENT_ISSUES/g) || []).length, 1, 'MSG.RECENT_ISSUES se manda desde un solo sitio')"
+    },
+    {
+     "id": "panel-55",
+     "tema": "pin readToday",
+     "fichero": "test/unit/panel-wiring.test.js",
+     "lineas": "3188-3199",
+     "hecho": "Pin de readToday (de 'async function readToday' a 'function todayFailText', sin comentarios): desde 'const msg =' no pueden aparecer 'jql', 'cql', 'origin:', 'url:', 'path:' ni 'host:', y projectKey/issueKey salen de sitio.",
+     "cita": "for (const prohibido of ['jql', 'cql', 'origin:', 'url:', 'path:', 'host:']) {\n    assert(!porPestana.includes(prohibido), 'el mensaje a la pestaña no puede llevar «' + prohibido + '»')\n  assert(/projectKey: sitio\\.projectKey/.test(porPestana) && /issueKey: sitio\\.issueKey/.test(porPestana), 'del sitio CAPTURADO, no del de ahora')"
+    },
+    {
+     "id": "panel-56",
+     "tema": "pin HOY",
+     "fichero": "test/unit/panel-wiring.test.js",
+     "lineas": "3113, 3218-3220",
+     "hecho": "HOY es panel.js desde 'function emptyToday()' (línea 10983) HASTA EL FINAL del fichero, y no puede contener runTurn(, promptStructured(, createSession(, baseSystem(, skillSystem( ni send(): código nuevo detrás de esa línea tampoco.",
+     "cita": "const HOY = sinComentarios(JS.slice(JS.indexOf('function emptyToday()')))\n  for (const prohibido of ['runTurn(', 'promptStructured(', 'createSession(', 'baseSystem(', 'skillSystem(', 'send()']) {\n    assert(!HOY.includes(prohibido), 'recomendar no puede llamar al modelo: «' + prohibido + '»')"
+    },
+    {
+     "id": "panel-57",
+     "tema": "pin drawCodeBlock",
+     "fichero": "test/unit/panel-wiring.test.js",
+     "lineas": "7720-7751",
+     "hecho": "drawCodeBlock está pinado ENTERO con eq(funcion(...), lineas(...)): cualquier línea nueva (un botón, una segunda figura, capturar el sitio) cambia el pin.",
+     "cita": "eq(\n    funcion('function drawCodeBlock('),\n    'drawCodeBlock: sólo la valla mermaid cerrada, el fallo visible, la vista con sus insignias y un registro por texto'"
+    },
+    {
+     "id": "panel-58",
+     "tema": "pin drawCodeBlock usos",
+     "fichero": "test/unit/panel-wiring.test.js",
+     "lineas": "7709-7715",
+     "hecho": "Pines: 4 llamadas a renderMarkdown y la palabra drawCodeBlock exactamente 5 veces en panel.js sin comentarios (la declaración y las cuatro).",
+     "cita": "eq(JS_SIN.split('renderMarkdown(').length - 1, 4, 'cuatro llamadas a renderMarkdown')\n  eq(JS_SIN.split('drawCodeBlock').length - 1, 5, 'y drawCodeBlock no se usa en ningún otro sitio: la declaración y las cuatro')"
+    },
+    {
+     "id": "panel-59",
+     "tema": "pin drawCodeBlock ejecutado",
+     "fichero": "test/unit/panel-wiring.test.js",
+     "lineas": "7764-7789",
+     "hecho": "Una prueba ejecuta el cuerpo REAL de drawCodeBlock con new Function y un conjunto fijo de nombres inyectados (abrirNodoDelDiagrama, focusNote, copiarMermaid, state, performance, document, KIND_LABELS…); un identificador nuevo en el cuerpo tendría que añadirse a esa lista.",
+     "cita": "'abrirNodoDelDiagrama', 'focusNote', 'copiarMermaid', 'state', 'performance', 'document', 'KIND_LABELS',\n      'const diagramasRegistrados = new Set()\\nlet contadorDiagramas = 0\\n' + funcion('function drawCodeBlock(') +"
+    },
+    {
+     "id": "panel-60",
+     "tema": "pin abrirNodo y seguridad",
+     "fichero": "test/unit/panel-wiring.test.js",
+     "lineas": "7817-7828, 7840-7841",
+     "hecho": "abrirNodoDelDiagrama y copiarMermaid están pinados enteros; en todo panel.js sin comentarios no puede aparecer ni '/browse/' + ni '/rest/api/'; drawCodeBlock+abrirNodo+copiarMermaid sin innerHTML/insertAdjacentHTML/outerHTML.",
+     "cita": "assert(!/'\\/browse\\/' \\+/.test(JS_SIN) && !JS_SIN.includes('/rest/api/'), 'SEGURIDAD: ninguna URL de incidencia ni ruta REST concatenada en el panel')\n  assert(!/innerHTML|insertAdjacentHTML|outerHTML/.test(dibujo), 'SEGURIDAD: el panel no dibuja con innerHTML')"
+    },
+    {
+     "id": "panel-61",
+     "tema": "pin oferta",
+     "fichero": "test/unit/panel-wiring.test.js",
+     "lineas": "7922-7945",
+     "hecho": "La oferta está pinada byte a byte dentro de send(); diagramButton( aparece 2 veces, '.dg-offer' 1 y 'dg-offer' 2; orden: después de announce(answerAnnouncement) y antes de await offerNotes(.",
+     "cita": "una(envio, oferta, 'el botón sólo en Jira, con tres claves o más de proyectos conocidos y sin un diagrama ya en la respuesta')\n  eq(JS_SIN.split('dg-offer').length - 1, 2, 'la marca se pone en un sitio y se busca en otro')"
+    },
+    {
+     "id": "panel-62",
+     "tema": "pin openIssueFromResults",
+     "fichero": "test/unit/panel-wiring.test.js",
+     "lineas": "2094-2120",
+     "hecho": "openIssueFromResults está pinada ENTERA (sin comentarios ni líneas vacías) con eq; reutilizarla sin tocarla no rompe el pin.",
+     "cita": "const firmaH8 = 'async function openIssueFromResults('\n      'async function openIssueFromResults(key, { site, card }) {',"
+    },
+    {
+     "id": "panel-63",
+     "tema": "pin imports",
+     "fichero": "test/unit/panel-wiring.test.js",
+     "lineas": "7699-7704",
+     "hecho": "Las líneas de import de diagram-parse, indexer, diagram-layout y diagram-view están pinadas exactas con una(): importar algo más de esos módulos (p. ej. validateDiagram) cambia el pin.",
+     "cita": "una(LIMPIO, \"\\nimport { readFlowchart, toMermaid, offerDiagramKeys, DIAGRAM_LIMITS } from './diagram-parse.js'\\n\", 'el parser')\n  una(LIMPIO, \"\\nimport { diagramNode, textMeasurer } from './diagram-view.js'\\n\", 'la vista')"
+    },
+    {
+     "id": "panel-64",
+     "tema": "bootstrap plantilla",
+     "fichero": "src/content/bootstrap.js",
+     "lineas": "391-403",
+     "hecho": "El case RECENT_ISSUES del content script arma la JQL con jqlDePlantilla(jira, msg) y el sitio con sitioJira(msg); sin plantilla contesta 'consulta no permitida' sin pedir, y si no busca con searchIssues(…, {limit}).",
+     "cita": "const jql = jqlDePlantilla(jira, msg)\n              sendResponse({ ok: false, reason: 'consulta no permitida' })\n            sendResponse(await jira.searchIssues((u, o) => fetch(u, o), sitio, jql, { limit: msg.limit }))"
+    }
+   ],
+   "dudas": [
+    "Si el kind nuevo de RECENT_ISSUES se manda desde un segundo sitio del panel, el pin de panel-wiring.test.js:3215 (una sola aparición de MSG.RECENT_ISSUES en todo panel.js, comentarios incluidos) tiene que cambiar, o hay que reutilizar readToday (que hoy lleva target/sitio de «hoy» y lo vigila el pin H11 con 'host:' prohibido desde 'const msg ='). Lo tiene que decidir el contrato.",
+    "El índice no guarda relaciones: cada issue es {key,title,projectKey,path}. No he mirado si searchIssues/parseSearchIssues pueden devolver issuelinks (lista blanca de campos en jira-rest.js); lo ve el lector del content script y de jira-rest.",
+    "drawCodeBlock no captura nada del sitio y es síncrona; una lectura REST al pulsar un botón tendría que capturar site/sessionID/tabId en el clic, como attachJqlResults. Queda por decidir si el botón vive en drawCodeBlock (pinado entero y ejecutado con una lista fija de nombres inyectados) o en diagram-view (pasando algo más en opts).",
+    "No hay regla CSS de caption para una figura (ni .dg-caption ni figcaption): un «Según Jira» con título y una lista de diferencias necesita clases nuevas, o reutilizar .nav-text/.result-*; lo decide el contrato, junto con panel-css.test.js y las CAJAS del espejo.",
+    "Queda por decidir cuáles son las «claves del diagrama que están en el índice»: los nodos con ref (validIssueKey de la primera palabra) cruzados con state.index.issues del momento del clic. No existe un hasIssue: la forma usada es index.issues?.[KEY]."
+   ]
+  },
+  {
+   "lector": "lector-banco-docs",
+   "hechos": [
+    {
+     "id": "banco-docs-1",
+     "tema": "recuento",
+     "fichero": "CLAUDE.md",
+     "lineas": "53, 78-79",
+     "hecho": "En disco (punta f9a4195), CLAUDE.md §2 dice 1607 pruebas unitarias y 64 tramos / 138 ok( / 137 resultados. El CLAUDE.md que se inyecta en la sesión está desfasado (dice 1555 y 63/131/130): hay que fiarse del de disco.",
+     "cita": "npm run check              # sintaxis + TDZ + manifest + 1607 pruebas unitarias + docs\n  1280×900: oculto no hay frames y caen la 27 y la 41. Hoy 64 tramos, 138 `ok(`,\n  137 resultados."
+    },
+    {
+     "id": "banco-docs-2",
+     "tema": "recuento",
+     "fichero": "README.md",
+     "lineas": "777",
+     "hecho": "README dice el mismo total de 1607 pruebas; check-docs exige que README y CLAUDE §2 coincidan con registry.length.",
+     "cita": "npm run check              # sintaxis + orden + manifest + 1607 pruebas unitarias + docs"
+    },
+    {
+     "id": "banco-docs-3",
+     "tema": "tamaño CLAUDE.md",
+     "fichero": "test/unit/docs.test.js",
+     "lineas": "271",
+     "hecho": "CLAUDE.md mide 60 997 bytes (wc -c) y el tope pinado es 60*1024 = 61 440: quedan 443 bytes. Todo lo que H25 añada a CLAUDE.md tiene que recortarse en otra parte.",
+     "cita": "assert(Buffer.byteLength(c, 'utf8') <= 60 * 1024, `CLAUDE.md es un mapa de ≤60 KB (mide ${Buffer.byteLength(c, 'utf8')}): lo largo va a docs/`)"
+    },
+    {
+     "id": "banco-docs-4",
+     "tema": "docs.test tramos",
+     "fichero": "test/unit/docs.test.js",
+     "lineas": "182-192",
+     "hecho": "tramosDelSelfcheck corta el texto de 'async selfcheck()' hasta 'return { passed, total: results.length, results }', busca las marcas '// N. ' (N con letra opcional) y cuenta los \\bok\\( de cada tramo, hasta la marca siguiente.",
+     "cita": "const marcas = [...cuerpo.matchAll(/^[ \\t]*\\/\\/ (\\d+[a-z]?)\\. /gm)]\n    return { n: m[1], comprobaciones: (tramo.match(/\\bok\\(/g) || []).length }"
+    },
+    {
+     "id": "banco-docs-5",
+     "tema": "docs.test sin huecos",
+     "fichero": "test/unit/docs.test.js",
+     "lineas": "307-319",
+     "hecho": "El test recorre de 1 hasta el MÁXIMO número entero de tramo y falla con cualquier hueco o repetido. Hoy el máximo es 64. Si se añaden 66 y 67 sin un 65, el hueco del 65 hace fallar el test.",
+     "cita": "for (let i = 1; i <= max; i++) {\n    const veces = enteros.filter((n) => n === i).length\n    if (veces === 0) huecos.push(i)"
+    },
+    {
+     "id": "banco-docs-6",
+     "tema": "docs.test ok(",
+     "fichero": "test/unit/docs.test.js",
+     "lineas": "322-331",
+     "hecho": "Cada tramo tiene que hacer al menos un ok(. CLAUDE.md, con los espacios normalizados, tiene que contener literalmente «N `ok(`» y «N-1 resultados», con N = suma de los ok(.",
+     "cita": "eq(vacios, [], 'cada tramo numerado hace al menos un ok(')\n  assert(claude.includes(`${n} \\`ok(\\``), ...\n  assert(claude.includes(`${n - 1} resultados`), ..."
+    },
+    {
+     "id": "banco-docs-7",
+     "tema": "orden de tramos",
+     "fichero": "harness/harness.js",
+     "lineas": "4067, 4221, 4364",
+     "hecho": "Los números no tienen que ir en orden en el fichero; el test sólo mira que sean únicos y que no haya huecos. 60-62 están en 4067-4176, el 63 en 4221 y el 64 (H23) en 4364, que es el último tramo antes de la restauración final.",
+     "cita": "// 63. Un host con DOS espacios indexados (H21): ENG y OPS leídos por la API\n// 64. El subrayado de H23 (forma A, docs/PLAN2.md §3.6). El relleno de las"
+    },
+    {
+     "id": "banco-docs-8",
+     "tema": "restauración final",
+     "fichero": "harness/harness.js",
+     "lineas": "4671-4678",
+     "hecho": "Tras el ok( del 64, el selfcheck restaura el estado (barra lateral clásica, page:200, runner.clear()) y devuelve. Los tramos nuevos irían entre el ok( del 64 y setSidebar('clasica'), o antes del 64; nunca después del return, porque tramosDelSelfcheck corta ahí.",
+     "cita": "setSidebar('clasica')\n    renderPage('page:200')\n    await wait(320)"
+    },
+    {
+     "id": "banco-docs-9",
+     "tema": "forma de un tramo REST",
+     "fichero": "harness/harness.js",
+     "lineas": "3106-3118",
+     "hecho": "Los tramos REST 44-52 llaman al MÓDULO directamente (import dinámico de /src/shared/jira-rest.js), no a bootstrap. Llevan el fetch envuelto en pideApi, que apunta cada URL; el sitio es {origin: location.origin, jiraPrefix:'', cloud:false} y la fixture se lee con fetch('/harness/issues.json').",
+     "cita": "const jiraRest = await import('/src/shared/jira-rest.js')\n    const FIX = await (await fetch('/harness/issues.json')).json()\n    const sitioJira = { origin: location.origin, jiraPrefix: '', cloud: false }"
+    },
+    {
+     "id": "banco-docs-10",
+     "tema": "el banco no ejercita bootstrap",
+     "fichero": "harness/harness.js",
+     "lineas": "4590",
+     "hecho": "harness.js no importa bootstrap.js ni manda mensajes MSG: grep de 'bootstrap|MSG.|onMessage' sólo da un comentario. Un case del content script (jqlDePlantilla) no se prueba en el banco; se pina por regex en bootstrap-wiring.test.js.",
+     "cita": "//     que hace bootstrap con el ajuste): en ámbar el host lleva"
+    },
+    {
+     "id": "banco-docs-11",
+     "tema": "variables disponibles",
+     "fichero": "harness/harness.js",
+     "lineas": "3109-3118",
+     "hecho": "jiraRest, FIX, pideApi, pedidasRest y sitioJira son const del nivel del cuerpo de selfcheck (sangría de 4 espacios), declarados en el 44. Siguen accesibles en los tramos posteriores; el 52 los reutiliza.",
+     "cita": "const pedidasRest = []\n    const pideApi = (u, o) => {\n      pedidasRest.push(String(u))"
+    },
+    {
+     "id": "banco-docs-12",
+     "tema": "forma del ok",
+     "fichero": "harness/harness.js",
+     "lineas": "1690-1693",
+     "hecho": "ok(name, pass, detail) mete {name, pass, detail} en results y lo imprime con ✓/✗. Cada ok( del texto es un resultado, salvo las dos ramas de un mismo if (de ahí N-1).",
+     "cita": "const ok = (name, pass, detail) => {\n      results.push({ name, pass, detail })"
+    },
+    {
+     "id": "banco-docs-13",
+     "tema": "pin de campos del 44",
+     "fichero": "harness/harness.js",
+     "lineas": "3120-3121, 3140-3141",
+     "hecho": "El tramo 44 exige las claves EXACTAS de una fila de searchIssues. Añadir un campo (p. ej. las relaciones) a parseSearchIssues rompe el 44.",
+     "cita": "const CLAVES_FILA =\n      'assignee,components,epicKey,key,labels,lastViewedAt,parentKey,priority,priorityId,reporter,status,statusCategory,statusId,summary,type,typeId,updatedAt'\n      Object.keys(fila44).sort().join(',') === CLAVES_FILA &&"
+    },
+    {
+     "id": "banco-docs-14",
+     "tema": "pin de claves de fila en Node",
+     "fichero": "test/unit/jira-rest.test.js",
+     "lineas": "253",
+     "hecho": "jira-rest.test.js también pina las claves ordenadas de parseSearchIssues. CLAUDE.md §6 «Incidencia leída de la API» (línea 283) lista las mismas 17 claves.",
+     "cita": "eq(Object.keys(issues[0]).sort(), ["
+    },
+    {
+     "id": "banco-docs-15",
+     "tema": "lista blanca de campos",
+     "fichero": "src/shared/jira-rest.js",
+     "lineas": "152-166",
+     "hecho": "JIRA_FIELDS, la lista blanca de campos que se pueden pedir, no tiene 'issuelinks'. Un nombre que no esté en la lista se ignora, así que hoy no se puede pedir issuelinks.",
+     "cita": "export const JIRA_FIELDS = [\n  'summary',\n  ...\n  'parent',\n]"
+    },
+    {
+     "id": "banco-docs-16",
+     "tema": "parser",
+     "fichero": "src/shared/jira-rest.js",
+     "lineas": "442-484",
+     "hecho": "parseSearchIssues no lee f.issuelinks: devuelve key, summary, type/typeId, status/statusId/statusCategory, priority/priorityId, assignee, reporter, updatedAt, lastViewedAt, labels, components, epicKey y parentKey.",
+     "cita": "epicKey: validIssueKey(f.epic?.key),\n      parentKey: validIssueKey(f.parent?.key),"
+    },
+    {
+     "id": "banco-docs-17",
+     "tema": "plantillas fijas",
+     "fichero": "src/shared/jira-rest.js",
+     "lineas": "307-314",
+     "hecho": "Ya existe relatedJql(issueKey): valida la clave con validIssueKey y escribe 'issue in linkedIssues(KEY)', sin tipo de enlace. Devuelve las incidencias enlazadas, no las relaciones con su tipo y su dirección.",
+     "cita": "export function relatedJql(issueKey) {\n  const key = validIssueKey(issueKey)\n  return key ? `issue in linkedIssues(${key})` : null"
+    },
+    {
+     "id": "banco-docs-18",
+     "tema": "bootstrap RECENT_ISSUES",
+     "fichero": "src/content/bootstrap.js",
+     "lineas": "127-140",
+     "hecho": "jqlDePlantilla elige por msg.kind entre history, mine, project y related; cualquier otro kind da null. Un kind nuevo es otro case aquí.",
+     "cita": "case 'related':\n        return jira.relatedJql(msg.issueKey)\n      default:\n        return null"
+    },
+    {
+     "id": "banco-docs-19",
+     "tema": "bootstrap RECENT_ISSUES",
+     "fichero": "src/content/bootstrap.js",
+     "lineas": "391-404",
+     "hecho": "El case RECENT_ISSUES llama a searchIssues sólo con { limit: msg.limit }, sin fields, así que pide los SEARCH_FIELDS por defecto. Para issuelinks haría falta pasar unos campos elegidos aquí, o una función fetch distinta.",
+     "cita": "const jql = jqlDePlantilla(jira, msg)\n            ...\n            sendResponse(await jira.searchIssues((u, o) => fetch(u, o), sitio, jql, { limit: msg.limit }))"
+    },
+    {
+     "id": "banco-docs-20",
+     "tema": "bootstrap-wiring pines",
+     "fichero": "test/unit/bootstrap-wiring.test.js",
+     "lineas": "46-60",
+     "hecho": "El case RECENT_ISSUES (recortado hasta 'case MSG.RECENT_PAGES: {') tiene que contener 'const jql = jqlDePlantilla(jira, msg)', 'if (!jql) {', el rechazo antes de 'jira.searchIssues(' y 'sitio, jql, {', y no puede contener 'msg.jql'. msg.jql aparece exactamente 1 vez en el fichero.",
+     "cita": "assert(caso.includes('sitio, jql, {'), 'lo que se ejecuta es la plantilla, no otra cosa')\n  assert(!caso.includes('msg.jql'), 'el texto de la consulta no puede venir en el mensaje')\n  eq(cuenta(JS, 'msg.jql'), 1)"
+    },
+    {
+     "id": "banco-docs-21",
+     "tema": "bootstrap-wiring pines",
+     "fichero": "test/unit/bootstrap-wiring.test.js",
+     "lineas": "73-80",
+     "hecho": "En jqlDePlantilla no puede haber comillas invertidas ni concatenación de cadenas ('...' +): una plantilla nueva se escribe en jira-rest.js y aquí sólo se elige. Se exige la lista de las cuatro fijas actuales.",
+     "cita": "for (const fija of ['jira.historyJql()', 'jira.mineJql(', 'jira.projectJql(msg.projectKey,', 'jira.relatedJql(msg.issueKey)']) {\n  assert(!jql.includes('`') && !/['\"]\\s*\\+/.test(jql), 'aquí no se CONSTRUYE ninguna consulta: sólo se elige')"
+    },
+    {
+     "id": "banco-docs-22",
+     "tema": "panel-wiring pin de emisor",
+     "fichero": "test/unit/panel-wiring.test.js",
+     "lineas": "3213-3216",
+     "hecho": "MSG.RECENT_ISSUES aparece exactamente UNA vez en panel.js (hoy dentro de readToday, panel.js:11257). Un segundo emisor para las relaciones del diagrama rompe el pin, salvo que pase por readToday o que el pin se cambie con su EL CAMBIO.",
+     "cita": "eq((JS.match(/MSG\\.RECENT_ISSUES/g) || []).length, 1, 'MSG.RECENT_ISSUES se manda desde un solo sitio')"
+    },
+    {
+     "id": "banco-docs-23",
+     "tema": "emisor actual",
+     "fichero": "src/panel/panel.js",
+     "lineas": "11230, 11254-11264",
+     "hecho": "El único emisor es readToday(target, kind, {sitio, ids, tabId}): monta el mensaje por kind con limit JIRA_REST_LIMITS.defaultResults (10) y cloud, más projectKey/days/issueKey según el kind.",
+     "cita": "type: MSG.RECENT_ISSUES,\n          kind,\n          ...(kind === 'related' ? { issueKey: sitio.issueKey } : {}),"
+    },
+    {
+     "id": "banco-docs-24",
+     "tema": "JQL_SEARCH pin",
+     "fichero": "test/unit/panel-wiring.test.js",
+     "lineas": "2274",
+     "hecho": "MSG.JQL_SEARCH aparece exactamente 2 veces en panel.js (sin comentarios): usar JQL_SEARCH para las relaciones rompería ese pin y §8.12.",
+     "cita": "eq(JS_SIN.match(/MSG\\.JQL_SEARCH/g).length, 2, 'el mensaje se manda desde dos sitios del panel, y cada uno tiene nombre')"
+    },
+    {
+     "id": "banco-docs-25",
+     "tema": "drawCodeBlock pinado entero",
+     "fichero": "test/unit/panel-wiring.test.js",
+     "lineas": "7721-7751, 7715",
+     "hecho": "El cuerpo de drawCodeBlock está pinado línea a línea con eq, y 'drawCodeBlock' aparece exactamente 5 veces en panel.js (la declaración y las cuatro llamadas de renderMarkdown). Pintar un segundo diagrama «Según Jira» desde ahí obliga a cambiar ese pin con su EL CAMBIO.",
+     "cita": "eq(JS_SIN.split('drawCodeBlock').length - 1, 5, 'y drawCodeBlock no se usa en ningún otro sitio: la declaración y las cuatro')\n    funcion('function drawCodeBlock('),\n      'function drawCodeBlock(block, pre) {',"
+    },
+    {
+     "id": "banco-docs-26",
+     "tema": "API falsa: rutas",
+     "fichero": "tools/serve-harness.js",
+     "lineas": "106-167",
+     "hecho": "contestarApi sirve /rest/api/2/search (a searchResponse de jql-eval.mjs, con jql, fields, maxResults y startAt), /rest/api/2/filter/favourite, /rest/api/2/issue/KEY/remotelink, /rest/api/content/search, /rest/api/content y /rest/api/content/ID. No hay /rest/api/2/issue/KEY a secas ni ruta de issueLink.",
+     "cita": "if (resto === '/rest/api/2/search') {\n    ...\n    return searchResponse(FIXTURE, {\n      jql,\n      fields: url.searchParams.get('fields'),"
+    },
+    {
+     "id": "banco-docs-27",
+     "tema": "API falsa: modos",
+     "fichero": "tools/serve-harness.js",
+     "lineas": "52-65",
+     "hecho": "El prefijo /sinsesion da 401 en cualquier ruta de API; /sinvista da 400 a lo que mencione lastViewed; cualquier otro segmento delante de /rest/api/ es un 404, que es la ruta de contexto equivocada.",
+     "cita": " *  · `/sinsesion` → 401 en cualquier ruta de API (sesión que no vale).\n *  · `/sinvista`  → 400 a la consulta que mencione `lastViewed`, como una"
+    },
+    {
+     "id": "banco-docs-28",
+     "tema": "jql-eval: campos devueltos",
+     "fichero": "tools/jql-eval.mjs",
+     "lineas": "536-562",
+     "hecho": "issueJson sólo devuelve summary, issuetype, status, priority, resolution, assignee, reporter, labels, components, updated, created, lastViewed, parent y epic, y cada uno sólo si se pidió. No emite 'issuelinks': pedirlo hoy devuelve fields sin él, sin error.",
+     "cita": "const pon = (nombre, valor) => {\n    if (pedidos.has(nombre)) fields[nombre] = valor\n  }"
+    },
+    {
+     "id": "banco-docs-29",
+     "tema": "jql-eval: campos por defecto",
+     "fichero": "tools/jql-eval.mjs",
+     "lineas": "508",
+     "hecho": "Sin fields, /search devuelve CAMPOS_POR_DEFECTO.",
+     "cita": "export const CAMPOS_POR_DEFECTO = ['summary', 'issuetype', 'status', 'priority', 'updated', 'assignee']"
+    },
+    {
+     "id": "banco-docs-30",
+     "tema": "jql-eval: 'in' sólo con función",
+     "fichero": "tools/jql-eval.mjs",
+     "lineas": "188-196",
+     "hecho": "La Jira de mentira sólo admite 'key in' / 'issue in' / 'issuekey in' seguido de una FUNCIÓN: 'key in (A, B)' con lista es un 400. Una plantilla de varias claves tendría que ser '(key = A OR key = B …)', porque key está en CAMPOS_IGUALDAD y OR/AND con paréntesis sí se evalúan, o hay que ampliar el evaluador con su prueba.",
+     "cita": "if (v.nodo.clase !== 'funcion') return error(`Error in the JQL Query: «${campo} in» sólo admite una función en esta Jira de pruebas.`)"
+    },
+    {
+     "id": "banco-docs-31",
+     "tema": "jql-eval: enlaces",
+     "fichero": "tools/jql-eval.mjs",
+     "lineas": "343-348, 497-502",
+     "hecho": "linkedIssues usa el campo 'links' de la fixture (sólo claves, sin tipo ni dirección) en los dos sentidos. buscarLinked resuelve UNA sola linkedIssues por consulta: la primera que encuentra.",
+     "cita": "function enlazadas(issues, clave) {\n  const suyas = issues.find((x) => x.key === key)?.links || []\n  return new Set([...suyas.map((k) => k.toUpperCase()), ...issues.filter((x) => (x.links || []).some((k) => igual(k, key))).map((x) => x.key)])"
+    },
+    {
+     "id": "banco-docs-32",
+     "tema": "jql-eval: sin NOT ni IN",
+     "fichero": "tools/jql-eval.mjs",
+     "lineas": "20-24",
+     "hecho": "La cabecera del evaluador dice que no hay NOT, ni !=, ni IN (…) con listas, y que lo que haga falta se añade con su prueba al lado.",
+     "cita": " * Lo que NO es: un motor de JQL. No hay `NOT`, ni `!=`, ni `IN (…)` con listas,\n * cláusula aquí y su prueba al lado."
+    },
+    {
+     "id": "banco-docs-33",
+     "tema": "fixture: enlaces actuales",
+     "fichero": "harness/issues.json",
+     "lineas": "33, 37",
+     "hecho": "De las 40 incidencias, sólo dos tienen 'links' no vacío: ENG-3 → [ENG-7] y ENG-7 → [ENG-3, ENG-12]. ENG-12 no lista ENG-7, pero enlazadas() lo hace simétrico. No hay tipo de enlace, dirección inward/outward ni campo 'issuelinks'.",
+     "cita": "{ \"key\": \"ENG-3\", ... \"links\": [\"ENG-7\"] },\n    { \"key\": \"ENG-7\", ... \"links\": [\"ENG-3\", \"ENG-12\"] },"
+    },
+    {
+     "id": "banco-docs-34",
+     "tema": "fixture: comentario",
+     "fichero": "harness/issues.json",
+     "lineas": "2-10",
+     "hecho": "El comentario de la fixture define 'links' como enlazadas, simétrico, para linkedIssues. Otras claves de primer nivel de la fixture: currentUser, people, issues, catalog, filters y remoteLinks.",
+     "cita": "\"'links' = enlazadas (issue in linkedIssues(KEY), simétrico).\","
+    },
+    {
+     "id": "banco-docs-35",
+     "tema": "fixture: pines que dependen de links",
+     "fichero": "test/unit/serve-harness.test.js",
+     "lineas": "124-128",
+     "hecho": "serve-harness.test.js pina que relatedJql('ENG-7') devuelve exactamente [ENG-3, ENG-12] y que la muestra de ENG son 28. Añadir enlaces a ENG-7, o incidencias a ENG, cambia estos pines. Los tramos 57 y 59 también leen relatedJql('ENG-7') (harness.js:3949, 4041).",
+     "cita": "eq(claves(relatedJql('ENG-7')), ['ENG-3', 'ENG-12'], 'linkedIssues es simétrico y no se devuelve a sí misma')\n  eq(claves(sampleQuery('ENG')).length, 28)"
+    },
+    {
+     "id": "banco-docs-36",
+     "tema": "fixture: tramos que cuentan incidencias",
+     "fichero": "harness/harness.js",
+     "lineas": "3451-3453, 3481-3484",
+     "hecho": "El 52 deriva de la fixture cuántas incidencias y cuántos tipos/estados tiene cada proyecto: añadir incidencias no rompe el 52, pero sí los números fijos de Node (28 de ENG, 11 de OPS en 30 días).",
+     "cita": "const deENG52 = FIX.issues.filter((i) => i.key.startsWith('ENG-'))\n        perfil52.sampled === deENG52.length &&"
+    },
+    {
+     "id": "banco-docs-37",
+     "tema": "faroHarness expone",
+     "fichero": "harness/harness.js",
+     "lineas": "4703, 4735-4739",
+     "hecho": "window.faroHarness expone jiraRest y confluenceRest como import a demanda, issuesFixture, searchChips, indexer y otros. No expone los módulos diagram-*.",
+     "cita": "jiraRest: () => import('/src/shared/jira-rest.js'),\n  confluenceRest: () => import('/src/shared/confluence-rest.js'),\n  issuesFixture: () => fetch('/harness/issues.json').then((r) => r.json()),"
+    },
+    {
+     "id": "banco-docs-38",
+     "tema": "PINES recuentos",
+     "fichero": "docs/PINES.md",
+     "lineas": "30, 28, 33, 39, 44, 168-170, 146",
+     "hecho": "Recuentos por fichero hoy, iguales a los test( registrados: jira-rest.test.js 46, bootstrap-wiring.test.js 9, serve-harness.test.js 23, service-worker.test.js 30, docs.test.js 10, check-docs.test.js 33, panel-wiring.test.js 121, diagram-parse 33, diagram-layout 20, diagram-view 20.",
+     "cita": "`jira-rest.test.js` (H7 + H8 + ... + H14 + H22 y su revisión adversaria; 46 pruebas desde la revisión adversaria de H22\n`diagram-parse.test.js` (H24; 33 pruebas"
+    },
+    {
+     "id": "banco-docs-39",
+     "tema": "check-docs recuentos",
+     "fichero": "tools/check-docs.mjs",
+     "lineas": "344-347, 382-390",
+     "hecho": "De cada «`x.test.js` (…)» de PINES §10 se lee el PRIMER «N pruebas» del paréntesis; «N pruebas más» se salta, y un «N pruebas» a secas tiene que ser el total registrado por ese fichero. Una entrada nueva de H25 puede decir «N pruebas más», y las entradas de cabecera (jira-rest 46, bootstrap-wiring 9…) tienen que subir su total.",
+     "cita": "const TEST_ENTRY_COUNT = /\\b(\\d+) pruebas\\b(\\s+más)?/\n    if (added) continue\n    else if (real !== count) out.push(`${DOC_FILES.pines} §10 (línea ${line}): «${file}» dice ${count} pruebas y registra ${real}`)"
+    },
+    {
+     "id": "banco-docs-40",
+     "tema": "check-docs STRICT",
+     "fichero": "tools/check-docs.mjs",
+     "lineas": "58",
+     "hecho": "Todo es ERROR: títulos de registro sin «» en INSTALL/CLAUDE, MSG sin receptor o fuera de §5, y ficheros .js de src/ fuera del mapa §3. Reusar RECENT_ISSUES con otro kind no añade ningún MSG; un fichero nuevo en src/ sí necesita su línea en CLAUDE §3.",
+     "cita": "export const STRICT = { titles: true, msgs: true, files: true }"
+    },
+    {
+     "id": "banco-docs-41",
+     "tema": "CLAUDE §5 RECENT_ISSUES",
+     "fichero": "CLAUDE.md",
+     "lineas": "237",
+     "hecho": "§5 enumera los kinds de RECENT_ISSUES ('history'|'mine'|'project'|'related') y dice que lo manda readToday, uno por kind. Con un kind nuevo, las dos frases quedan incompletas o falsas si el emisor no es readToday.",
+     "cita": "RECENT_ISSUES (`{kind:'history'|'mine'|'project'|'related', projectKey?, issueKey?, days?, limit?}` → la plantilla fija de jira-rest.js; ...\n`RECENT_ISSUES` y `RECENT_PAGES` los manda `readToday` de panel.js, uno por `kind` y con los parámetros validados del sitio CAPTURADO"
+    },
+    {
+     "id": "banco-docs-42",
+     "tema": "CLAUDE §6",
+     "fichero": "CLAUDE.md",
+     "lineas": "283, 288",
+     "hecho": "§6 fija las claves de «Incidencia leída de la API» (17, sin relaciones) y el contrato «Diagrama» (H24), sin un segundo diagrama ni comparación. Los dos quedan incompletos con H25b.",
+     "cita": "- **Incidencia leída de la API** (`parseSearchIssues`): `['assignee','components','epicKey','key','labels','lastViewedAt','parentKey','priority','priorityId','reporter','status','statusCategory',...\n- **Diagrama** (H24): `readFlowchart` → `{ok, direction, nodes, edges, subgraphs, errores}`, ... `state.pendingDiagram` `{host}` o null, sólo memoria."
+    },
+    {
+     "id": "banco-docs-43",
+     "tema": "CLAUDE §8.27",
+     "fichero": "CLAUDE.md",
+     "lineas": "354",
+     "hecho": "CLAUDE §8.27 dice sin matiz «nada del diagrama se vuelve consulta». PLAN2 §H25 pide precisarla con la procedencia (claves ya en el índice). En REFERENCIA §8.27 ya está anticipado; en CLAUDE no.",
+     "cita": "27. **Diagramas** — ... un nodo navega sólo al hacer clic, por `validatePlan` y con la clave en el índice; nada del diagrama se vuelve consulta; «Dibujar el flujo» no manda nada; sin viñeta en el prompt ni MCP de dibujo."
+    },
+    {
+     "id": "banco-docs-44",
+     "tema": "REFERENCIA §8.27",
+     "fichero": "docs/REFERENCIA.md",
+     "lineas": "568",
+     "hecho": "REFERENCIA §8.27 ya deja escrito, en condicional, lo que haría H25b. Al hacerlo, el «si H25b se hace» deja de ser condicional.",
+     "cita": "Nada del diagrama convierte texto en consulta (si H25b se hace, sólo consultará claves que YA estaban en el índice, por una plantilla elegida por `kind`)"
+    },
+    {
+     "id": "banco-docs-45",
+     "tema": "CLAUDE §8.12 / REFERENCIA §8.12",
+     "fichero": "CLAUDE.md",
+     "lineas": "339",
+     "hecho": "§8.12 dice que la REST sólo lee con consultas de plantilla fija y que una JQL en texto sale sólo del MCP o de un chip. REFERENCIA §8.12 (línea 553) detalla los DOS emisores de JQL_SEARCH en attachJqlResults. PLAN2 pide precisar §8.12 con la procedencia de las claves del diagrama.",
+     "cita": "La REST sólo lee por GET y consultas de plantilla fija; una JQL en texto sólo del MCP o de un chip, y un título del DOM nunca es CQL ni JQL."
+    },
+    {
+     "id": "banco-docs-46",
+     "tema": "CLAUDE §8.19",
+     "fichero": "CLAUDE.md",
+     "lineas": "346",
+     "hecho": "§8.19 dice que lo leído por la REST sólo vuelve al modelo si el usuario lo pide («Preguntar sobre estos»). Las relaciones de Jira se pintarían, no irían a ningún prompt; la frase no las nombra.",
+     "cita": "19. **Lecturas REST sin tokens** — ... Siempre por `getJson`, GET, mismo origen; sin REST de Jira en Cloud (`sinRestDeJira`). Lo leído sólo vuelve al modelo si el usuario lo pide («Preguntar sobre estos»)."
+    },
+    {
+     "id": "banco-docs-47",
+     "tema": "CLAUDE §11",
+     "fichero": "CLAUDE.md",
+     "lineas": "380, 383",
+     "hecho": "§11 da los pasos: una lectura REST nueva es xxxPath + parseXxx + fetchXxx por getJson, con fixture, tramo y SEGURIDAD de origen; una comprobación del banco es '// N. …' + ok( y 1..N sin huecos.",
+     "cita": "- **Lectura REST nueva**: `xxxPath`+`parseXxx`+`fetchXxx` por `getJson`; sitio de `location`, plantilla por `kind`; fixture, tramo y SEGURIDAD de origen; barrera UNA vez.\n- **Comprobación del banco**: en `selfcheck()`, `// N. …` + `ok(`; fixtures del DOM; 1..N sin huecos (`docs.test.js`)."
+    },
+    {
+     "id": "banco-docs-48",
+     "tema": "CLAUDE §3",
+     "fichero": "CLAUDE.md",
+     "lineas": "177, 179",
+     "hecho": "El mapa §3 dice «selfcheck 1-64» y «40 incidencias»: los dos cambian con los tramos 66/67 y con incidencias nuevas en la fixture.",
+     "cita": "harness/harness.js  selfcheck 1-64 del banco; el 52 con dos proyectos (H22); el 64, el subrayado (H23) (docs/REFERENCIA.md §2)\nharness/issues.json  la Jira de mentira: 40 incidencias (docs/MAPA.md)"
+    },
+    {
+     "id": "banco-docs-49",
+     "tema": "INSTALL recuento",
+     "fichero": "docs/INSTALL.md",
+     "lineas": "1350, 1435-1438",
+     "hecho": "INSTALL dice 64 tramos (137 comprobaciones), y describe 44-49 como las lecturas por API y los endpoints que finge el banco, sin issuelinks.",
+     "cita": "recorre hoy **64 tramos numerados (137 comprobaciones)**; hay que correrla con el panel del navegador a\nLos tramos 44-49 son de las **lecturas por API** y no tocan la\npágina ni el panel: el servidor del banco finge `/rest/api/2/search`, los filtros"
+    },
+    {
+     "id": "banco-docs-50",
+     "tema": "INSTALL título Diagrama",
+     "fichero": "docs/INSTALL.md",
+     "lineas": "1724-1739",
+     "hecho": "El título «Diagrama» se describe «con cinco detalles» (Dibujado, No dibujado, Mermaid copiado, Sin marcas, Pregunta preparada). Un detalle nuevo con el mismo título (p. ej. las relaciones leídas de Jira) deja falso el «cinco». Las cinco llamadas están en panel.js:5408, 5456, 5472, 5503 y 5556.",
+     "cita": "- «Diagrama» — (H24) todo lo del diagrama de flujo del chat, con cinco\n  detalles. **Dibujado** (en verde): «N nodos · M aristas · X con clave · T"
+    },
+    {
+     "id": "banco-docs-51",
+     "tema": "REFERENCIA §2 recuento",
+     "fichero": "docs/REFERENCIA.md",
+     "lineas": "258, 307-308",
+     "hecho": "REFERENCIA §2 dice «Selfcheck 1-64», que H24 no tiene tramo, que el 65 queda libre y que hay 138 ok(; lleva además la historia de ok( por hito (línea 315). Con 66/67 todo esto cambia, y el 65 libre choca con el pin de «sin huecos».",
+     "cita": "Selfcheck 1-64 (39 y 40 son de H2: el digest no depende del scroll del panel\n  tiene tramo (el panel no corre en el banco) y el 65 queda libre; así\n  que el fichero fusionado tiene hoy **138 `ok(`**"
+    },
+    {
+     "id": "banco-docs-52",
+     "tema": "ESTADO / BITACORA: el 65",
+     "fichero": "docs/plan/handoff/ESTADO.md",
+     "lineas": "14",
+     "hecho": "ESTADO fija los tramos 66/67 porque «el 65 quedó libre porque H24 no tiene tramo». BITACORA:1093 dice lo mismo. docs.test.js no admite ese hueco (banco-docs-5).",
+     "cita": "tramos fijos 66/67 (el 65 quedó libre porque H24 no tiene tramo)."
+    },
+    {
+     "id": "banco-docs-53",
+     "tema": "FLUJOS §4.9",
+     "fichero": "docs/FLUJOS.md",
+     "lineas": "116, 121",
+     "hecho": "§4.9 enumera las plantillas fijas (historyJql, mineJql, projectJql, relatedJql, sampleQuery) y las listas blancas de campos, y dice que el banco finge «los cinco endpoints». Una plantilla o un campo nuevo dejan la lista incompleta.",
+     "cita": "Las consultas salen de **plantillas fijas** con parámetros validados (`historyJql`, `mineJql(days)`, `projectJql(key, days)`, `relatedJql(key)`, `sampleQuery(key)`; ...\nLos campos son lista blanca (`JIRA_FIELDS`, `SEARCH_FIELDS`, `SAMPLE_FIELDS`: ..."
+    },
+    {
+     "id": "banco-docs-54",
+     "tema": "FLUJOS §4.4 H24",
+     "fichero": "docs/FLUJOS.md",
+     "lineas": "63",
+     "hecho": "§4.4 dice que drawCodeBlock es la ÚNICA función del panel que dibuja, sólo un mermaid cerrado. Con un segundo diagrama «Según Jira», esa frase y el registro «Diagrama» por texto hay que precisarlos.",
+     "cita": "`drawCodeBlock` es la ÚNICA función del panel que dibuja: sólo un bloque `mermaid` CERRADO"
+    },
+    {
+     "id": "banco-docs-55",
+     "tema": "FLUJOS §4.10",
+     "fichero": "docs/FLUJOS.md",
+     "lineas": "184-188",
+     "hecho": "§4.10 describe RECENT_ISSUES por kind como la vía de «qué mirar hoy» (todayTargets), con un Promise.allSettled por kind.",
+     "cita": "mensaje (`MSG.RECENT_ISSUES`/`MSG.RECENT_PAGES` con su `kind` y parámetros\n  validados del sitio CAPTURADO, **nunca una consulta, un origen, una URL ni una\n  ruta**)"
+    },
+    {
+     "id": "banco-docs-56",
+     "tema": "today kinds",
+     "fichero": "test/unit/today.test.js",
+     "lineas": "150",
+     "hecho": "todayTargets pina que sus kinds de Jira son exactamente los cuatro de hoy. Un kind nuevo de RECENT_ISSUES que no sea de «hoy» no debe entrar en esa lista.",
+     "cita": "eq(tab.kinds, ['history', 'mine', 'project', 'related'], 'con proyecto e incidencia abiertos, las cuatro')"
+    },
+    {
+     "id": "banco-docs-57",
+     "tema": "README",
+     "fichero": "README.md",
+     "lineas": "591-600",
+     "hecho": "README explica «Dibujar el flujo» y que el diagrama lo pinta Faro sin librerías. No menciona ningún diagrama «Según Jira» ni la comparación.",
+     "cita": "   - **Y puedes pedir el flujo dibujado** (desde H24). Bajo la última respuesta,\n     si cita tres incidencias o más de proyectos que Faro conoce, hay un botón,\n     *Dibujar el flujo*: como el de arriba, te deja la pregunta escrita y no"
+    },
+    {
+     "id": "banco-docs-58",
+     "tema": "README banco",
+     "fichero": "README.md",
+     "lineas": "932-940",
+     "hecho": "README resume lo que finge la API de Jira del banco (plantilla, rechazo, sesión, reintentos, árbol, filtros), sin issuelinks.",
+     "cita": "  Y, desde que Faro lee la API del propio sitio, el banco finge también **la API\n  de Jira**: una consulta de las que Faro escribe por plantilla devuelve las\n  incidencias que dice la fixture y en su orden;"
+    },
+    {
+     "id": "banco-docs-59",
+     "tema": "MAPA fixture",
+     "fichero": "docs/MAPA.md",
+     "lineas": "76",
+     "hecho": "MAPA describe la fixture con 40 incidencias y `history`/`watched`/`links`, sin tipos de enlace ni issuelinks.",
+     "cita": "harness/issues.json           la fixture de la Jira de mentira: 40 incidencias de ENG y OPS con ... más `history`/`watched`/`links`, los dos filtros favoritos y los enlaces remotos de ENG-7"
+    },
+    {
+     "id": "banco-docs-60",
+     "tema": "PLAN2 pruebas pedidas",
+     "fichero": "docs/PLAN2.md",
+     "lineas": "1677-1681",
+     "hecho": "PLAN2 §H25 pide para (b): jira-rest y bootstrap-wiring (plantilla por kind, claves validadas, ninguna consulta leída del mensaje) y un tramo con issuelinks.",
+     "cita": "(b) `jira-rest` y `bootstrap-wiring` (plantilla por\n  `kind`, claves validadas, ninguna consulta leída del mensaje) y un tramo\n  con issuelinks."
+    }
+   ],
+   "dudas": [
+    "Los tramos 66 y 67 sin un 65 hacen fallar «el selfcheck del banco numera 1..N sin huecos» (docs.test.js:307-319). Hay tres salidas y el contrato tiene que elegir una: numerar 65 y 66, poner un 65 real, o cambiar el pin de docs.test.js con su motivo. ESTADO.md y BITACORA dan por libre el 65, y el test no lo admite.",
+    "Qué forma tienen los issuelinks en la fixture: hoy 'links' son sólo claves, sin tipo ni dirección, y alimentan linkedIssues (con pines en serve-harness.test.js:126 y en los tramos 57/59). No sé si hay que añadir un campo nuevo, p. ej. 'issuelinks' con type {name, inward, outward} y inwardIssue/outwardIssue, dejando 'links' como está, o derivar uno de otro; ni si jql-eval.issueJson emitirá 'issuelinks' con la forma del Jira DC real.",
+    "Cómo pide la plantilla nueva varias claves a la vez: la Jira de mentira no admite 'key in (A,B)' (jql-eval.mjs:192), así que o la plantilla escribe '(key = A OR key = B …)' o se amplía el evaluador con su prueba. Tampoco está claro si hace falta un tope de claves por petición, y cuál.",
+    "Por dónde entra el campo 'issuelinks': JIRA_FIELDS no lo tiene, y el case RECENT_ISSUES no pasa fields. Añadirlo a parseSearchIssues rompe el pin de claves del tramo 44 (CLAVES_FILA), el de jira-rest.test.js:253 y §6 «Incidencia leída de la API». Otra opción es un parser aparte (parseIssueLinks) y otra ruta de fetch.",
+    "Quién manda el kind nuevo desde el panel: el pin panel-wiring.test.js:3215 exige una sola aparición de MSG.RECENT_ISSUES (hoy en readToday). O el emisor pasa por readToday o una función común, o el pin cambia con su EL CAMBIO.",
+    "Dónde se pinta «Según Jira»: el cuerpo de drawCodeBlock está pinado entero (panel-wiring.test.js:7721-7751). Si se toca, hace falta un EL CAMBIO; si no, el segundo diagrama se pinta en otro sitio. No he leído diagram-view.js para saber si diagramNode sirve tal cual para el diagrama de Jira.",
+    "CLAUDE.md tiene 443 bytes de margen hasta 60 KB. Las frases de §3, §5, §6, §8.12, §8.27, §2 y §12 que habría que tocar no caben sin recortar en otra parte.",
+    "El CLAUDE.md inyectado en la sesión está desfasado frente al de disco (63/131/130 y 1555 frente a 64/138/137 y 1607). Los agentes del flujo deberían leer el de disco."
+   ]
+  }
+ ]
+}

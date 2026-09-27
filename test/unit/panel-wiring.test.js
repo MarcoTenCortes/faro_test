@@ -23,6 +23,11 @@ import { keysUnverified } from '../../src/panel/setup.js'
 // y sus colores se cruzan con las parejas que de verdad se miden.
 import { readFlowchart } from '../../src/panel/diagram-parse.js'
 import { TEXTO, CONTROL } from '../contrast-pairs.js'
+// H25: «Contrastar con Jira» se EJECUTA con la comparación, los textos, la
+// tregua y el tope reales; lo único fingido es el DOM, chrome y la vista.
+import { jiraDiagram, resumenJira } from '../../src/panel/diagram-links.js'
+import { restFailureDue, linksFailText } from '../../src/panel/rest-notice.js'
+import { JIRA_REST_LIMITS } from '../../src/shared/jira-rest.js'
 // H23: los colores que el panel ofrece son los que config.js acepta, y lo que
 // dicen sus radios de «Señalar» y de las insignias se comprueba en la hoja.
 import { HIGHLIGHT_COLORS } from '../../src/shared/config.js'
@@ -2068,7 +2073,9 @@ test('H8: la tarjeta de una búsqueda de Jira trae la lista leída de la API, y 
   assert(/restFailureDue\(state\.restWarned, reason, site\.host, sessionID\)/.test(lista), 'con tregua por host y sesión para lo que no cambia por reintentar')
   // La REGLA se ejecuta de verdad en rest-notice.test.js; aquí, que el panel la
   // use y no lleve una copia (cuatro mutaciones que borraban el aviso pasaban).
-  assert(/import \{ restFailureDue, jqlFailText \} from '\.\/rest-notice\.js'/.test(JS))
+  // EL CAMBIO (H25): la misma línea trae además `linksFailText`, el texto de
+  // un fallo al leer las relaciones de Jira (`contrastarConJira`).
+  assert(/import \{ restFailureDue, jqlFailText, linksFailText \} from '\.\/rest-notice\.js'/.test(JS))
   assert(!/function restFailureDue\(/.test(JS) && !/function jqlFailText\(/.test(JS), 'sin copia local de la regla')
   assert(/announce\(aviso\)/.test(lista), 'y el aviso se anuncia: cuelga de la tarjeta, no pasa por attachToBubble (A2)')
   assert(!/card\.remove\(\)/.test(lista), 'la tarjeta de siempre nunca desaparece: la lista es un añadido')
@@ -7666,7 +7673,7 @@ test('H22 revisión: los cuerpos que deciden en el selector, generateContext y e
   eq(apunte.split('applyLinkedScope(').length - 1, 1, 'y sólo ahí dentro')
 })
 
-test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibujar el flujo» no manda nada', () => {
+test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibujar el flujo» no manda nada', async () => {
   // H24 (docs/plan/handoff/h24-contrato.md §3): un ```mermaid CERRADO de la
   // respuesta se dibuja con el parser, el layout y la vista propios; un nodo con
   // clave navega AL HACER CLIC por el mismo camino que una fila de la lista de
@@ -7744,12 +7751,17 @@ test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibu
       "    uid: 'dg' + (++contadorDiagramas),",
       '    kinds: KIND_LABELS,',
       '  })',
+      '  const boton = linksButton(d, figure)',
+      "  if (boton) figure.querySelector('.dg-actions')?.appendChild(boton)",
       "  if (nuevo) log.ok('Diagrama', `${d.nodes.length} nodos · ${d.edges.length} aristas · ${d.nodes.filter((n) => n.ref).length} con clave · ${Math.round(performance.now() - t0)} ms`)",
       '  return figure',
       '}'
     ),
-    'drawCodeBlock: sólo la valla mermaid cerrada, el fallo visible, la vista con sus insignias y un registro por texto'
+    'drawCodeBlock: sólo la valla mermaid cerrada, el fallo visible, la vista con sus insignias, «Contrastar con Jira» si toca y un registro por texto'
   )
+  // EL CAMBIO (H25): tras la vista, `linksButton` decide si la fila de acciones
+  // gana «Contrastar con Jira» (sólo en Jira DC, con restTools y dos claves del
+  // índice); el botón no es un registro, así que el de «Diagrama» no cambia.
   // EL CAMBIO (revisión adversaria de H24): la valla sin mayúsculas (D18: un
   // ```Mermaid no se dibujaba, no avisaba y sacaba el botón), el tipo de cada
   // nodo con las etiquetas de la tarjeta (D15, `kinds: KIND_LABELS`) y un
@@ -7762,9 +7774,12 @@ test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibu
   {
     const registros = []
     const vistas = []
+    // EL CAMBIO (H25): `linksButton` entra en la lista de nombres inyectados;
+    // aquí no da botón (null), salvo en la última comprobación de abajo.
+    let botonDeContraste = null
     const hacer = new Function(
       'readFlowchart', 'log', 'layoutDiagram', 'diagramNode', 'medirTextoDelPanel', 'noticeNode', 'toMermaid',
-      'abrirNodoDelDiagrama', 'focusNote', 'copiarMermaid', 'state', 'performance', 'document', 'KIND_LABELS',
+      'abrirNodoDelDiagrama', 'focusNote', 'copiarMermaid', 'state', 'performance', 'document', 'KIND_LABELS', 'linksButton',
       'const diagramasRegistrados = new Set()\nlet contadorDiagramas = 0\n' + funcion('function drawCodeBlock(') +
         '\nreturn { drawCodeBlock, vaciar: () => diagramasRegistrados.clear() }'
     )
@@ -7772,11 +7787,15 @@ test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibu
     const { drawCodeBlock, vaciar } = hacer(
       (t) => (t === 'malo' ? { ok: false, errores: ['no es un flowchart'] } : { ok: true, nodes: [], edges: [] }),
       { ok: (t) => registros.push(t), info: (t) => registros.push(t) },
-      () => ({}), (d, layout, vista) => (vistas.push(vista), { figura: true }), () => null, () => ({}), () => '',
+      () => ({}), (d, layout, vista) => (vistas.push(vista), { figura: true, querySelector: (sel) => (sel === '.dg-actions' ? fila : null) }), () => null, () => ({}), () => '',
       null, null, null, { notes: [] }, { now: () => 0 },
       { createElement: () => ({ append() {} }) },
-      TABLA
+      TABLA,
+      (d, figura) => (llamadasAlBoton.push([d, figura]), botonDeContraste)
     )
+    const colgados = []
+    const fila = { appendChild: (b) => colgados.push(b) }
+    const llamadasAlBoton = []
     for (const text of ['A', 'B', 'A', 'B', 'A', 'B']) drawCodeBlock({ lang: 'mermaid', text, closed: true }, null)
     eq(registros.length, 2, 'dos diagramas en la misma respuesta, tres repintados: un registro por texto')
     for (const text of ['A', 'malo', 'A', 'malo']) drawCodeBlock({ lang: 'mermaid', text, closed: true }, null)
@@ -7788,6 +7807,13 @@ test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibu
     eq(drawCodeBlock({ lang: 'MERMAID', text: 'C', closed: false }, null), null, 'y abierta, con mayúsculas o sin ellas, sigue siendo código')
     eq(drawCodeBlock({ lang: 'js', text: 'C', closed: true }, null), null, 'y otro lenguaje, también')
     assert(vistas.length > 0 && vistas.every((v) => v.kinds === TABLA), 'D15: la vista recibe la tabla de la tarjeta, la misma, sin copiarla')
+    eq(colgados.length, 0, 'H25: sin botón de contraste, la fila de acciones no gana nada')
+    assert(llamadasAlBoton.length > 0 && llamadasAlBoton.every(([d, f]) => d.ok && f.figura), 'H25: linksButton recibe el diagrama leído y la figura dibujada')
+    botonDeContraste = { boton: 'Contrastar con Jira' }
+    const antesDelBoton = registros.length
+    eq(drawCodeBlock({ lang: 'mermaid', text: 'D', closed: true }, null), { figura: true }, 'H25: con botón, la figura sigue siendo la misma')
+    eq(colgados, [botonDeContraste], 'H25: el botón va a la fila de acciones de la figura')
+    eq(registros.length, antesDelBoton + 1, 'H25: y el botón no es un registro: uno por texto, como antes')
   }
   una(funcion('async function newSession('), '\n  diagramasRegistrados.clear()\n', 'la sesión nueva vacía los diagramas apuntados')
   eq(LIMPIO.split('diagramasRegistrados.clear()').length - 1, 2, 'y «Olvidar este sitio» también: newSession y btn-forget, nadie más')
@@ -8115,6 +8141,490 @@ test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibu
   )
   // Y el espejo dibuja como el panel: la valla sin mayúsculas (D18).
   assert(tercera.includes("if (block.lang.toLowerCase() !== 'mermaid' || !block.closed) return null"), 'el espejo mira la valla como drawCodeBlock')
+
+  // ---------------------------------------------------------------------------
+  // H25b (docs/plan/handoff/h25-contrato.md §3): «Contrastar con Jira». Dentro
+  // de esta prueba y no en una nueva: es el mismo diagrama, y cada línea de
+  // docs/PINES.md que dice cuántas registra el fichero sigue siendo verdad.
+  // Cuerpos ENTEROS con `eq`, y después EJECUTADOS con un DOM mínimo, chrome
+  // fingido y la comparación, los textos, la tregua y el tope reales.
+
+  // (12) Los imports: la comparación y el texto de sus fallos.
+  una(LIMPIO, "\nimport { jiraDiagram, resumenJira } from './diagram-links.js'\n", 'H25: la comparación con Jira')
+  una(LIMPIO, "\nimport { diagramNode, textMeasurer } from './diagram-view.js'\nimport { jiraDiagram, resumenJira } from './diagram-links.js'\n", 'H25: justo detrás de la vista')
+  una(LIMPIO, "\nimport { restFailureDue, jqlFailText, linksFailText } from './rest-notice.js'\n", 'H25: el texto de un fallo, de rest-notice.js')
+
+  // (13) Las claves: sólo las del índice, sin repetir y con el tope de una
+  // consulta, que tiene dueño (JIRA_REST_LIMITS.linkKeys).
+  eq(
+    funcion('function clavesParaContrastar('),
+    lineas(
+      'function clavesParaContrastar(diagrama, indice) {',
+      '  const claves = []',
+      '  for (const n of Array.isArray(diagrama?.nodes) ? diagrama.nodes : []) {',
+      "    const clave = n?.ref?.kind === 'jira-issue' ? n.ref.id : ''",
+      '    if (!clave || claves.includes(clave) || !indice?.issues?.[clave]) continue',
+      '    claves.push(clave)',
+      '    if (claves.length >= JIRA_REST_LIMITS.linkKeys) break',
+      '  }',
+      '  return claves',
+      '}'
+    ),
+    'H25: las claves que se contrastan son las del índice, sin repetir y con tope'
+  )
+
+  // (14) El botón, ENTERO: sólo en Jira DC, con restTools y dos claves del
+  // índice; las claves no viajan en el botón, se recalculan al hacer clic.
+  eq(
+    funcion('function linksButton('),
+    lineas(
+      'function linksButton(diagrama, figura) {',
+      "  if (state.site?.product !== 'jira' || state.site.cloud || !state.settings.restTools) return null",
+      '  if (clavesParaContrastar(diagrama, state.index).length < 2) return null',
+      "  const boton = document.createElement('button')",
+      "  boton.className = 'ghost small'",
+      "  boton.type = 'button'",
+      "  boton.textContent = 'Contrastar con Jira'",
+      "  boton.title = 'Lee las relaciones reales de estas incidencias por la API de Jira y las dibuja debajo'",
+      "  boton.addEventListener('click', () => contrastarConJira(diagrama, figura, boton))",
+      '  return boton',
+      '}'
+    ),
+    'H25: el botón sólo en Jira DC, con las lecturas REST encendidas y dos claves del índice'
+  )
+
+  // (15) Las filas de la lista de diferencias, ENTERAS.
+  const filasDelPanel = funcion('function filasDeLaComparacion(')
+  eq(
+    filasDelPanel,
+    lineas(
+      'function filasDeLaComparacion(comparacion) {',
+      '  const filas = [',
+      "    ...comparacion.soloModelo.map((a) => `El modelo dibujó ${a.from} → ${a.to}${a.label ? ` (${a.label})` : ''} y Jira no lo tiene`),",
+      "    ...comparacion.soloJira.map((r) => `Jira tiene ${r.from} ${r.type || '→'} ${r.to} y el modelo no lo dibujó`),",
+      '  ]',
+      "  if (!filas.length) filas.push('Coinciden todas')",
+      '  const fuera = comparacion.fuera',
+      '  if (fuera.length === 1) filas.push(`Sin contrastar: ${fuera[0]} (no está en el índice o Jira no la ha devuelto)`)',
+      "  if (fuera.length > 1) filas.push(`Sin contrastar: ${fuera.join(', ')} (no están en el índice o Jira no las ha devuelto)`)",
+      '  return filas',
+      '}'
+    ),
+    'H25: lo que el modelo dibujó y Jira no tiene, lo que Jira tiene y el modelo no, y lo que no se contrastó'
+  )
+
+  // (16) contrastarConJira, ENTERA: se captura al pedir (§8.22), el mensaje
+  // lleva SÓLO claves del índice, al volver se comprueba antes de pintar, y
+  // cada fallo se ve con la tregua de rest-notice.js (§8.14).
+  const contraste = funcion('async function contrastarConJira(')
+  eq(
+    contraste,
+    lineas(
+      'async function contrastarConJira(diagrama, figura, boton) {',
+      '  const sitio = state.site',
+      '  const host = sitio?.host || state.lastHost',
+      '  const sessionID = state.sessionID',
+      '  const tabId = state.tabId',
+      '  const indice = state.index',
+      '  const t0 = performance.now()',
+      '  const avisar = (fallo) => {',
+      '    const texto = linksFailText(fallo, host)',
+      "    log.warn('Relaciones de Jira', `${fallo?.reason || 'sin respuesta'} · ${texto}`)",
+      '    if (restFailureDue(state.restWarned, fallo?.reason, host, sessionID)) {',
+      '      figura.appendChild(noticeNode(texto, true))',
+      '      announce(texto)',
+      '    }',
+      '  }',
+      "  if (!sitio || sitio.product !== 'jira' || sitio.cloud || !state.settings.restTools) {",
+      "    const detail = state.settings.restTools ? 'la pestaña no es de un Jira Data Center' : 'las lecturas por la API están apagadas en Ajustes'",
+      "    avisar(sitio?.cloud ? { reason: 'cloud' } : { reason: 'apagado', detail })",
+      '    return',
+      '  }',
+      '  const claves = clavesParaContrastar(diagrama, indice)',
+      '  if (claves.length < 2) {',
+      "    figura.appendChild(noticeNode(linksFailText({ reason: 'claves' }, host)))",
+      '    return',
+      '  }',
+      '  boton.disabled = true',
+      '  const acceso = tabId != null && (await ensureContentAccess({ announce: false }))',
+      '  const r = acceso',
+      '    ? await chrome.tabs.sendMessage(tabId, { type: MSG.ISSUE_LINKS, keys: claves, cloud: sitio.cloud }).catch(() => null)',
+      "    : { ok: false, reason: 'permiso' }",
+      '  boton.disabled = false',
+      '  if (!figura.isConnected || (state.site?.host ?? state.lastHost) !== host || state.sessionID !== sessionID) {',
+      "    log.info('Relaciones de Jira', `lo leído de ${host} llegó con el diagrama repintado o el panel en otro sitio`)",
+      '    return',
+      '  }',
+      '  if (!r?.ok) {',
+      '    avisar(r)',
+      '    return',
+      '  }',
+      '  const { diagram, comparacion } = jiraDiagram(diagrama, r)',
+      "  if (figura.nextElementSibling?.classList.contains('dg-jira')) figura.nextElementSibling.remove()",
+      '  if (!diagram) {',
+      "    figura.appendChild(noticeNode(linksFailText({ reason: 'claves' }, host)))",
+      '    return',
+      '  }',
+      '  const resumen = resumenJira(comparacion)',
+      '  const layout = layoutDiagram(diagram, { measure: medirTextoDelPanel() })',
+      '  const figuraJira = diagramNode(diagram, layout, {',
+      '    onOpen: abrirNodoDelDiagrama,',
+      '    onCopy: copiarMermaid,',
+      '    mermaid: toMermaid(diagram),',
+      "    uid: 'dg' + (++contadorDiagramas),",
+      '    kinds: KIND_LABELS,',
+      '  })',
+      "  figuraJira.classList.add('dg-jira')",
+      "  const pie = document.createElement('figcaption')",
+      "  pie.className = 'dg-caption'",
+      '  pie.textContent = resumen',
+      '  figuraJira.prepend(pie)',
+      "  const diferencias = document.createElement('ul')",
+      "  diferencias.className = 'dg-diff'",
+      '  for (const texto of filasDeLaComparacion(comparacion)) {',
+      "    const fila = document.createElement('li')",
+      '    fila.textContent = texto',
+      '    diferencias.appendChild(fila)',
+      '  }',
+      '  figuraJira.appendChild(diferencias)',
+      '  figura.after(figuraJira)',
+      '  announce(resumen)',
+      "  log.ok('Relaciones de Jira', `${resumen} · ${Math.round(performance.now() - t0)} ms`)",
+      '}'
+    ),
+    'H25: contrastar captura al pedir, manda sólo claves del índice, comprueba al volver y pinta «Según Jira» debajo'
+  )
+  // Lo que no se puede escapar entre líneas: UN solo emisor del mensaje en todo
+  // panel.js (comentarios incluidos), con claves y nada más; la captura antes
+  // del primer await; y la comprobación al volver antes de leer la respuesta.
+  eq(JS.split('MSG.ISSUE_LINKS').length - 1, 1, 'H25: MSG.ISSUE_LINKS se manda desde un solo sitio, contrastarConJira')
+  una(contraste, '{ type: MSG.ISSUE_LINKS, keys: claves, cloud: sitio.cloud }', 'H25: el mensaje lleva las claves y si es Cloud, nada más')
+  const mensaje25 = contraste.slice(contraste.indexOf('{ type: MSG.ISSUE_LINKS'), contraste.indexOf('.catch(() => null)'))
+  for (const prohibido of ['jql', 'origin', 'url', 'path', 'host', 'prefix', 'wikiPrefix']) {
+    assert(!mensaje25.includes(prohibido), 'SEGURIDAD (§8.19): el mensaje a la pestaña no lleva «' + prohibido + '»')
+  }
+  const primerAwait = contraste.indexOf('await ')
+  for (const captura of ['const sitio = state.site', 'const sessionID = state.sessionID', 'const tabId = state.tabId', 'const indice = state.index']) {
+    assert(contraste.indexOf(captura) >= 0 && contraste.indexOf(captura) < primerAwait, 'H25 (§8.22): se captura antes del primer await: ' + captura)
+  }
+  assert(!contraste.slice(primerAwait).includes('state.index') && !contraste.slice(primerAwait).includes('state.tabId'), 'H25: detrás del primer await no se vuelve a leer el índice ni la pestaña de ahora')
+  orden(
+    contraste,
+    ['await ensureContentAccess(', 'await chrome.tabs.sendMessage(', '!figura.isConnected', 'state.sessionID !== sessionID', 'if (!r?.ok) {', 'jiraDiagram(diagrama, r)', 'figura.after(figuraJira)'],
+    'H25: al volver, primero se comprueba y después se lee y se pinta'
+  )
+  eq(JS_SIN.split('linksButton(').length - 1, 2, 'H25: linksButton, la declaración y drawCodeBlock')
+  eq(JS_SIN.split('contrastarConJira(').length - 1, 2, 'H25: contrastarConJira, la declaración y el clic del botón')
+  eq(JS_SIN.split('clavesParaContrastar(').length - 1, 3, 'H25: las claves, la declaración, el botón y el contraste')
+  eq(JS_SIN.split('filasDeLaComparacion(').length - 1, 2, 'H25: las filas, la declaración y el contraste')
+  const dibujo25 = funcion('function linksButton(') + contraste + filasDelPanel
+  assert(!/innerHTML|insertAdjacentHTML|outerHTML/.test(dibujo25), 'SEGURIDAD: «Según Jira» no se dibuja con innerHTML')
+  assert(!/'\/browse\/' \+|\/rest\/api\//.test(dibujo25), 'SEGURIDAD: ninguna URL ni ruta REST en el contraste')
+  assert(!/runTurn\(|promptStructured\(|baseSystem\(|el\.input/.test(dibujo25), 'SEGURIDAD (§8.19/§8.20): lo leído de Jira no va a ningún prompt ni al cuadro de texto')
+
+  // (17) Y EJECUTADO: los cuatro cuerpos reales con un DOM mínimo.
+  class Nodo {
+    constructor(tag) {
+      this.tagName = tag
+      this.className = ''
+      this.textContent = ''
+      this.hijos = []
+      this.padre = null
+      this.oyentes = {}
+      this.disabled = false
+      const yo = this
+      this.classList = {
+        add: (c) => {
+          if (!yo.className.split(' ').includes(c)) yo.className = (yo.className + ' ' + c).trim()
+        },
+        contains: (c) => yo.className.split(' ').includes(c),
+      }
+    }
+    appendChild(h) {
+      h.remove()
+      h.padre = this
+      this.hijos.push(h)
+      return h
+    }
+    prepend(h) {
+      h.remove()
+      h.padre = this
+      this.hijos.unshift(h)
+    }
+    after(h) {
+      if (!this.padre) return
+      h.remove()
+      h.padre = this.padre
+      this.padre.hijos.splice(this.padre.hijos.indexOf(this) + 1, 0, h)
+    }
+    remove() {
+      if (!this.padre) return
+      this.padre.hijos.splice(this.padre.hijos.indexOf(this), 1)
+      this.padre = null
+    }
+    get nextElementSibling() {
+      return this.padre ? this.padre.hijos[this.padre.hijos.indexOf(this) + 1] || null : null
+    }
+    get isConnected() {
+      let n = this
+      while (n.padre) n = n.padre
+      return n.raiz === true
+    }
+    addEventListener(tipo, fn) {
+      ;(this.oyentes[tipo] ||= []).push(fn)
+    }
+  }
+  const documento = { createElement: (tag) => new Nodo(tag) }
+  const noticeNode25 = new Function('document', funcion('function noticeNode(') + '\nreturn noticeNode')(documento)
+  const hacer25 = new Function(
+    'state', 'performance', 'linksFailText', 'log', 'restFailureDue', 'noticeNode', 'announce', 'ensureContentAccess', 'chrome', 'MSG',
+    'jiraDiagram', 'resumenJira', 'layoutDiagram', 'medirTextoDelPanel', 'diagramNode', 'abrirNodoDelDiagrama', 'copiarMermaid', 'toMermaid',
+    'KIND_LABELS', 'document', 'JIRA_REST_LIMITS',
+    'let contadorDiagramas = 0\n' +
+      [funcion('function clavesParaContrastar('), funcion('function linksButton('), filasDelPanel, contraste].join('\n') +
+      '\nreturn { clavesParaContrastar, linksButton, filasDeLaComparacion, contrastarConJira }'
+  )
+  const ABRIR = () => {}
+  const COPIAR = () => {}
+  const KIND = { riesgo: 'riesgo' }
+  const DIAGRAMA = readFlowchart(
+    [
+      'flowchart LR',
+      '  A[ENG-7 Definir la API] --> C[ENG-12 Backend]:::riesgo',
+      '  C --> D[ENG-20 Quién revoca]',
+      '  B[ENG-3 Tokens] -.->|contradice| D',
+      '  D --> X[ENG-999 No existe]',
+    ].join('\n')
+  )
+  assert(DIAGRAMA.ok, 'el diagrama de la prueba se lee')
+  const DEL_INDICE = ['ENG-7', 'ENG-12', 'ENG-20', 'ENG-3']
+  const INDICE = { issues: Object.fromEntries(DEL_INDICE.map((k) => [k, { key: k }])) }
+  const RESPUESTA = {
+    ok: true,
+    nodes: DEL_INDICE.map((key) => ({ key, summary: key, type: 'Tarea', statusCategory: 'new' })),
+    links: [
+      { from: 'ENG-7', to: 'ENG-3', type: 'blocks', name: 'Blocks', id: '20001' },
+      { from: 'ENG-7', to: 'ENG-12', type: 'relates to', name: 'Relates', id: '20002' },
+      { from: 'ENG-12', to: 'ENG-20', type: 'blocks', name: 'Blocks', id: '20003' },
+    ],
+    via: 'jql',
+    prefix: '',
+    ms: 12,
+  }
+  const JIRA_DC = { host: 'jira.example.com', product: 'jira', cloud: false }
+  const montar = ({ site = JIRA_DC, restTools = true, index = INDICE, tabId = 7, acceso = true, respuesta = RESPUESTA, durante = null } = {}) => {
+    const raiz = new Nodo('div')
+    raiz.raiz = true
+    const figura = raiz.appendChild(new Nodo('figure'))
+    figura.className = 'dg-wrap'
+    const env = { figura, raiz, enviados: [], anuncios: [], registros: [], vistas: [], desactivadoAlEnviar: null, boton: new Nodo('button') }
+    env.state = { site, lastHost: site?.host || '', settings: { restTools }, index, tabId, sessionID: 'ses-1', restWarned: new Set() }
+    const chrome = {
+      tabs: {
+        sendMessage: (id, msg) => {
+          env.enviados.push([id, msg])
+          env.desactivadoAlEnviar = env.boton.disabled
+          if (durante) durante(env)
+          return respuesta instanceof Error ? Promise.reject(respuesta) : Promise.resolve(respuesta)
+        },
+      },
+    }
+    const apunta = (nivel) => (titulo, detalle) => env.registros.push([nivel, titulo, detalle])
+    const vista = (diagram, layout, opts) => {
+      env.vistas.push({ diagram, opts })
+      const f = new Nodo('figure')
+      f.className = 'dg-wrap'
+      f.appendChild(new Nodo('svg'))
+      f.appendChild(new Nodo('div')).className = 'dg-actions nav-actions'
+      return f
+    }
+    env.api = hacer25(
+      env.state, { now: () => 0 }, linksFailText, { ok: apunta('ok'), info: apunta('info'), warn: apunta('warn') }, restFailureDue, noticeNode25,
+      (t) => env.anuncios.push(t), async () => acceso, chrome, { ISSUE_LINKS: 'faro:issue-links' },
+      jiraDiagram, resumenJira, () => ({}), () => null, vista, ABRIR, COPIAR, () => 'flowchart LR', KIND, documento, JIRA_REST_LIMITS
+    )
+    env.contrastar = () => env.api.contrastarConJira(DIAGRAMA, env.figura, env.boton)
+    return env
+  }
+  const avisos = (env) => env.figura.hijos.filter((h) => h.className.startsWith('notice')).map((h) => `${h.className}: ${h.textContent}`)
+  const titulos = (env) => env.registros.map(([nivel, titulo]) => `${nivel} ${titulo}`)
+
+  {
+    // Las claves: repetidas, de otro tipo, fuera del índice y con tope.
+    const { clavesParaContrastar } = montar().api
+    eq(clavesParaContrastar(DIAGRAMA, INDICE), DEL_INDICE, 'las del índice, en el orden del diagrama; ENG-999 no está en el índice y no sale')
+    const repetidas = { nodes: [...DIAGRAMA.nodes, ...DIAGRAMA.nodes, { ref: { kind: 'confluence-page', id: 'ENG-7' } }, { ref: null }] }
+    eq(clavesParaContrastar(repetidas, INDICE), DEL_INDICE, 'sin repetir y sólo refs de incidencia')
+    eq(clavesParaContrastar(DIAGRAMA, null), [], 'sin índice, ninguna')
+    eq(clavesParaContrastar(null, INDICE), [], 'sin diagrama, ninguna')
+    const muchas = Array.from({ length: JIRA_REST_LIMITS.linkKeys + 5 }, (_, i) => `ENG-${i + 1}`)
+    const grande = { nodes: muchas.map((id) => ({ ref: { kind: 'jira-issue', id } })) }
+    const indiceGrande = { issues: Object.fromEntries(muchas.map((k) => [k, { key: k }])) }
+    eq(clavesParaContrastar(grande, indiceGrande), muchas.slice(0, JIRA_REST_LIMITS.linkKeys), 'con el tope de una consulta, las primeras')
+  }
+  {
+    // El botón: cuándo sale, cómo es y que las claves se recalculan al clic.
+    const figura = new Nodo('figure')
+    eq(montar({ site: { host: 'wiki.example.com', product: 'confluence', cloud: false } }).api.linksButton(DIAGRAMA, figura), null, 'en Confluence no hay botón')
+    eq(montar({ site: { host: 'x.atlassian.net', product: 'jira', cloud: true } }).api.linksButton(DIAGRAMA, figura), null, 'en Jira Cloud no hay botón (sinRestDeJira)')
+    eq(montar({ site: null }).api.linksButton(DIAGRAMA, figura), null, 'sin sitio no hay botón')
+    eq(montar({ restTools: false }).api.linksButton(DIAGRAMA, figura), null, 'con las lecturas REST apagadas no hay botón')
+    eq(montar({ index: { issues: { 'ENG-7': {} } } }).api.linksButton(DIAGRAMA, figura), null, 'con una sola clave del índice no hay botón')
+    const env = montar()
+    const boton = env.api.linksButton(DIAGRAMA, env.figura)
+    eq(
+      boton && [boton.tagName, boton.className, boton.type, boton.textContent, boton.title, (boton.oyentes.click || []).length],
+      ['button', 'ghost small', 'button', 'Contrastar con Jira', 'Lee las relaciones reales de estas incidencias por la API de Jira y las dibuja debajo', 1],
+      'el botón, con dos claves del índice en Jira DC'
+    )
+    env.state.index = { issues: { 'ENG-7': {} } }
+    env.boton = boton
+    await boton.oyentes.click[0]()
+    eq(env.enviados.length, 0, 'las claves se recalculan al hacer clic: con el índice de ahora no hay dos, no se pide')
+    eq(avisos(env), ['notice: Hacen falta al menos dos incidencias del índice para contrastar.'], 'y se dice en la figura')
+    env.state.index = INDICE
+    await boton.oyentes.click[0]()
+    eq(env.enviados.map(([, m]) => m.keys), [DEL_INDICE], 'con el índice de ahora, el clic manda las claves de ahora')
+  }
+  {
+    // El camino bueno: el mensaje exacto, el botón apagado mientras, y la
+    // figura «Según Jira» DETRÁS de la del modelo con su pie y sus diferencias.
+    const env = montar()
+    await env.contrastar()
+    eq(env.enviados, [[7, { type: 'faro:issue-links', keys: DEL_INDICE, cloud: false }]], 'SEGURIDAD: a la pestaña capturada, sólo las claves del índice y si es Cloud')
+    eq([env.desactivadoAlEnviar, env.boton.disabled], [true, false], 'el botón, apagado mientras se lee y encendido al volver')
+    const jira = env.figura.nextElementSibling
+    assert(jira && jira.classList.contains('dg-wrap') && jira.classList.contains('dg-jira'), 'la figura de Jira va justo detrás de la del modelo')
+    eq(env.raiz.hijos.length, 2, 'y es la única que se añade')
+    const esperado = resumenJira(jiraDiagram(DIAGRAMA, RESPUESTA).comparacion)
+    eq(esperado, 'Según Jira: 3 relaciones entre 4 incidencias · coinciden 2 · sólo el modelo 1 · sólo Jira 1', 'el resumen de este caso')
+    eq([jira.hijos[0].tagName, jira.hijos[0].className, jira.hijos[0].textContent], ['figcaption', 'dg-caption', esperado], 'el pie va delante del dibujo, con el resumen')
+    const lista = jira.hijos[jira.hijos.length - 1]
+    eq([lista.tagName, lista.className], ['ul', 'dg-diff'], 'la lista de diferencias va detrás de las acciones')
+    eq(
+      lista.hijos.map((li) => `${li.tagName}: ${li.textContent}`),
+      [
+        'li: El modelo dibujó ENG-3 → ENG-20 (contradice) y Jira no lo tiene',
+        'li: Jira tiene ENG-7 blocks ENG-3 y el modelo no lo dibujó',
+        'li: Sin contrastar: ENG-999 (no está en el índice o Jira no la ha devuelto)',
+      ],
+      'una fila por diferencia, y la clave que el modelo escribió y el índice no tiene'
+    )
+    const [{ diagram, opts }] = env.vistas
+    eq(diagram.nodes.map((n) => [n.id, n.kind]), [['A', ''], ['C', ''], ['D', ''], ['B', '']], 'la vista recibe los nodos del modelo sin su tipo')
+    eq([opts.onOpen === ABRIR, opts.onCopy === COPIAR, opts.kinds === KIND, opts.uid, 'notes' in opts, 'onNote' in opts], [true, true, true, 'dg1', false, false], 'navega y copia como el del modelo, sin insignias')
+    eq(env.anuncios, [esperado], 'se anuncia el resumen')
+    eq(titulos(env), ['ok Relaciones de Jira'], 'y se registra con su título')
+    await env.contrastar()
+    eq(env.raiz.hijos.filter((h) => h.classList.contains('dg-jira')).length, 1, 'contrastar otra vez sustituye la figura de Jira, no la duplica')
+    eq(env.vistas[1].opts.uid, 'dg2', 'con un uid nuevo')
+  }
+  {
+    // §8.22: al volver, otra figura, otro sitio u otra sesión no se pintan.
+    for (const [cambio, durante] of [
+      ['el chat se repintó', (env) => env.figura.remove()],
+      ['el panel está en otro sitio', (env) => (env.state.site = { host: 'otro.example.com', product: 'jira', cloud: false })],
+      ['el panel abrió otra sesión', (env) => (env.state.sessionID = 'ses-2')],
+    ]) {
+      const env = montar({ durante })
+      await env.contrastar()
+      eq(env.enviados.length, 1, cambio + ': se pidió')
+      assert(!env.raiz.hijos.some((h) => h.classList.contains('dg-jira')), cambio + ': no se pinta')
+      eq([env.anuncios, titulos(env)], [[], ['info Relaciones de Jira']], cambio + ': ni aviso ni anuncio, sólo el registro')
+    }
+  }
+  {
+    // §8.14: cada fallo se ve, en la figura y anunciado, con la tregua.
+    const env = montar({ respuesta: { ok: false, reason: 'sesion' } })
+    await env.contrastar()
+    eq(avisos(env), ['notice bad: ' + linksFailText({ reason: 'sesion' }, 'jira.example.com')], 'la sesión que no vale, en la figura')
+    eq([env.anuncios.length, titulos(env)], [1, ['warn Relaciones de Jira']], 'anunciado y registrado')
+    await env.contrastar()
+    eq([avisos(env).length, env.anuncios.length, titulos(env).length], [1, 1, 2], 'el mismo motivo en la misma sesión: se registra, no se repite el aviso')
+    const nulo = montar({ respuesta: new Error('sin pestaña') })
+    await nulo.contrastar()
+    eq(avisos(nulo), ['notice bad: No he podido leer las relaciones de Jira (sin respuesta).'], 'la pestaña que no contesta')
+    for (const [caso, opciones, texto] of [
+      ['sin pestaña', { tabId: null }, 'Sin acceso a la pestaña de Jira.'],
+      ['sin content script', { acceso: false }, 'Sin acceso a la pestaña de Jira.'],
+      ['las lecturas apagadas después', { restTools: false }, 'No he podido leer las relaciones de Jira (las lecturas por la API están apagadas en Ajustes).'],
+      ['la pestaña en Jira Cloud', { site: { host: 'x.atlassian.net', product: 'jira', cloud: true } }, 'En Jira Cloud no leo relaciones por la API (todo va por el MCP).'],
+      ['la pestaña en Confluence', { site: { host: 'wiki.example.com', product: 'confluence', cloud: false } }, 'No he podido leer las relaciones de Jira (la pestaña no es de un Jira Data Center).'],
+    ]) {
+      const e = montar(opciones)
+      await e.contrastar()
+      eq(e.enviados.length, 0, caso + ': no sale ninguna petición')
+      eq(avisos(e), ['notice bad: ' + texto], caso + ': y se dice')
+    }
+    const pocas = montar({ respuesta: { ...RESPUESTA, nodes: RESPUESTA.nodes.slice(0, 1) } })
+    await pocas.contrastar()
+    eq([pocas.raiz.hijos.length, avisos(pocas)], [1, ['notice: Hacen falta al menos dos incidencias del índice para contrastar.']], 'si Jira devuelve menos de dos, no hay figura y se dice')
+  }
+  {
+    // Las filas, en los casos que el camino bueno no pasa.
+    const { filasDeLaComparacion } = montar().api
+    eq(filasDeLaComparacion({ soloModelo: [], soloJira: [], fuera: [] }), ['Coinciden todas'], 'sin diferencias')
+    eq(
+      filasDeLaComparacion({ soloModelo: [{ from: 'A-1', to: 'B-2', label: '' }], soloJira: [{ from: 'A-1', to: 'C-3', type: '' }], fuera: ['X-1', 'Y-2'] }),
+      ['El modelo dibujó A-1 → B-2 y Jira no lo tiene', 'Jira tiene A-1 → C-3 y el modelo no lo dibujó', 'Sin contrastar: X-1, Y-2 (no están en el índice o Jira no las ha devuelto)'],
+      'sin etiqueta, sin tipo y dos sin contrastar'
+    )
+  }
+
+  // (18) El espejo: la comparación REAL, el botón en la fila de acciones de la
+  // primera figura y «Según Jira» detrás, con las mismas frases que el panel.
+  orden(imports, ["import('/src/panel/diagram-view.js'),", "import('/src/panel/diagram-links.js'),"], 'H25: el espejo carga la comparación real, detrás de la vista')
+  una(espejo, '\n    { diagramNode, textMeasurer },\n    { jiraDiagram, resumenJira },\n', 'H25: con lo que usa de ella')
+  orden(
+    tercera,
+    ["cuerpo.querySelector('.dg-wrap')", "figura.querySelector('.dg-actions')?.appendChild(botonContrastar())", 'figura.after(figuraSegunJira(dibujado))', 'return b', 'dibujado = d'],
+    'H25: el botón en la fila de la figura del modelo y «Según Jira» justo detrás'
+  )
+  const botonDelEspejo = corte(espejo, 'function botonContrastar()', 'function figuraSegunJira(')
+  assert(botonDelEspejo.includes("mk('button', 'ghost small', 'Contrastar con Jira')"), 'H25: el botón del espejo, con la clase y el texto del panel')
+  assert(botonDelEspejo.includes("'Lee las relaciones reales de estas incidencias por la API de Jira y las dibuja debajo'"), 'H25: y su title')
+  const segunJira = corte(espejo, 'function figuraSegunJira(', 'function filasDeLaComparacion(')
+  orden(
+    segunJira,
+    ['jiraDiagram(d, r)', 'layoutDiagram(diagram, { measure: textMeasurer(', 'diagramNode(diagram, layout, {', 'mermaid: toMermaid(diagram),', "figuraJira.classList.add('dg-jira')", "figuraJira.prepend(mk('figcaption', 'dg-caption', resumenJira(comparacion)))", "mk('ul', 'dg-diff')", 'filasDeLaComparacion(comparacion)', 'figuraJira.appendChild(diferencias)'],
+    'H25: «Según Jira» del espejo se monta como en el panel'
+  )
+  const recortado = (src) => src.split('\n').map((l) => l.trim()).filter(Boolean).join('\n')
+  const filasDelEspejo = espejo.slice(espejo.indexOf('\n  function filasDeLaComparacion('), espejo.indexOf('\n  }\n', espejo.indexOf('\n  function filasDeLaComparacion(')) + 4)
+  eq(recortado(filasDelEspejo), recortado(filasDelPanel), 'H25: las filas del espejo son las del panel, letra a letra')
+  // Y lo que pinta el espejo, calculado con los módulos reales: una diferencia
+  // de cada clase (y las dos claves del modelo que la respuesta fija no trae).
+  const rDelEspejo = new Function('return ' + corte(segunJira, 'const r = {', '\n    }\n').slice('const r = '.length) + '\n}')()
+  const fuenteEspejo = [...corte(tercera, "'```mermaid',", "'```',").matchAll(/^\s*'(.*)',$/gm)].map((m) => m[1]).slice(1)
+  const cmpEspejo = jiraDiagram(readFlowchart(fuenteEspejo.join('\n')), rDelEspejo).comparacion
+  eq(
+    [cmpEspejo.comunes.length, cmpEspejo.soloModelo.length, cmpEspejo.soloJira.length, cmpEspejo.nodos, cmpEspejo.fuera],
+    [2, 1, 1, 4, ['ENG-1', 'OPS-2']],
+    'H25: el espejo enseña dos que coinciden, una de cada lado y dos sin contrastar'
+  )
+  eq(
+    new Function(filasDelEspejo + '\nreturn filasDeLaComparacion')()(cmpEspejo),
+    [
+      'El modelo dibujó ENG-20 → ENG-3 (contradice) y Jira no lo tiene',
+      'Jira tiene ENG-7 blocks ENG-3 y el modelo no lo dibujó',
+      'Sin contrastar: ENG-1, OPS-2 (no están en el índice o Jira no las ha devuelto)',
+    ],
+    'H25: las tres filas del espejo'
+  )
+
+  // (19) Y el banco: el tramo 66 hace cinco comprobaciones con los módulos
+  // reales, y la de SEGURIDAD mira que ENG-999 no llegue a ninguna petición.
+  const banco = readFileSync(join(ROOT, 'harness/harness.js'), 'utf8')
+  const t66 = sinComentarios(corte(banco, '\n    // 66. ', "\n    setSidebar('clasica')\n    renderPage('page:200')"))
+  eq((t66.match(/\bok\(/g) || []).length, 5, 'H25: el tramo 66 hace cinco comprobaciones')
+  for (const m of ["import('/src/panel/diagram-parse.js'),", "import('/src/panel/diagram-links.js'),", "import('/src/panel/diagram-layout.js'),", "import('/src/panel/diagram-view.js'),"]) {
+    una(t66, m, 'H25: el 66 carga los módulos reales')
+  }
+  una(t66, 'const claves66 = modelo66.nodes.map((n) => n.ref?.id).filter((k) => k && enLaFixture66.has(k))', 'H25: el 66 manda sólo las claves «del índice» (las de la fixture)')
+  una(t66, 'const r66 = await jiraRest.fetchIssueLinks(pideApi, sitioJira, claves66)', 'H25: por la API de mentira, con la plantilla fija')
+  una(t66, 'dgLinks66.jiraDiagram(modelo66, r66)', 'H25: la comparación real')
+  una(t66, "!urls66.some((u) => decodeURIComponent(u).includes('ENG-999')) &&", 'H25: SEGURIDAD, ENG-999 no llega a ninguna petición')
+  una(t66, "JSON.stringify(cmp66.fuera) === JSON.stringify(['ENG-999']) &&", 'H25: y queda fuera del diagrama')
 })
 
 test('H23: el color del subrayado se elige en Ajustes y viaja a la página; los radios no mienten', () => {
@@ -8251,7 +8761,9 @@ test('H23: el color del subrayado se elige en Ajustes y viaja a la página; los 
   const t20 = sinComentarios(corte(banco, '\n    // 20. ', '\n    // 21. '))
   const t22 = sinComentarios(corte(banco, '\n    // 22. ', '\n    // 23. '))
   const t26 = sinComentarios(corte(banco, '\n    // 26. ', '\n    // 27. '))
-  const t64 = sinComentarios(corte(banco, '\n    // 64. ', 'return { passed, total: results.length, results }'))
+  // EL CAMBIO (H25): el 64 ya no es el último tramo (detrás van el 65 y el 66,
+  // las relaciones de Jira), así que se corta hasta el 65 y no hasta el final.
+  const t64 = sinComentarios(corte(banco, '\n    // 64. ', '\n    // 65. '))
   const t23 = sinComentarios(corte(banco, '\n    // 23. ', '\n    // 24. '))
 
   eq(oks(t64), 5, 'el tramo 64 hace cinco comprobaciones (la quinta, la línea de arriba)')

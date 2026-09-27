@@ -348,6 +348,105 @@ test('los filtros favoritos y los enlaces remotos de la fixture tienen la forma 
   eq(parseRemoteLinks(links), [{ pageId: '301', title: '', url: '' }], 'el título genérico no llega como título')
 })
 
+// ---------------------------------------------------------------------------
+// H25: las relaciones de Jira (issuelinks), dirigidas y con su tipo
+// ---------------------------------------------------------------------------
+//
+// El diagrama «Según Jira» de H25 se dibuja con lo que devuelve
+// `GET /rest/api/2/search?fields=issuelinks`. Si la Jira de mentira contestara
+// relaciones sin sentido o sin tipo, o unas distintas de las que usa
+// `linkedIssues()`, el banco dibujaría en verde un grafo que el Jira real no da.
+
+test('H25: issueLinks de la fixture es dirigido y tipado, sus claves existen y casa con links en los dos sentidos', () => {
+  const existen = new Set(FIXTURE.issues.map((i) => i.key))
+  const tipos = FIXTURE.linkTypes
+  eq(Object.keys(tipos).sort(), ['Blocks', 'Duplicate', 'Relates'])
+  for (const [nombre, t] of Object.entries(tipos)) {
+    eq(Object.keys(t).sort(), ['id', 'inward', 'outward'], `el tipo ${nombre} tiene la forma de la API`)
+    assert(/^\d+$/.test(t.id) && t.inward && t.outward, `${nombre}: id numérico y los dos sentidos: ${JSON.stringify(t)}`)
+  }
+  const ids = new Set()
+  for (const l of FIXTURE.issueLinks) {
+    eq(Object.keys(l).sort(), ['from', 'id', 'to', 'type'], 'una relación es {id, type, from, to}: ' + JSON.stringify(l))
+    assert(/^\d+$/.test(l.id) && !ids.has(l.id), 'id numérico y sin repetir: ' + l.id)
+    ids.add(l.id)
+    assert(Object.hasOwn(tipos, l.type), `el tipo «${l.type}» está en linkTypes`)
+    assert(existen.has(l.from) && existen.has(l.to) && l.from !== l.to, `los dos extremos existen y son distintos: ${l.from} → ${l.to}`)
+  }
+  // Coherencia con el `links` plano, que es lo que lee linkedIssues(): cada
+  // relación está en los `links` de sus DOS extremos, y cada clave de un `links`
+  // tiene su relación. Así «las enlazadas» y «las relaciones» son la misma Jira.
+  const hay = (a, b) => FIXTURE.issueLinks.some((l) => (l.from === a && l.to === b) || (l.from === b && l.to === a))
+  for (const l of FIXTURE.issueLinks) {
+    const de = (k) => FIXTURE.issues.find((i) => i.key === k).links
+    assert(de(l.from).includes(l.to), `${l.from} lista a ${l.to} en links`)
+    assert(de(l.to).includes(l.from), `${l.to} lista a ${l.from} en links`)
+  }
+  for (const i of FIXTURE.issues) for (const k of i.links) assert(hay(i.key, k), `${i.key} → ${k} de links tiene su relación en issueLinks`)
+  // ENG-7 no cambia: lo pinan relatedJql('ENG-7') y los tramos 57 y 59 del banco.
+  eq(FIXTURE.issues.find((i) => i.key === 'ENG-7').links, ['ENG-3', 'ENG-12'])
+  eq(
+    FIXTURE.issueLinks.map((l) => `${l.from} ${tipos[l.type].outward} ${l.to}`),
+    ['ENG-7 blocks ENG-3', 'ENG-7 relates to ENG-12', 'ENG-12 blocks ENG-20', 'ENG-20 duplicates ENG-25', 'OPS-2 relates to ENG-12']
+  )
+})
+
+test('H25: «issuekey in (K1, K2, …)» con una lista de claves, y una lista vacía o con basura es 400', () => {
+  eq(claves('issuekey in (ENG-7, ENG-3)'), ['ENG-3', 'ENG-7'], 'las dos, en el orden de la fixture')
+  eq(claves('issuekey in (ENG-7, ENG-999)'), ['ENG-7'], 'una clave que no existe no es un error: no viene')
+  eq(claves('key in (eng-12)'), ['ENG-12'], 'sin distinguir mayúsculas, y también con key')
+  eq(claves('issue in (ENG-20, OPS-2) ORDER BY key ASC'), ['ENG-20', 'OPS-2'], 'y con issue, con su ORDER BY')
+  eq(claves('project = ENG AND issuekey in (ENG-7, OPS-2)'), ['ENG-7'], 'dentro de un AND')
+  for (const malo of ['issuekey in ()', 'issuekey in (ENG-7, hola)', 'issuekey in (ENG-7 ENG-3)', 'issuekey in (ENG-7,', 'issuekey in (ENG-7, (ENG-3))']) {
+    const r = searchResponse(FIXTURE, { jql: malo, maxResults: 5 })
+    eq(r.status, 400, `«${malo}» es un 400`)
+    assert(Array.isArray(r.body.errorMessages) && r.body.errorMessages.length === 1, 'con su mensaje del servidor: ' + JSON.stringify(r.body))
+  }
+  assert(/Field 'project' does not exist/.test(parseJql('project in (ENG)').errorMessages[0]), 'la lista sólo vale sobre la clave')
+  assert(/sólo admite una función/.test(parseJql('issuekey in ENG-7').errorMessages[0]), 'sin paréntesis sigue sin valer')
+})
+
+test('H25: issueJson emite issuelinks con la forma de la API v2 (outwardIssue / inwardIssue) sólo si se pide', () => {
+  const ahora = Date.UTC(2026, 8, 20)
+  const pide = (key, fields) => searchResponse(FIXTURE, { jql: `key = ${key}`, fields, maxResults: 5, now: ahora }).body.issues[0].fields
+  const catalogo = fieldCatalog(FIXTURE)
+  const eng3 = FIXTURE.issues.find((i) => i.key === 'ENG-3')
+  const eng7 = pide('ENG-7', 'issuelinks,summary')
+  eq(Object.keys(eng7).sort(), ['issuelinks', 'summary'], 'sólo lo pedido')
+  eq(eng7.issuelinks.length, 2)
+  eq(eng7.issuelinks[0], {
+    id: '20001',
+    type: { id: '10000', name: 'Blocks', inward: 'is blocked by', outward: 'blocks' },
+    outwardIssue: {
+      id: issueJson(eng3, ['summary']).id,
+      key: 'ENG-3',
+      fields: {
+        summary: eng3.summary,
+        issuetype: issueJson(eng3, ['issuetype'], { catalog: catalogo }).fields.issuetype,
+        status: issueJson(eng3, ['status'], { catalog: catalogo }).fields.status,
+      },
+    },
+  })
+  eq(eng7.issuelinks[1].type.name, 'Relates')
+  eq(eng7.issuelinks[1].outwardIssue.key, 'ENG-12')
+  assert(eng7.issuelinks.every((l) => !('inwardIssue' in l)), 'ENG-7 es el origen de las dos: ninguna viene de dentro')
+  // Desde el otro extremo, la misma relación llega con inwardIssue.
+  const deEng3 = pide('ENG-3', 'issuelinks').issuelinks
+  eq(deEng3.map((l) => [l.id, l.type.name, l.inwardIssue?.key, 'outwardIssue' in l]), [['20001', 'Blocks', 'ENG-7', false]])
+  eq(
+    pide('ENG-12', 'issuelinks').issuelinks.map((l) => `${l.id} ${l.type.name} ${l.outwardIssue ? '→ ' + l.outwardIssue.key : '← ' + l.inwardIssue.key}`),
+    ['20002 Relates ← ENG-7', '20003 Blocks → ENG-20', '20005 Relates ← OPS-2'],
+    'en el orden de issueLinks, cada una con su sentido'
+  )
+  eq(pide('ENG-1', 'issuelinks').issuelinks, [], 'pedido y sin relaciones: una lista vacía, como Jira')
+  assert(!('issuelinks' in pide('ENG-7', 'summary')), 'sin pedirlo no viene')
+  assert(!('issuelinks' in pide('ENG-7', '')), 'ni entre los de por defecto')
+  for (const l of eng7.issuelinks) {
+    const otro = l.outwardIssue
+    eq(Object.keys(otro.fields).sort(), ['issuetype', 'status', 'summary'], 'de la otra incidencia viaja lo justo, sin personas')
+  }
+})
+
 // ----------------------------------- la Confluence de mentira del banco (H14)
 //
 // Vive en tools/cql-eval.mjs justo para poder ejercitarla desde aquí: mientras

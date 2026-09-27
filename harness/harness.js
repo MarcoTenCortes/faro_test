@@ -4668,6 +4668,228 @@ const actions = {
         `cursor ${oscuro64 && claro64 && oscuro64.cursor !== claro64.cursor ? 'distinto del claro' : 'IGUAL que el claro'}`
     )
 
+    // 65. Las relaciones de Jira (H25b, docs/plan/handoff/h25-contrato.md §1 y
+    //     §4): `fetchIssueLinks` pide las `issuelinks` de unas claves del
+    //     índice con la plantilla fija `linksJql` contra la Jira de mentira, y
+    //     devuelve las relaciones DIRIGIDAS entre esas claves y sólo ésas. Lo
+    //     que se espera no está escrito a mano: sale del `issueLinks` de la
+    //     fixture. Como el 44, llama al módulo (el content script sólo añade
+    //     la validación de las claves, pinada en bootstrap-wiring.test.js).
+    const claves65 = ['ENG-7', 'ENG-3', 'ENG-12', 'ENG-20']
+    const tipos65 = FIX.linkTypes || {}
+    const esperadas65 = (conjunto) =>
+      (FIX.issueLinks || [])
+        .filter((l) => conjunto.includes(l.from) && conjunto.includes(l.to))
+        .map((l) => `${l.from} ${tipos65[l.type]?.outward} ${l.to} (${l.type}, ${l.id})`)
+        .sort()
+    const vistas65 = (r) => (r?.links || []).map((l) => `${l.from} ${l.type} ${l.to} (${l.name}, ${l.id})`).sort()
+    const antes65 = pedidasRest.length
+    const todas65 = await jiraRest.fetchIssueLinks(pideApi, sitioJira, claves65)
+    const url65 = pedidasRest[pedidasRest.length - 1] || ''
+    ok(
+      'relaciones de Jira: cuatro claves del índice dan sus relaciones EXACTAS, con su tipo y su sentido, en UNA petición de plantilla',
+      todas65.ok &&
+        todas65.via === 'jql' &&
+        pedidasRest.length === antes65 + 1 &&
+        /[?&]jql=issuekey%20in%20\(/.test(url65) &&
+        /[?&]fields=[^&]*\bissuelinks\b/.test(url65) &&
+        /[?&]maxResults=4(&|$)/.test(url65) &&
+        (todas65.nodes || []).map((n) => n.key).join(',') === claves65.join(',') &&
+        (todas65.nodes || []).every((n) => Object.keys(n).sort().join(',') === 'key,statusCategory,summary,type') &&
+        vistas65(todas65).join(' | ') === esperadas65(claves65).join(' | ') &&
+        esperadas65(claves65).join(' | ') ===
+          ['ENG-12 blocks ENG-20 (Blocks, 20003)', 'ENG-7 blocks ENG-3 (Blocks, 20001)', 'ENG-7 relates to ENG-12 (Relates, 20002)'].join(' | '),
+      todas65.ok
+        ? `${vistas65(todas65).join(' | ')} · nodos ${todas65.nodes.map((n) => n.key).join(',')} · ${decodeURIComponent(url65.replace(location.origin, ''))}`
+        : `${todas65.reason} · ${todas65.detail || ''}`
+    )
+
+    //     Las claves se validan y se recortan en el módulo, no en quien llama:
+    //     minúsculas a mayúsculas, sin repetir y sin basura; la consulta es la
+    //     de dos claves y la página, de dos filas.
+    const sucias65 = await jiraRest.fetchIssueLinks(pideApi, sitioJira, ['eng-7', 'ENG-3', 'ENG-3', 'x y'])
+    const urlSucias65 = pedidasRest[pedidasRest.length - 1] || ''
+    ok(
+      'relaciones de Jira: claves en minúsculas, repetidas o con basura se limpian antes de pedir, y la consulta es la de dos claves',
+      sucias65.ok &&
+        (sucias65.nodes || []).map((n) => n.key).join(',') === 'ENG-7,ENG-3' &&
+        vistas65(sucias65).join(' | ') === esperadas65(['ENG-7', 'ENG-3']).join(' | ') &&
+        decodeURIComponent(/[?&]jql=([^&]*)/.exec(urlSucias65)?.[1] || '') === jiraRest.linksJql(['ENG-7', 'ENG-3']) &&
+        jiraRest.linksJql(['ENG-7', 'ENG-3']) === 'issuekey in (ENG-7, ENG-3)' &&
+        /[?&]maxResults=2(&|$)/.test(urlSucias65),
+      sucias65.ok ? `${vistas65(sucias65).join(' | ')} · ${decodeURIComponent(urlSucias65.replace(location.origin, ''))}` : sucias65.reason
+    )
+
+    //     Con menos de dos claves válidas no hay grafo: `'claves'` y NINGUNA
+    //     petición.
+    const antesPocas65 = pedidasRest.length
+    const una65 = await jiraRest.fetchIssueLinks(pideApi, sitioJira, ['ENG-7'])
+    const mala65 = await jiraRest.fetchIssueLinks(pideApi, sitioJira, ['ENG-7', 'mal'])
+    const nada65 = await jiraRest.fetchIssueLinks(pideApi, sitioJira, 'ENG-7, ENG-3')
+    ok(
+      'relaciones de Jira: con una sola clave válida (o sin lista) el motivo es «claves» y no sale ninguna petición',
+      !una65.ok && una65.reason === 'claves' && !mala65.ok && mala65.reason === 'claves' && !nada65.ok && nada65.reason === 'claves' && pedidasRest.length === antesPocas65,
+      `${una65.reason} · ${mala65.reason} · ${nada65.reason} · ${pedidasRest.length - antesPocas65} peticiones`
+    )
+
+    //     Una sesión que no vale es la sesión, con el mensaje del servidor.
+    const antesSesion65 = pedidasRest.length
+    const sinSesion65 = await jiraRest.fetchIssueLinks(pideApi, sitioJira, claves65, { prefix: '/sinsesion' })
+    ok(
+      'relaciones de Jira: sin sesión válida el motivo es la sesión (401), sin reintentos',
+      !sinSesion65.ok && sinSesion65.reason === 'sesion' && sinSesion65.status === 401 && pedidasRest.length === antesSesion65 + 1,
+      `${sinSesion65.reason} · ${sinSesion65.status} · ${pedidasRest.length - antesSesion65} peticiones`
+    )
+
+    //     En Jira Cloud no hay REST de Jira (`sinRestDeJira`): ni se pide.
+    const antesCloud65 = pedidasRest.length
+    const cloud65 = await jiraRest.fetchIssueLinks(pideApi, { ...sitioJira, cloud: true }, claves65)
+    ok(
+      'relaciones de Jira: en Jira Cloud el motivo es «cloud» y no sale ninguna petición',
+      !cloud65.ok && cloud65.reason === 'cloud' && pedidasRest.length === antesCloud65,
+      `${cloud65.reason} · ${pedidasRest.length - antesCloud65} peticiones`
+    )
+
+    //     SEGURIDAD: la respuesta REAL del servidor trae relaciones con un
+    //     extremo que no se pidió (ENG-20 duplicates ENG-25, OPS-2 relates to
+    //     ENG-12). `parseIssueLinks` las deja fuera: sólo se dibuja lo que une
+    //     dos claves pedidas QUE VINIERON, y una clave que no vino (ENG-25
+    //     pedida sin estar en la respuesta) no se cuela por una relación.
+    const cruda65 = await (await fetch(url65)).json()
+    const deEng20 = (cruda65.issues || []).find((i) => i.key === 'ENG-20')?.fields?.issuelinks || []
+    const traeFuera65 = deEng20.some((l) => l.outwardIssue?.key === 'ENG-25')
+    const leido65 = jiraRest.parseIssueLinks(cruda65, { keys: claves65 })
+    const conFantasma65 = jiraRest.parseIssueLinks(cruda65, { keys: [...claves65, 'ENG-25'] })
+    const extremos65 = (r) => (r?.links || []).flatMap((l) => [l.from, l.to])
+    ok(
+      'relaciones de Jira: una relación con un extremo que no se pidió, o que no vino, se descarta aunque la API la traiga',
+      traeFuera65 &&
+        !!leido65 &&
+        !extremos65(leido65).some((k) => k === 'ENG-25' || k === 'OPS-2') &&
+        vistas65(leido65).join(' | ') === esperadas65(claves65).join(' | ') &&
+        !!conFantasma65 &&
+        !extremos65(conFantasma65).includes('ENG-25') &&
+        !conFantasma65.nodes.some((n) => n.key === 'ENG-25') &&
+        jiraRest.parseIssueLinks({ total: 0 }, { keys: claves65 }) === null,
+      `la API trae ENG-20 → ENG-25: ${traeFuera65} · leídas ${vistas65(leido65).join(' | ')} · con ENG-25 pedida: ${vistas65(conFantasma65).length} relaciones, nodos ${(conFantasma65?.nodes || []).map((n) => n.key).join(',')}`
+    )
+
+    // 66. El diagrama «Según Jira» (H25b, docs/plan/handoff/h25-contrato.md §2
+    //     y §3): lo que hace `contrastarConJira` del panel, con los módulos
+    //     REALES. Un diagrama del modelo leído por `readFlowchart` con cuatro
+    //     incidencias de la fixture y una que no existe (ENG-999); se mandan
+    //     sólo las claves del índice —aquí, las que están en la fixture, que
+    //     es lo que el panel tendría cosechado—; `fetchIssueLinks` contra la
+    //     Jira de mentira; `jiraDiagram` con esa respuesta; y la figura con el
+    //     layout y la vista del panel. panel.js necesita `chrome.*` y no se
+    //     puede cargar aquí: su cableado lo pina panel-wiring.test.js.
+    const [dgParse66, dgLinks66, dgLayout66, dgView66] = await Promise.all([
+      import('/src/panel/diagram-parse.js'),
+      import('/src/panel/diagram-links.js'),
+      import('/src/panel/diagram-layout.js'),
+      import('/src/panel/diagram-view.js'),
+    ])
+    const modelo66 = dgParse66.readFlowchart(
+      [
+        'flowchart LR',
+        '  A[ENG-7 Definir la API de rotación] --> C[ENG-12 Backend de rotación]:::riesgo',
+        '  C --> D["ENG-20 ¿Quién revoca la clave vieja? [1]"]:::hueco',
+        '  B[ENG-3 Tokens de 90 días] -.->|contradice| D',
+        '  D --> X[ENG-999 Una clave que la fixture no tiene]',
+      ].join('\n')
+    )
+    const enLaFixture66 = new Set(FIX.issues.map((i) => i.key))
+    const claves66 = modelo66.nodes.map((n) => n.ref?.id).filter((k) => k && enLaFixture66.has(k))
+    const antes66 = pedidasRest.length
+    const r66 = await jiraRest.fetchIssueLinks(pideApi, sitioJira, claves66)
+    const urls66 = pedidasRest.slice(antes66)
+    ok(
+      'según Jira: las claves del diagrama que están en el índice dan las relaciones EXACTAS de la fixture, con su tipo y su sentido',
+      modelo66.ok &&
+        claves66.join(',') === 'ENG-7,ENG-12,ENG-20,ENG-3' &&
+        r66.ok &&
+        urls66.length === 1 &&
+        (r66.nodes || []).map((n) => n.key).join(',') === claves66.join(',') &&
+        vistas65(r66).join(' | ') === esperadas65(claves66).join(' | ') &&
+        esperadas65(claves66).length === 3,
+      r66.ok ? `${vistas65(r66).join(' | ')} · ${decodeURIComponent((urls66[0] || '').replace(location.origin, ''))}` : `${r66.reason} · ${r66.detail || ''}`
+    )
+
+    //     `jiraDiagram`: los nodos son los del modelo (mismo id y etiqueta) sin
+    //     su tipo, que era un juicio del modelo; las aristas, las de Jira con
+    //     el tipo como etiqueta; y la comparación, por pares sin orden.
+    const { diagram: jira66, comparacion: cmp66 } = dgLinks66.jiraDiagram(modelo66, r66)
+    const claveDe66 = new Map((jira66?.nodes || []).map((n) => [n.id, n.ref?.id]))
+    const delModelo66 = modelo66.nodes.filter((n) => claves66.includes(n.ref?.id))
+    ok(
+      'según Jira: los nodos son los del modelo sin su tipo, las aristas las de Jira y la comparación separa lo común, lo del modelo y lo de Jira',
+      !!jira66 &&
+        jira66.nodes.map((n) => `${n.id}|${n.label}`).join(' ; ') === delModelo66.map((n) => `${n.id}|${n.label}`).join(' ; ') &&
+        jira66.nodes.every((n) => n.kind === '' && n.ref?.kind === 'jira-issue') &&
+        delModelo66.some((n) => n.kind) &&
+        jira66.edges.map((e) => `${claveDe66.get(e.from)} ${e.label} ${claveDe66.get(e.to)}`).sort().join(' | ') ===
+          r66.links.map((l) => `${l.from} ${l.type} ${l.to}`).sort().join(' | ') &&
+        cmp66.comunes.length + cmp66.soloJira.length === r66.links.length &&
+        JSON.stringify(cmp66.comunes.map((c) => [c.from, c.to].sort().join('|')).sort()) === JSON.stringify(['ENG-12|ENG-20', 'ENG-12|ENG-7']) &&
+        JSON.stringify(cmp66.soloModelo) === JSON.stringify([{ from: 'ENG-3', to: 'ENG-20', label: 'contradice' }]) &&
+        JSON.stringify(cmp66.soloJira) === JSON.stringify([{ from: 'ENG-7', to: 'ENG-3', type: FIX.linkTypes.Blocks.outward }]) &&
+        cmp66.nodos === 4,
+      jira66
+        ? `nodos ${jira66.nodes.map((n) => n.id + ':' + n.ref?.id).join(',')} · ${dgLinks66.resumenJira(cmp66)} · sólo el modelo ${JSON.stringify(cmp66.soloModelo)} · sólo Jira ${JSON.stringify(cmp66.soloJira)}`
+        : 'sin diagrama: ' + JSON.stringify(cmp66)
+    )
+
+    //     La barrera del H24 lo da por bueno y la ida y vuelta por Mermaid lo
+    //     deja igual; el resumen es el del pie de la figura.
+    ok(
+      'según Jira: el diagrama pasa validateDiagram, sobrevive a toMermaid y readFlowchart, y el resumen cuenta bien',
+      !!jira66 &&
+        dgParse66.validateDiagram(jira66).ok &&
+        JSON.stringify(dgParse66.readFlowchart(dgParse66.toMermaid(jira66))) === JSON.stringify(jira66) &&
+        dgLinks66.resumenJira(cmp66) === 'Según Jira: 3 relaciones entre 4 incidencias · coinciden 2 · sólo el modelo 1 · sólo Jira 1',
+      jira66 ? `${dgLinks66.resumenJira(cmp66)} · ${dgParse66.toMermaid(jira66).split('\n').length} líneas de Mermaid` : 'sin diagrama'
+    )
+
+    //     Y dibujado con el layout y la vista del panel: tantos nodos como
+    //     claves (todos navegables) y tantas aristas como relaciones, sin los
+    //     colores de tipo del modelo.
+    const figura66 = jira66
+      ? dgView66.diagramNode(jira66, dgLayout66.layoutDiagram(jira66), { mermaid: dgParse66.toMermaid(jira66), uid: 'dg-banco-66' })
+      : null
+    ok(
+      'según Jira: la figura tiene un nodo navegable por clave y una arista por relación, sin los tipos del modelo',
+      !!figura66 &&
+        figura66.tagName === 'FIGURE' &&
+        figura66.classList.contains('dg-wrap') &&
+        figura66.querySelectorAll('.dg-node').length === claves66.length &&
+        figura66.querySelectorAll('.dg-node.dg-link').length === claves66.length &&
+        figura66.querySelectorAll('.dg-edge').length === r66.links.length &&
+        figura66.querySelectorAll('.dg-riesgo, .dg-hueco').length === 0 &&
+        !!figura66.querySelector('.dg-actions button'),
+      figura66
+        ? `${figura66.querySelectorAll('.dg-node').length} nodos · ${figura66.querySelectorAll('.dg-edge').length} aristas · ${figura66.querySelectorAll('.dg-riesgo, .dg-hueco').length} con tipo`
+        : 'sin figura'
+    )
+
+    //     SEGURIDAD: ENG-999 la escribió el modelo y no está en el índice, así
+    //     que no llega a ninguna petición; y aunque se colara en la lista de
+    //     claves, `parseIssueLinks` no la saca si Jira no la devuelve, y el
+    //     diagrama la deja en `fuera`.
+    const cruda66 = await (await fetch(urls66[0] || url65)).json()
+    const colada66 = jiraRest.parseIssueLinks(cruda66, { keys: [...claves66, 'ENG-999'] })
+    ok(
+      'según Jira: una clave que el modelo escribió y el índice no tiene no se pide, no vuelve de la API y no entra en el diagrama',
+      modelo66.nodes.some((n) => n.ref?.id === 'ENG-999') &&
+        urls66.length > 0 &&
+        !urls66.some((u) => decodeURIComponent(u).includes('ENG-999')) &&
+        !!colada66 &&
+        !colada66.nodes.some((n) => n.key === 'ENG-999') &&
+        !colada66.links.some((l) => l.from === 'ENG-999' || l.to === 'ENG-999') &&
+        JSON.stringify(cmp66.fuera) === JSON.stringify(['ENG-999']) &&
+        !(jira66?.nodes || []).some((n) => n.ref?.id === 'ENG-999'),
+      `pedidas ${urls66.map((u) => decodeURIComponent(u.replace(location.origin, ''))).join(' · ')} · fuera ${JSON.stringify(cmp66.fuera)}`
+    )
+
     setSidebar('clasica')
     renderPage('page:200')
     await wait(320)

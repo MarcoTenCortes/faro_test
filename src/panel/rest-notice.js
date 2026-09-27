@@ -64,3 +64,30 @@ export function jqlFailText(r, host) {
   if (!r) return 'La pestaña no ha contestado.'
   return `No he podido leer la lista (${r.detail || reason || 'sin motivo'}).`
 }
+
+/**
+ * Por qué no se pudieron contrastar las relaciones de un diagrama con Jira (H25),
+ * en palabras del usuario. Mismo contrato que `jqlFailText`: el `reason` es un
+ * código de `jira-rest.js` (o `'permiso'`/`'claves'`, que pone el panel antes de
+ * pedir) y `messages` son del servidor, que se enseñan y no se interpretan.
+ *
+ * Un 400 aquí no es una consulta escrita por nadie —es la plantilla
+ * `linksJql`—, así que lo que diga el servidor es lo único que explica qué pasó
+ * (en un Jira Data Center, una clave que ya no existe hace fallar la consulta
+ * entera): se enseña tal cual.
+ */
+export function linksFailText(r, host) {
+  const reason = String(r?.reason || '')
+  if (!r || reason === 'red') return `No he podido leer las relaciones de Jira (${r?.detail || 'sin respuesta'}).`
+  if (reason === 'cloud') return 'En Jira Cloud no leo relaciones por la API (todo va por el MCP).'
+  if (reason === 'claves') return 'Hacen falta al menos dos incidencias del índice para contrastar.'
+  // La sesión se arregla igual la lea quien la lea: la misma frase que la lista.
+  if (reason === 'sesion') return jqlFailText(r, host)
+  if (reason === 'permiso') return 'Sin acceso a la pestaña de Jira.'
+  if (reason === 'jql') {
+    const delServidor = (Array.isArray(r.messages) ? r.messages : []).filter((m) => typeof m === 'string' && m).join(' · ')
+    // Sin el punto final del servidor, que ya pone la frase.
+    return `Jira no acepta la consulta de relaciones: ${delServidor.replace(/\.+$/, '') || 'la ha rechazado sin decir por qué'}.`
+  }
+  return `No he podido leer las relaciones de Jira (${r.detail || reason || 'sin motivo'}).`
+}

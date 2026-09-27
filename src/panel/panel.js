@@ -104,6 +104,7 @@ import { renderMarkdown } from './markdown.js'
 import { readFlowchart, toMermaid, offerDiagramKeys, DIAGRAM_LIMITS } from './diagram-parse.js'
 import { layoutDiagram } from './diagram-layout.js'
 import { diagramNode, textMeasurer } from './diagram-view.js'
+import { jiraDiagram, resumenJira } from './diagram-links.js'
 import { SKILLS, DEFAULT_SKILL, skillById } from './skills.js'
 import { pickLabel } from '../content/pick-payload.js'
 import { prettyTool, clockTime, formatBytes } from '../shared/format.js'
@@ -156,7 +157,7 @@ import {
 } from './sources.js'
 import { SUGGESTION_COUNT, suggestionsFor } from './suggestions.js'
 import { searchChips } from './search-chips.js'
-import { restFailureDue, jqlFailText } from './rest-notice.js'
+import { restFailureDue, jqlFailText, linksFailText } from './rest-notice.js'
 import { issueFamily, normalizeIssueFields } from './issue-profile.js'
 import {
   clearSourceHistory,
@@ -5444,7 +5445,9 @@ let medidorDelPanel = null
  * La valla se mira sin mayúsculas: un ```Mermaid no se dibujaba, no avisaba y
  * sacaba el botón (revisión adversaria de H24, D18). El tipo de cada nodo se dice
  * con las etiquetas de la tarjeta (`KIND_LABELS`, con su tilde), no sólo con el
- * color (D15).
+ * color (D15). Desde H25, en Jira DC y con dos claves del índice o más, la fila
+ * de acciones gana «Contrastar con Jira» (`linksButton`): el botón no es un
+ * registro, así que el de «Diagrama» no cambia.
  */
 function drawCodeBlock(block, pre) {
   if (block.lang.toLowerCase() !== 'mermaid' || !block.closed) return null
@@ -5469,6 +5472,8 @@ function drawCodeBlock(block, pre) {
     uid: 'dg' + (++contadorDiagramas),
     kinds: KIND_LABELS,
   })
+  const boton = linksButton(d, figure)
+  if (boton) figure.querySelector('.dg-actions')?.appendChild(boton)
   if (nuevo) log.ok('Diagrama', `${d.nodes.length} nodos · ${d.edges.length} aristas · ${d.nodes.filter((n) => n.ref).length} con clave · ${Math.round(performance.now() - t0)} ms`)
   return figure
 }
@@ -5502,6 +5507,157 @@ async function copiarMermaid(texto, boton) {
   if (!(await copyToClipboard(texto, boton))) return
   log.ok('Diagrama', `Mermaid copiado · ${texto.length} caracteres`)
   announce('Diagrama copiado como Mermaid.')
+}
+
+/**
+ * Las claves de un diagrama que se pueden contrastar con Jira (H25b): las de
+ * los nodos con `ref` de incidencia que YA están en el índice —cosechadas por
+ * M4 de la salida de una herramienta o de una lectura REST, nunca de la prosa—,
+ * sin repetir, en el orden del diagrama y con el tope de una consulta
+ * (`JIRA_REST_LIMITS.linkKeys`). Una clave que el modelo escribió y el índice
+ * no tiene no sale del panel: nada del diagrama se vuelve consulta (§8.27).
+ * Pura: el índice se pasa, no se lee del estado.
+ */
+function clavesParaContrastar(diagrama, indice) {
+  const claves = []
+  for (const n of Array.isArray(diagrama?.nodes) ? diagrama.nodes : []) {
+    const clave = n?.ref?.kind === 'jira-issue' ? n.ref.id : ''
+    if (!clave || claves.includes(clave) || !indice?.issues?.[clave]) continue
+    claves.push(clave)
+    if (claves.length >= JIRA_REST_LIMITS.linkKeys) break
+  }
+  return claves
+}
+
+/**
+ * «Contrastar con Jira», en la fila de acciones de un diagrama (H25b): sólo en
+ * un Jira Data Center —en Cloud no hay REST de Jira (`sinRestDeJira`)—, con las
+ * lecturas REST encendidas (`restTools`, el interruptor maestro) y con dos
+ * claves del índice o más, porque un grafo necesita dos. Las claves NO se
+ * guardan en el botón: se recalculan al hacer clic con el índice de ESE
+ * momento, como un nodo que navega.
+ */
+function linksButton(diagrama, figura) {
+  if (state.site?.product !== 'jira' || state.site.cloud || !state.settings.restTools) return null
+  if (clavesParaContrastar(diagrama, state.index).length < 2) return null
+  const boton = document.createElement('button')
+  boton.className = 'ghost small'
+  boton.type = 'button'
+  boton.textContent = 'Contrastar con Jira'
+  boton.title = 'Lee las relaciones reales de estas incidencias por la API de Jira y las dibuja debajo'
+  boton.addEventListener('click', () => contrastarConJira(diagrama, figura, boton))
+  return boton
+}
+
+/**
+ * Las filas de la lista de diferencias de «Según Jira»: lo que el modelo dibujó
+ * y Jira no tiene, lo que Jira tiene y el modelo no dibujó, «Coinciden todas»
+ * si no hay ninguna de las dos, y las claves que no se pudieron contrastar.
+ * Pura. El espejo (harness/panel-preview.html) lleva una copia letra a letra,
+ * pinada en panel-wiring.test.js: las frases no pueden decir cosas distintas.
+ */
+function filasDeLaComparacion(comparacion) {
+  const filas = [
+    ...comparacion.soloModelo.map((a) => `El modelo dibujó ${a.from} → ${a.to}${a.label ? ` (${a.label})` : ''} y Jira no lo tiene`),
+    ...comparacion.soloJira.map((r) => `Jira tiene ${r.from} ${r.type || '→'} ${r.to} y el modelo no lo dibujó`),
+  ]
+  if (!filas.length) filas.push('Coinciden todas')
+  const fuera = comparacion.fuera
+  if (fuera.length === 1) filas.push(`Sin contrastar: ${fuera[0]} (no está en el índice o Jira no la ha devuelto)`)
+  if (fuera.length > 1) filas.push(`Sin contrastar: ${fuera.join(', ')} (no están en el índice o Jira no las ha devuelto)`)
+  return filas
+}
+
+/**
+ * Lee las relaciones REALES de Jira entre las incidencias de un diagrama y las
+ * dibuja como un segundo diagrama, «Según Jira», debajo del del modelo, con lo
+ * que coincide y lo que no (H25b; §8.19, §8.27).
+ *
+ * El dibujo del modelo es lo que CREE que hay; las `issuelinks` son lo que hay,
+ * y lo que la API da exacto no se le pide al modelo. La petición la hace el
+ * content script con la sesión del navegador, y el mensaje lleva SÓLO claves
+ * del índice —ni JQL, ni origen, ni URL, ni ruta, ni host—: la consulta es la
+ * plantilla fija `linksJql` de jira-rest.js, y el content script vuelve a
+ * validar cada clave. Lo leído se PINTA y no va a ningún prompt (§8.19,
+ * §8.20), ni se guarda: la figura no se restaura al reabrir el panel.
+ *
+ * Se captura al pedir (§8.22): sitio, host, sesión, pestaña e índice, antes del
+ * primer await; al volver, si la figura ya no está (el chat se repintó) o el
+ * panel está en otro sitio u otra sesión, no se pinta nada. El botón nació con
+ * el sitio de ENTONCES: con las lecturas apagadas después en Ajustes, o la
+ * pestaña fuera de un Jira DC, no sale ninguna petición. Cada fallo se ve
+ * (§8.14), con la tregua de rest-notice.js, como la lista de Jira.
+ */
+async function contrastarConJira(diagrama, figura, boton) {
+  const sitio = state.site
+  const host = sitio?.host || state.lastHost
+  const sessionID = state.sessionID
+  const tabId = state.tabId
+  const indice = state.index
+  const t0 = performance.now()
+  const avisar = (fallo) => {
+    const texto = linksFailText(fallo, host)
+    log.warn('Relaciones de Jira', `${fallo?.reason || 'sin respuesta'} · ${texto}`)
+    if (restFailureDue(state.restWarned, fallo?.reason, host, sessionID)) {
+      figura.appendChild(noticeNode(texto, true))
+      announce(texto)
+    }
+  }
+  if (!sitio || sitio.product !== 'jira' || sitio.cloud || !state.settings.restTools) {
+    const detail = state.settings.restTools ? 'la pestaña no es de un Jira Data Center' : 'las lecturas por la API están apagadas en Ajustes'
+    avisar(sitio?.cloud ? { reason: 'cloud' } : { reason: 'apagado', detail })
+    return
+  }
+  const claves = clavesParaContrastar(diagrama, indice)
+  if (claves.length < 2) {
+    figura.appendChild(noticeNode(linksFailText({ reason: 'claves' }, host)))
+    return
+  }
+  boton.disabled = true
+  const acceso = tabId != null && (await ensureContentAccess({ announce: false }))
+  const r = acceso
+    ? await chrome.tabs.sendMessage(tabId, { type: MSG.ISSUE_LINKS, keys: claves, cloud: sitio.cloud }).catch(() => null)
+    : { ok: false, reason: 'permiso' }
+  boton.disabled = false
+  if (!figura.isConnected || (state.site?.host ?? state.lastHost) !== host || state.sessionID !== sessionID) {
+    log.info('Relaciones de Jira', `lo leído de ${host} llegó con el diagrama repintado o el panel en otro sitio`)
+    return
+  }
+  if (!r?.ok) {
+    avisar(r)
+    return
+  }
+  const { diagram, comparacion } = jiraDiagram(diagrama, r)
+  if (figura.nextElementSibling?.classList.contains('dg-jira')) figura.nextElementSibling.remove()
+  if (!diagram) {
+    figura.appendChild(noticeNode(linksFailText({ reason: 'claves' }, host)))
+    return
+  }
+  const resumen = resumenJira(comparacion)
+  const layout = layoutDiagram(diagram, { measure: medirTextoDelPanel() })
+  const figuraJira = diagramNode(diagram, layout, {
+    onOpen: abrirNodoDelDiagrama,
+    onCopy: copiarMermaid,
+    mermaid: toMermaid(diagram),
+    uid: 'dg' + (++contadorDiagramas),
+    kinds: KIND_LABELS,
+  })
+  figuraJira.classList.add('dg-jira')
+  const pie = document.createElement('figcaption')
+  pie.className = 'dg-caption'
+  pie.textContent = resumen
+  figuraJira.prepend(pie)
+  const diferencias = document.createElement('ul')
+  diferencias.className = 'dg-diff'
+  for (const texto of filasDeLaComparacion(comparacion)) {
+    const fila = document.createElement('li')
+    fila.textContent = texto
+    diferencias.appendChild(fila)
+  }
+  figuraJira.appendChild(diferencias)
+  figura.after(figuraJira)
+  announce(resumen)
+  log.ok('Relaciones de Jira', `${resumen} · ${Math.round(performance.now() - t0)} ms`)
 }
 
 /**

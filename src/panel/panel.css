@@ -1559,5 +1559,14 @@ html.faro-still .busy-bar i { animation: none; width: 100%; }
 .dg-list summary { color: var(--muted); cursor: pointer; }
 .dg-actions { margin-top: var(--s2); }
 
+/* El diagrama «Según Jira» (H25), debajo del del modelo: un filete decorativo
+   lo separa, el pie dice el resumen («N relaciones entre M incidencias…») y
+   la lista, en texto, lo que el modelo dibujó y Jira no tiene y al revés. Sin
+   color propio: la diferencia se DICE, no se colorea (WCAG 1.4.1). */
+.dg-jira { border-top: 1px solid var(--hairline); padding-top: var(--s2); }
+.dg-caption { font-size: var(--text-sm); color: var(--ink-2); margin-top: var(--s1); }
+.dg-diff { list-style: none; margin: var(--s1) 0; padding: 0; font-size: var(--text-sm); color: var(--ink-2); }
+.dg-diff li { padding-left: var(--s2); }
+
 /* Lo que no se ha podido dibujar: el código de siempre con el motivo debajo. */
 .dg-fallback { margin: var(--s2) 0; }
