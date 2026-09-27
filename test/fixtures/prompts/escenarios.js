@@ -663,6 +663,18 @@ export const ESCENARIOS = [
       sistema({ site: SITE_JIRA, page: PAGE_JIRA, skill: 'general', contextMd: CONTEXTO_JIRA, memoryMd: MEMORIA_MD, linkedContext: ENLAZADO }),
   },
   {
+    id: 'jira-general-enlazado-sin-texto',
+    que: 'H22: General en Jira DC con el Confluence enlazado cuyo contexto no viaja (dos espacios y nada que elija uno): una línea dice de qué espacios del enlazado hay contexto',
+    build: () =>
+      sistema({
+        site: SITE_JIRA,
+        page: PAGE_JIRA,
+        skill: 'general',
+        contextMd: CONTEXTO_JIRA,
+        linkedContext: { host: HOST_CONFLUENCE, contextMd: '', index: null, wikiPrefix: '', contextScope: '', otherScopes: ['DCPIAS', 'SIMPL'], via: '' },
+      }),
+  },
+  {
     id: 'jira-busqueda',
     que: 'Búsqueda (JQL) en Jira DC con proyecto, contexto del proyecto y Confluence enlazado con contexto',
     build: () => sistema({ site: SITE_JIRA, page: PAGE_JIRA, skill: 'busqueda', contextMd: CONTEXTO_JIRA, linkedContext: ENLAZADO }),

@@ -839,6 +839,11 @@ test('SEGURIDAD: profileForProject sólo deja pasar el perfil del proyecto que h
   assert(profileForProject(perfiles, 'SIMPL') === delMapa, 'el mismo objeto del mapa, sin copiar')
   assert(profileForProject(perfiles, 'simpl') === delMapa, 'la clave no distingue mayúsculas: validProjectKey la sube')
   eq(profileForProject(perfiles, 'OPS').projectKey, 'OPS', 'cada proyecto, el suyo')
+  // Con sólo SIMPL contado, OPS no recibe el de SIMPL: no hay perfil y es null.
+  const soloSimpl = withProfile(emptyProfiles(), simpl)
+  for (const otro of ['OPS', 'SIMPLE', 'SIM', '', null, 'SIMPL-12', 'SIMPL OR 1=1', {}]) {
+    eq(profileForProject(soloSimpl, otro), null, 'sólo SIMPL: ' + (JSON.stringify(otro) ?? String(otro)))
+  }
   for (const otro of ['SIMPLE', 'SIM', '', null, undefined, 'SIMPL-12', 'SIMPL OR 1=1', {}, '__proto__', 'constructor', 'toString']) {
     eq(profileForProject(perfiles, otro), null, JSON.stringify(otro) ?? String(otro))
   }

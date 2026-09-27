@@ -499,9 +499,28 @@ Si usas un Confluence con varios espacios —por ejemplo SIMPL y DCPIAS—:
   caracteres, al convertirlo se recorta y lo que sobra se pierde de lo que
   guarda Faro (tu fichero sigue donde lo tengas): el Registro lo dice en
   amarillo.
-- **Desde Jira**, del Confluence enlazado viaja UN contexto: el de todo el sitio
-  si lo hay, o el de su único espacio con contexto; con dos o más, ninguno
-  (elegir cuál por proyecto llegará en H22).
+- **Desde Jira**, del Confluence enlazado viaja UN contexto, y desde H22 se
+  elige **por proyecto**: si en **Ajustes → Este sitio** elegiste en qué espacio
+  se documenta el proyecto de la pestaña (el selector «El proyecto «SIMPL» se
+  documenta en el espacio»), manda eso; si no, el espacio de las páginas que el
+  contexto de ESE proyecto cita con su id (el más citado), si no el de las
+  páginas base que usaste en análisis de ese proyecto, si no el único espacio
+  con contexto, y si no el de todo el sitio. Si el espacio que elegiste todavía
+  no tiene contexto, viaja el de todo el sitio si lo hay, y si no, ninguno. Si al
+  final no viaja ninguno, el modelo recibe una sola línea con las claves de los
+  espacios de ese Confluence que sí tienen contexto (nunca su texto). Tu
+  historial de análisis no entra en ninguna pregunta: sólo ayuda a elegir el
+  espacio.
+- **El selector** sale en **Ajustes → Este sitio** sólo en un Jira con
+  Confluence enlazado y un proyecto delante. «Automático (hoy X, por el
+  contexto)» dice qué elegiría Faro sin ti y por qué; «Todo el sitio» y cada
+  espacio con contexto son las otras opciones, y debajo una línea dice qué viaja
+  ahora. Lo que eliges se guarda por proyecto en este sitio y se apunta en el
+  Registro («Espacio enlazado»).
+- **El perfil del proyecto es también por proyecto** (H22): Faro guarda uno por
+  cada proyecto de tu Jira (hasta 20 por sitio, los más recientes), así que
+  volver a un proyecto que ya contó no lo vuelve a contar. El perfil que tenías
+  de antes (uno por sitio) se conserva bajo su proyecto.
 
 La memoria entre sesiones y la conversación de opencode siguen siendo del sitio
 entero, no de cada espacio.
@@ -1021,9 +1040,12 @@ incidencia, ni una línea del contexto—:
   Memoria está apagada pero hay resúmenes de antes, lo dice así: «3 resúmenes ·
   desactivada» —apagarla no los borra: deja de usarlos y de añadir—. Se borran
   uno a uno en esa pantalla, o todos con «Olvidar este sitio».
-- **perfil del proyecto** — «SIMPL · muestra de 30 · contado hace 2 días»: los
-  nombres que Faro contó de tu Jira (tipos, estados, componentes, etiquetas). Se
-  dice de qué proyecto es porque se guarda uno por sitio.
+- **perfiles de proyectos** — «2 proyectos con perfil (SIMPL, OPS) · el de
+  SIMPL: muestra de 30 · contado hace 2 días»: los nombres que Faro contó de tu
+  Jira (tipos, estados, componentes, etiquetas), uno por proyecto desde H22. Se
+  dice de qué proyectos son —sus claves, reconstruidas y nunca copiadas, como
+  mucho cuatro y «y N más»— y, del que tienes delante, de cuántas incidencias
+  era su muestra y cuándo se contó; nunca un nombre de estado ni de tipo.
 - **historial de páginas base** — «6 análisis»: con qué páginas analizaste qué,
   que es lo que permite proponerlas otra vez.
 - **diario de actividad** — «48 entradas · 2 descartes», y «· apagado» detrás si
@@ -1459,6 +1481,13 @@ corto y un detalle. Todos los títulos, por dónde salen:
   Confluence enlazado: host, caracteres, de qué ámbito es el que viaja (desde
   H21: «espacio X», «*» si es el de todo ese sitio, o «sin contexto» si tiene
   varios espacios con contexto y ninguno de todo el sitio) y si tiene índice.
+  Desde H22 dice además por qué regla se eligió: «a mano», «por el contexto»,
+  «por el historial», «por ser el único con contexto» o «heredado».
+- «Espacio enlazado» — (H22, en gris) cambiaste en **Ajustes → Este sitio** en
+  qué espacio del Confluence enlazado se documenta el proyecto de la pestaña:
+  host, proyecto y lo elegido («host · SIMPL → DCPIAS», «→ *» para todo el
+  sitio, o «→ automático» si volviste a dejarlo en manos de Faro). Desde ese
+  momento viaja lo que elegiste.
 - «Content script inyectado» — con el permiso ya concedido, el content script
   se inyectó en la pestaña abierta sin recargarla.
 - «Permiso concedido» — concediste el permiso sobre el dominio; el content

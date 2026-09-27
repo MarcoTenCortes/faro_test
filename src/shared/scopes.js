@@ -452,19 +452,144 @@ export function spaceOverflow(index, spaceKey, { maxPages = INDEX_LIMITS.maxPage
   return otros + maxPages > maxTotal
 }
 
+// ---- desde Jira: qué espacio del Confluence enlazado viaja (H22) --------------
+//
+// POR QUÉ EXISTE. Desde un Jira viaja UN contexto del Confluence enlazado, nunca
+// el reparto a partes iguales (cinco resúmenes truncados de páginas que no
+// vienen al caso). H21 lo elegía sin saber el proyecto (`linkedContextFor`: el
+// de todo el sitio, o el único espacio con contexto; con dos, ninguno), y en el
+// Confluence de Marco, con varios espacios, eso era casi siempre «ninguno».
+// H22 elige POR PROYECTO, con las reglas de docs/PLAN2.md §3.4 y, delante de
+// todas, la elección manual de Ajustes («Este proyecto se documenta en el
+// espacio…»): una elección explícita del usuario no la pisa una heurística
+// (decisión del orquestador sobre «respaldo»).
+
 /**
- * El contexto del Confluence ENLAZADO que viaja desde un Jira: el de todo el
- * sitio (`'*'`) si existe; si no, el ÚNICO espacio con texto si sólo hay uno
- * (regla (c) de docs/PLAN2.md §3.4, la única que no necesita saber el
- * proyecto); si no, nada. Nunca el reparto a partes iguales: con dos espacios
- * no se elige ninguno. H22 lo sustituye por `linkedSpacesFor`, que elige con
- * el ámbito del proyecto (las reglas (a) y (b) y el selector de Ajustes). Pura.
- * @returns {{key: string, text: string}}
+ * El mapa proyecto → espacio que guarda `sites[host].linkedSpaces`, con claves
+ * blancas: sólo claves PROPIAS (`JSON.parse` trae `__proto__` como propia) que
+ * sean clave de proyecto (por `validProjectKey`, así que en mayúsculas) y
+ * valores que sean `'*'` (todo el sitio) o una clave de espacio EXACTA. Tope
+ * `SCOPE_LIMITS.maxScopes`, por orden de clave (el mismo orden en que sale),
+ * así que normalizar dos veces da lo mismo. Si dos claves acaban en la misma
+ * mayúscula, gana la que ya lo estaba. Pura, nunca lanza, no muta.
+ * @returns {Record<string, string>}
  */
-export function linkedContextFor(ctxs) {
-  const base = normalizeContexts(ctxs)
-  if (Object.hasOwn(base.scopes, '*')) return { key: '*', text: base.scopes['*'].text }
-  const espacios = Object.keys(base.scopes).filter((k) => k.startsWith('space:'))
-  if (espacios.length === 1) return { key: espacios[0], text: base.scopes[espacios[0]].text }
-  return { key: '', text: '' }
+export function normalizeLinkedSpaces(raw) {
+  try {
+    if (!esObjeto(raw)) return {}
+    const elegidos = new Map()
+    for (const k of Object.keys(raw)) {
+      if (!Object.hasOwn(raw, k)) continue
+      const proyecto = validProjectKey(k)
+      if (!proyecto) continue
+      const v = raw[k]
+      const espacio = v === '*' ? '*' : claveDeEspacio(v)
+      if (!espacio) continue
+      if (elegidos.has(proyecto) && k !== proyecto) continue
+      elegidos.set(proyecto, espacio)
+    }
+    const out = {}
+    for (const k of ordenadas([...elegidos.keys()]).slice(0, SCOPE_LIMITS.maxScopes)) out[k] = elegidos.get(k)
+    return out
+  } catch {
+    return {}
+  }
+}
+
+/**
+ * Un mapa NUEVO, normalizado, con el espacio de `projectKey` puesto; un
+ * `spaceKey` vacío («automático») o que no vale QUITA la entrada, y un proyecto
+ * que no vale devuelve el mapa como estaba. No muta. Pura.
+ */
+export function withLinkedSpace(map, projectKey, spaceKey) {
+  const base = normalizeLinkedSpaces(map)
+  const proyecto = validProjectKey(projectKey)
+  if (!proyecto) return base
+  const out = { ...base }
+  const espacio = spaceKey === '*' ? '*' : claveDeEspacio(spaceKey)
+  if (espacio) out[proyecto] = espacio
+  else delete out[proyecto]
+  return normalizeLinkedSpaces(out)
+}
+
+/**
+ * La clave más repetida de una lista entre las `permitidas`, con los empates
+ * decididos por `localeCompare('es')`; '' si ninguna cuenta. Cada elemento es
+ * una página citada o usada, así que las repeticiones SON la señal. Pura.
+ */
+function masRepetida(lista, permitidas) {
+  const cuentas = new Map()
+  for (const v of Array.isArray(lista) ? lista : []) {
+    const k = claveDeEspacio(v)
+    if (!k || !permitidas.has(k)) continue
+    cuentas.set(k, (cuentas.get(k) || 0) + 1)
+  }
+  let mejor = ''
+  for (const k of ordenadas([...cuentas.keys()])) if (!mejor || cuentas.get(k) > cuentas.get(mejor)) mejor = k
+  return mejor
+}
+
+/**
+ * El espacio del Confluence ENLAZADO cuyo contexto viaja desde un Jira, por
+ * proyecto (H22, docs/PLAN2.md §3.4). En este orden:
+ *
+ * 1. **manual**, lo elegido en Ajustes para este proyecto (`'*'` o una clave de
+ *    espacio): si ese ámbito tiene texto propio, ése; si no, el de todo el
+ *    sitio si existe; y si tampoco, ninguno. Con `via: 'manual'` en los tres
+ *    casos, porque lo eligió el usuario aunque no haya nada que llevar. Un
+ *    `manual` sin forma de clave se ignora.
+ * 2. **(a)** el espacio más citado por el CONTEXT.md del proyecto (`citadas`:
+ *    una clave por página citada con id), `via: 'contexto'`;
+ * 3. **(b)** el más usado como página base en análisis de ESE proyecto
+ *    (`usadas`), `via: 'historial'`: el historial sólo elige la CLAVE, nunca
+ *    aporta texto;
+ * 4. **(c)** el ÚNICO espacio con contexto, `via: 'unico'`;
+ * 5. el de todo el sitio (`'*'`), `via: 'heredado'`;
+ * 6. y si no, ninguno: `{ key: '', text: '', via: '' }`.
+ *
+ * En (a) y (b) sólo cuentan las claves que el enlazado TIENE con contexto: la
+ * clave sale SIEMPRE de los contextos, nunca de lo que se le pase (ni la
+ * elección manual ni una lista pueden meter una clave que no existe). `key` es
+ * una clave de ÁMBITO (`space:KEY`, `'*'` o ''), la que el prompt usa para decir
+ * de qué espacio es; `otras` son las claves de los DEMÁS espacios con contexto,
+ * SIN el «space:» delante (como las lee `linkedScopesLine` de prompts.js y como
+ * deja el panel las del propio sitio), ordenadas, SIEMPRE, también con `key`
+ * `'*'` o ''. Pura, determinista, nunca lanza.
+ * @returns {{key: string, text: string, via: string, otras: string[]}}
+ */
+export function linkedSpacesFor(ctxsEnlazado, opciones = {}) {
+  try {
+    const { manual = '', citadas = [], usadas = [] } = esObjeto(opciones) ? opciones : {}
+    const base = normalizeContexts(ctxsEnlazado)
+    const espacios = ordenadas(
+      Object.keys(base.scopes)
+        .filter((k) => k.startsWith('space:'))
+        .map((k) => k.slice('space:'.length))
+    )
+    const conTexto = new Set(espacios)
+    const texto = (key) => (key && Object.hasOwn(base.scopes, key) ? base.scopes[key].text : '')
+    const hayTodo = Object.hasOwn(base.scopes, '*')
+    const salida = (key, via) => ({
+      key,
+      text: texto(key),
+      via,
+      otras: espacios.filter((k) => 'space:' + k !== key),
+    })
+
+    const elegido = manual === '*' ? '*' : claveDeEspacio(manual)
+    if (elegido) {
+      if (elegido === '*') return salida(hayTodo ? '*' : '', 'manual')
+      if (conTexto.has(elegido)) return salida('space:' + elegido, 'manual')
+      return salida(hayTodo ? '*' : '', 'manual')
+    }
+    const citado = masRepetida(citadas, conTexto)
+    if (citado) return salida('space:' + citado, 'contexto')
+    const usado = masRepetida(usadas, conTexto)
+    if (usado) return salida('space:' + usado, 'historial')
+    if (espacios.length === 1) return salida('space:' + espacios[0], 'unico')
+    if (hayTodo) return salida('*', 'heredado')
+    return salida('', '')
+  } catch {
+    return { key: '', text: '', via: '', otras: [] }
+  }
 }

@@ -35,7 +35,9 @@ import {
   otherScopesWithMap,
   countPages,
   spaceOverflow,
-  linkedContextFor,
+  normalizeLinkedSpaces,
+  withLinkedSpace,
+  linkedSpacesFor,
 } from '../../src/shared/scopes.js'
 
 const AHORA = Date.UTC(2026, 8, 26, 10, 0, 0)
@@ -410,13 +412,129 @@ test('H21 revisión: a igual at, el tope se queda con los que estaban antes; y w
 
 // ---- desde Jira ---------------------------------------------------------------
 
-test('H21: linkedContextFor — el de todo el sitio manda, uno solo vale, dos no', () => {
-  eq(linkedContextFor({ version: 2, scopes: { 'space:ENG': ambito('eng'), '*': ambito('todo') } }), { key: '*', text: 'todo' })
-  eq(linkedContextFor({ version: 2, scopes: { 'space:ENG': ambito('eng') } }), { key: 'space:ENG', text: 'eng' })
-  eq(linkedContextFor({ version: 2, scopes: { 'space:ENG': ambito('eng'), 'space:OPS': ambito('ops') } }), { key: '', text: '' }, 'nunca se elige uno de dos')
-  eq(linkedContextFor({ version: 2, scopes: { 'project:SIMPL': ambito('p') } }), { key: '', text: '' }, 'un proyecto no es un Confluence')
-  eq(linkedContextFor(emptyContexts()), { key: '', text: '' })
-  eq(linkedContextFor('texto viejo'), { key: '*', text: 'texto viejo' }, 'un texto de antes de H21 es de todo el sitio')
+// EL CAMBIO (H22): `linkedContextFor` (el `'*'`, o el único espacio con
+// contexto; con dos, ninguno) se BORRA. En su sitio, `linkedSpacesFor` elige UN
+// espacio del Confluence enlazado por proyecto, con las reglas de docs/PLAN2.md
+// §3.4 y la elección manual de Ajustes delante (la decisión del orquestador:
+// una elección explícita del usuario no la pisa una heurística).
+
+/** Los contextos de un Confluence enlazado con ENG, OPS y, si se pide, todo el sitio. */
+const enlazado = ({ todo = true } = {}) =>
+  congelar({
+    version: 2,
+    scopes: {
+      'space:ENG': ambito('eng'),
+      'space:OPS': ambito('ops'),
+      ...(todo ? { '*': ambito('todo') } : {}),
+      'project:SIMPL': ambito('del proyecto'),
+    },
+  })
+
+test('H22: linkedSpacesFor — sin nada que decida: el único espacio, el heredado o ninguno, con las claves de los demás', () => {
+  const r = linkedSpacesFor({ version: 2, scopes: { 'space:ENG': ambito('eng'), '*': ambito('todo') } })
+  eq(Object.keys(r), ['key', 'text', 'via', 'otras'], 'claves exactas y en su orden')
+  eq(r, { key: 'space:ENG', text: 'eng', via: 'unico', otras: [] }, '(c) el único espacio con contexto, aunque haya uno de todo el sitio')
+  eq(linkedSpacesFor(enlazado()), { key: '*', text: 'todo', via: 'heredado', otras: ['ENG', 'OPS'] }, 'dos espacios: el de todo el sitio, y los dos dichos')
+  eq(linkedSpacesFor(enlazado({ todo: false })), { key: '', text: '', via: '', otras: ['ENG', 'OPS'] }, 'nunca se elige uno de dos')
+  eq(linkedSpacesFor({ version: 2, scopes: { 'project:SIMPL': ambito('p') } }), { key: '', text: '', via: '', otras: [] }, 'un proyecto no es un Confluence')
+  eq(linkedSpacesFor('texto viejo'), { key: '*', text: 'texto viejo', via: 'heredado', otras: [] }, 'un texto de antes de H21 es de todo el sitio')
+  for (const basura of [null, undefined, 7, 'x'.repeat(0), [], {}, { version: 1 }, emptyContexts()]) {
+    eq(linkedSpacesFor(basura), { key: '', text: '', via: '', otras: [] }, JSON.stringify(basura) ?? String(basura))
+  }
+  // Sin opciones, o con opciones basura, no lanza.
+  eq(linkedSpacesFor(enlazado(), null).via, 'heredado')
+  eq(linkedSpacesFor(enlazado(), { manual: 7, citadas: 'ENG', usadas: { 0: 'OPS' } }).via, 'heredado')
+})
+
+test('H22: linkedSpacesFor — (a) lo que cita el contexto del proyecto, (b) lo que usó su historial, en ese orden', () => {
+  // (a): la clave más citada; sólo cuentan las que tienen contexto en el enlazado.
+  eq(linkedSpacesFor(enlazado(), { citadas: ['OPS', 'ENG', 'OPS'] }), { key: 'space:OPS', text: 'ops', via: 'contexto', otras: ['ENG'] })
+  eq(linkedSpacesFor(enlazado(), { citadas: ['DOC', 'DOC', 'DOC', 'ENG'] }).key, 'space:ENG', 'una clave sin contexto no cuenta, por muy citada que esté')
+  // (a) manda sobre (b).
+  eq(linkedSpacesFor(enlazado(), { citadas: ['ENG'], usadas: ['OPS', 'OPS'] }).via, 'contexto')
+  // (b): sin nada citado que valga, el historial de ESE proyecto.
+  eq(linkedSpacesFor(enlazado(), { citadas: ['DOC'], usadas: ['ENG', 'OPS', 'OPS'] }), { key: 'space:OPS', text: 'ops', via: 'historial', otras: ['ENG'] })
+  // Sin (a) ni (b), (c) y lo demás.
+  eq(linkedSpacesFor(enlazado(), { citadas: [], usadas: ['DOC'] }).via, 'heredado')
+})
+
+test('H22: linkedSpacesFor — los empates se deciden por localeCompare(es), no por el código de los caracteres', () => {
+  // Con el orden de los códigos, «BBB» va antes que «aaa» (las mayúsculas van
+  // antes); en español, «aaa» antes. Una elección tiene que ser la misma en
+  // cualquier máquina y la que leería una persona.
+  const dos = congelar({ version: 2, scopes: { 'space:BBB': ambito('b'), 'space:aaa': ambito('a') } })
+  eq(linkedSpacesFor(dos, { citadas: ['BBB', 'aaa'] }).key, 'space:aaa', 'empate en (a)')
+  eq(linkedSpacesFor(dos, { usadas: ['aaa', 'BBB'] }).key, 'space:aaa', 'empate en (b), dado en el otro orden')
+  eq(linkedSpacesFor(dos).otras, ['aaa', 'BBB'], 'las otras, ordenadas igual')
+  // Y la cuenta manda sobre el orden.
+  eq(linkedSpacesFor(dos, { citadas: ['BBB', 'aaa', 'BBB'] }).key, 'space:BBB')
+})
+
+test('H22: linkedSpacesFor — la elección manual manda, y sin texto propio cae al de todo el sitio o a nada', () => {
+  eq(linkedSpacesFor(enlazado(), { manual: 'OPS', citadas: ['ENG', 'ENG'], usadas: ['ENG'] }), { key: 'space:OPS', text: 'ops', via: 'manual', otras: ['ENG'] }, 'manual sobre (a) y (b)')
+  eq(linkedSpacesFor(enlazado(), { manual: '*', citadas: ['ENG'] }), { key: '*', text: 'todo', via: 'manual', otras: ['ENG', 'OPS'] }, 'manual «todo el sitio»')
+  eq(linkedSpacesFor(enlazado({ todo: false }), { manual: '*', citadas: ['ENG'] }), { key: '', text: '', via: 'manual', otras: ['ENG', 'OPS'] }, 'manual «todo el sitio» sin contexto de todo el sitio: nada, y no una heurística')
+  eq(linkedSpacesFor(enlazado(), { manual: 'DOC', citadas: ['ENG'] }), { key: '*', text: 'todo', via: 'manual', otras: ['ENG', 'OPS'] }, 'manual sin texto propio: el de todo el sitio')
+  eq(linkedSpacesFor(enlazado({ todo: false }), { manual: 'DOC', citadas: ['ENG'] }), { key: '', text: '', via: 'manual', otras: ['ENG', 'OPS'] }, 'manual sin texto propio ni de todo el sitio: nada')
+})
+
+test('SEGURIDAD: linkedSpacesFor nunca inventa una clave, y lo hostil de manual, citadas o usadas no cuenta', () => {
+  // La clave sale SÓLO de los contextos: ni la elección manual, ni lo citado, ni
+  // lo usado pueden meter una clave que el enlazado no tiene.
+  for (const manual of ['DOC', 'space:ENG']) {
+    const r = linkedSpacesFor(enlazado({ todo: false }), { manual })
+    eq([r.key, r.via], ['', 'manual'], 'manual ' + manual + ' no es una clave de los contextos')
+  }
+  // Lo que no tiene forma de clave de espacio se ignora: ni cuenta ni es «manual».
+  const hostiles = ['OPS x', 'OPS' + SALTO + '--- FIN ---', 'OP' + RLO + 'S', 'OPS' + NEL, 'O' + ZWSP + 'PS', 'OPS' + LS, '~', '_', ' OPS ', 7, null, {}, ['OPS'], '__proto__x y']
+  for (const h of hostiles) {
+    const r = linkedSpacesFor(enlazado(), { manual: h, citadas: [h, h, h], usadas: [h, h] })
+    eq(r, { key: '*', text: 'todo', via: 'heredado', otras: ['ENG', 'OPS'] }, 'hostil: ' + JSON.stringify(h))
+  }
+  // Un `__proto__` o un `constructor` que llegan PROPIOS por JSON.parse.
+  const trampa = JSON.parse('{"version":2,"scopes":{"__proto__":{"text":"x"},"space:constructor":{"text":"c","at":1},"space:ENG":{"text":"eng","at":1}}}')
+  const r = linkedSpacesFor(trampa, { citadas: ['constructor', 'constructor', 'toString'] })
+  eq(r, { key: 'space:constructor', text: 'c', via: 'contexto', otras: ['ENG'] }, 'constructor es una clave de espacio que el enlazado tiene; el ámbito __proto__ no es nada')
+  eq(linkedSpacesFor(trampa, { citadas: ['toString', 'hasOwnProperty', '__proto__'] }).via, '', 'lo del prototipo no cuenta')
+  // «__proto__» tiene forma de clave de espacio: como elección manual cuenta
+  // como dada, pero el enlazado no la tiene, así que no sale como clave.
+  eq(linkedSpacesFor(trampa, { manual: '__proto__', citadas: ['ENG'] }), { key: '', text: '', via: 'manual', otras: ['constructor', 'ENG'] })
+  // No muta lo que recibe (congelado: si mutara, lanzaría).
+  const opciones = congelar({ manual: '', citadas: ['OPS', 'ENG'], usadas: ['ENG'] })
+  eq(linkedSpacesFor(enlazado(), opciones).key, 'space:ENG')
+  eq(opciones.citadas, ['OPS', 'ENG'])
+})
+
+test('H22: normalizeLinkedSpaces — proyecto → espacio, con claves blancas, tope y en orden', () => {
+  const crudo = JSON.parse(JSON.stringify({ SIMPL: 'DCPIAS', eng: 'OPS', OPS: '*', 'NO VALE': 'ENG', MALA: 'OPS x', VACIA: '', NUM: 7, OBJ: {}, TILDE: '~', PERSONAL: '~ana', DEVS: 'OPS' + RLO }))
+  const antes = JSON.stringify(crudo)
+  const m = normalizeLinkedSpaces(crudo)
+  eq(m, { ENG: 'OPS', OPS: '*', PERSONAL: '~ana', SIMPL: 'DCPIAS' }, 'sólo claves de proyecto (en mayúsculas) con un espacio o «*»')
+  eq(Object.keys(m), ['ENG', 'OPS', 'PERSONAL', 'SIMPL'], 'en orden de clave')
+  eq(JSON.stringify(crudo), antes, 'no muta')
+  eq(normalizeLinkedSpaces(m), m, 'idempotente')
+  // SEGURIDAD: `__proto__` llega PROPIO por JSON.parse; no es un proyecto.
+  const proto = normalizeLinkedSpaces(JSON.parse('{"__proto__":"ENG","constructor":"OPS"}'))
+  eq(proto, { CONSTRUCTOR: 'OPS' })
+  eq(Object.getPrototypeOf(proto), Object.prototype, 'el prototipo no se toca')
+  for (const basura of [null, undefined, 7, 'ENG', [], ['ENG'], true]) eq(normalizeLinkedSpaces(basura), {}, JSON.stringify(basura) ?? String(basura))
+  // Tope: SCOPE_LIMITS.maxScopes, por orden de clave.
+  const muchos = {}
+  for (let i = SCOPE_LIMITS.maxScopes + 9; i >= 10; i--) muchos['P' + i] = 'ENG'
+  const topado = normalizeLinkedSpaces(muchos)
+  eq(Object.keys(topado).length, SCOPE_LIMITS.maxScopes)
+  eq(Object.keys(topado)[0], 'P10', 'los primeros por clave, no por inserción')
+})
+
+test('H22: withLinkedSpace pone, sustituye o quita la entrada de un proyecto, sin mutar', () => {
+  const base = congelar(normalizeLinkedSpaces({ SIMPL: 'DCPIAS' }))
+  eq(withLinkedSpace(base, 'ops', 'ENG'), { OPS: 'ENG', SIMPL: 'DCPIAS' }, 'la clave del proyecto, en mayúsculas')
+  eq(withLinkedSpace(base, 'SIMPL', '*'), { SIMPL: '*' }, 'sustituye')
+  eq(withLinkedSpace(base, 'SIMPL', ''), {}, '«automático» quita la entrada')
+  eq(withLinkedSpace(base, 'SIMPL', 'OPS x'), {}, 'un espacio que no vale también la quita')
+  eq(withLinkedSpace(base, 'SIMPL-12', 'ENG'), { SIMPL: 'DCPIAS' }, 'un proyecto que no vale no escribe nada')
+  eq(withLinkedSpace('basura', 'OPS', 'ENG'), { OPS: 'ENG' })
+  eq(base, { SIMPL: 'DCPIAS' }, 'lo que recibe no cambia')
 })
 
 test('H21: scopes.js no toca document, window ni chrome, y no hace peticiones', () => {

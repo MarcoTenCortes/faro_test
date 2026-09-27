@@ -21,9 +21,14 @@
  * `sites[host]` ni en cookies: es un rastro local de qué incidencias analizó el
  * usuario —claves, ids y títulos, nunca texto—, tiene su propio tamaño y su
  * propia caducidad, y tiene que poder borrarse solo («Olvidar el historial»)
- * sin llevarse el modelo ni el MCP del sitio. Y NUNCA entra en un prompt: lo
- * único que sale de aquí son puntos y un motivo escrito por la extensión
- * (CLAUDE.md §8.20).
+ * sin llevarse el modelo ni el MCP del sitio. Y NO APORTA TEXTO a ningún prompt:
+ * de aquí salen puntos y un motivo escrito por la extensión (CLAUDE.md §8.20)
+ * y, desde H22, UNA cosa más, que es una elección y no un contenido: por la
+ * regla (b) de `linkedSpacesFor` (docs/PLAN2.md §3.4), el espacio de las páginas
+ * base que usaron los análisis de un proyecto elige QUÉ contexto del Confluence
+ * enlazado viaja desde ese proyecto (`applyLinkedScope` del panel). Lo que viaja
+ * es ese contexto, escrito por el indexador o subido por el usuario; ni una
+ * clave, ni un título, ni una palabra de esta lista llega al modelo.
  *
  * La lógica es pura —lo que entra del almacenamiento se reconstruye con claves
  * blancas y el reloj se inyecta—, y al final del fichero viven las tres

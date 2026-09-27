@@ -611,7 +611,7 @@ Veinte decisiones que sostienen el diseño:
 17. **Lo que Faro guarda de ti se ve en una lista, y se borra con un botón.**
    En **Ajustes → Qué guarda Faro de mí** hay una línea por cada cosa que Faro
    guarda de este sitio —el índice de navegación, el contexto, la memoria entre
-   sesiones, el perfil del proyecto, el historial de páginas base, el diario de
+   sesiones, los perfiles de los proyectos, el historial de páginas base, el diario de
    actividad, las últimas búsquedas y las páginas base elegidas—, cada una con
    su cuenta o su medida y **sin una línea de su contenido**; debajo, el espacio
    que ocupa todo en el navegador y qué otros sitios tienen datos guardados.
@@ -672,7 +672,16 @@ Veinte decisiones que sostienen el diseño:
    espacio si el mapa guardado era de ese espacio y se sabe cuándo se indexó
    —también el que subiste a mano, porque subirlo reindexaba el espacio—, y la
    lista lo dice («migrado del contexto de antes de H21»); si no, sigue valiendo
-   para todo el sitio, como hasta ahora.
+   para todo el sitio, como hasta ahora. **Y en Jira, desde H22, también por
+   proyecto:** el perfil del proyecto (tipos, estados y sus ids) se guarda uno
+   por proyecto —volver a un proyecto que ya se contó no lo vuelve a contar—, y
+   del Confluence enlazado viaja el contexto del espacio donde se documenta ESE
+   proyecto: el que elijas en **Ajustes → Este sitio** («El proyecto «SIMPL» se
+   documenta en el espacio…»), que manda; si no eliges, el de las páginas que
+   cita el contexto del proyecto, el de las páginas base que usaste en sus
+   análisis, el único espacio con contexto o el de todo el sitio. El historial
+   de análisis sólo ayuda a elegir el espacio: su texto no entra en ninguna
+   pregunta.
 
 ---
 
@@ -692,7 +701,8 @@ Veinte decisiones que sostienen el diseño:
 sitio (es justo lo que enseña «Qué guarda Faro de mí»): el **índice** (desde
 H21, con las páginas de cada espacio que hayas mapeado), el **contexto** de
 cada espacio o proyecto (desde H21 uno por ámbito, y el de todo el sitio), la **memoria entre sesiones** si la tienes activada, el
-**perfil del proyecto**, el **historial de páginas base**, el **diario de
+**perfil de cada proyecto** (desde H22 uno por proyecto), el **espacio enlazado
+que elegiste para cada proyecto**, el **historial de páginas base**, el **diario de
 actividad** (30 días), las **páginas base elegidas** con su alcance, las
 **últimas búsquedas** y la **Skill** de ese sitio; y, de TODOS los sitios, tu
 **modelo elegido** y los **veredictos de modelos** (qué modelos han contestado y
@@ -724,7 +734,7 @@ cuáles no), que desde H16 son tuyos y no de un sitio.
 ## Comprobaciones
 
 ```bash
-npm run check              # sintaxis + orden + manifest + 1478 pruebas unitarias + docs
+npm run check              # sintaxis + orden + manifest + 1495 pruebas unitarias + docs
 npm run check:docs         # sólo el paso docs: número de pruebas, títulos del registro, mensajes y ficheros del mapa
 npm run test:integration   # contra un opencode real que arranca la propia prueba
 npm run harness            # banco de pruebas visual en http://127.0.0.1:5175
@@ -1374,14 +1384,14 @@ src/
   nav/                      esquema NavigationPlan y su validación
   shared/
     rest-get.js             la única puerta por la que Faro lee una API REST: sólo GET, sólo al mismo sitio, con tope de tiempo y sin lanzar nunca (puro)
-    jira-rest.js            lo que la API del propio Jira da exacto: consultas de plantilla, filas con claves blancas, el perfil contado de un proyecto y las búsquedas sugeridas; en Jira Cloud no pide nada (puro)
+    jira-rest.js            lo que la API del propio Jira da exacto: consultas de plantilla, filas con claves blancas, el perfil contado de un proyecto (desde H22 uno por proyecto dentro del host: normalizeProfiles, withProfile) y las búsquedas sugeridas; en Jira Cloud no pide nada (puro)
     confluence-rest.js      el árbol y la búsqueda de páginas por la API REST del sitio, con tu sesión; lo último que viste y el árbol entero de un espacio, paginado (puro)
     digest.js               cómo se enseñan los bloques y cómo se reconoce uno después (puro)
     config.js               ajustes por defecto y su migración (el modelo es de la persona); el plazo de la sonda de «Comprobar»; NAV_TIMING, el único sitio con los tiempos de la navegación; los topes de la eficiencia (cuántos mensajes se piden al restaurar, cuándo se avisa de una conversación pesada); y la lista de lo que Faro guarda, con el área del navegador en la que vive cada cosa
     activity-store.js       dónde vive ese diario y cómo se escribe sin que el service worker y el panel se pisen
     storage.js              lo guardado del navegador; todo lo de un sitio en UNA lectura (getSiteBundle), lo que arrastra la sesión abierta, y «olvidar este sitio» en una sola función que deriva de esa lista lo que borra
     mcp-config.js           la única barrera de lo que Faro puede escribir en la configuración de opencode: sólo entradas de MCP con forma fija, comando de lista blanca y las diez variables (puro)
-    scopes.js               el ámbito (H21): de qué espacio o proyecto es cada contexto y cada página del índice, qué contexto toca a la pestaña, si un espacio tiene mapa y cuándo el mapa está lleno (puro)
+    scopes.js               el ámbito (H21): de qué espacio o proyecto es cada contexto y cada página del índice, qué contexto toca a la pestaña, si un espacio tiene mapa y cuándo el mapa está lleno, y desde H22 qué espacio del Confluence enlazado viaja desde cada proyecto de Jira (linkedSpacesFor) (puro)
     permissions.js          los permisos de cada sesión de opencode: todo denegado salvo el MCP, y una copia de cómo los evalúa opencode para probarlo (puro)
     timing.js               el cronómetro por fases que el registro enseña: sólo etiquetas y números, nunca cuerpos ni claves (puro)
     models.js               elegir modelo, y desde H16 qué enseña un fallo: clasificarlo, sacar de él los veredictos (también de proveedor y de la lista de Copilot), recordarlos con caducidad y que ninguna elección automática vuelva a caer en lo que falló (puro)

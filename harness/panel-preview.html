@@ -271,6 +271,7 @@ async function arrancar() {
     { ACTIVITY_LIMITS, emptyActivity, preferredFamilies, recordVisit, touchActivity },
     { preloadNote },
     { clockTime },
+    { emptyContexts, linkedSpacesFor, withContext },
   ] = await Promise.all([
     import('/src/panel/setup.js'),
     import('/src/panel/markdown.js'),
@@ -288,6 +289,7 @@ async function arrancar() {
     import('/src/atlassian/activity.js'),
     import('/src/panel/prompts.js'),
     import('/src/shared/format.js'),
+    import('/src/shared/scopes.js'),
   ])
 
   const $ = (id) => doc.getElementById(id)
@@ -1581,6 +1583,44 @@ async function arrancar() {
   }
 
   /**
+   * H22: el selector de Ajustes «El proyecto «SIMPL» se documenta en el
+   * espacio…», en la conversación «Jira · SIMPL-1234» (en las demás se esconde,
+   * como en el panel fuera de un Jira con Confluence enlazado). Qué elegiría
+   * «Automático» lo decide `linkedSpacesFor` DE VERDAD sobre dos espacios con
+   * contexto (DCPIAS y SIMPL) y una página del contexto del proyecto citada en
+   * DCPIAS; los textos son copia de `linkedChoiceText`/`linkedHintText` del
+   * panel, con los MISMOS literales (el test lo pina). Declaración `function`,
+   * por la TDZ (H17).
+   */
+  function pintarSelectorEnlazado() {
+    const campo = $('set-linked-space-field')
+    const enJira = estado.chat === 'jira'
+    campo.classList.toggle('hidden', !enJira)
+    if (!enJira) return
+    let ctxs = emptyContexts()
+    ctxs = withContext(ctxs, 'space:DCPIAS', { text: 'Contexto del espacio DCPIAS.', indexedAt: Date.now() })
+    ctxs = withContext(ctxs, 'space:SIMPL', { text: 'Contexto del espacio SIMPL.', indexedAt: Date.now() })
+    const auto = linkedSpacesFor(ctxs, { citadas: ['DCPIAS'], usadas: [] })
+    const espacio = auto.key.slice('space:'.length)
+    $('set-linked-space-label').textContent = 'El proyecto «SIMPL» se documenta en el espacio'
+    const select = $('set-linked-space')
+    select.textContent = ''
+    for (const [valor, texto] of [
+      ['', `Automático (hoy ${espacio}, por el contexto)`],
+      ['*', 'Todo el sitio'],
+      ['DCPIAS', 'DCPIAS'],
+      ['SIMPL', 'SIMPL'],
+    ]) {
+      const o = doc.createElement('option')
+      o.value = valor
+      o.textContent = texto
+      o.selected = valor === ''
+      select.appendChild(o)
+    }
+    $('set-linked-space-hint').textContent = `Viaja el contexto del espacio «${espacio}» de confluence.simplprogramme.eu.`
+  }
+
+  /**
    * «Mapas y contextos de este sitio», en Ajustes (H21), rellena a mano con tres
    * ámbitos —dos espacios y el de todo el sitio— y el formato de
    * `paintScopeList`: `scopeLabel` en la clave, las cuentas en el valor y un
@@ -1774,7 +1814,9 @@ async function arrancar() {
     ['índice de navegación', '212 páginas en 2 espacios · 34 incidencias'],
     ['contexto del sitio', '3 ámbitos con contexto (ENG, OPS, todo el sitio)'],
     ['memoria entre sesiones', '3 resúmenes'],
-    ['perfil del proyecto', 'ENG · muestra de 28 · contado hace 2 días'],
+    // H22: los perfiles son POR PROYECTO, y la fila dice cuántos, de cuáles y,
+    // del que hay delante, su muestra, con el formato de `paintPrivacy`.
+    ['perfiles de proyectos', '2 proyectos con perfil (ENG, OPS) · el de ENG: muestra de 28 · contado hace 2 días'],
     ['historial de páginas base', '5 análisis'],
     ['diario de actividad', '12 entradas · 2 descartes'],
     ['últimas búsquedas', '(nada)'],
@@ -2202,6 +2244,7 @@ async function arrancar() {
     pintarPaginasBase()
     pintarChat()
     pintarPantallaHoy()
+    pintarSelectorEnlazado()
   }
 
   lado.querySelectorAll('[data-screen]').forEach((b) =>
@@ -2378,6 +2421,9 @@ async function arrancar() {
     // final y envuelven: lo que esto caza es que se salgan a lo ancho.
     '.no-map',
     '#scope-list li',
+    // H22: el selector del espacio enlazado, con una opción larga («Automático
+    // (hoy DCPIAS, por el contexto)») que no puede empujar Ajustes a lo ancho.
+    '#set-linked-space-field',
     // H15: el consejo del MCP caído en las dos mitades de la pantalla de claves,
     // con el comando para copiar (su `code` desplaza a lo ancho dentro de su
     // caja; lo que esto caza es que la caja entera se salga).
@@ -2549,6 +2595,7 @@ async function arrancar() {
   pintarEnvio()
   pintarChat()
   pintarPantallaHoy()
+  pintarSelectorEnlazado()
   mostrarPantalla('')
   pintarMedidas()
 

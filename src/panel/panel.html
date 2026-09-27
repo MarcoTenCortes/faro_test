@@ -410,6 +410,14 @@
 
     <h2>Este sitio</h2>
     <p class="fine" id="settings-site-info"></p>
+    <!-- H22: desde un Jira con Confluence enlazado, qué espacio documenta este
+         proyecto. Nace oculto; lo rellena el panel con los espacios del enlazado
+         que tienen contexto, y lo elegido aquí manda sobre las reglas. -->
+    <div class="field hidden" id="set-linked-space-field">
+      <label for="set-linked-space" id="set-linked-space-label">Este proyecto se documenta en el espacio</label>
+      <select id="set-linked-space"></select>
+      <p class="fine" id="set-linked-space-hint"></p>
+    </div>
     <div class="row wrap">
       <button class="ghost" id="btn-reindex" type="button">Reconstruir el contexto</button>
       <button class="ghost" id="btn-edit-keys" type="button">Cambiar las claves</button>

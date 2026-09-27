@@ -3420,6 +3420,47 @@ const actions = {
         enElPerfil52.length === 0,
       `${gente52.length} personas en la fixture, ${enElPerfil52.length} en el perfil · campos ${jiraRest.SAMPLE_FIELDS.join(',')}`
     )
+    // H22: el perfil es POR PROYECTO dentro del host. Hasta H22 se guardaba UNO
+    // por host y alternar entre dos proyectos del mismo Jira volvía a contar en
+    // cada salto; ahora la misma clave guarda `{ version, byProject }`. Se cuentan
+    // ENG y OPS de la MISMA Jira de mentira, se guardan en el contenedor y cada
+    // proyecto recibe el suyo. Qué incidencias tiene cada uno lo dice la
+    // fixture, no el tramo; y ENG sigue contando lo de siempre (tantos tipos y
+    // estados como la fixture le da).
+    const muestraOps52 = await jiraRest.searchIssues(pideApi, sitioJira, jiraRest.sampleQuery('OPS'), opciones52)
+    const deOPS52 = FIX.issues.filter((i) => i.key.startsWith('OPS-'))
+    const perfilOps52 = jiraRest.profileFromSample(muestraOps52.issues, { projectKey: 'OPS', now: 3 })
+    const perfiles52 = jiraRest.withProfile(jiraRest.withProfile(jiraRest.emptyProfiles(), perfil52), perfilOps52)
+    const deEng52 = jiraRest.profileForProject(perfiles52, 'ENG')
+    const deOps52 = jiraRest.profileForProject(perfiles52, 'OPS')
+    const migrado52 = jiraRest.normalizeProfiles(JSON.parse(JSON.stringify(perfil52)))
+    const distintos52 = (lista, campo) => new Set(lista.map((i) => i[campo])).size
+    ok(
+      'H22: dos proyectos, dos perfiles en el mismo contenedor: cada uno el suyo, sin personas, y el perfil suelto de antes migra bajo su clave',
+      muestraOps52.ok &&
+        deOPS52.length > 0 &&
+        perfilOps52.sampled === deOPS52.length &&
+        perfilOps52.types.length === distintos52(deOPS52, 'type') &&
+        perfilOps52.statuses.length === distintos52(deOPS52, 'status') &&
+        deEng52?.projectKey === 'ENG' &&
+        deOps52?.projectKey === 'OPS' &&
+        deEng52 !== deOps52 &&
+        sinFecha52(deEng52) === sinFecha52(perfil52) &&
+        sinFecha52(deOps52) === sinFecha52(perfilOps52) &&
+        Object.keys(perfiles52.byProject).join(',') === 'ENG,OPS' &&
+        JSON.stringify(jiraRest.normalizeProfiles(perfiles52)) === JSON.stringify(perfiles52) &&
+        Object.keys(migrado52.byProject).join(',') === 'ENG' &&
+        JSON.stringify(migrado52.byProject.ENG) === JSON.stringify(jiraRest.normalizeProfile(perfil52)) &&
+        jiraRest.profileForProject(perfiles52, 'SIMPL') === null &&
+        muestraOps52.issues.every((i) => !i.assignee && !i.reporter) &&
+        [deEng52, deOps52].every((p) => gente52.every((quien) => !JSON.stringify(p).includes(quien))) &&
+        perfil52.sampled === deENG52.length &&
+        perfil52.types.length === distintos52(deENG52, 'type') &&
+        perfil52.statuses.length === distintos52(deENG52, 'status'),
+      `ENG ${deEng52?.sampled} incidencias · ${deEng52?.types.length} tipos · ${deEng52?.statuses.length} estados · ` +
+        `OPS ${deOps52?.sampled} incidencias · ${deOps52?.types.length} tipos · ${deOps52?.statuses.length} estados · ` +
+        `contenedor ${Object.keys(perfiles52.byProject).join(',')} · migrado ${Object.keys(migrado52.byProject).join(',')}`
+    )
     // Y con el perfil contado, los chips de estado que H8 dejó previstos tienen
     // por fin qué ofrecer: los estados de verdad del flujo de este proyecto, no
     // los que el modelo supondría. Desde H14 la consulta va por el ID que el

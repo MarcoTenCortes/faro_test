@@ -50,7 +50,7 @@ Cinco piezas: la página (Jira/Confluence) · la extensión · opencode · el LL
 ## 2. Arrancar y comprobar
 
 ```bash
-npm run check              # sintaxis + TDZ + manifest + 1478 pruebas unitarias + docs (sólo si las unitarias pasan)
+npm run check              # sintaxis + TDZ + manifest + 1495 pruebas unitarias + docs (sólo si las unitarias pasan)
 npm run check:docs         # sólo el paso docs, informe entero; sale con 1 si hay errores
 npm run test:integration   # su propio opencode serve (4123) y el cliente real; GASTA turnos de pago
 npm run harness            # Confluence de mentira en http://127.0.0.1:5175 (preview_start "harness")
@@ -105,13 +105,13 @@ Qué es cada fichero, en una línea; el mapa largo (qué hizo cada hito en cada 
 
 ```
 manifest.json  MV3, sidePanel, use_dynamic_url (S7) (docs/MAPA.md)
-src/panel/panel.js  el panel, ÚNICO que habla con opencode: estado, chat, turnos (docs/FLUJOS.md §4.1)
-src/panel/panel.html  las pantallas; ids pinados por test (docs/MAPA.md)
+src/panel/panel.js  el panel, ÚNICO que habla con opencode: estado, chat, turnos; H22 applyLinkedScope (docs/FLUJOS.md §4.1)
+src/panel/panel.html  las pantallas; ids pinados por test; H22 #set-linked-space en Ajustes (docs/MAPA.md)
 src/panel/panel.css  sobre tokens, claro y oscuro; contraste pinado (docs/REFERENCIA.md §9)
 src/panel/chat-scroll.js  stuckToBottom: ¿chat pegado al fondo? (A7) (docs/MAPA.md)
 src/panel/screens.js  ESCAPE_CLOSES/ESCAPE_DISMISSES (A3) (docs/MAPA.md)
 src/panel/links.js  allowedLinkOrigin: qué enlaces se abren (S5) (docs/MAPA.md)
-src/panel/prompts.js  baseSystem y los bloques delimitados (docs/FLUJOS.md §4.2)
+src/panel/prompts.js  baseSystem y los bloques delimitados; H22 linkedScopesLine (docs/FLUJOS.md §4.2)
 src/panel/skills.js  SKILLS y skillSystem (docs/FLUJOS.md §4.7)
 src/panel/sources.js  páginas base; consultedOutside (docs/FLUJOS.md §4.4)
 src/panel/suggestions.js  las tres sugerencias del chat vacío (H5) (docs/MAPA.md)
@@ -150,15 +150,15 @@ src/nav/schema.js  NAVIGATION_PLAN_SCHEMA, TARGET_KINDS (docs/MAPA.md)
 src/nav/validate.js  validatePlan/validateAnchor (docs/REFERENCIA.md §8)
 src/nav/options.js  navOptions: «Paso a paso» / «Llévame» (docs/MAPA.md)
 src/shared/config.js  constantes, límites, STORAGE_KEYS (docs/REFERENCIA.md §6)
-src/shared/scopes.js  el ámbito del contexto y del mapa (H21) (docs/FLUJOS.md §4.6)
+src/shared/scopes.js  el ámbito del contexto y del mapa (H21); H22 linkedSpacesFor por proyecto (docs/FLUJOS.md §4.6)
 src/shared/permissions.js  SAFE_PERMISSIONS (S1) (docs/REFERENCIA.md §7)
 src/shared/mcp-config.js  la ÚNICA barrera de escritura en opencode (H18) (docs/REFERENCIA.md §8)
 src/shared/messages.js  MSG y sendToTab (docs/MAPA.md)
-src/shared/storage.js  getSiteBundle, forgetEverythingFor (docs/FLUJOS.md §4.11)
+src/shared/storage.js  getSiteBundle, forgetEverythingFor; H22 getProfiles/saveProfiles (docs/FLUJOS.md §4.11)
 src/shared/activity-store.js  el diario, con su cola (H11) (docs/FLUJOS.md §4.10)
 src/shared/digest.js  formatDigest, matchBlock (docs/MAPA.md)
 src/shared/rest-get.js  la ÚNICA puerta REST: getJson (H7) (docs/FLUJOS.md §4.9)
-src/shared/jira-rest.js  la REST de Jira (docs/FLUJOS.md §4.9)
+src/shared/jira-rest.js  la REST de Jira; H22 perfiles por proyecto (normalizeProfiles) (docs/FLUJOS.md §4.9)
 src/shared/confluence-rest.js  la REST de Confluence (docs/FLUJOS.md §4.9)
 src/shared/timing.js  cronómetro por fases (H3) (docs/MAPA.md)
 src/shared/models.js  veredictos y elección de modelo (H16) (docs/REFERENCIA.md §8)
@@ -170,7 +170,7 @@ src/atlassian/index-store.js  el índice, SÓLO rutas (docs/REFERENCIA.md §6)
 src/opencode/client.js  OpencodeClient: fetch + SSE, runTurn (docs/REFERENCIA.md §7)
 src/opencode/turn.js  TurnTracker (docs/MAPA.md)
 harness/index.html  banco: páginas falsas y ENG-7 (docs/REFERENCIA.md §2)
-harness/harness.js  selfcheck 1-63 del banco (docs/REFERENCIA.md §2)
+harness/harness.js  selfcheck 1-63 del banco; el 52 con dos proyectos (H22) (docs/REFERENCIA.md §2)
 harness/harness.css  estilos del banco (docs/BITACORA.md)
 harness/issues.json  la Jira de mentira: 40 incidencias (docs/MAPA.md)
 harness/panel-preview.html  espejo del panel (docs/REFERENCIA.md §2)
@@ -254,7 +254,7 @@ Cada contrato con su porqué y sus bordes, en docs/REFERENCIA.md §6; aquí, la 
 - **Tiempos del panel** (`state.timing`): `{boot, turn}`; foto `['phases', 'total']`/`['label', 'ms']`.
 - **Ubicación de la cabecera** (`locationParts`): `{key, title}`.
 - **Enlace del chat** (`allowedLinkOrigin`): origen EXACTO; `EXTENSION_ORIGINS`.
-- **Sitio guardado** (`sites[host]`): registro de `siteRecords` con claves en este orden `configured, mcpName, product, cloud, verified, jiraHost|confluenceHost`; `verified` ausente = verificado, sólo `false` explícito en un `configured: true` avisa (`keysUnverified`).
+- **Sitio guardado** (`sites[host]`): registro de `siteRecords` con claves en este orden `configured, mcpName, product, cloud, verified, jiraHost|confluenceHost`; `verified` ausente = verificado, sólo `false` explícito en un `configured: true` avisa (`keysUnverified`). De H22, `linkedSpaces` (proyecto → espacio o `'*'`, `normalizeLinkedSpaces`), escrito entero sólo por el selector.
 - **Claves de un producto** (`buildMcpConfig`): `['command', 'enabled', 'environment', 'timeout', 'type']`; `mcpFailureHint` `{copy, kind, retry, text}`.
 - **Entrada MCP que Faro escribe** (`validMcpEntry`): claves EXACTAS `['command', 'enabled', 'environment', 'timeout', 'type']` (una de más la INVALIDA), `type` `'local'`, `command` de lista blanca o byte a byte el de `GET /config`; diez `MCP_ENV_KEYS`, ≤4096, `timeout` 1000..600000.
 - **Respuesta de las puertas de escritura**: `{ok, status, kind}` y NADA de la respuesta de opencode (trae los tokens); `configureMcp` `['ok','status','kind','name','block','reuse','standard']`, `kind: 'config'` = no se escribió; `paths()` `{config, state, home}`.
@@ -274,10 +274,10 @@ Cada contrato con su porqué y sus bordes, en docs/REFERENCIA.md §6; aquí, la 
 - **Campos de la incidencia** (`normalizeIssueFields`): `ISSUE_REF_KEYS` `['epicKey','statusCategory']`.
 - **Campos leídos para los chips** (`state.issueFields`): `{url, fields}`.
 - **La comprobación del MCP** (`state.mcpCheck`): nunca rechaza; `state.mcpPending`.
-- **Confluence enlazado como sitio** (`linkedSite`).
+- **Confluence enlazado como sitio** (`linkedSite`). En memoria (`state.linkedContext`, H22): `{host, ctxs, index, wikiPrefix, contextMd, contextScope, otherScopes, via}` en ese orden, rellenado por `applyLinkedScope` con `linkedSpacesFor` → `{key, text, via, otras}`.
 - **Fallo de una lectura REST de Jira**: `reason` código.
 - **Incidencia leída de la API** (`parseSearchIssues`): `['assignee','components','epicKey','key','labels','lastViewedAt','parentKey','priority','priorityId','reporter','status','statusCategory','statusId','summary','type','typeId','updatedAt']`; ids sólo dígitos; personas nunca en un prompt.
-- **Perfil del proyecto** (`normalizeProfile`): `['at','components','labels','prefixes','projectKey','sampled','statuses','types','version']`, `PROFILE_VERSION` 2 (la 1 se descarta), sin personas.
+- **Perfiles por proyecto** (`normalizeProfiles`, H22): contenedor `['version', 'byProject']`, `PROFILES_VERSION` 1, tope `profileProjects` 20 (los de `at` más reciente); el perfil suelto de antes migra bajo su clave. Cada perfil (`normalizeProfile`): `['at','components','labels','prefixes','projectKey','sampled','statuses','types','version']`, `PROFILE_VERSION` 2 (la 1 se descarta), sin personas.
 - **Búsqueda sugerida** (`suggestedQueries`): `['jql','kind','label']`.
 - **Chip de búsqueda** (`searchChips`): `['jql','kind','label','run','title']`.
 - **Búsqueda precargada** (`state.pendingPreload`).
@@ -344,7 +344,7 @@ Sólo el enunciado; el porqué, el incidente que la motivó y sus matices están
 23. **Enseñar traducido, preguntar por id** — en JQL, tipo/estado/prioridad por id (`porIdONombre`, F5); lo del equipo, por nombre.
 24. **Faro sólo escribe MCP en opencode** — una barrera (`mcp-config.js`) y dos puertas: `updateMcpEntries` y `reloadGlobalConfig`, nunca un PATCH genérico ni `POST /mcp`; nunca `/config` de proyecto ni `agent`/`permission`/`plugin`/`command`; sin configuración legible no se escribe. Con permiso, `reconfiguring()`, `sensitive`, sin pisar lo que no pidió; quitar = entrada entera `enabled: false`. Pruebas sólo en `npm run sandbox`.
 25. **El modelo es de la persona** — `settings.model` global; `resolveModel` nunca elige solo, se elige en «Elige el modelo». Fallos clasificados gratis en `faro:model-checks` con TTL; la única sonda es «Comprobar» (`probeModel`).
-26. **El ámbito, unidad del contexto** — contexto por `space:`/`project:`/`'*'` en la misma clave, índice por host sin partir; migración a `'*'` en la duda. «Tiene mapa» = `hasMap` (sólo `indexedAt`); tope total sin desalojo; ninguna clave nueva en `STORAGE_KEYS` por ámbito.
+26. **El ámbito, unidad del contexto** — contexto por `space:`/`project:`/`'*'` en la misma clave, índice por host sin partir; migración a `'*'` en la duda. «Tiene mapa» = `hasMap` (sólo `indexedAt`); tope total sin desalojo; ninguna clave nueva en `STORAGE_KEYS` por ámbito. En Jira (H22), por proyecto también el perfil (`byProject`) y el contexto del enlazado que viaja (`linkedSpacesFor`; lo elegido a mano manda).
 
 ## 9. Convenciones de código
 - Cabecera `/** … */` en cada módulo con POR QUÉ existe y el incidente que lo motivó; comentarios de razones, no de mecánica.
@@ -419,8 +419,9 @@ Los pasos completos, con el porqué de cada regla: docs/REFERENCIA.md §11.
 | H18 | MCP por `PATCH /global/config`, sandbox | `…h18-mcp-automatico` · 80e7ce9 + 8188813 | 1416 |
 | H19 | «Quitar las claves de este sitio» | `…h19-quitar-claves` · 9f65b73 + 8bb5298 | 1431 |
 | H21 | Contexto y mapa por ámbito (`scopes.js`) | `…h21-multi-espacio` · 4a62170 + 9a7780a | 1478 |
+| H22 | Jira por proyecto: perfiles `byProject`, `linkedSpacesFor` y su selector | `plan/h22-jira-por-proyecto` · (construcción al cerrar) | 1495 |
 
-Ramas `plan/…`. **Dónde vive:** 22 ramas apiladas sobre `40f56d7`, nada pusheado ni PR, `main` local en `523c25f`; H20 saltado (manual, con gasto); H22 a medias en `plan/h22-jira-por-proyecto` (df84c10, un commit WIP en el que `npm run check` NO pasa; traspaso en docs/plan/handoff/ESTADO.md); este mapa (Tarea 0, 2026-09-27) es la rama `plan/docs-mapa`, sobre `2684f14` y debajo de H22.
+Ramas `plan/…`. **Dónde vive:** 22 ramas apiladas sobre `40f56d7`, nada pusheado ni PR, `main` local en `523c25f`; H20 saltado (manual, con gasto); H22 construido en `plan/h22-jira-por-proyecto` sobre el WIP d8df6d7, sin commit, pendiente de la verificación del orquestador y de su revisión adversaria (docs/plan/handoff/ESTADO.md); este mapa (Tarea 0, 2026-09-27) es la rama `plan/docs-mapa`, sobre `2684f14` y debajo de H22.
 
 **Límites que no son de ningún hito:**
 - Jira Cloud sin REST de Jira (410): todo por el MCP (`sinRestDeJira`).
@@ -440,7 +441,7 @@ Detalle por hito: docs/BITACORA.md §12.2.
 2. ~~P5, MCP fuera del camino crítico~~ RESUELTA en H14: hecho.
 3. `test:integration` gasta turnos de pago: cuándo correrlo.
 4. `jiraPrefix` no se guarda (sin instancia con ruta de contexto).
-5. Un perfil por host, no por proyecto (lo cierra H22).
+5. ~~Un perfil por host~~ RESUELTA en H22: uno por proyecto (`byProject`).
 6. Las ramas, sin push ni PR: apiladas o aplastadas.
 7. Topes puestos a ojo (`TODAY_LIMITS`, `SIGNALS`, TTL…).
 8. «Copiar observaciones» copia Markdown tal cual.
@@ -448,5 +449,5 @@ Detalle por hito: docs/BITACORA.md §12.2.
 10. Decisiones 6-8 de PLAN2 §8: TOMADAS en H17.
 11. Decisiones 1, 2 y 4 de PLAN2 §8: TOMADAS en H18.
 12. Decisión 3 de PLAN2 §8: TOMADA en H19 (no hay quitar UN producto).
-13. Decisión 9 de PLAN2 §8: TOMADA en H21; lo de Jira es de H22.
+13. Decisión 9 de PLAN2 §8: TOMADA en H21 y H22 (lo de Jira, hecho; «manual manda», desvío anotado).
 Detalle: docs/BITACORA.md §12.3.

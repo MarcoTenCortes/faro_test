@@ -306,6 +306,13 @@ export function baseSystem({
       LINKED_CLOSE,
       contentRule('un resumen de páginas de ese Confluence')
     )
+  } else if (enJira && linkedContext) {
+    // Sin contexto enlazado que viaje (H22: con dos espacios y nada que elija
+    // uno, `linkedSpacesFor` no elige ninguno), una línea de Faro dice de qué
+    // espacios del enlazado hay contexto, en el sitio del bloque. La dice Faro,
+    // así que no lleva la regla del contenido detrás.
+    const linea = linkedScopesLine(linkedContext.host, linkedContext.otherScopes)
+    if (linea) out.push('', linea)
   }
 
   if (memoryMd?.trim()) {
@@ -468,6 +475,31 @@ export function otherScopesLine(keys) {
   const vistas = validas.slice(0, SCOPE_LIMITS.keysShown).map((k) => `«${k}»`)
   const resto = validas.length - vistas.length
   return `Este sitio tiene mapa de otros espacios: ${vistas.join(', ')}${resto > 0 ? ` y ${resto} más` : ''}.`
+}
+
+/**
+ * La línea que dice, desde un Jira, de qué espacios del Confluence ENLAZADO hay
+ * contexto cuando ninguno viaja (H22): «El Confluence enlazado «host» tiene
+ * contexto de los espacios: «A», «B».». Así el modelo sabe que existen aunque
+ * no se le dé ninguno. Va FUERA de bloque porque la dice Faro, así que
+ * SEGURIDAD: cada clave por `claveEnLinea` (entera, con forma de clave, sin
+ * repetir, como mucho `SCOPE_LIMITS.keysShown` y «y N más») y el host por
+ * `dato()`, en una línea y sin invisibles. Sin host o sin ninguna clave válida,
+ * ''. Recibe las claves SIN el «space:» delante (las `otras` de
+ * `linkedSpacesFor`). Pura.
+ */
+export function linkedScopesLine(host, keys) {
+  const h = dato(host)
+  if (!h) return ''
+  const validas = []
+  for (const k of Array.isArray(keys) ? keys : []) {
+    const limpia = claveEnLinea(k)
+    if (limpia && !validas.includes(limpia)) validas.push(limpia)
+  }
+  if (!validas.length) return ''
+  const vistas = validas.slice(0, SCOPE_LIMITS.keysShown).map((k) => `«${k}»`)
+  const resto = validas.length - vistas.length
+  return `El Confluence enlazado «${h}» tiene contexto de los espacios: ${vistas.join(', ')}${resto > 0 ? ` y ${resto} más` : ''}.`
 }
 
 /**

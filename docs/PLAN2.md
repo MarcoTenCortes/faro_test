@@ -733,7 +733,13 @@ se puede afirmar, y el índice lleva tope total.
   base que el historial de ese proyecto usó; (c) el único con contexto; y si
   no hay regla, el `'*'` heredado más la línea de las claves; **como respaldo
   manual, un selector en Ajustes «este proyecto se documenta en el espacio
-  X»**, porque los contextos generados antes de H9 casi nunca citan ids; el
+  X»**, porque los contextos generados antes de H9 casi nunca citan ids
+  (**decisión de H22, desvío anotado de la palabra «respaldo»**: la elección
+  manual MANDA cuando existe —una elección explícita del usuario no la pisa
+  una heurística— y las reglas (a)-(c) sólo deciden sin ella; si el espacio
+  elegido a mano todavía no tiene contexto, viaja el `'*'` si existe y, si no,
+  ninguno, con la línea de las claves; y la regla (b) se conserva: el
+  historial elige la CLAVE, nunca aporta texto a un prompt); el
   mapeo vive en `sites[host].linkedSpaces` (proyecto → espacio), un mapa que
   escribe ENTERO su único escritor, el selector, y que se valida clave a
   clave al leer. **Todo esto es de H22, no de H21**: la regla (a) y el
@@ -1472,6 +1478,19 @@ Reglas transversales, que salen de los dos juicios y valen para todos:
   verdad; dos proyectos que no se pisan; migración; `profileAsked` como
   tregua; los pines 2530-2656 de `panel-wiring` actualizados.
 - **Riesgo**: bajo-medio.
+- **Hecho el 2026-09-27** (rama `plan/h22-jira-por-proyecto`, sin commit de
+  cierre todavía: pendiente de la verificación del orquestador y de su
+  revisión adversaria): todo lo de «Qué» y, de §3.4, lo que H21 dejó para
+  aquí: `linkedSpacesFor` con las reglas (a)-(c) (y `linkedContextFor`
+  borrada), `normalizeLinkedSpaces`/`withLinkedSpace` y el selector «Este
+  proyecto se documenta en el espacio» en Ajustes (`sites[host].linkedSpaces`,
+  escrito entero por el selector), `applyLinkedScope` síncrona en el arranque
+  y en `applyScope`, la línea de Faro `linkedScopesLine` cuando no viaja
+  ningún contexto, el título «Espacio enlazado» y la promesa del historial
+  reescrita con verdad. Desvío: la elección manual MANDA (arriba, en §3.4).
+  1495 pruebas (+17), 23 + 30 mutaciones (52 cazadas, una viva equivalente),
+  las 39 instantáneas intactas y una nueva. La bitácora, en docs/BITACORA.md
+  §12.5.
 
 ### H23 · Subrayado (forma A): cursor subrayador azul, selección azul, marcas legibles, insignias que no tapan y barra que cabe
 

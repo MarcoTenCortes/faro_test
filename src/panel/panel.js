@@ -61,7 +61,9 @@ import {
   otherScopesWithMap,
   countPages,
   spaceOverflow,
-  linkedContextFor,
+  normalizeLinkedSpaces,
+  withLinkedSpace,
+  linkedSpacesFor,
 } from '../shared/scopes.js'
 import { mergeIndex, mergeIndexKeepingTree, indexSize, normalizeIndex, ancestryOf, isPlaceholderTitle } from '../atlassian/index-store.js'
 import {
@@ -79,7 +81,9 @@ import { MSG } from '../shared/messages.js'
 import {
   JIRA_REST_LIMITS,
   SAMPLE_FIELDS,
-  normalizeProfile,
+  emptyProfiles,
+  normalizeProfiles,
+  withProfile,
   profileForProject,
   normalizeRecentJql,
   profileFromSample,
@@ -90,7 +94,7 @@ import { navOptions } from '../nav/options.js'
 import { validatePlan } from '../nav/validate.js'
 import {
   getSettings, saveSettings, getSite, getSites, saveSite, forgetEverythingFor, getSiteBundle,
-  getIndex, saveIndex, getProfile, saveProfile, getSessionId, setSessionId, clearSessionId,
+  getIndex, saveIndex, getProfiles, saveProfiles, getSessionId, setSessionId, clearSessionId,
   getSessionWeight, setSessionWeight, clearSessionWeight,
   getModelChecks, recordModelChecks, clearModelChecks,
 } from '../shared/storage.js'
@@ -331,13 +335,19 @@ const state = {
   // y un aviso colgado ahí se perdería: se guarda y lo enseña `showMcpPending`
   // cuando el panel vuelve al sitio o cuando el chat se repinta.
   mcpPending: null,
-  // Desde Jira, el contexto del Confluence enlazado: {host, contextMd, index,
-  // wikiPrefix, contextScope} o null. El prefijo es el observado al visitarlo,
-  // si se visitó: hace falta para preguntarle a su API desde aquí. Y desde H21
-  // `contextScope` dice de qué ámbito de ese Confluence es el texto (el de todo
-  // el sitio, «*», o el de su único espacio con contexto), para que la cabecera
-  // del bloque lo diga.
+  // Desde Jira, el contexto del Confluence enlazado: {host, ctxs, index,
+  // wikiPrefix, contextMd, contextScope, otherScopes, via} o null. El prefijo es
+  // el observado al visitarlo, si se visitó: hace falta para preguntarle a su API
+  // desde aquí. `ctxs` son TODOS los contextos de ese Confluence, ya
+  // normalizados; los otros cuatro los deriva `applyLinkedScope` por proyecto
+  // (H22): `contextMd` el texto que viaja, `contextScope` de qué ámbito es (para
+  // que la cabecera del bloque lo diga), `otherScopes` las claves de los demás
+  // espacios con contexto y `via` por qué regla se eligió.
   linkedContext: null,
+  // Desde Jira, lo elegido en Ajustes para cada proyecto: qué espacio del
+  // Confluence enlazado lo documenta (`sites[host].linkedSpaces`, proyecto →
+  // espacio o «*»), ya normalizado. Manda sobre las reglas de `linkedSpacesFor`.
+  linkedSpaces: {},
   // La búsqueda de páginas base en curso: un testigo para descartar la
   // respuesta tardía de una consulta que el usuario ya ha reescrito.
   sourcesSearch: { token: 0, timer: 0, suggestions: [], active: -1 },
@@ -491,13 +501,14 @@ const state = {
   // normalizadas (`normalizeRecentJql`). Se guardan en el registro del sitio,
   // así que sobreviven al panel; es la única memoria de búsquedas que hay.
   recentJql: [],
-  // Lo que la extensión contó de una muestra del proyecto de este Jira
-  // (`normalizeProfile`): los nombres EXACTOS de tipo, estado, componente y
-  // etiqueta, y cómo se nombran los tickets aquí. De ahí salen los chips de
-  // estado y el bloque DATOS DEL PROYECTO del prompt de Búsqueda. Se carga con
-  // el paquete del sitio, se vuelve a contar cuando envejece y `refreshTab` lo
-  // vacía al cambiar de host: es de ESTE proyecto. null en Confluence.
-  profile: null,
+  // Lo que la extensión contó de una muestra de CADA proyecto de este Jira
+  // (`normalizeProfiles`, H22: `{version, byProject: {KEY: perfil}}`): los
+  // nombres EXACTOS de tipo, estado, componente y etiqueta, y cómo se nombran
+  // los tickets aquí. De ahí salen los chips de estado y el bloque DATOS DEL
+  // PROYECTO del prompt de Búsqueda, siempre por `currentProfile`, que da el del
+  // proyecto que hay delante. Se carga con el paquete del sitio, se vuelve a
+  // contar cuando envejece y `refreshTab` lo vacía al cambiar de host.
+  profiles: emptyProfiles(),
   // Por qué proyecto se preguntó ya el perfil («host:CLAVE»): la tregua del
   // refresco que dispara `refreshTab` al cambiar de proyecto sin cambiar de host.
   profileAsked: '',
@@ -741,7 +752,10 @@ async function refreshTab() {
     // contado del proyecto los carga `bootForSite` del sitio nuevo.
     state.favouriteFilters = null
     state.recentJql = []
-    state.profile = null
+    state.profiles = emptyProfiles()
+    // Y lo elegido en Ajustes para el Confluence enlazado de ESTE Jira: lo
+    // recarga `bootForSite` del registro del sitio nuevo.
+    state.linkedSpaces = {}
     // Y si el MCP está conectado, que es de ESTE sitio: lo vuelve a comprobar el
     // arranque del nuevo, en segundo plano (P5). Hasta que conteste no se sabe,
     // y quien pregunte por él se lleva el lado prudente.
@@ -824,13 +838,12 @@ async function refreshTab() {
   // que no se hacía nunca —un fallo de antes de H15—. Arrancar ya cuenta el
   // perfil (`refreshProfileSoon` al final de `bootForSite`).
   else if (state.bootPending === site.host) await bootForSite()
-  // Otro PROYECTO del mismo Jira: no hay arranque, pero el perfil que hay en
-  // memoria es del de antes. `currentProfile()` ya no lo deja entrar en ningún
-  // sitio; aquí se cuenta el del nuevo, en segundo plano y con las mismas
-  // condiciones del arranque (permiso ya concedido, restTools, Data Center).
-  // Límite asumido: se guarda UNO por host, así que alternar entre dos proyectos
-  // recuenta en cada salto (una petición de la sesión del navegador).
-  // `refreshTab` corre en cada cambio de pestaña y de URL, así que se pregunta UNA
+  // Otro PROYECTO del mismo Jira: no hay arranque. Desde H22 los perfiles se
+  // guardan POR PROYECTO (`state.profiles.byProject`), así que volver a uno ya
+  // contado encuentra el suyo en `currentProfile(site)` y no se recuenta nada;
+  // sólo se cuenta el de un proyecto que todavía no tiene, en segundo plano y
+  // con las mismas condiciones del arranque (permiso ya concedido, restTools,
+  // Data Center). `refreshTab` corre en cada cambio de pestaña y de URL, así que se pregunta UNA
   // vez por proyecto (`state.profileAsked`): una API que no contesta no puede
   // convertirse en una petición por cada clic.
   else if (site.product === 'jira' && site.projectKey && !currentProfile(site) && state.profileAsked !== `${site.host}:${site.projectKey}`) {
@@ -1192,12 +1205,16 @@ async function bootForSite() {
   // reconstruyen al leer, como las páginas base, porque son consultas que
   // acabarán dentro de una URL.
   state.recentJql = normalizeRecentJql(saved?.recentJql)
-  // Y el perfil contado del proyecto, que viaja en el MISMO paquete del sitio
-  // (`BUNDLE_EXTRA_KEYS`, H9): no cuesta ninguna lectura más y se reconstruye
-  // con claves blancas al leerlo, como todo lo que sale del almacén. Volver a
-  // contarlo es una petición con la sesión del usuario y eso NO va aquí: se
-  // hace al final, en segundo plano (P4 dejó el arranque en una sola lectura).
-  state.profile = normalizeProfile(bundle.extras?.profile)
+  // Y los perfiles contados de los proyectos, que viajan en el MISMO paquete
+  // del sitio (`BUNDLE_EXTRA_KEYS`, H9): no cuestan ninguna lectura más y se
+  // reconstruyen con claves blancas al leerlos, como todo lo que sale del
+  // almacén; el perfil suelto de antes de H22 migra bajo su proyecto. Volver a
+  // contar es una petición con la sesión del usuario y eso NO va aquí: se hace
+  // al final, en segundo plano (P4 dejó el arranque en una sola lectura).
+  state.profiles = normalizeProfiles(bundle.extras?.profile)
+  // Y lo elegido en Ajustes para el Confluence enlazado, del mismo registro del
+  // sitio (H22): proyecto → espacio, reconstruido con claves blancas al leer.
+  state.linkedSpaces = normalizeLinkedSpaces(bundle.site?.linkedSpaces)
   // Y el historial de análisis con páginas base, que viaja en ese MISMO paquete
   // (H10): sale crudo de `getSiteBundle` —`shared/storage.js` no puede importar
   // de `src/panel/`, igual que con la memoria— y se reconstruye aquí, con el
@@ -1321,16 +1338,16 @@ async function bootForSite() {
  * no puede tumbar el arranque, así que se recoge y se apunta en el Registro.
  */
 /**
- * El perfil contado, sólo si es del proyecto que hay delante.
+ * El perfil contado del proyecto que hay delante, o null.
  *
- * `state.profile` es del HOST (así se guarda) y un Jira tiene muchos proyectos:
- * al pasar de SIMPL-12 a OPS-77 en la misma pestaña no hay arranque que lo
- * vacíe, y el de SIMPL entraba en el prompt y en los chips de OPS como «los
- * nombres exactos» (revisión adversaria de H9). Los tres que lo consumen —la
- * petición de `send()`, los chips y el indexador— pasan por aquí.
+ * Un Jira tiene muchos proyectos y desde H22 se guarda un perfil por cada uno
+ * (`state.profiles.byProject`): al pasar de SIMPL-12 a OPS-77 en la misma
+ * pestaña, el de SIMPL no puede entrar en el prompt ni en los chips de OPS como
+ * «los nombres exactos» (revisión adversaria de H9). Los tres que lo consumen
+ * —la petición de `send()`, los chips y el indexador— pasan por aquí.
  */
 function currentProfile(site = state.site) {
-  return profileForProject(state.profile, site?.projectKey)
+  return profileForProject(state.profiles, site?.projectKey)
 }
 
 function refreshProfileSoon(testigo) {
@@ -1355,8 +1372,8 @@ async function refreshProfile(testigo) {
   if (sitio?.product !== 'jira' || sitio.cloud || tabId == null) return
   const scope = defaultScope(sitio)
   if (scope?.kind !== 'project') return
-  const vigente =
-    state.profile && state.profile.projectKey === scope.key && Date.now() - state.profile.at < PROFILE_LIMITS.ttlMs
+  const p = currentProfile(sitio)
+  const vigente = !!p && Date.now() - p.at < PROFILE_LIMITS.ttlMs
   if (vigente) return
   state.profileAsked = `${sitio.host}:${scope.key}`
   // Con permiso YA concedido y nada más: un refresco en segundo plano no puede
@@ -1373,7 +1390,7 @@ async function refreshProfile(testigo) {
   // Lo capturado al pedir manda al volver (§8.22): la muestra tarda lo que
   // tarde y el panel puede estar ya en otro sitio, o en otro arranque.
   if (state.bootToken !== testigo || (state.site?.host ?? state.lastHost) !== sitio.host) return
-  state.profile = r.profile
+  state.profiles = r.profiles
 }
 
 /**
@@ -1386,9 +1403,13 @@ async function refreshProfile(testigo) {
  * la petición y lo que se guarda estén escritos una vez.
  *
  * Escribe bajo el host que se le pasa, nunca bajo el de ahora; quien llama
- * decide si lo que vuelve entra en `state` (§8.22).
+ * decide si lo que vuelve entra en `state` (§8.22). Y desde H22 FUNDE: el
+ * perfil de este proyecto entra en el contenedor de TODOS los del host, releído
+ * del almacén justo antes de escribir (como los contextos, H21), así que dos
+ * recuentos de proyectos distintos no se pisan y la copia que el panel tenga en
+ * memoria no se lleva lo que otra ventana contó en el hueco.
  *
- * @returns {Promise<{ok:true, profile:object, ms:number}|{ok:false, reason:string, detail:string}>}
+ * @returns {Promise<{ok:true, profile:object, profiles:object, ms:number}|{ok:false, reason:string, detail:string}>}
  */
 async function countProfile(sitio, scope, { tabId = state.tabId, signal = null } = {}) {
   const jql = sampleQuery(scope?.kind === 'project' ? scope.key : '')
@@ -1404,13 +1425,15 @@ async function countProfile(sitio, scope, { tabId = state.tabId, signal = null }
   if (signal?.aborted) return { ok: false, reason: 'cancelado', detail: 'Cancelado.' }
 
   const profile = profileFromSample(r.issues, { projectKey: scope.key })
-  await saveProfile(sitio.host, profile)
+  const actuales = await getProfiles(sitio.host)
+  const nuevos = withProfile(actuales, profile)
+  await saveProfiles(sitio.host, nuevos)
   log.ok(
     'Perfil del proyecto',
     `${sitio.host} · muestra de ${profile.sampled} incidencias · ${profile.types.length} tipos · ${profile.statuses.length} estados` +
       `${Number.isFinite(r.ms) ? ` · ${r.ms} ms` : ''}`
   )
-  return { ok: true, profile, ms: r.ms }
+  return { ok: true, profile, profiles: nuevos, ms: r.ms }
 }
 
 // ------------------------------------------------------- el MCP, en segundo plano
@@ -1994,35 +2017,103 @@ async function loadLinkedContext(saved) {
   // un Jira con Confluence enlazado nunca tuvo el «un solo await» que P4
   // presumía (revisión adversaria de H6).
   const bundle = await getSiteBundle(host)
-  // Su contexto, que desde H21 es por ámbito (los espacios de ese Confluence).
-  // Viaja UNO: el de todo el sitio si existe, o el de su único espacio con
-  // contexto (`linkedContextFor`, regla (c) de docs/PLAN2.md §3.4); con dos
-  // espacios y sin «*», ninguno —elegir por proyecto es de H22—. Se normaliza
-  // aquí con la misma regla de migración que el sitio propio, pero NO se escribe
-  // nada de ese host: la reparación la hace su propio panel al arrancar.
+  // Sus contextos, que desde H21 son por ámbito (los espacios de ese
+  // Confluence). Se guardan TODOS en `ctxs` y viaja UNO, que elige por proyecto
+  // `applyLinkedScope` (H22). Se normalizan aquí con la misma regla de migración
+  // que el sitio propio, pero NO se escribe nada de ese host: la reparación la
+  // hace su propio panel al arrancar.
   const ctxs = normalizeContexts(bundle.contextRaw, {
     legacyScope: legacyScopeOf(bundle, bundle.site),
     legacyIndexedAt: bundle.site?.indexedAt,
   })
-  const { key, text } = linkedContextFor(ctxs)
-  const contextMd = text
   // Su índice: es donde se buscan las páginas base de un análisis desde Jira,
-  // que son páginas de ESE Confluence. Nunca se guarda desde aquí, y su
-  // `stale` tampoco se anuncia: el índice de ese host lo reconstruye su panel.
-  const index = bundle.index
+  // que son páginas de ESE Confluence, y de donde sale el espacio de cada página
+  // que el contexto del proyecto cita o que el historial usó. Nunca se guarda
+  // desde aquí, y su `stale` tampoco se anuncia: lo reconstruye su panel.
+  const index = bundle.index || null
   // Y el prefijo de su wiki, si se observó al visitarlo: su API cuelga de ahí
   // (`/confluence/rest/api/…` en un Data Center con ruta de contexto).
   const wikiPrefix = typeof bundle.site?.wikiPrefix === 'string' ? bundle.site.wikiPrefix : ''
+  const enlazado = applyLinkedScope({ host, ctxs, index, wikiPrefix, contextMd: '', contextScope: '', otherScopes: [], via: '' })
+  const { contextMd, contextScope: key, via } = enlazado
   // El enlace es un hecho del sitio guardado, no de que ya haya contexto: sin
   // esto, una URL de ese Confluence pegada en las páginas base se rechazaba
   // como «otro sitio» justo antes de indexarlo, que es cuando más falta hace.
   if (contextMd?.trim() || index) {
     log.info(
       'Contexto de Confluence enlazado',
-      `${host} · ${contextMd?.length || 0} caracteres · ${key ? (key === '*' ? '*' : scopeLabel(key).replace(/^el /, '')) : 'sin contexto'} · ${index ? indexSize(index) + ' entradas' : 'sin índice'}`
+      `${host} · ${contextMd?.length || 0} caracteres · ${key ? (key === '*' ? '*' : scopeLabel(key).replace(/^el /, '')) : 'sin contexto'}${via ? ' ' + VIA_ENLAZADO[via] : ''} · ${index ? indexSize(index) + ' entradas' : 'sin índice'}`
     )
   }
-  return { host, contextMd: contextMd || '', index: index || null, wikiPrefix, contextScope: key }
+  return enlazado
+}
+
+/**
+ * Por qué se eligió el contexto del Confluence enlazado que viaja, en palabras
+ * del Registro (el `via` de `linkedSpacesFor`).
+ */
+const VIA_ENLAZADO = Object.freeze({
+  manual: 'a mano',
+  contexto: 'por el contexto',
+  historial: 'por el historial',
+  unico: 'por ser el único con contexto',
+  heredado: 'heredado',
+})
+
+/**
+ * Las dos señales con las que las reglas (a) y (b) de `linkedSpacesFor` eligen
+ * el espacio del Confluence enlazado para un proyecto (H22), en listas de
+ * claves de espacio con repeticiones (cada elemento es una página):
+ *
+ * - `citadas`, el espacio de cada página que el CONTEXT.md del PROYECTO cita con
+ *   su id (`referencesFromContext`); el espacio sale del índice del enlazado,
+ *   porque una referencia no lo lleva;
+ * - `usadas`, el de cada página base que el historial de ESE proyecto usó: la
+ *   suya si la guardó, y si no la del índice del enlazado.
+ *
+ * Del contexto del proyecto sólo salen ids y del historial sólo claves: ninguno
+ * aporta texto a ningún prompt. Síncrona y sin leer el almacén.
+ */
+function linkedSignals(enlazado, proyecto) {
+  const paginas = enlazado?.index?.pages || {}
+  const espacioDe = (id) => (Object.hasOwn(paginas, id) ? paginas[id]?.spaceKey || '' : '')
+  const propio = proyecto ? contextFor(state.contexts, 'project:' + proyecto, { fallback: '' }) : ''
+  const citadas = Object.keys(referencesFromContext(propio, { index: enlazado?.index || null }).items)
+    .map(espacioDe)
+    .filter(Boolean)
+  const usadas = []
+  for (const entrada of proyecto ? state.sourceHistory?.entries || [] : []) {
+    if (entrada.projectKey !== proyecto) continue
+    for (const pagina of entrada.pages || []) {
+      const espacio = pagina.spaceKey || espacioDe(pagina.id)
+      if (espacio) usadas.push(espacio)
+    }
+  }
+  return { citadas, usadas }
+}
+
+/**
+ * Qué contexto del Confluence enlazado viaja desde el proyecto de la pestaña
+ * (H22, docs/PLAN2.md §3.4): rellena `contextMd`, `contextScope`, `otherScopes`
+ * y `via` del enlazado con lo que decida `linkedSpacesFor` —lo elegido en
+ * Ajustes manda; si no, las reglas (a) contexto del proyecto, (b) historial,
+ * (c) el único con contexto, y el de todo el sitio—. SÍNCRONA y sin leer el
+ * almacén: todo lo que necesita ya está en memoria, así que cambiar de proyecto
+ * (`applyScope`) lo recalcula al instante. La llaman el final de
+ * `loadLinkedContext`, `applyScope` y el selector de Ajustes. Sin un sitio de
+ * Jira o sin enlazado, no hace nada. Devuelve el mismo objeto.
+ */
+function applyLinkedScope(enlazado = state.linkedContext) {
+  if (state.site?.product !== 'jira' || !enlazado) return enlazado
+  const proyecto = validProjectKey(state.site.projectKey)
+  const manual = proyecto && Object.hasOwn(state.linkedSpaces, proyecto) ? state.linkedSpaces[proyecto] : ''
+  const { citadas, usadas } = linkedSignals(enlazado, proyecto)
+  const r = linkedSpacesFor(enlazado.ctxs, { manual, citadas, usadas })
+  enlazado.contextMd = r.text
+  enlazado.contextScope = r.key
+  enlazado.otherScopes = r.otras
+  enlazado.via = r.via
+  return enlazado
 }
 
 /**
@@ -7699,6 +7790,91 @@ function paintSettingsSiteInfo() {
     : 'sin sitio'
 }
 
+/**
+ * Qué espacio elegiría «Automático» y por qué, para la primera opción del
+ * selector de Ajustes (H22): «hoy DCPIAS, por el contexto». El `via` de
+ * `linkedSpacesFor` en palabras; sin espacio, «todo el sitio» o «ninguno». Pura.
+ */
+function linkedChoiceText(r) {
+  if (!r?.key) return 'ninguno'
+  if (r.key === '*') return 'todo el sitio'
+  const espacio = r.key.slice('space:'.length)
+  if (r.via === 'contexto') return `${espacio}, por el contexto`
+  if (r.via === 'historial') return `${espacio}, por el historial`
+  return `${espacio}, el único con contexto`
+}
+
+/**
+ * Lo que dice el selector debajo: qué contexto del Confluence enlazado viaja
+ * AHORA desde este proyecto, y si lo elegido a mano todavía no tiene contexto.
+ * Nunca el texto: sólo de qué ámbito es. Pura.
+ */
+function linkedHintText(enlazado, elegido) {
+  const clave = enlazado?.contextScope || ''
+  const falta =
+    elegido && elegido !== '*' && clave !== 'space:' + elegido ? ` «${elegido}» todavía no tiene contexto.` : ''
+  if (!clave) return 'No viaja ningún contexto del Confluence enlazado.' + falta
+  const de = clave === '*' ? 'de todo el sitio' : `del espacio «${clave.slice('space:'.length)}»`
+  return `Viaja el contexto ${de} de ${enlazado.host}.` + falta
+}
+
+/**
+ * El selector de Ajustes «El proyecto «KEY» se documenta en el espacio…» (H22):
+ * la elección manual que manda sobre las reglas de `linkedSpacesFor`. Sólo en un
+ * Jira con Confluence enlazado y con un proyecto delante. Las opciones son
+ * «Automático» —que dice qué elegiría hoy y por qué—, «Todo el sitio» y cada
+ * espacio del enlazado con contexto propio, todas con `createElement`; y si lo
+ * elegido ya no tiene contexto, se enseña igual para que no parezca otra cosa.
+ * Sin leer nada: todo sale de lo que el panel tiene en memoria.
+ */
+function paintLinkedSpaceSetting() {
+  const campo = $('set-linked-space-field')
+  const enlazado = state.linkedContext
+  const proyecto = state.site?.product === 'jira' ? validProjectKey(state.site.projectKey) : ''
+  campo.classList.toggle('hidden', !enlazado || !proyecto)
+  if (!enlazado || !proyecto) return
+  $('set-linked-space-label').textContent = `El proyecto «${proyecto}» se documenta en el espacio`
+  const elegido = Object.hasOwn(state.linkedSpaces, proyecto) ? state.linkedSpaces[proyecto] : ''
+  const auto = linkedSpacesFor(enlazado.ctxs, linkedSignals(enlazado, proyecto))
+  const espacios = scopeKeys(enlazado.ctxs)
+    .filter((k) => k.startsWith('space:'))
+    .map((k) => k.slice('space:'.length))
+  const select = $('set-linked-space')
+  select.textContent = ''
+  const opcion = (valor, texto) => {
+    const o = document.createElement('option')
+    o.value = valor
+    o.textContent = texto
+    o.selected = valor === elegido
+    select.appendChild(o)
+  }
+  opcion('', `Automático (hoy ${linkedChoiceText(auto)})`)
+  opcion('*', 'Todo el sitio')
+  for (const espacio of espacios) opcion(espacio, espacio)
+  if (elegido && elegido !== '*' && !espacios.includes(elegido)) opcion(elegido, `${elegido} (sin contexto)`)
+  $('set-linked-space-hint').textContent = linkedHintText(enlazado, elegido)
+}
+
+/**
+ * Al cambiar el selector: el mapa entero del sitio (proyecto → espacio) se
+ * escribe con la entrada nueva —`withLinkedSpace`, que lo normaliza y quita la
+ * entrada con «Automático»—, y sólo si el panel sigue en ese host entra en el
+ * estado y se vuelve a elegir qué contexto viaja (§8.22). Se registra y se dice.
+ */
+async function onLinkedSpaceChange(ev) {
+  const host = state.site?.host || ''
+  const proyecto = state.site?.product === 'jira' ? validProjectKey(state.site.projectKey) : ''
+  if (!host || !proyecto || !state.linkedContext) return
+  const mapa = withLinkedSpace(state.linkedSpaces, proyecto, ev.target.value)
+  await saveSite(host, { linkedSpaces: mapa })
+  if ((state.site?.host ?? state.lastHost) !== host) return
+  state.linkedSpaces = mapa
+  applyLinkedScope()
+  paintLinkedSpaceSetting()
+  log.info('Espacio enlazado', `${host} · ${proyecto} → ${mapa[proyecto] || 'automático'}`)
+  announce(`${proyecto}: ${$('set-linked-space-hint').textContent}`)
+}
+
 async function showSettingsScreen() {
   $('set-nav-guided').checked = state.settings.navMode !== 'quick'
   $('set-nav-quick').checked = state.settings.navMode === 'quick'
@@ -7718,6 +7894,9 @@ async function showSettingsScreen() {
   // lista era lo que opencode tenía entonces, y reabrir Ajustes no la trae.
   hideRemoveKeysConfirm()
   paintSettingsSiteInfo()
+  // Desde un Jira con Confluence enlazado, qué espacio documenta este proyecto
+  // (H22): también de lo que el panel tiene en memoria.
+  paintLinkedSpaceSetting()
   // Los mapas y contextos de este sitio, ámbito a ámbito (H21): de lo que el
   // panel tiene en memoria, sin leer nada, así que va antes de abrir.
   paintScopeList()
@@ -7861,13 +8040,22 @@ async function paintPrivacy() {
     resumenes ? `${resumenes} resúmenes${state.settings.crossSessionMemory ? '' : ' · desactivada'}` : '(nada)'
   )
 
-  // El perfil se guarda por HOST y un Jira tiene muchos proyectos, así que se
-  // dice de CUÁL es: el de otro proyecto no es el que entra en el prompt de aquí
-  // (revisión adversaria de H9), y verlo con su clave es lo que lo explica.
-  const perfil = normalizeProfile(bundle.extras?.profile)
+  // Los perfiles se guardan POR PROYECTO dentro del host (H22), así que se dice
+  // cuántos y DE CUÁLES —las claves, reconstruidas por `validProjectKey` en
+  // `nombresDeAmbitos`: dicen de qué es lo guardado, no qué guarda— y, del
+  // proyecto que hay delante, de cuántas incidencias es su muestra y cuándo se
+  // contó. El suelto de antes de H22 cuenta como uno, el de su proyecto.
+  const perfiles = normalizeProfiles(bundle.extras?.profile)
+  const proyectos = Object.keys(perfiles.byProject).length
+  const clavesProyectos = nombresDeAmbitos(Object.keys(perfiles.byProject).map((k) => 'project:' + k))
+  const proyecto = validProjectKey(state.site?.projectKey)
+  const delActual = profileForProject(perfiles, proyecto)
   add(
-    'perfil del proyecto',
-    perfil ? `${perfil.projectKey} · muestra de ${perfil.sampled} · ${hace(perfil.at)}` : '(nada)'
+    'perfiles de proyectos',
+    proyectos
+      ? `${proyectos} proyectos con perfil (${clavesProyectos})` +
+          (delActual ? ` · el de ${proyecto}: muestra de ${delActual.sampled} · ${hace(delActual.at)}` : '')
+      : '(nada)'
   )
 
   const analisis = normalizeHistory(bundle.extras?.sourceHistory, { host }).entries.length
@@ -8361,6 +8549,11 @@ function wireEvents() {
   // se apaga la de arriba, ésta se desactiva y dice por qué, sin esperar a que
   // se guarde nada.
   $('set-rest-tools').addEventListener('change', paintTodaySetting)
+  // El espacio que documenta este proyecto (H22) se guarda al cambiarlo, no al
+  // cerrar Ajustes: es del registro del sitio, no de los ajustes de la persona.
+  $('set-linked-space').addEventListener('change', (ev) =>
+    onLinkedSpaceChange(ev).catch((err) => ($('settings-status').textContent = 'No he podido guardar el espacio: ' + err.message))
+  )
   $('btn-settings-close').addEventListener('click', async () => {
     const antes = state.settings
     state.settings = await saveSettings({
@@ -8483,7 +8676,14 @@ function wireEvents() {
     state.sources = emptySources()
     state.recentJql = []
     state.favouriteFilters = null
-    state.profile = null
+    // Los perfiles de todos sus proyectos se van con la clave del host, y con
+    // ellos la tregua del recuento: si no, el proyecto que ya se había pedido no
+    // se volvería a contar hasta recargar el panel.
+    state.profiles = emptyProfiles()
+    state.profileAsked = ''
+    // Y lo elegido en Ajustes para el Confluence enlazado, que vivía en el
+    // registro del sitio que se acaba de olvidar.
+    state.linkedSpaces = {}
     // Lo precargado: `bootForSite` repinta el chat y se lleva la tarjeta con la
     // lista, así que dejarlo armado lo metería en la primera pregunta tras
     // olvidar, con unos resultados que ya no se ven (revisión adversaria de H12;
@@ -9893,9 +10093,9 @@ function attachSetupModelNotice(texto) {
 async function restIndexFor(scope, { sitio, report = () => {}, tabId = state.tabId, signal = null } = {}) {
   // El perfil que ya hubiera contado sigue valiendo aunque hoy no se pueda
   // contar otro: es un conteo, no una lectura de ahora mismo.
-  // Y sólo el de ESTE proyecto: el perfil se guarda por host y un Jira tiene
-  // muchos. Con el panel ya en otro sitio, el de este host se lee del almacén.
-  const delHost = !sitio ? null : (state.site?.host ?? state.lastHost) === sitio.host ? state.profile : await getProfile(sitio.host)
+  // Y sólo el de ESTE proyecto: desde H22 se guarda uno por proyecto dentro del
+  // host. Con el panel ya en otro sitio, los de este host se leen del almacén.
+  const delHost = !sitio ? null : (state.site?.host ?? state.lastHost) === sitio.host ? state.profiles : await getProfiles(sitio.host)
   const guardado = profileForProject(delHost, sitio?.projectKey)
   const nada = { index: null, profile: guardado, aviso: '' }
   // El interruptor maestro. Apagado no es un fallo —lo eligió el usuario en
@@ -9966,7 +10166,7 @@ async function restIndexFor(scope, { sitio, report = () => {}, tabId = state.tab
     if (!r.ok) return falla(r.reason, r.detail)
     // El perfil se guarda bajo el host con el que se pidió (lo hace
     // `countProfile`); en el estado sólo entra si el panel sigue ahí (§8.22).
-    if ((state.site?.host ?? state.lastHost) === host) state.profile = r.profile
+    if ((state.site?.host ?? state.lastHost) === host) state.profiles = r.profiles
     return { index: null, profile: r.profile, aviso: '' }
   }
 
@@ -10269,7 +10469,9 @@ async function uploadContext(ev) {
  *
  * Sube el testigo de las sugeridas y vacía la memo de las referencias: las dos
  * se calcularon con el contexto de antes, y una respuesta en vuelo de la pestaña
- * no puede pintar sugerencias de otro espacio.
+ * no puede pintar sugerencias de otro espacio. Y desde H22, en un Jira, vuelve a
+ * elegir qué contexto del Confluence enlazado viaja (`applyLinkedScope`), que es
+ * por PROYECTO: también sin leer nada.
  */
 function applyScope() {
   const clave = scopeKeyOf(state.site)
@@ -10277,6 +10479,7 @@ function applyScope() {
   state.contextScope = contextScopeFor(state.contexts, clave)
   state.sourcesSuggest.token++
   state.references = { propio: null, enlazado: null, index: null, items: null }
+  applyLinkedScope()
 }
 
 /**
