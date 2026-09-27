@@ -1682,8 +1682,7 @@ Reglas transversales, que salen de los dos juicios y valen para todos:
 - **Riesgo**: medio-alto en (a) por la GPU sin medir y la detección del tema;
   medio en (b) por §8.12.
 - **Hecho el 2026-09-27: (b) sí, (a) descartada** (rama `plan/h25-issuelinks`
-  sobre f9a4195, sin commit todavía: pendiente de la verificación del
-  orquestador y de su revisión adversaria; contrato en
+  sobre f9a4195: 8928c60 la construcción, verificada por el orquestador en el banco y el espejo, y dfabd81 su revisión adversaria (D01-D10); contrato en
   `docs/plan/handoff/h25-contrato.md`, hechos en `h25-hechos.json`). Marco
   delegó la decisión en el orquestador. **(a), el «Rotulador», se DESCARTA**:
   una segunda raíz en el documento (§8.11), GPU en cada frame de scroll sin

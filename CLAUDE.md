@@ -430,9 +430,9 @@ Los pasos completos, con el porqué de cada regla: docs/REFERENCIA.md §11.
 | H22 | Jira por proyecto: perfiles `byProject`, `linkedSpacesFor` y su selector | `plan/h22-jira-por-proyecto` · bd01fa2 + a7b781a | 1498 |
 | H24 | Diagramas: parser, layout y SVG propios, «Dibujar el flujo» | `plan/h24-diagramas` · e8b950f + 512e8a1 | 1580 |
 | H23 | Subrayado (forma A): tinta azul/ámbar bajo el texto, trazo, insignias en superíndice, cursor subrayador | `plan/h23-subrayado` · 5184261 + 65adb9c + 3cd6ae3 → fusión 39ef839 | 1505; fundido, 1607 |
-| H25 | «Contrastar con Jira»: las `issuelinks` reales, el diagrama «Según Jira» y la comparación (H25a descartada) | `plan/h25-issuelinks` · (construcción al cerrar) | 1635 |
+| H25 | «Contrastar con Jira»: las `issuelinks` reales, el diagrama «Según Jira» y la comparación (H25a descartada) | `plan/h25-issuelinks` · 8928c60 + dfabd81 | 1642 |
 
-Ramas `plan/…`. **Dónde vive:** 22 ramas apiladas sobre `40f56d7` (H0-H21), nada pusheado ni PR, `main` local en `523c25f`; H20 saltado (manual, con gasto); encima `plan/docs-mapa` (este mapa, Tarea 0), `plan/h22-jira-por-proyecto` (bd01fa2 + a7b781a + 9cfc93d), `plan/h24-diagramas` (e8b950f + 512e8a1 + 8a98d94) y la punta, `plan/h23-fusion` · 39ef839: H23 se construyó en su carril (`plan/h23-subrayado` sobre 6256545, worktree `../faro-h23`: 5184261 + 65adb9c + 3cd6ae3) y se fusionó sobre 8a98d94 conservando los dos lados (docs/plan/handoff/ESTADO.md).
+Ramas `plan/…`. **Dónde vive:** 22 ramas apiladas sobre `40f56d7` (H0-H21), nada pusheado ni PR, `main` local en `523c25f`; H20 saltado (manual, con gasto); encima `plan/docs-mapa` (este mapa, Tarea 0), `plan/h22-jira-por-proyecto` (bd01fa2 + a7b781a + 9cfc93d), `plan/h24-diagramas` (e8b950f + 512e8a1 + 8a98d94) `plan/h23-fusion` (39ef839 + 225421e: H23 se construyó en su carril, `plan/h23-subrayado` sobre 6256545, 5184261 + 65adb9c + 3cd6ae3, y se fusionó sobre 8a98d94 conservando los dos lados) y la punta, `plan/h25-issuelinks` · 8928c60 + dfabd81 + el commit de los hashes (docs/plan/handoff/ESTADO.md).
 
 **Límites que no son de ningún hito:**
 - Jira Cloud sin REST de Jira (410): todo por el MCP (`sinRestDeJira`).
