@@ -330,3 +330,41 @@ test('el selfcheck del banco numera 1..N sin huecos', () => {
   assert(claude.includes(`${n} \`ok(\``), `CLAUDE.md §2 dice los ${n} \`ok(\` del selfcheck del banco`)
   assert(claude.includes(`${n - 1} resultados`), `CLAUDE.md §2 dice los ${n - 1} resultados del banco (uno menos que los ok(: dos son las ramas de un mismo if)`)
 })
+
+/**
+ * Las frases que llaman «sin commit» a un hito cuya fila de la tabla de §12 ya
+ * lleva su hash. Al cerrar un hito se rellena la tabla y es fácil olvidar la
+ * prosa de alrededor: con H24, CLAUDE.md §12 y BITACORA §12.1 decían «sin
+ * commit, pendiente de la verificación» en cuatro sitios (revisión adversaria de
+ * H24, D18). Otro «Hn» por medio corta la frase: sin eso, H16…H22 casaban con el
+ * «sin commit» de H24.
+ */
+function sinCommitConHash(doce, bitacora) {
+  const conCommit = [...doce.matchAll(/^\| (H\d+) \|[^\n]*· [0-9a-f]{7}\b/gm)].map((m) => m[1])
+  const mal = []
+  for (const h of conCommit) {
+    const re = new RegExp('\\b' + h + '\\b\\**(?:(?!\\bH\\d)[^.;|]){0,80}sin commit', 'g')
+    for (const [texto, donde] of [[doce, 'CLAUDE.md §12'], [bitacora, 'BITACORA §12 y §12.1']]) {
+      for (const m of texto.matchAll(re)) mal.push(donde + ': ' + m[0])
+    }
+  }
+  return { conCommit, mal }
+}
+
+test('un hito con su commit en la tabla de §12 no se sigue llamando «sin commit» (CLAUDE.md §12, BITACORA §12.1)', () => {
+  // La regla, con una tabla de mentira: la fila con hash y la prosa que lo
+  // niega es un error; sin hash, o con otro hito por medio, no.
+  const tabla = '| H22 | x | `r` · bd01fa2 + a7b781a | 1 |\n| H24 | y | `r` · e8b950f + (revisión al cerrar) | 2 |\n'
+  eq(sinCommitConHash(tabla + 'H24 en `r`, sin commit, pendiente.', '').mal, ['CLAUDE.md §12: H24 en `r`, sin commit'], 'la tabla dice su commit y la prosa lo niega')
+  eq(sinCommitConHash(tabla, '**H24** (los diagramas) está construido, sin commit;').mal.length, 1, 'también en la bitácora, y con negrita')
+  const sinHash = '| H22 | x | `r` · bd01fa2 + a7b781a | 1 |\n| H24 | y | `r` · (construcción al cerrar) | 2 |\n'
+  eq(sinCommitConHash(sinHash + 'H22 cerrado y H24 sin commit.', '').mal, [], 'otro hito por medio corta la frase, y sin hash en su fila «sin commit» es verdad')
+  // Y los documentos de verdad.
+  const claude = leer('CLAUDE.md')
+  const doce = claude.slice(claude.indexOf('## 12.'))
+  const bitacora = leer('docs/BITACORA.md')
+  const docea = bitacora.slice(bitacora.indexOf('## 12.'), bitacora.indexOf('### 12.2'))
+  const { conCommit, mal } = sinCommitConHash(doce, docea)
+  assert(conCommit.length >= 20, 'la tabla de §12 tiene hitos con hash: si esto es 0, la regex no la lee')
+  eq(mal, [], 'la tabla dice su commit y la prosa lo niega')
+})

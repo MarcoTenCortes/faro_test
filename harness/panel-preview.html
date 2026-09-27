@@ -1469,7 +1469,8 @@ async function arrancar() {
     return b
 
     function dibujarEnElEspejo(block, pre) {
-      if (block.lang !== 'mermaid' || !block.closed) return null
+      // Sin mayúsculas, como drawCodeBlock (revisión adversaria de H24, D18).
+      if (block.lang.toLowerCase() !== 'mermaid' || !block.closed) return null
       const d = readFlowchart(block.text)
       if (!d.ok) {
         console.warn('[espejo] diagrama sin dibujar:', d.errores[0])
@@ -2515,10 +2516,13 @@ async function arrancar() {
     // H22: el selector del espacio enlazado, con una opción larga («Automático
     // (hoy DCPIAS, por el contexto)») que no puede empujar Ajustes a lo ancho.
     '#set-linked-space-field',
-    // H24: el diagrama de la tercera respuesta de Jira. Encoge con su viewBox
-    // (`max-width: 100%`); lo que esto caza es que algo de la figura —la lista,
-    // la fila de «Copiar como Mermaid»— la empuje a lo ancho.
-    '.dg-wrap',
+    // H24: el diagrama de la tercera respuesta de Jira. La figura (`.dg-wrap`)
+    // NO entra: sale a su tamaño y desplaza a lo ancho a propósito (`.dg-svg`
+    // con `max-width: none`; encogida, la letra bajaba a 2-5 px). Lo que esto
+    // caza es que la lista o la fila de «Copiar como Mermaid» se salgan
+    // (revisión adversaria de H24, D13).
+    '.dg-list',
+    '.dg-actions',
     // H15: el consejo del MCP caído en las dos mitades de la pantalla de claves,
     // con el comando para copiar (su `code` desplaza a lo ancho dentro de su
     // caja; lo que esto caza es que la caja entera se salga).

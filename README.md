@@ -575,9 +575,10 @@ Veinte decisiones que sostienen el diseño:
      pedirlas a Jira. Debajo de tu pregunta se dice lo que fue: «con los 10
      resultados de una búsqueda previa». Van la clave, el estado, el tipo y el
      resumen; nunca de quién es una incidencia.
-   - **Y puedes pedir el flujo dibujado** (desde H24). Bajo una respuesta que
-     cita tres incidencias o más hay un botón, *Dibujar el flujo*: como el de
-     arriba, te deja la pregunta escrita y no manda nada. Cualquier respuesta
+   - **Y puedes pedir el flujo dibujado** (desde H24). Bajo la última respuesta,
+     si cita tres incidencias o más de proyectos que Faro conoce, hay un botón,
+     *Dibujar el flujo*: como el de arriba, te deja la pregunta escrita y no
+     manda nada, y desaparece en cuanto preguntas otra cosa. Cualquier respuesta
      que traiga un bloque ```mermaid cerrado se dibuja en el chat —Faro lo
      pinta él mismo, sin librerías y sin ejecutar nada de lo que escribió el
      modelo—; cada nodo con su clave te lleva a la incidencia por el mismo
@@ -743,7 +744,7 @@ cuáles no), que desde H16 son tuyos y no de un sitio.
 ## Comprobaciones
 
 ```bash
-npm run check              # sintaxis + orden + manifest + 1555 pruebas unitarias + docs
+npm run check              # sintaxis + orden + manifest + 1580 pruebas unitarias + docs
 npm run check:docs         # sólo el paso docs: número de pruebas, títulos del registro, mensajes y ficheros del mapa
 npm run test:integration   # contra un opencode real que arranca la propia prueba
 npm run harness            # banco de pruebas visual en http://127.0.0.1:5175

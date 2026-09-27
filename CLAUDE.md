@@ -50,7 +50,7 @@ Cinco piezas: la página (Jira/Confluence) · la extensión · opencode · el LL
 ## 2. Arrancar y comprobar
 
 ```bash
-npm run check              # sintaxis + TDZ + manifest + 1555 pruebas unitarias + docs (sólo si las unitarias pasan)
+npm run check              # sintaxis + TDZ + manifest + 1580 pruebas unitarias + docs (sólo si las unitarias pasan)
 npm run check:docs         # sólo el paso docs, informe entero; sale con 1 si hay errores
 npm run test:integration   # su propio opencode serve (4123) y el cliente real; GASTA turnos de pago
 npm run harness            # Confluence de mentira en http://127.0.0.1:5175 (preview_start "harness")
@@ -130,7 +130,7 @@ src/panel/memory.js  contextos por ámbito y memoria (docs/FLUJOS.md §4.6)
 src/panel/markdown.js  markdown → DOM sin innerHTML; allowHref; H24 closed y onCodeBlock (docs/MAPA.md)
 src/panel/diagram-parse.js  H24: el Mermaid flowchart leído con claves blancas; toMermaid (docs/FLUJOS.md §4.4)
 src/panel/diagram-layout.js  H24: layoutDiagram, capas y baricentro (docs/REFERENCIA.md §6)
-src/panel/diagram-view.js  H24: diagramNode, el SVG sin innerHTML (docs/FLUJOS.md §4.4)
+src/panel/diagram-view.js  H24: diagramNode, el SVG sin innerHTML; un solo import, LAYOUT_LIMITS (docs/FLUJOS.md §4.4)
 src/background/service-worker.js  paso a paso, permisos, «visto» (docs/FLUJOS.md §4.3)
 src/content/bootstrap.js  content script: switch de mensajes (docs/FLUJOS.md §4.9)
 src/content/runner.js  NavRunner: executeStep, applyNotes (docs/FLUJOS.md §4.4)
@@ -284,7 +284,7 @@ Cada contrato con su porqué y sus bordes, en docs/REFERENCIA.md §6; aquí, la 
 - **Búsqueda sugerida** (`suggestedQueries`): `['jql','kind','label']`.
 - **Chip de búsqueda** (`searchChips`): `['jql','kind','label','run','title']`.
 - **Búsqueda precargada** (`state.pendingPreload`).
-- **Diagrama** (H24): `readFlowchart` → `{ok, direction, nodes, edges, subgraphs, errores}`, nodo `{id, label, shape, kind, ref, note, sub}`, arista `{from, to, label, style, arrow}`; `layoutDiagram` → `{width, height, nodes, edges, subgraphs}` 1:1 con el diagrama; `diagramNode` → `figure.dg-wrap`; `state.pendingDiagram` `{host}` o null, sólo memoria.
+- **Diagrama** (H24): `readFlowchart` → `{ok, direction, nodes, edges, subgraphs, errores}`, nodo `{id, label, shape, kind, ref, note, sub}`, arista `{from, to, label, style, arrow}`; `layoutDiagram` → `{width, height, nodes, edges, subgraphs}` 1:1 con el diagrama, `LAYOUT_LIMITS.edgeSep` entre paralelas; `diagramNode(…, { kinds })` → `figure.dg-wrap`; `offerDiagramKeys`/`knownProjectsFor` sólo deciden la oferta; `state.pendingDiagram` `{host}` o null, sólo memoria.
 - **Últimas consultas** (`normalizeRecentJql`): 5.
 - **Avisos REST ya dados** (`state.restWarned`).
 - **Filtro favorito** (`parseFilters`).

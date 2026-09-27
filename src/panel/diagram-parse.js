@@ -176,9 +176,27 @@ function idValido(id) {
  * tope. La comilla doble pasa a simple porque «Copiar como Mermaid» escribe
  * cada etiqueta entre comillas dobles y Mermaid no admite una dentro: sin esto
  * la copia no se podría pegar ni volver a leer.
+ *
+ * El salto `<br/>` de Mermaid es un espacio, y las entidades `#quot;` y `#35;`
+ * se deshacen (revisión adversaria de H24, D06): los modelos escriben
+ * `ENG-1<br/>Épica`, y con el `<br/>` literal la primera palabra ya no era una
+ * clave y el nodo no se podía pulsar. Se deshacen DESPUÉS de quitar invisibles
+ * (un `<br>` con un espacio de anchura cero en medio también es un salto) y en
+ * bucle hasta que no quede ninguno (`<br<br>>` deja otro `<br>`), con otro
+ * `unaLinea` al final para juntar los espacios: si no, la copia se volvería a
+ * leer distinta. `#quot;` pasa a `'` y no a `"` por lo mismo que la comilla
+ * doble de arriba.
  */
+const SALTOS_Y_ENTIDADES = [[/<br\s*\/?>/gi, ' '], [/#quot;/g, "'"], [/#35;/g, '#']]
+
 function recorte(valor, max) {
   let t = unaLinea(typeof valor === 'string' ? valor : '').replace(/"/g, "'")
+  // Cada vuelta acorta el texto o lo deja igual: el bucle termina siempre.
+  for (let antes = null; antes !== t; ) {
+    antes = t
+    for (const [re, por] of SALTOS_Y_ENTIDADES) t = t.replace(re, por)
+  }
+  t = unaLinea(t)
   if (t.length > max) {
     t = t.slice(0, max)
     const ultimo = t.charCodeAt(t.length - 1)
@@ -306,8 +324,32 @@ function puntaDe(cierre) {
   return ultimo === '>' ? 'arrow' : ultimo === 'x' ? 'cross' : ultimo === 'o' ? 'circle' : 'none'
 }
 
-/** Una flecha con su etiqueta (`-- texto -->` o `-->|texto|`), o null. */
+/** La punta de la izquierda de una flecha doble y la que tiene que cerrarla. */
+const PUNTA_IZQUIERDA = { '<': 'arrow', x: 'cross', o: 'circle' }
+
+/**
+ * Una flecha, simple o de doble punta (revisión adversaria de H24, D07).
+ * `A <--> B`, `A <-- texto --> B`, `<-.->`, `<==>`, `o--o` y `x--x` son
+ * Mermaid válido y los modelos los escriben (el diagrama del README lleva uno):
+ * antes tumbaban el diagrama entero con «sobra». Se leen como una línea SIN
+ * punta (`none`), porque dibujar una sola inventaría un sentido que el modelo
+ * no dijo, y `PUNTAS` no cambia (`toMermaid` escribe `---` y la ida y vuelta
+ * sigue exacta). La punta de la izquierda tiene que casar con la de la derecha
+ * (`<--x` no es nada), y una `x`/`o` sólo es punta detrás de un espacio: en
+ * `Ao--oB` es del id.
+ */
 function leerFlecha(s, i) {
+  const izquierda = Object.hasOwn(PUNTA_IZQUIERDA, s[i]) ? PUNTA_IZQUIERDA[s[i]] : ''
+  if (izquierda && (s[i] === '<' || /\s/.test(s[i - 1] ?? ''))) {
+    const f = leerFlechaSimple(s, i + 1)
+    if (f && f.arrow === izquierda) return { ...f, arrow: 'none' }
+    if (s[i] === '<') return null
+  }
+  return leerFlechaSimple(s, i)
+}
+
+/** Una flecha con su etiqueta (`-- texto -->` o `-->|texto|`), o null. */
+function leerFlechaSimple(s, i) {
   for (const [re, style] of FLECHAS_CON_TEXTO) {
     const m = leer(re, s, i)
     if (m) return { style, arrow: puntaDe(m[2]), label: sinComillas(m[1]), j: i + m[0].length }
@@ -372,7 +414,19 @@ function leerFlowchart(src) {
   const subgrafos = new Map()
   let abierto = null
 
+  // Un subgrafo sin id propio («subgraph Lote uno») lleva uno PROVISIONAL, que
+  // no es un id válido y no choca con nada; el `sgK` de verdad se le pone al
+  // final, saltándose los ids de nodos y subgrafos que escribió el modelo: un
+  // `subgraph sg1` explícito ya no reabre el de «Lote uno» ni le mete nodos
+  // ajenos (revisión adversaria de H24, D07).
+  let provisionales = 0
+
   const tocar = (n) => {
+    // Mermaid une una arista a la CAJA de un subgrafo; aquí no hay aristas a
+    // cajas, y sin esto salía un nodo «S» fantasma fuera de la caja (D07). Se
+    // rechaza con su línea; nunca se redirige a un nodo de dentro, que sería
+    // dibujar una arista que el modelo no escribió.
+    if (subgrafos.has(n.id)) return `«${fragmento(n.id)}» es un subgrafo y no puede ser un nodo`
     let nodo = nodos.get(n.id)
     if (!nodo) {
       nodo = { id: n.id, label: n.id, shape: 'rect', kind: '', sub: '' }
@@ -384,6 +438,14 @@ function leerFlowchart(src) {
     }
     if (n.cls !== undefined) clases.set(n.id, n.cls)
     if (abierto && !nodo.sub) nodo.sub = abierto.id
+    return ''
+  }
+  const tocarTodos = (miembros, n) => {
+    for (const x of miembros) {
+      const error = tocar(x)
+      if (error) return `línea ${n}: ${error}`
+    }
+    return ''
   }
 
   const sentencia = (s, n) => {
@@ -404,9 +466,10 @@ function leerFlowchart(src) {
         label = titulo
       } else {
         label = sinComillas(conTitulo ? conTitulo[2] : titulo)
-        for (let k = 1; !id; k++) if (!subgrafos.has('sg' + k)) id = 'sg' + k
+        id = ' ' + ++provisionales
       }
-      if (!subgrafos.has(id)) subgrafos.set(id, { id, label: label || id })
+      if (!id.startsWith(' ') && nodos.has(id)) return `línea ${n}: «${fragmento(id)}» es un nodo y no puede ser un subgrafo`
+      if (!subgrafos.has(id)) subgrafos.set(id, { id, label: label || (id.startsWith(' ') ? '' : id) })
       abierto = subgrafos.get(id)
       return ''
     }
@@ -426,7 +489,8 @@ function leerFlowchart(src) {
     let grupo = leerGrupo(s, 0)
     if (grupo?.error) return `línea ${n}: ${grupo.error}`
     if (!grupo) return `línea ${n}: sobra: «${fragmento(s)}»`
-    grupo.nodos.forEach(tocar)
+    const e1 = tocarTodos(grupo.nodos, n)
+    if (e1) return e1
     let i = grupo.j
     for (;;) {
       const k = saltarEspacios(s, i)
@@ -435,7 +499,8 @@ function leerFlowchart(src) {
       const siguiente = flecha ? leerGrupo(s, saltarEspacios(s, flecha.j)) : null
       if (siguiente?.error) return `línea ${n}: ${siguiente.error}`
       if (!siguiente) return `línea ${n}: sobra: «${fragmento(s.slice(k))}»`
-      siguiente.nodos.forEach(tocar)
+      const e2 = tocarTodos(siguiente.nodos, n)
+      if (e2) return e2
       for (const a of grupo.nodos) {
         for (const b of siguiente.nodos) {
           aristas.push({ from: a.id, to: b.id, label: flecha.label, style: flecha.style, arrow: flecha.arrow })
@@ -469,6 +534,20 @@ function leerFlowchart(src) {
   if (!direction) return fallo(['no es un flowchart'])
 
   const lista = [...nodos.values()]
+  // Los ids provisionales toman, en orden de aparición, el primer `sgK` libre
+  // DESPUÉS de leer todos los ids explícitos, de nodos y de subgrafos (D07).
+  const usados = new Set([...nodos.keys(), ...subgrafos.keys()])
+  let k = 0
+  for (const s of subgrafos.values()) {
+    if (!s.id.startsWith(' ')) continue
+    const provisional = s.id
+    do k++
+    while (usados.has('sg' + k))
+    s.id = 'sg' + k
+    usados.add(s.id)
+    if (!s.label) s.label = s.id
+    for (const nodo of lista) if (nodo.sub === provisional) nodo.sub = s.id
+  }
   for (const nodo of lista) if (clases.has(nodo.id)) nodo.kind = clases.get(nodo.id)
   const topes = []
   if (lista.length > DIAGRAM_LIMITS.nodes) topes.push(`demasiados nodos: ${lista.length} de tope ${DIAGRAM_LIMITS.nodes}`)
@@ -518,19 +597,27 @@ export function validateDiagram(raw) {
   }
 }
 
+/*
+ * Cada campo se lee UNA vez, en una constante, y se valida y se copia esa
+ * constante (revisión adversaria de H24, D16): con dos lecturas, un getter que
+ * da 'A' a la primera y otra cosa a la segunda salía de la barrera sin validar,
+ * y la barrera dejaba de ser idempotente. Hoy sólo con objetos hechos a mano
+ * (el parser da objetos planos), pero la barrera promete «cualquier cosa».
+ */
 function validar(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return fallo(['no es un diagrama'])
-  const direction = direccion(raw.direction) || 'TD'
-  const previos = (Array.isArray(raw.errores) ? raw.errores : [])
+  const { ok, direction: dir, nodes: rn, edges: re, subgraphs: rs, errores: rerr } = raw
+  const direction = direccion(dir) || 'TD'
+  const previos = (Array.isArray(rerr) ? rerr : [])
     .filter((e) => typeof e === 'string')
     .map((e) => unaLinea(e))
     .filter(Boolean)
-  if (raw.ok === false || previos.length) {
+  if (ok === false || previos.length) {
     return fallo(previos.length ? previos : ['no se ha podido leer el diagrama'], direction)
   }
-  const nodosCrudos = Array.isArray(raw.nodes) ? raw.nodes : []
-  const aristasCrudas = Array.isArray(raw.edges) ? raw.edges : []
-  const subgrafosCrudos = Array.isArray(raw.subgraphs) ? raw.subgraphs : []
+  const nodosCrudos = Array.isArray(rn) ? rn : []
+  const aristasCrudas = Array.isArray(re) ? re : []
+  const subgrafosCrudos = Array.isArray(rs) ? rs : []
   const topes = []
   if (nodosCrudos.length > DIAGRAM_LIMITS.nodes) {
     topes.push(`demasiados nodos: ${nodosCrudos.length} de tope ${DIAGRAM_LIMITS.nodes}`)
@@ -545,21 +632,24 @@ function validar(raw) {
 
   const candidatos = []
   for (const s of subgrafosCrudos) {
-    if (!s || !idValido(s.id) || candidatos.some((c) => c.id === s.id)) continue
-    candidatos.push({ id: s.id, label: recorte(s.label, DIAGRAM_LIMITS.labelMax) || s.id })
+    const id = s ? s.id : undefined
+    if (!idValido(id) || candidatos.some((c) => c.id === id)) continue
+    candidatos.push({ id, label: recorte(s.label, DIAGRAM_LIMITS.labelMax) || id })
   }
   const nodes = []
   for (const n of nodosCrudos) {
-    if (!n || !idValido(n.id) || nodes.some((x) => x.id === n.id)) continue
-    const label = recorte(n.label, DIAGRAM_LIMITS.labelMax) || n.id
+    const id = n ? n.id : undefined
+    if (!idValido(id) || nodes.some((x) => x.id === id)) continue
+    const label = recorte(n.label, DIAGRAM_LIMITS.labelMax) || id
+    const { shape, kind, sub } = n
     nodes.push({
-      id: n.id,
+      id,
       label,
-      shape: DIAGRAM_SHAPES.includes(n.shape) ? n.shape : 'rect',
-      kind: typeof n.kind === 'string' && NOTE_KINDS.includes(n.kind) ? n.kind : '',
+      shape: DIAGRAM_SHAPES.includes(shape) ? shape : 'rect',
+      kind: typeof kind === 'string' && NOTE_KINDS.includes(kind) ? kind : '',
       ref: referencia(label),
       note: numeroDeNota(label),
-      sub: candidatos.some((c) => c.id === n.sub) ? n.sub : '',
+      sub: candidatos.some((c) => c.id === sub) ? sub : '',
     })
   }
   // Un subgrafo sin nodos no tiene caja que dibujar: fuera.
@@ -569,13 +659,15 @@ function validar(raw) {
   const ids = new Set(nodes.map((x) => x.id))
   const edges = []
   for (const e of aristasCrudas) {
-    if (!e || !ids.has(e.from) || !ids.has(e.to)) continue
+    if (!e) continue
+    const { from, to, style, arrow } = e
+    if (!ids.has(from) || !ids.has(to)) continue
     edges.push({
-      from: e.from,
-      to: e.to,
+      from,
+      to,
       label: recorte(e.label, DIAGRAM_LIMITS.edgeLabelMax),
-      style: ESTILOS.includes(e.style) ? e.style : 'solid',
-      arrow: PUNTAS.includes(e.arrow) ? e.arrow : 'arrow',
+      style: ESTILOS.includes(style) ? style : 'solid',
+      arrow: PUNTAS.includes(arrow) ? arrow : 'arrow',
     })
   }
   if (nodes.length < 2) return fallo(['menos de dos nodos'], direction)
@@ -624,7 +716,8 @@ export function toMermaid(diagram) {
 
 /**
  * Las claves de incidencia DISTINTAS que cita un texto, en orden de aparición.
- * El panel la usa para decidir si ofrece «Dibujar el flujo»; nunca para navegar.
+ * `offerDiagramKeys` la filtra por proyecto para decidir si se ofrece «Dibujar
+ * el flujo»; nunca sirve para navegar.
  *
  * @param {string} text la respuesta del modelo
  * @returns {string[]}
@@ -637,4 +730,22 @@ export function citedIssueKeys(text) {
     if (clave && !out.includes(clave)) out.push(clave)
   }
   return out
+}
+
+/**
+ * Las claves que cuentan para ofrecer «Dibujar el flujo»: las de
+ * `citedIssueKeys` cuyo proyecto conoce el panel (revisión adversaria de H24,
+ * D01). «UTF-8», «ISO-8601» o «SHA-256» tienen forma de clave y no son
+ * incidencias, y ofrecían dibujar un flujo que no existe; la cosecha del índice
+ * ya las tira por lo mismo (M4, `knownProjects` de indexer.js). Las claves de
+ * dentro de un bloque de código siguen contando: las de un ```jql son
+ * incidencias. Pura.
+ *
+ * @param {string} text la respuesta del modelo
+ * @param {Set<string>|string[]} projects claves de proyecto conocidas
+ * @returns {string[]}
+ */
+export function offerDiagramKeys(text, projects) {
+  const conocidos = new Set(projects instanceof Set || Array.isArray(projects) ? projects : [])
+  return citedIssueKeys(text).filter((k) => conocidos.has(k.split('-')[0]))
 }

@@ -507,6 +507,21 @@ function knownProjects(site, index, blob) {
   return out
 }
 
+/**
+ * Los proyectos de Jira que un turno deja por conocidos: los mismos de los que
+ * se fía la cosecha (`knownProjects`), con la salida de sus herramientas y la
+ * misma barrera de URLs ajenas (S6). La usa la oferta de «Dibujar el flujo»
+ * (revisión adversaria de H24, D01): sin ella, «UTF-8, ISO-8601 y SHA-256»
+ * eran tres incidencias, la lección de M4 otra vez. Pura.
+ *
+ * @param {Array} parts las partes del turno
+ * @param {{site?:object, index?:object|null, allowedHosts?:string[]}} opts
+ * @returns {Set<string>}
+ */
+export function knownProjectsFor(parts, { site, index = null, allowedHosts = [] } = {}) {
+  return knownProjects(site, index, dropForeignUrls(collectToolText(parts), [site?.host, ...asStrings(allowedHosts)]))
+}
+
 function collectToolText(parts) {
   const out = []
   for (const p of parts || []) {

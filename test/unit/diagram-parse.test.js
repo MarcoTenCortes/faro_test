@@ -17,6 +17,7 @@ import {
   readFlowchart,
   toMermaid,
   citedIssueKeys,
+  offerDiagramKeys,
 } from '../../src/panel/diagram-parse.js'
 
 const NEL = String.fromCharCode(0x85)
@@ -141,6 +142,9 @@ test('diagrama: tolerancia a lo que escriben los modelos, un caso por variante (
   eq(corto('flowchart TD\nA[texto] --> B(texto)'), { nodos: ['A=texto', 'B/round=texto'], aristas: ['A>B'] })
   eq(corto('flowchart TD\nA -- texto --> B'), { nodos: ['A=A', 'B=B'], aristas: ['A>B «texto»'] })
   eq(corto('flowchart TD\nA -->|texto| B'), { nodos: ['A=A', 'B=B'], aristas: ['A>B «texto»'] })
+  // Revisión adversaria de H24 (D08): el «;» del tubo y las comillas de `-- "x" -->` no se vigilaban.
+  eq(corto('flowchart TD\nA -->|uno; dos| B'), { nodos: ['A=A', 'B=B'], aristas: ['A>B «uno; dos»'] }, 'el «;» dentro de |…| no parte')
+  eq(corto('flowchart TD\nA -- "bloquea" --> B'), { nodos: ['A=A', 'B=B'], aristas: ['A>B «bloquea»'] }, '-- "texto" --> sin comillas')
   eq(corto('flowchart TD\nA --x B'), { nodos: ['A=A', 'B=B'], aristas: ['A>B cross'] })
   eq(corto('flowchart TD\nA --o B'), { nodos: ['A=A', 'B=B'], aristas: ['A>B circle'] })
   eq(corto('flowchart TD\nA -.-> B'), { nodos: ['A=A', 'B=B'], aristas: ['A>B dotted'] })
@@ -179,6 +183,7 @@ test('diagrama: tolerancia a lo que escriben los modelos, un caso por variante (
   eq(readFlowchart('flowchart TD\n  A --> B --> C\n  class A,B hueco').nodes.map((n) => n.kind), ['hueco', 'hueco', ''])
   eq(readFlowchart('flowchart TD\n  class A riesgo\n  A:::dato --> B\n').nodes[0].kind, 'dato', 'manda lo último')
   eq(corto('%% antes de la cabecera\nflowchart TD\n  %% comentario\n  A --> B'), { nodos: ['A=A', 'B=B'], aristas: ['A>B'] })
+  eq(corto('flowchart TD\n  %%sin espacio\n  A --> B'), { nodos: ['A=A', 'B=B'], aristas: ['A>B'] }, '«%%» sin espacio también es comentario')
   const titulos = readFlowchart('flowchart TD\n  subgraph Lote de pruebas\n  A\n  end\n  subgraph "Otro lote"\n  B\n  end\n  subgraph T\n  C\n  end')
   eq(titulos.subgraphs, [
     { id: 'sg1', label: 'Lote de pruebas', nodes: ['A'] },
@@ -282,6 +287,10 @@ test('SEGURIDAD: las directivas %%{init}%% se rechazan, también antes de la cab
     'línea 3: las directivas «%%{…}%%» no se admiten',
   ])
   eq(readFlowchart('flowchart TD\n  A --> B\n  %% {esto sí es un comentario}').ok, true)
+  // Cualquier «%%{», no sólo «%%{init»: con espacio, config, wrap y con sangría (D08).
+  for (const directiva of ['%%{ init: {"securityLevel":"loose"} }%%', '%%{config: {"flowchart":{"htmlLabels":true}}}%%', '%%{wrap}%%', '    %%{init: {}}%%']) {
+    eq(readFlowchart(`flowchart TD\n  A --> B\n${directiva}`).errores, ['línea 3: las directivas «%%{…}%%» no se admiten'], directiva)
+  }
 })
 
 test('SEGURIDAD: <img onerror> y javascript: en una etiqueta son TEXTO de una línea', () => {
@@ -373,11 +382,37 @@ test('SEGURIDAD: los topes, con su error', () => {
   eq(validateDiagram({ nodes: muchos }).errores, ['demasiados nodos: 31 de tope 30'])
 })
 
+// Revisión adversaria de H24 (D08): sin esta prueba vivían los mutantes de la
+// barrera sin tope de aristas ni de subgrafos, sin `!ids.has(e.from)`, con el id
+// de subgrafo sin `idValido` y con `srcMax` por `>=`.
+test('SEGURIDAD: la barrera sola (sin parser) aplica topes, huérfanos por los dos lados e ids de subgrafo', () => {
+  const dos = [{ id: 'A' }, { id: 'B' }]
+  const aristas = (n) => Array.from({ length: n }, () => ({ from: 'A', to: 'B' }))
+  eq(validateDiagram({ nodes: dos, edges: aristas(60) }).edges.length, 60)
+  eq(validateDiagram({ nodes: dos, edges: aristas(61) }).errores, ['demasiadas aristas: 61 de tope 60'])
+  const siete = Array.from({ length: 7 }, (_, i) => ({ id: 'N' + i, sub: 'S' + i }))
+  const subs = (n) => Array.from({ length: n }, (_, i) => ({ id: 'S' + i }))
+  eq(validateDiagram({ nodes: siete, subgraphs: subs(6) }).subgraphs.length, 6)
+  eq(validateDiagram({ nodes: siete, subgraphs: subs(7) }).errores, ['demasiados subgrafos: 7 de tope 6'])
+  const huerfanos = validateDiagram({
+    nodes: [{ id: 'A' }, { id: 'B' }, { id: 'mal id' }],
+    edges: [{ from: 'mal id', to: 'A' }, { from: 'Z', to: 'A' }, { from: 'A', to: 'Z' }, { from: 'A', to: 'B' }],
+  })
+  eq(huerfanos.edges.map((e) => `${e.from}>${e.to}`), ['A>B'], 'fuera las aristas con from o to que no es un nodo')
+  const hostil = validateDiagram({ nodes: [{ id: 'A', sub: 'x" onclick' }, { id: 'B' }], subgraphs: [{ id: 'x" onclick', label: 'L' }] })
+  eq([hostil.subgraphs, hostil.nodes.map((n) => n.sub)], [[], ['', '']], 'un id de subgrafo que no es un id no pasa')
+  const base = 'flowchart TD\n  A --> B\n'
+  const justo = base + '%'.repeat(DIAGRAM_LIMITS.srcMax - base.length)
+  eq([justo.length, readFlowchart(justo).ok], [6000, true], 'exactamente srcMax se lee')
+  eq(readFlowchart(justo + '%').errores, ['demasiado largo: 6001 caracteres de tope 6000'])
+})
+
 test('diagrama: lo que no se entiende se rechaza con su línea', () => {
   const error = (src) => readFlowchart(src).errores
   eq(error('sequenceDiagram\n  A->>B: hola'), ['línea 1: no es un flowchart'])
   eq(error('\n\nflowchart-elk TD\n  A --> B'), ['línea 3: no es un flowchart'])
-  eq(error('flowchart TD\n  A --> B\n  A <--> B'), ['línea 3: sobra: «<--> B»'])
+  // EL CAMBIO (D07): `A <--> B` se lee (una línea sin punta); lo que no casa sigue sobrando.
+  eq(error('flowchart TD\n  A --> B\n  A <--x B'), ['línea 3: sobra: «<--x B»'], 'una doble punta que no casa')
   eq(error('flowchart TD\n  A --> B %% nota'), ['línea 2: sobra: «%% nota»'])
   eq(error('flowchart TD\n  A -->'), ['línea 2: sobra: «-->»'])
   eq(error('flowchart TD\n  subgraph S\n  subgraph T\n  A --> B\n  end\n  end'), ['línea 3: un subgrafo dentro de otro no se admite'])
@@ -387,6 +422,10 @@ test('diagrama: lo que no se entiende se rechaza con su línea', () => {
   // Una palabra que abre sentencia no es un id: `click --> B` en la copia sería un `click`.
   eq(error('flowchart TD\n  A --> click --> B'), ['línea 2: «click» no vale como id'])
   eq(error('flowchart TD\n  A --> Style'), ['línea 2: «Style» no vale como id'])
+  // Las DOCE reservadas, una a una (D08: quitar cualquiera de las otras nueve no lo veía nadie).
+  for (const w of ['end', 'subgraph', 'direction', 'class', 'classDef', 'click', 'href', 'callback', 'style', 'linkStyle', 'graph', 'flowchart']) {
+    eq(error(`flowchart TD\n  A --> ${w}`), [`línea 2: «${w}» no vale como id`], `reservada: ${w}`)
+  }
   eq(error('flowchart TD\n  A --> B ' + '?'.repeat(100)), [`línea 2: sobra: «${'?'.repeat(80)}…»`], 'lo que sobra, recortado')
   eq(error(''), ['no es un flowchart'])
 })
@@ -536,4 +575,118 @@ test('diagrama: citedIssueKeys da las claves DISTINTAS en orden, y [] con lo que
   eq(citedIssueKeys('```mermaid\nA[ENG-1] --> B[ENG-2]\n```'), ['ENG-1', 'ENG-2'])
   for (const x of [null, undefined, 3, {}, ['ENG-1']]) eq(citedIssueKeys(x), [])
   assert(DIAGRAM_LIMITS.offerMinKeys === 3)
+})
+
+// ---- Revisión adversaria de H24 (docs/plan/handoff/h24-rev-decisiones.md) ----
+
+const aristasDe = (src) => readFlowchart(src).edges.map((e) => `${e.from}>${e.to}:${e.style}/${e.arrow}${e.label ? '«' + e.label + '»' : ''}`)
+
+test('diagrama: las flechas de doble punta se leen como una línea sin punta (no se inventa un sentido)', () => {
+  // D07: antes, «sobra» y el diagrama entero (el del README incluido) sin dibujar.
+  eq(aristasDe('flowchart TD\n  A <--> B'), ['A>B:solid/none'])
+  eq(aristasDe('flowchart TD\n  A<-->B'), ['A>B:solid/none'], 'sin espacios')
+  eq(aristasDe('flowchart TD\n  A <-.-> B'), ['A>B:dotted/none'])
+  eq(aristasDe('flowchart TD\n  A <==> B'), ['A>B:thick/none'])
+  eq(aristasDe('flowchart TD\n  A o--o B\n  B x--x C'), ['A>B:solid/none', 'B>C:solid/none'])
+  eq(aristasDe('flowchart TD\n  A <-->|t| B'), ['A>B:solid/none«t»'])
+  eq(aristasDe('flowchart TD\n  A <== t ==> B\n  B <-. u .-> C'), ['A>B:thick/none«t»', 'B>C:dotted/none«u»'])
+  // El del README, sin classDef/class (que se rechazan aparte, §8.12) ni <br/>.
+  const readme = readFlowchart('flowchart LR\n  PAGINA["Jira"]\n  EXT["Faro"]\n  PAGINA <-- "marca, navega y lee el árbol" --> EXT')
+  eq(readme.ok, true)
+  eq(readme.edges, [{ from: 'PAGINA', to: 'EXT', label: 'marca, navega y lee el árbol', style: 'solid', arrow: 'none' }])
+  eq(readFlowchart(toMermaid(readme)), readme, 'ida y vuelta exacta')
+  // La de la izquierda tiene que casar con la de la derecha, y una x/o pegada es del id.
+  eq(readFlowchart('flowchart TD\n  A <--x B').errores, ['línea 2: sobra: «<--x B»'])
+  eq(readFlowchart('flowchart TD\n  A o--> B').errores, ['línea 2: sobra: «o--> B»'])
+  eq(readFlowchart('flowchart TD\n  Ao--oB').errores, ['línea 2: sobra: «--oB»'])
+  eq(readFlowchart('flowchart TD\n  A[uno]o--o B').errores, ['línea 2: sobra: «o--o B»'], 'una x/o sólo es punta detrás de un espacio')
+})
+
+test('diagrama: una arista a un subgrafo se rechaza con su línea, en los dos órdenes', () => {
+  // D07: antes salía un nodo «S» fantasma fuera de la caja; no se redirige a nadie.
+  eq(readFlowchart('flowchart TD\n  subgraph S\n  A\n  end\n  S --> B').errores, ['línea 5: «S» es un subgrafo y no puede ser un nodo'])
+  eq(readFlowchart('flowchart TD\n  subgraph S [Sprint]\n  A --> C\n  end\n  B --> S').errores, ['línea 5: «S» es un subgrafo y no puede ser un nodo'])
+  eq(readFlowchart('flowchart TD\n  S --> B\n  subgraph S\n  A\n  end').errores, ['línea 3: «S» es un nodo y no puede ser un subgrafo'])
+})
+
+test('diagrama: el id de un subgrafo sin id propio no choca con uno explícito ni con un nodo', () => {
+  // D07: antes `subgraph sg1` reabría el de «Lote uno» y le metía nodos ajenos.
+  eq(readFlowchart('flowchart TD\n  subgraph Lote uno\n  A\n  end\n  subgraph sg1 [Otro]\n  B\n  end\n  A --> B').subgraphs, [
+    { id: 'sg2', label: 'Lote uno', nodes: ['A'] },
+    { id: 'sg1', label: 'Otro', nodes: ['B'] },
+  ])
+  const d = readFlowchart('flowchart TD\n  sg1 --> B\n  subgraph Lote uno\n  A\n  end\n  A --> B')
+  eq(d.subgraphs, [{ id: 'sg2', label: 'Lote uno', nodes: ['A'] }])
+  eq(d.nodes.map((n) => n.sub), ['', '', 'sg2'])
+  eq(readFlowchart(toMermaid(d)), d, 'ida y vuelta exacta')
+  eq(readFlowchart('flowchart TD\n  subgraph\n  A --> B\n  end').subgraphs, [{ id: 'sg1', label: 'sg1', nodes: ['A', 'B'] }], 'sin título, su id')
+  eq(parseFlowchart('flowchart TD\n  subgraph\n  A --> B\n  end').subgraphs, [{ id: 'sg1', label: 'sg1', nodes: ['A', 'B'] }], 'también en la lectura en crudo')
+})
+
+test('diagrama: un <br/> de Mermaid en una etiqueta es un espacio y no esconde la clave', () => {
+  // D06: antes «ENG-1<br/>Alta» se pintaba tal cual y el nodo no tenía clave (ref null).
+  const d = readFlowchart('flowchart LR\n  A["ENG-1<br/>Alta"] -->|"sí<br>no"| B["x<BR>y"]\n  C[ENG-2 <br /> Baja] --> A\n  subgraph S ["uno<br/>dos"]\n    A\n  end')
+  assert(d.ok, JSON.stringify(d.errores))
+  eq(d.nodes.map((n) => [n.label, n.ref]), [
+    ['ENG-1 Alta', { kind: 'jira-issue', id: 'ENG-1' }],
+    ['x y', null],
+    ['ENG-2 Baja', { kind: 'jira-issue', id: 'ENG-2' }],
+  ])
+  eq(d.edges.map((e) => e.label), ['sí no', ''])
+  eq(d.subgraphs.map((s) => s.label), ['uno dos'])
+  eq(readFlowchart(toMermaid(d)), d)
+})
+
+test('diagrama: las entidades #quot; y #35; de Mermaid se leen, y la ida y vuelta sigue EXACTA', () => {
+  const d = readFlowchart('flowchart LR\n  A["ENG-1 dice #quot;hola#quot; #35;3"] --> B["y"]')
+  eq(d.nodes[0].label, "ENG-1 dice 'hola' #3")
+  eq(readFlowchart(toMermaid(d)), d)
+  // Lo que al deshacerse vuelve a formar un salto o una entidad se deshace hasta el final,
+  // y un espacio de anchura cero dentro de «<br>» no lo esconde.
+  const raro = validateDiagram({
+    direction: 'LR',
+    nodes: [{ id: 'a', label: '<br<br>>x #35;35; #35;quot;' }, { id: 'b', label: `ENG-3<b${ZWSP}r>Alta` }],
+    edges: [],
+    subgraphs: [],
+  })
+  assert(raro.ok)
+  eq(raro.nodes.map((n) => [n.label, n.ref]), [["x # '", null], ['ENG-3 Alta', { kind: 'jira-issue', id: 'ENG-3' }]])
+  eq(readFlowchart(toMermaid(raro)), raro)
+})
+
+test('SEGURIDAD: la barrera lee cada campo una vez: lo validado es lo que sale', () => {
+  // D16: un getter que da 'A' a la primera lectura y otra cosa a la segunda.
+  const malo = 'A"]\n  click A href "javascript:alert(1)"\n  X["x'
+  const cambiante = (primero) => {
+    let veces = 0
+    return () => (veces++ === 0 ? primero : malo)
+  }
+  const conGetters = (objeto, campos) => {
+    for (const [campo, primero] of Object.entries(campos)) {
+      Object.defineProperty(objeto, campo, { enumerable: true, get: cambiante(primero) })
+    }
+    return objeto
+  }
+  const n1 = conGetters({ label: 'a' }, { id: 'A', shape: 'round', kind: 'riesgo', sub: 'S' })
+  const a1 = conGetters({ label: '', style: 'solid', arrow: 'arrow' }, { from: 'A', to: 'B' })
+  const s1 = conGetters({ label: 'S' }, { id: 'S' })
+  const raw = conGetters({ ok: true, direction: 'TD', edges: [a1], subgraphs: [s1], errores: [] }, { nodes: [n1, { id: 'B', label: 'b' }] })
+  const d = validateDiagram(raw)
+  eq(d.ok, true)
+  eq(d.nodes.map((n) => [n.id, n.shape, n.kind, n.sub]), [['A', 'round', 'riesgo', 'S'], ['B', 'rect', '', '']])
+  eq(d.edges.map((e) => [e.from, e.to]), [['A', 'B']])
+  eq(d.subgraphs.map((s) => s.id), ['S'])
+  eq(validateDiagram(d), d, 'idempotente')
+})
+
+test('diagrama: offerDiagramKeys sólo cuenta las claves de un proyecto conocido («UTF-8, SHA-256» no son incidencias)', () => {
+  // D01: la oferta de «Dibujar el flujo» contaba siglas; la lección M4 de indexer.js.
+  eq(offerDiagramKeys('El fichero va en UTF-8, las fechas en ISO-8601 y la firma con SHA-256.', new Set(['ENG'])), [])
+  eq(offerDiagramKeys('UTF-8, SHA-256, AES-256 y ENG-1', new Set(['ENG'])), ['ENG-1'])
+  eq(offerDiagramKeys('ENG-1 bloquea a OPS-22 y a ENG-7; UTF-8 no.', ['ENG', 'OPS']), ['ENG-1', 'OPS-22', 'ENG-7'])
+  eq(offerDiagramKeys('ABC_2-3 y ENG-1', new Set(['ABC_2'])), ['ABC_2-3'])
+  // Las de un ```jql siguen contando: son incidencias.
+  eq(offerDiagramKeys('Para ENG-1 ejecuta:\n```jql\nkey in (ENG-2, ENG-3)\n```', new Set(['ENG'])), ['ENG-1', 'ENG-2', 'ENG-3'])
+  for (const p of [null, undefined, 'ENG', {}, new Set()]) eq(offerDiagramKeys('ENG-1, ENG-2, ENG-3', p), [])
+  eq(offerDiagramKeys(null, new Set(['ENG'])), [])
 })

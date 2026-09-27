@@ -8,8 +8,15 @@
  * los ciclos se rompen por DFS (la arista de vuelta se invierte SÓLO para
  * ordenar las capas: en la salida conserva su `from` y su `to`), las capas salen
  * del camino más largo, una arista que salta capas pasa por puntos intermedios
- * (nodos ficticios que no se dibujan), el orden dentro de cada capa baja los
- * cruces por baricentro, y `LR`/`RL`/`BT` son `TD` transpuesto o en espejo. Si
+ * (nodos ficticios que no se dibujan) que entran y salen de su capa en vertical,
+ * por su hueco, y un extremo más fino que su capa sale de ella igual: ningún
+ * tramo cruza a un nodo ajeno. El orden dentro de cada capa baja los cruces por
+ * baricentro; los de un subgrafo van SIEMPRE juntos, los subgrafos en un mismo
+ * orden en todas las capas, y cada caja tiene su franja de su primera a su
+ * última capa, donde no entra nadie ajeno ni otro subgrafo. Dos aristas entre
+ * los mismos nodos van en paralelo con un codo a `edgeSep`, y el hueco entre
+ * capas crece para que ninguna etiqueta quede bajo un nodo (revisión adversaria
+ * de H24, D11 y D12). `LR`/`RL`/`BT` son `TD` transpuesto o en espejo. Si
  * con grafos densos se queda corto, el plan B es `dagre` SIN cambiar esta forma
  * de salida (docs/PLAN2.md §3.5): se anota, no se hace.
  *
@@ -19,9 +26,11 @@
  *
  * Forma de la salida: `x`/`y` de un nodo y de un subgrafo son su esquina
  * SUPERIOR IZQUIERDA; los `points` de una arista van del borde de `from` al
- * borde de `to` (la punta de la flecha no queda debajo del nodo); `labelAt` es
- * el CENTRO de la etiqueta de la arista. `width`/`height` lo cubren todo con un
- * margen de `padX`: nada se sale del viewBox.
+ * borde de `to` (la punta de la flecha no queda debajo del nodo), en las cuatro
+ * direcciones; `labelAt` es el CENTRO de la etiqueta de la arista, siempre en un
+ * tramo de hueco entre capas (o junto a su lazo en un autoenlace), nunca en el
+ * vertical de una capa. `width`/`height` lo cubren todo con un margen de `padX`
+ * en los cuatro lados: nada se sale del viewBox.
  *
  * Puro y determinista: la misma entrada da el mismo JSON; nunca lanza.
  */
@@ -39,6 +48,8 @@ export const LAYOUT_LIMITS = Object.freeze({
   subPad: 12,
   maxLines: 3,
   charW: 6.6,
+  /** Separación entre dos aristas que unen los mismos dos nodos (revisión adversaria de H24, D12). */
+  edgeSep: 16,
 })
 
 function vacio() {
@@ -269,27 +280,103 @@ function colocar(diagram, medir) {
   }
   capas = mejor
   fijar()
-  // Los de un mismo subgrafo, juntos en su capa, si no añade cruces.
-  const agrupadas = capas.map((c) => {
-    const out = []
-    for (const id of c) {
-      if (out.includes(id)) continue
-      const sub = nodo.get(id).sub
-      if (sub) out.push(...c.filter((x) => nodo.get(x).sub === sub))
-      else out.push(id)
-    }
-    return out
-  })
-  const posAgrupada = new Map()
-  agrupadas.forEach((c) => c.forEach((id, i) => posAgrupada.set(id, i)))
-  if (contarCruces(agrupadas, abajo, posAgrupada) <= menosCruces) {
-    capas = agrupadas
-    fijar()
+  // Los de un mismo subgrafo, juntos en su capa SIEMPRE, y los subgrafos en el
+  // MISMO orden en todas: si no, la caja que envuelve a los suyos taparía a quien
+  // no lo es (revisión adversaria de H24, D11: antes se agrupaba «si no añade
+  // cruces» y B, de fuera, quedaba dentro de la caja de A y C).
+  const listados = (Array.isArray(diagram.subgraphs) ? diagram.subgraphs : [])
+    .map((s) => (s && typeof s.id === 'string' ? s.id : ''))
+    .filter(Boolean)
+  const subDe = (id) => (listados.includes(nodo.get(id).sub) ? nodo.get(id).sub : '')
+  const ordenSub = new Map()
+  listados
+    .map((s, i) => {
+      const ps = reales.filter((n) => subDe(n.id) === s).map((n) => pos.get(n.id))
+      return [s, ps.length ? media(ps) : NaN, i]
+    })
+    .filter(([, m]) => Number.isFinite(m))
+    .sort((a, b) => a[1] - b[1] || a[2] - b[2])
+    .forEach(([s], k) => ordenSub.set(s, k))
+  const enOrden = (unidades) => {
+    const huecos = []
+    unidades.forEach((u, i) => u.s && huecos.push(i))
+    const bloques = huecos.map((i) => unidades[i]).sort((a, b) => ordenSub.get(a.s) - ordenSub.get(b.s))
+    huecos.forEach((i, k) => (unidades[i] = bloques[k]))
+    return unidades
   }
+  // Una capa en bloques: cada suelto es uno, los de un subgrafo otro (en su orden
+  // de `peso`, la media del bloque), y los bloques de subgrafo en `ordenSub`.
+  const agrupar = (capa, peso) => {
+    const unidades = []
+    const deSub = new Map()
+    for (const id of capa) {
+      const s = subDe(id)
+      if (!s) unidades.push({ clave: peso(id), ids: [id], s: '' })
+      else if (deSub.has(s)) deSub.get(s).ids.push(id)
+      else {
+        const u = { clave: 0, ids: [id], s }
+        deSub.set(s, u)
+        unidades.push(u)
+      }
+    }
+    for (const u of deSub.values()) {
+      u.ids.sort((a, b) => peso(a) - peso(b) || pos.get(a) - pos.get(b))
+      u.clave = media(u.ids.map(peso))
+    }
+    unidades.sort((a, b) => a.clave - b.clave || pos.get(a.ids[0]) - pos.get(b.ids[0]))
+    const orden = enOrden(unidades).flatMap((u) => u.ids)
+    capa.splice(0, capa.length, ...orden)
+    capa.forEach((id, i) => pos.set(id, i))
+  }
+  if (ordenSub.size) {
+    for (const c of capas) agrupar(c, (id) => pos.get(id))
+    // El baricentro otra vez, ya por bloques: se queda el que menos cruza.
+    mejor = capas.map((c) => c.slice())
+    menosCruces = contarCruces(capas, abajo, pos)
+    const porBloques = (capa, vecinos) => {
+      const bc = new Map(
+        capa.map((id) => {
+          const vs = vecinos.get(id)
+          return [id, vs.length ? media(vs.map((v) => pos.get(v))) : pos.get(id)]
+        })
+      )
+      agrupar(capa, (id) => bc.get(id))
+    }
+    for (let pasada = 0; pasada < 2; pasada++) {
+      for (let r = 1; r < nCapas; r++) porBloques(capas[r], arriba)
+      apuntar()
+      for (let r = nCapas - 2; r >= 0; r--) porBloques(capas[r], abajo)
+      apuntar()
+    }
+    capas = mejor
+  }
+  fijar()
 
   // 6. Coordenadas abstractas: `a` a lo ancho de la capa, `r` a lo largo del flujo.
-  const ea = (id) => (horizontal ? nodo.get(id).h : nodo.get(id).w)
+  // Lo que un autoenlace ocupa más allá del borde de su nodo empuja al vecino:
+  // en TD/BT su etiqueta, escrita a la derecha del lazo; y cada lazo de más,
+  // uno por fuera del otro (en LR/RL a un renglón, para que sus etiquetas no se
+  // pisen). Revisión adversaria de H24, D12: la etiqueta del lazo quedaba bajo el vecino.
+  const lazos = new Map()
+  for (const e of aristas) {
+    if (e.from !== e.to) continue
+    const v = lazos.get(e.from) || { n: 0, w: 0 }
+    v.n++
+    if (typeof e.label === 'string' && e.label) v.w = Math.max(v.w, medir(e.label))
+    lazos.set(e.from, v)
+  }
+  const pasoLazo = horizontal ? L.lineH : L.gapX / 2
+  const lazo = new Map(
+    [...lazos].map(([id, v]) => [id, (v.n - 1) * pasoLazo + (!horizontal && v.w ? L.padY + v.w : 0)])
+  )
+  const ea0 = (id) => (horizontal ? nodo.get(id).h : nodo.get(id).w)
   const er = (id) => (horizontal ? nodo.get(id).w : nodo.get(id).h)
+  // `ea` para separar vecinos: la anchura del nodo más lo que ocupa la etiqueta de su lazo.
+  const ea = (id) => ea0(id) + 2 * (lazo.get(id) || 0)
+  // La franja de la cadena por la que va la etiqueta de una arista: entre ids[j] e ids[j+1].
+  const tramoEtiqueta = (ids) => Math.floor((ids.length - 2) / 2)
+  // Los dos extremos sin orden: A→B y B→A son el mismo par (antes de `hueco`, o TDZ).
+  const par = (e) => (e.from < e.to ? e.from + '\n' + e.to : e.to + '\n' + e.from)
   const A = new Map()
   for (const c of capas) {
     let x = 0
@@ -315,13 +402,125 @@ function colocar(diagram, medir) {
       }
     }
   }
+  // Las franjas: la caja de un subgrafo va de su primera capa a la última, y en
+  // TODAS ellas nadie ajeno ni otro subgrafo entra en su franja (con subPad a
+  // cada lado y lineH del título, que en LR/RL cae a lo ancho). Sólo se empuja
+  // hacia `a` creciente: el orden de cada capa se conserva, y como el orden de
+  // los subgrafos es el mismo en todas, la relajación converge (revisión
+  // adversaria de H24, D11: dos subgrafos se solapaban y una capa sin miembros
+  // dejaba a un ajeno dentro de la caja).
+  if (ordenSub.size) {
+    const extIni = L.subPad + (horizontal ? L.lineH : 0)
+    const franja = new Map()
+    for (const n of reales) {
+      const s = subDe(n.id)
+      if (!s) continue
+      const r = rango.get(n.id)
+      const lo = A.get(n.id) - ea(n.id) / 2
+      const hi = A.get(n.id) + ea(n.id) / 2
+      const f = franja.get(s)
+      if (!f) franja.set(s, { r0: r, r1: r, lo, hi })
+      else Object.assign(f, { r0: Math.min(f.r0, r), r1: Math.max(f.r1, r), lo: Math.min(f.lo, lo), hi: Math.max(f.hi, hi) })
+    }
+    const clave = (u) => (u.s ? 's:' + u.s : 'n:' + u.id)
+    const centro = (u) => (u.s ? (franja.get(u.s).lo + franja.get(u.s).hi) / 2 : A.get(u.id))
+    const filas = capas.map((c, r) => {
+      const fila = []
+      for (const id of c) {
+        const s = subDe(id)
+        if (!s) fila.push({ id, s: '' })
+        else if (!fila.some((u) => u.s === s)) fila.push({ id: '', s })
+      }
+      // Un marcador en cada capa del subgrafo aunque no tenga miembros en ella.
+      for (const [s, f] of franja) {
+        if (r < f.r0 || r > f.r1 || fila.some((u) => u.s === s)) continue
+        const m = (f.lo + f.hi) / 2
+        let k = 0
+        while (k < fila.length && centro(fila[k]) < m) k++
+        fila.splice(k, 0, { id: '', s })
+      }
+      return enOrden(fila)
+    })
+    const izq = new Map()
+    const ancho = new Map()
+    for (const fila of filas) {
+      for (const u of fila) {
+        const k = clave(u)
+        if (izq.has(k)) continue
+        const f = u.s ? franja.get(u.s) : null
+        izq.set(k, f ? f.lo - extIni : A.get(u.id) - ea(u.id) / 2)
+        ancho.set(k, f ? f.hi - f.lo + extIni + L.subPad : ea(u.id))
+      }
+    }
+    const antes = new Map(izq)
+    let cambio = true
+    for (let it = 0; cambio && it <= izq.size; it++) {
+      cambio = false
+      for (const fila of filas) {
+        for (let k = 1; k < fila.length; k++) {
+          const a = clave(fila[k - 1])
+          const b = clave(fila[k])
+          const min = izq.get(a) + ancho.get(a) + L.gapX
+          if (izq.get(b) < min - 1e-9) {
+            izq.set(b, min)
+            cambio = true
+          }
+        }
+      }
+    }
+    for (const [k, v] of izq) {
+      const d = v - antes.get(k)
+      if (!d) continue
+      const ids = k.startsWith('n:') ? [k.slice(2)] : reales.filter((n) => subDe(n.id) === k.slice(2)).map((n) => n.id)
+      for (const id of ids) A.set(id, A.get(id) + d)
+    }
+  }
+  // En LR/RL la etiqueta, horizontal, cruza el hueco entre capas: el hueco la
+  // cabe. En TD/BT, las etiquetas de las directas entre los mismos dos nodos van
+  // una bajo otra: el hueco las cabe todas (revisión adversaria de H24, D12).
+  const hueco = Array.from({ length: nCapas }, () => L.gapY)
+  const apiladas = new Map()
+  aristas.forEach((e, i) => {
+    if (horizontal || e.from === e.to || typeof e.label !== 'string' || !e.label) return
+    const ids = cadenas.get(i)
+    if (ids.length > 2) return
+    const k = par(e)
+    apiladas.set(k, (apiladas.get(k) || 0) + 1)
+    const r = rango.get(ids[0])
+    hueco[r] = Math.max(hueco[r], apiladas.get(k) * L.lineH + L.padY)
+  })
+  if (horizontal) {
+    aristas.forEach((e, i) => {
+      if (e.from === e.to || typeof e.label !== 'string' || !e.label) return
+      const ids = cadenas.get(i)
+      const r = rango.get(ids[tramoEtiqueta(ids)])
+      hueco[r] = Math.max(hueco[r], medir(e.label) + 2 * L.padX)
+    })
+    // La etiqueta de un autoenlace va encima del lazo, centrada en su capa: si
+    // es más ancha que la capa, los huecos de los dos lados la caben (revisión
+    // adversaria de H24, D12: «revisar el contrato de la API» tapaba al vecino).
+    aristas.forEach((e) => {
+      if (e.from !== e.to || typeof e.label !== 'string' || !e.label) return
+      const r = rango.get(e.from)
+      const sobra = medir(e.label) / 2 + L.padX - Math.max(L.nodeH, ...capas[r].map(er)) / 2
+      if (sobra <= 0) return
+      hueco[r] = Math.max(hueco[r], sobra)
+      if (r > 0) hueco[r - 1] = Math.max(hueco[r - 1], sobra)
+    })
+  }
   const R = []
+  const G = []
+  // Lo que ocupa de verdad el nodo más grueso de cada capa: un nodo más fino
+  // que él tiene franja libre a sus lados, y por ahí no debe cruzar en diagonal.
+  const GN = []
   let inicio = 0
-  for (const c of capas) {
+  capas.forEach((c, r) => {
     const grosor = Math.max(L.nodeH, ...c.map(er))
     R.push(inicio + grosor / 2)
-    inicio += grosor + L.gapY
-  }
+    G.push(grosor)
+    GN.push(Math.max(0, ...c.map(er)))
+    inicio += grosor + hueco[r]
+  })
   const centroAbs = (id) => [A.get(id), R[rango.get(id)]]
   const aFinal = ([a, r]) =>
     dir === 'TD' ? [a, r] : dir === 'BT' ? [a, -r] : dir === 'LR' ? [r, a] : [-r, a]
@@ -332,26 +531,80 @@ function colocar(diagram, medir) {
     return { id: n.id, x: cx - n.w / 2, y: cy - n.h / 2, w: n.w, h: n.h, lines: n.lines }
   })
   const caja = new Map(nodes.map((n) => [n.id, n]))
+  // Las aristas DIRECTAS (sin ficticios) que unen los mismos dos nodos, en
+  // cualquier sentido, saldrían idénticas: van en paralelo, a `edgeSep` una de
+  // otra, y sus etiquetas escalonadas. Las que tienen ficticios ya van por
+  // puntos distintos (y desplazarlas las haría cruzarse). Revisión adversaria de H24, D12.
+  const grupo = new Map()
+  aristas.forEach((e, i) => {
+    if (e.from !== e.to && cadenas.get(i).length > 2) {
+      grupo.set(String(i), [i])
+      return
+    }
+    const k = par(e)
+    if (!grupo.has(k)) grupo.set(k, [])
+    grupo.get(k).push(i)
+  })
   const edges = aristas.map((e, i) => {
+    const hermanas = grupo.get(grupo.has(String(i)) ? String(i) : par(e))
+    const m = hermanas.length
+    const orden = hermanas.indexOf(i)
+    const conEtiqueta = hermanas.filter((j) => typeof aristas[j].label === 'string' && aristas[j].label)
+    const desplaza = (orden - (m - 1) / 2) * L.edgeSep
+    const escalon = (conEtiqueta.indexOf(i) - (conEtiqueta.length - 1) / 2) * L.lineH
     let abs
+    let en = null
     if (e.from === e.to) {
       const [a, r] = centroAbs(e.from)
-      const borde = a + ea(e.from) / 2
+      const borde = a + ea0(e.from) / 2
       const q = er(e.from) / 4
+      const fuera = borde + L.gapX / 2 + orden * pasoLazo
       abs = [
         [borde, r - q],
-        [borde + L.gapX / 2, r - q],
-        [borde + L.gapX / 2, r + q],
+        [fuera, r - q],
+        [fuera, r + q],
         [borde, r + q],
       ]
+      en = horizontal ? [fuera, r] : [fuera + L.padY + medir(e.label || '') / 2, r + escalon]
     } else {
       const ids = cadenas.get(i)
-      abs = ids.map((id, k) => {
+      const t = tramoEtiqueta(ids)
+      abs = []
+      let sale = 0
+      ids.forEach((id, k) => {
         const [a, r] = centroAbs(id)
-        if (k === 0) return [a, r + er(id) / 2]
-        if (k === ids.length - 1) return [a, r - er(id) / 2]
-        return [a, r]
+        // Un extremo más fino que el nodo más grueso de su capa sale de la franja
+        // de la capa en vertical: en diagonal desde su borde cruzaba al vecino
+        // grueso (revisión adversaria de H24, D12, al juntarla con D11: un nodo
+        // de 64 px junto a uno de 176 en LR).
+        const banda = GN[rango.get(id)] / 2
+        const holgura = banda - er(id) / 2 > 0.05
+        if (k === 0) {
+          abs.push([a, r + er(id) / 2])
+          if (holgura) abs.push([a, r + banda])
+        } else if (k === ids.length - 1) {
+          if (holgura) abs.push([a, r - banda])
+          abs.push([a, r - er(id) / 2])
+        } else {
+          // Un ficticio es una franja: entra y sale de su capa en vertical, por su
+          // hueco (en su centro, la arista larga cruzaba en diagonal a los vecinos).
+          const g = G[rango.get(id)] / 2
+          abs.push([a, r - g], [a, r + g])
+        }
+        if (k === t) sale = abs.length - 1
       })
+      // La etiqueta, siempre en un tramo de hueco (de la salida de la capa de
+      // ids[t] a la entrada de la de ids[t+1]): nunca en el vertical de una capa.
+      en = [(abs[sale][0] + abs[sale + 1][0]) / 2, (abs[sale][1] + abs[sale + 1][1]) / 2]
+      // Dos directas entre los mismos nodos: la misma salida y la misma llegada,
+      // y un codo en medio del hueco, a `desplaza` a lo ancho de la capa.
+      if (m > 1) {
+        en = [en[0] + desplaza, en[1]]
+        abs.splice(sale + 1, 0, en.slice())
+      }
+      // Escalonadas a lo alto del texto: en TD a lo largo del flujo, en LR/RL a lo ancho.
+      if (horizontal) en[0] += escalon
+      else en[1] += escalon
       if (invertida.has(i)) abs.reverse()
     }
     const points = abs.map((p) => {
@@ -360,8 +613,8 @@ function colocar(diagram, medir) {
     })
     let labelAt = null
     if (typeof e.label === 'string' && e.label) {
-      const k = Math.floor((points.length - 1) / 2)
-      labelAt = { x: (points[k].x + points[k + 1].x) / 2, y: (points[k].y + points[k + 1].y) / 2 }
+      const [x, y] = aFinal(en)
+      labelAt = { x, y }
     }
     return { from: e.from, to: e.to, points, labelAt, label: typeof e.label === 'string' ? e.label : '' }
   })

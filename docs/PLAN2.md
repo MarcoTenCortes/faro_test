@@ -1584,7 +1584,16 @@ Reglas transversales, que salen de los dos juicios y valen para todos:
   medían); la vista toma las `x`/`y` de un nodo como su centro y el layout
   las da como esquina (incidencia abierta al cerrar, docs/BITACORA.md §12.5).
   1555 pruebas (+57), 167 mutaciones (64 + 39 + 64), todas cazadas, y las 40
-  instantáneas intactas. La bitácora, en docs/BITACORA.md §12.5.
+  instantáneas intactas. Su revisión adversaria (18 grupos más un hallazgo
+  reproducido por el orquestador: 12 confirmados, 6 matizados, 0 refutados;
+  decisiones D01-D19 en `docs/plan/handoff/h24-rev-decisiones.md`): 1580
+  pruebas (+25), la oferta sólo con claves de proyectos conocidos y sólo bajo
+  la última respuesta, el armado que no se pierde ni se queda, «Diagrama» una
+  vez por texto y sesión, `<br/>` y dobles puntas leídos, ningún tramo por
+  dentro de un nodo ajeno ni una caja de subgrafo encima de nadie, la figura a
+  su tamaño con desplazamiento, la insignia hermana del nodo, el tipo dicho en
+  texto, un solo import en la vista y el cuelgue de `parseBlocks` (de antes de
+  H24). La bitácora, en docs/BITACORA.md §12.5.
 
 ### H25 · Condicionados: «Rotulador» con host de mezcla, y el grafo exacto de issuelinks
 

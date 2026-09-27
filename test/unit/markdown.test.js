@@ -336,6 +336,53 @@ test('markdown H24: el bloque de código dice si su valla cerró (closed), con `
   eq(parseBlocks('```')[0], { type: 'code', lang: '', text: '', closed: false }, 'sólo la apertura: abierta')
 })
 
+// Revisión adversaria de H24, D19: una línea que empieza por ``` o ~~~ sin ser
+// una valla válida colgaba el panel (el párrafo salía vacío sin avanzar y se
+// apilaban párrafos vacíos sin fin). La prueba no puede colgarse con el código
+// viejo: `Array.prototype.push` va envuelto en un contador que lanza pasadas
+// 10 000 llamadas, y se restaura en el `finally` pase lo que pase.
+test('SEGURIDAD: una línea que empieza por ``` sin ser una valla no cuelga parseBlocks, y una valla con cadena de información es una valla', () => {
+  const push = Array.prototype.push
+  const acotado = (src) => {
+    let vueltas = 0
+    Array.prototype.push = function (...a) {
+      if (++vueltas > 10000) throw new Error('parseBlocks no avanza: más de 10 000 push con ' + JSON.stringify(src))
+      return push.apply(this, a)
+    }
+    try {
+      return parseBlocks(src)
+    } finally {
+      Array.prototype.push = push
+    }
+  }
+  const enLinea = acotado('```ENG-1``` está bloqueada por ENG-2')
+  eq(enLinea, [{ type: 'paragraph', text: '```ENG-1``` está bloqueada por ENG-2' }], 'código en línea al principio de línea: UN párrafo')
+  assert(
+    parseInline(enLinea[0].text).some((t) => t.type === 'code' && t.text === 'ENG-1'),
+    'y su código en línea sigue siéndolo'
+  )
+  eq(
+    acotado('```mermaid {init}\nflowchart LR\nA --> B\n```'),
+    [{ type: 'code', lang: 'mermaid', text: 'flowchart LR\nA --> B', closed: true }],
+    'la cadena de información con espacios: el lenguaje es su primera palabra'
+  )
+  eq(acotado('~~~ a b\nx\n~~~'), [{ type: 'code', lang: 'a', text: 'x', closed: true }], 'con ~~~ también')
+  eq(
+    acotado('```js y un `x` suelto'),
+    [{ type: 'paragraph', text: '```js y un `x` suelto' }],
+    'un acento grave en la cadena de información: no es valla (CommonMark), es un párrafo'
+  )
+  eq(
+    acotado('antes\n```ENG-1``` está bloqueada\npor ENG-2\n\notro'),
+    [
+      { type: 'paragraph', text: 'antes' },
+      { type: 'paragraph', text: '```ENG-1``` está bloqueada por ENG-2' },
+      { type: 'paragraph', text: 'otro' },
+    ],
+    'la línea abre su propio párrafo, que sigue con las de detrás'
+  )
+})
+
 test('renderMarkdown H24: sin onCodeBlock el código se pinta como siempre, y un onCodeBlock que devuelve null deja el pre', () => {
   conDocument(() => {
     const textos = [

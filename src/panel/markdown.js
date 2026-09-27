@@ -20,7 +20,12 @@ export function parseBlocks(src) {
     const line = lines[i]
 
     // Bloque de código: ``` o ~~~ (CommonMark), y cierra con el mismo carácter.
-    const fence = line.match(/^\s*(`{3,}|~{3,})\s*(\S*)\s*$/)
+    // La cadena de información puede llevar espacios pero no acentos graves,
+    // como en CommonMark, y el lenguaje es su primera palabra: «```mermaid
+    // {init}» es una valla y «```ENG-1``` está bloqueada» es un párrafo con
+    // código en línea. Antes sólo valía una palabra, y esas dos líneas colgaban
+    // el panel (ver el párrafo, abajo; revisión adversaria de H24, D19).
+    const fence = line.match(/^\s*(`{3,}|~{3,})\s*([^\s`]*)(?:\s[^`]*)?$/)
     if (fence) {
       const lang = fence[2] || ''
       const cierre = fence[1][0] === '`' ? /^\s*`{3,}\s*$/ : /^\s*~{3,}\s*$/
@@ -81,9 +86,17 @@ export function parseBlocks(src) {
       continue
     }
 
-    // Párrafo: hasta la línea en blanco o el inicio de otro bloque.
+    // Párrafo: hasta la línea en blanco o el inicio de otro bloque. La PRIMERA
+    // línea se consume siempre, y así cada vuelta del bucle avanza: una línea
+    // que empieza por ``` o ~~~ sin ser una valla válida no es de ningún bloque
+    // de arriba, `isBlockStart` la tomaba por una valla, el párrafo salía vacío
+    // sin avanzar y `parseBlocks` apilaba párrafos vacíos sin fin: el panel
+    // colgado por una respuesta del modelo (venía de antes de H24; revisión
+    // adversaria de H24, D19).
     const para = []
-    while (i < lines.length && lines[i].trim() && !isBlockStart(lines[i])) para.push(lines[i++])
+    do {
+      para.push(lines[i++])
+    } while (i < lines.length && lines[i].trim() && !isBlockStart(lines[i]))
     blocks.push({ type: 'paragraph', text: para.join(' ') })
   }
 

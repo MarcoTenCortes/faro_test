@@ -797,8 +797,12 @@ Junto al selector de modelo, abajo, hay otras dos cosas:
   tienes, si el modelo no vuelve a buscar no aparece ninguna tarjeta de
   «Abrir la búsqueda en Jira» debajo de la respuesta: la de antes sigue arriba.
 
-- **Dibujar el flujo** (H24) — una respuesta de Jira que cita **tres
-  incidencias o más** lleva debajo un botón «Dibujar el flujo». Como «Preguntar
+- **Dibujar el flujo** (H24) — la **última** respuesta de Jira, si cita **tres
+  incidencias o más** de proyectos que Faro conoce (el de la pestaña, los del
+  mapa, los que devolvió Jira en ese turno y los de los perfiles: «UTF-8» o
+  «SHA-256» no son incidencias), lleva debajo un botón «Dibujar el flujo»; en
+  cuanto preguntas otra cosa desaparece, porque la pregunta habla de «tu última
+  respuesta». Como «Preguntar
   sobre estos», pulsarlo **no manda nada**: te deja escrita en el cuadro la
   pregunta que pide el diagrama (un Mermaid «flowchart» con la clave de cada
   incidencia como primera palabra de su nodo, como mucho 15 nodos, y
@@ -814,8 +818,13 @@ Junto al selector de modelo, abajo, hay otras dos cosas:
   botón: al pulsarlo (o con Enter) Faro te lleva a esa incidencia **por el mismo
   camino que una fila de la lista de una búsqueda**, sólo si la clave está en el
   mapa del sitio; si no, lo dice dentro del diagrama. Un «[n]» de una
-  observación que existe sale como insignia y lleva a ella. Debajo del dibujo,
-  «Ver como lista» lo cuenta en texto (una fila por flecha) y «Copiar como
+  observación que existe sale como insignia y lleva a ella. El tipo de un nodo
+  (riesgo, hueco, contradicción, supuesto) no se dice sólo con el color: el
+  borde de la contradicción y del supuesto va a trazos, y el lector de pantalla
+  oye «Abrir ENG-7 (riesgo)». El dibujo sale a su tamaño, con la letra a su
+  tamaño de siempre: si es más ancho que el panel, se desplaza a lo ancho.
+  Debajo del dibujo, «Ver como lista» lo cuenta en texto (una fila por flecha y
+  otra por caja suelta o con tipo, «ENG-7 Pagos: riesgo») y «Copiar como
   Mermaid» lo pone en el portapapeles, listo para pegarlo en Excalidraw («Más
   herramientas» → «Mermaid a Excalidraw») o en cualquier sitio que lea Mermaid.
   Si Faro no entiende el diagrama, deja el código tal cual y dice debajo por

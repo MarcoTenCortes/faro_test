@@ -2,6 +2,7 @@ import { test, eq, assert } from '../harness.js'
 import {
   buildContext,
   extractEntities,
+  knownProjectsFor,
   harvestIndex,
   harvestFromSearch,
   indexFromSpacePages,
@@ -348,6 +349,23 @@ test('una clave suelta entra si su proyecto es conocido: el de la pestaña, los 
   eq(extractEntities([fallida], JIRA_DC).issues, [])
   // Y una ruta /browse/CLAVE vale por sí sola, pero no hace conocido al proyecto.
   eq(extractEntities([toolPart('ver /browse/OPS-3 y también OPS-4')], JIRA_DC).issues.map((i) => i.key), ['OPS-3'])
+})
+
+// Revisión adversaria de H24 (D01): la oferta de «Dibujar el flujo» contaba
+// «UTF-8, ISO-8601 y SHA-256» como tres incidencias; ahora pregunta aquí qué
+// proyectos conoce el turno, con la misma regla de M4.
+test('knownProjectsFor: los proyectos de la pestaña, del índice y del JSON de Jira; nunca los de «UTF-8» sueltos (D01)', () => {
+  const site = { ...JIRA_DC, projectKey: 'ENG' }
+  const parts = [toolPart('{"key": "OPS-4", "summary": "x"} UTF-8 SHA-256 ver /browse/EVIL-1')]
+  const index = { issues: { 'WEB-2': { key: 'WEB-2' } }, projects: { DOC: {} } }
+  const conocidos = knownProjectsFor(parts, { site, index })
+  assert(conocidos instanceof Set, 'un Set, lo que espera offerDiagramKeys')
+  eq([...conocidos].sort(), ['DOC', 'ENG', 'OPS', 'WEB'])
+  // Lo que el modelo PIDE no cuenta: sólo lo que Jira devuelve.
+  const pedido = { type: 'tool', tool: 'jira_get_issue', state: { status: 'error', output: 'no existe', input: { issue_key: 'UTF-8' } } }
+  eq([...knownProjectsFor([pedido], { site: JIRA_DC })], [])
+  eq([...knownProjectsFor([], { site: JIRA_DC })], [])
+  eq([...knownProjectsFor(null)], [], 'sin nada, nada (y no lanza)')
 })
 
 // --------------------------------------------------- el contexto de Jira

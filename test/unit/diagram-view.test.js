@@ -13,7 +13,9 @@
  *
  * El diagrama y el layout se construyen A MANO con las formas exactas del
  * contrato (§1.1 y §1.2): la vista no depende de cómo se lee ni de cómo se
- * coloca, y estas pruebas tampoco. Los nodos Y los subgrafos del layout llevan
+ * coloca, y estas pruebas tampoco, salvo la última, que cruza la vista con un
+ * layout REAL (los renglones dentro de su caja: la revisión adversaria de H24,
+ * D17, quitó el `lineH` que la vista copiaba). Los nodos Y los subgrafos del layout llevan
  * `x`/`y` en la ESQUINA de arriba a la izquierda, como dice `diagram-layout.js`
  * (la prueba de concepto del anexo 2-E los llevaba en el centro, y al cerrar
  * H24 la vista todavía lo creía: cada nodo salía medio ancho a la izquierda de
@@ -23,6 +25,8 @@ import { test, eq, assert } from '../harness.js'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { diagramNode, textMeasurer } from '../../src/panel/diagram-view.js'
+import { LAYOUT_LIMITS, layoutDiagram } from '../../src/panel/diagram-layout.js'
+import { NOTE_KINDS } from '../../src/panel/notes.js'
 
 const ROOT = join(import.meta.dirname, '..', '..')
 const FUENTE = readFileSync(join(ROOT, 'src', 'panel', 'diagram-view.js'), 'utf8').replace(/\r\n/g, '\n')
@@ -63,7 +67,19 @@ function documentoMinimo() {
       _hijos: [],
       _padre: null,
       _oyentes: {},
-      dataset: {},
+      // Como en el DOM: `dataset.fooBar = v` ES el atributo `data-foo-bar`, así que
+      // lo que se escriba ahí lo ven attrs() y la prueba de las etiquetas hostiles
+      // (al cerrar H24 era un `{}` suelto y `g.dataset.label = nodo.label` pasaba; D10).
+      dataset: new Proxy(
+        {},
+        {
+          get: (_, prop) => datos._attrs['data-' + String(prop).replace(/[A-Z]/g, (m) => '-' + m.toLowerCase())],
+          set: (_, prop, valor) => {
+            datos._attrs['data-' + String(prop).replace(/[A-Z]/g, (m) => '-' + m.toLowerCase())] = String(valor)
+            return true
+          },
+        }
+      ),
       appendChild(hijo) {
         hijo[PADRE] = proxy
         datos._hijos.push(hijo)
@@ -238,13 +254,22 @@ const LAYOUT = {
 const pintar = (opts = {}, diagrama = DIAGRAMA, layout = LAYOUT) => diagramNode(diagrama, layout, opts)
 const svgDe = (fig) => hijos(fig)[0]
 const nodoDe = (fig, id) => buscar(fig, (n) => clases(n).includes('dg-node') && attrs(n)['data-id'] === id)[0]
+/** La insignia de un nodo: su HERMANA justo detrás (nunca un botón dentro del botón «Abrir KEY»; D14). */
+const insigniaDe = (fig, id) => {
+  const g = nodoDe(fig, id)
+  const hermanos = hijos(g._padre)
+  const sig = hermanos[hermanos.indexOf(g) + 1]
+  return sig && clases(sig).includes('dg-note') ? sig : undefined
+}
 
 // --- Las pruebas ------------------------------------------------------------------
 
-test('SEGURIDAD H24: la vista no tiene innerHTML, outerHTML ni insertAdjacentHTML, y no importa nada', () => {
+test('SEGURIDAD H24: la vista no tiene innerHTML, outerHTML ni insertAdjacentHTML, y sólo importa LAYOUT_LIMITS', () => {
   const js = sinComentarios(FUENTE)
   eq(js.match(/innerHTML|outerHTML|insertAdjacentHTML/g), null, 'ni en el fuente')
-  eq(js.match(/^\s*import\b.*$/gm), null, 'sin imports: recibe todo por parámetros (ni panel.js ni un módulo con estado)')
+  // `[ \t]` y no `\s`: `\s` se come los saltos de antes y el import saldría con "\n\n" delante.
+  eq((js.match(/^[ \t]*import\b.*$/gm) || []).map((l) => l.trim()), ["import { LAYOUT_LIMITS } from './diagram-layout.js'"], 'un solo import, puro y sin estado (ni panel.js ni un módulo con estado)')
+  eq(js.match(/\blineH\s*:|\bcharW\s*:/g), null, 'el alto de renglón y los px por carácter no se repiten en la vista (§9)')
   eq(js.match(/\bchrome\.|\bwindow\b|document\.(?!createElement\(|createElementNS\()\w+/g), null, 'del document sólo createElement y createElementNS')
   // Y en lo EJECUTADO: el document mínimo lanza si alguien lo toca, así que
   // pintar el diagrama entero con todas las opciones es la prueba.
@@ -340,7 +365,8 @@ test('H24: debajo los subgrafos, luego las aristas y sus etiquetas, y encima los
 
 test('H24: cada forma con su figura (rx para round/stadium, polygon, ellipse, rect doble)', () => {
   conDocument(() => {
-    const formas = ['rect', 'round', 'stadium', 'subroutine', 'cylinder', 'circle', 'diamond', 'hexagon', 'trapecio']
+    // Las cuatro últimas son nombres de Object.prototype: FIGURAS[shape] sin hasOwn las daría por figuras (D10).
+    const formas = ['rect', 'round', 'stadium', 'subroutine', 'cylinder', 'circle', 'diamond', 'hexagon', 'trapecio', 'constructor', '__proto__', 'toString', 'hasOwnProperty']
     const d = {
       ...DIAGRAMA,
       nodes: formas.map((shape, i) => ({ id: 'F' + i, label: shape, shape, kind: '', ref: null, note: 0, sub: '' })),
@@ -348,7 +374,7 @@ test('H24: cada forma con su figura (rx para round/stadium, polygon, ellipse, re
       subgraphs: [],
     }
     const l = {
-      width: 900,
+      width: 1400,
       height: 60,
       nodes: formas.map((_, i) => ({ id: 'F' + i, x: 10 + i * 100, y: 12, w: 80, h: 36, lines: [formas[i]] })),
       edges: [],
@@ -356,8 +382,8 @@ test('H24: cada forma con su figura (rx para round/stadium, polygon, ellipse, re
     }
     const svg = svgDe(pintar({}, d, l))
     const figuras = formas.map((_, i) => hijos(nodoDe(svg, 'F' + i)).filter((n) => !clases(n).includes('dg-label')).map((n) => n.tagName))
-    eq(figuras, [['rect'], ['rect'], ['rect'], ['rect', 'rect'], ['rect', 'rect'], ['ellipse'], ['polygon'], ['polygon'], ['rect']])
-    eq(clases(nodoDe(svg, 'F8')), ['dg-node', 'dg-rect'], 'una forma desconocida es un rect')
+    eq(figuras, [['rect'], ['rect'], ['rect'], ['rect', 'rect'], ['rect', 'rect'], ['ellipse'], ['polygon'], ['polygon'], ['rect'], ['rect'], ['rect'], ['rect'], ['rect']])
+    for (const i of [8, 9, 10, 11, 12]) eq(clases(nodoDe(svg, 'F' + i)), ['dg-node', 'dg-rect'], `una forma desconocida (${formas[i]}) es un rect`)
     const rx = (i) => attrs(hijos(nodoDe(svg, 'F' + i))[0]).rx
     assert(Number(rx(1)) > Number(rx(0)), 'round más redondeado que rect')
     eq(rx(2), '18', 'stadium: rx = la mitad del alto')
@@ -378,8 +404,9 @@ test('H24: tabindex, role=button, aria-label y data-ref SÓLO en los nodos con r
     })
     eq(lectura, [
       ['ENG-1', '0', 'button', 'Abrir ENG-1', 'jira-issue:ENG-1'],
-      ['ENG-7', '0', 'button', 'Abrir ENG-7', 'jira-issue:ENG-7'],
-      ['ENG-12', '0', 'button', 'Abrir ENG-12', 'jira-issue:ENG-12'],
+      // EL CAMBIO (D15): el tipo, en texto; sin `kinds`, el kind tal cual.
+      ['ENG-7', '0', 'button', 'Abrir ENG-7 (riesgo)', 'jira-issue:ENG-7'],
+      ['ENG-12', '0', 'button', 'Abrir ENG-12 (hueco)', 'jira-issue:ENG-12'],
       ['rev', undefined, undefined, undefined, undefined],
       ['fin', undefined, undefined, undefined, undefined],
       ['suelto', undefined, undefined, undefined, undefined],
@@ -397,7 +424,7 @@ test('H24: data-note y la insignia SÓLO si esa observación existe (notes.has(n
     const leer = (svg) =>
       DIAGRAMA.nodes.map((n) => {
         const g = nodoDe(svg, n.id)
-        const insignia = porClase(g, 'dg-note')[0]
+        const insignia = insigniaDe(svg, n.id)
         return [n.id, attrs(g)['data-note'], insignia ? [attrs(insignia).role, attrs(insignia).tabindex, attrs(insignia)['aria-label'], forma(insignia)] : null]
       })
     eq(leer(svgDe(pintar({ notes: new Set([1, 3, 9]) }))), [
@@ -408,6 +435,13 @@ test('H24: data-note y la insignia SÓLO si esa observación existe (notes.has(n
       ['fin', undefined, null],
       ['suelto', undefined, null],
     ])
+    // D14: al cerrar H24 la insignia colgaba del botón del nodo (axe nested-interactive, WCAG 4.1.2).
+    const conNotas = svgDe(pintar({ notes: new Set([1, 2, 3]) }))
+    eq(
+      buscar(conNotas, (b) => attrs(b).role === 'button').flatMap((b) => buscar(b, (d) => d !== b && (attrs(d).role === 'button' || 'tabindex' in attrs(d))).map((d) => attrs(d)['aria-label'])),
+      [],
+      'ningún botón (ni nada con tabindex) dentro de un botón: nested-interactive'
+    )
     eq(porClase(svgDe(pintar()), 'dg-note'), [], 'sin notes (un Set vacío) ninguna insignia')
     eq(porClase(svgDe(pintar({ notes: new Set() })), 'dg-note'), [])
     eq(buscar(svgDe(pintar()), (n) => 'data-note' in attrs(n)), [], 'ni data-note')
@@ -419,12 +453,12 @@ test('H24: el clic en la insignia llama a onNote(n) y NO abre la incidencia; con
     const abiertas = []
     const notas = []
     const fig = pintar({ onOpen: (r) => abiertas.push(r), onNote: (n) => notas.push(n), notes: new Set([1, 2]) })
-    const insignia = porClase(nodoDe(fig, 'ENG-7'), 'dg-note')[0]
+    const insignia = insigniaDe(fig, 'ENG-7')
     disparar(insignia, 'click')
     const enter = disparar(insignia, 'keydown', 'Enter')
     const espacio = disparar(insignia, 'keydown', ' ')
     eq(notas, [1, 1, 1])
-    eq(abiertas, [], 'la insignia para el evento: el nodo de debajo no se entera')
+    eq(abiertas, [], 'la insignia es hermana del nodo, no su hija: el nodo no se entera')
     eq([enter.defaultPrevented, espacio.defaultPrevented], [true, true])
     disparar(insignia, 'keydown', 'a')
     eq(notas, [1, 1, 1], 'otra tecla no hace nada')
@@ -455,7 +489,7 @@ test('H24: el clic en un nodo con ref llama a onOpen({kind, id}, figure); Enter 
   })
 })
 
-test('H24: «Ver como lista» tiene una fila por arista y otra por nodo suelto, con las etiquetas', () => {
+test('H24: «Ver como lista» tiene una fila por arista y otra por nodo suelto o con tipo, con las etiquetas', () => {
   conDocument(() => {
     const fig = pintar()
     const lista = hijos(fig)[1]
@@ -468,6 +502,9 @@ test('H24: «Ver como lista» tiene una fila por arista y otra por nodo suelto, 
             { li: ['ENG-7 Definir la API [1] → ENG-12 Cliente [2]'] },
             { li: ['ENG-12 Cliente [2] → Revisión [3]'] },
             { li: ['Revisión [3] → Fin (no)'] },
+            // EL CAMBIO (D15): una fila por nodo con tipo aunque tenga aristas, «Etiqueta: tipo».
+            { li: ['ENG-7 Definir la API [1]: riesgo'] },
+            { li: ['ENG-12 Cliente [2]: hueco'] },
             { li: ['Nodo suelto'] },
           ],
         },
@@ -573,4 +610,183 @@ test('H24: textMeasurer mide con un canvas fuera del documento y, sin él, cae e
     if (antes === undefined) delete globalThis.document
     else globalThis.document = antes
   }
+})
+
+// --- Revisión adversaria de H24 (docs/plan/handoff/h24-rev-decisiones.md) ----------
+
+test('H24: la insignia va en la esquina de arriba a la derecha del nodo y nunca sale del viewBox', () => {
+  conDocument(() => {
+    // El círculo y su número de la insignia (la hermana del nodo, D14), como [cx, cy, r].
+    const centro = (fig, id) => {
+      const nota = insigniaDe(fig, id)
+      const c = porTag(nota, 'circle')[0]
+      const t = porTag(nota, 'text')[0]
+      eq([attrs(t).x, attrs(t).y], [attrs(c).cx, attrs(c).cy], 'el número en el centro del círculo')
+      return [Number(attrs(c).cx), Number(attrs(c).cy), Number(attrs(c).r)]
+    }
+    // Con LAYOUT: la esquina (x + w, y) de cada nodo con observación.
+    const svg = svgDe(pintar({ notes: new Set([1, 3]) }))
+    eq(centro(svg, 'ENG-7'), [175, 84, 8], 'ENG-7: x 25 + w 150, y 84')
+    eq(centro(svg, 'rev'), [150, 262, 8], 'rev: x 50 + w 100, y 262')
+    // Nodos pegados a los bordes de un viewBox de 200 × 100: el círculo entero dentro (r ≤ c ≤ lado − r).
+    const nota = (id, n) => ({ id, label: id, shape: 'rect', kind: '', ref: null, note: n, sub: '' })
+    const d = { ...DIAGRAMA, nodes: [nota('dcha', 1), nota('izda', 2), nota('abajo', 3)], edges: [], subgraphs: [] }
+    const l = {
+      width: 200,
+      height: 100,
+      nodes: [
+        { id: 'dcha', x: 120, y: 0, w: 80, h: 36, lines: ['dcha'] },
+        { id: 'izda', x: -40, y: 20, w: 44, h: 36, lines: ['izda'] },
+        { id: 'abajo', x: 60, y: 97, w: 40, h: 20, lines: ['abajo'] },
+      ],
+      edges: [],
+      subgraphs: [],
+    }
+    const bordes = svgDe(pintar({ notes: new Set([1, 2, 3]) }, d, l))
+    eq(['dcha', 'izda', 'abajo'].map((id) => centro(bordes, id)), [[192, 8, 8], [8, 20, 8], [100, 92, 8]])
+  })
+})
+
+test('H24: un layout con los nodos y las aristas en otro orden: cada uno se pinta con lo SUYO (por id y por extremos)', () => {
+  conDocument(() => {
+    const revuelto = { ...LAYOUT, nodes: [...LAYOUT.nodes].reverse(), edges: [...LAYOUT.edges].reverse() }
+    const svg = svgDe(pintar({ uid: 'dg4' }, DIAGRAMA, revuelto))
+    // Las aristas se pintan en el orden del DIAGRAMA, cada una con sus puntos y su etiqueta.
+    eq(porClase(svg, 'dg-edge').map((p) => attrs(p).d), ['M 100 48 L 100 84', 'M 100 136 L 100 182', 'M 100 218 L 100.3 262', 'M 100 298 L 120 330 L 100 352'])
+    eq(porClase(svg, 'dg-edge').map((p) => attrs(p)['marker-end']), ['url(#dg4-arrow)', 'url(#dg4-arrow)', undefined, 'url(#dg4-cross)'])
+    eq(porClase(svg, 'dg-edge-label').map((t) => [attrs(t).x, attrs(t).y, t.textContent]), [['100', '66', 'la consume'], ['110', '325', 'no']])
+    // Y los nodos en el orden del diagrama (el del tabulador), cada uno en su caja.
+    eq(porClase(svg, 'dg-node').map((g) => attrs(g)['data-id']), DIAGRAMA.nodes.map((n) => n.id))
+    eq(attrs(hijos(nodoDe(svg, 'ENG-1'))[0]).x, '15')
+    // Una arista sin pareja en el layout no se dibuja (sigue en la lista).
+    const cojo = svgDe(pintar({}, DIAGRAMA, { ...LAYOUT, edges: LAYOUT.edges.slice(1) }))
+    eq(porClase(cojo, 'dg-edge').map((p) => attrs(p).d), ['M 100 136 L 100 182', 'M 100 218 L 100.3 262', 'M 100 298 L 120 330 L 100 352'])
+  })
+})
+
+test('H24: el tipo del nodo se dice en TEXTO —en «Ver como lista» y en el aria-label—, no sólo con un color', () => {
+  conDocument(() => {
+    const kinds = { dato: 'dato', supuesto: 'supuesto', hueco: 'hueco', contradiccion: 'contradicción', riesgo: 'riesgo' }
+    const fig = pintar({ onOpen() {}, kinds })
+    const svg = svgDe(fig)
+    eq(['ENG-1', 'ENG-7', 'ENG-12'].map((id) => attrs(nodoDe(svg, id))['aria-label']), ['Abrir ENG-1', 'Abrir ENG-7 (riesgo)', 'Abrir ENG-12 (hueco)'])
+    eq(
+      hijos(hijos(hijos(fig)[1])[1]).map((li) => li.textContent).slice(4),
+      ['ENG-7 Definir la API [1]: riesgo', 'ENG-12 Cliente [2]: hueco', 'Nodo suelto'],
+      'una fila por nodo con tipo, aunque tenga aristas, y la del suelto'
+    )
+    // La etiqueta al usuario, con su tilde, la da quien llama (KIND_LABELS del panel); sin ella, el kind tal cual.
+    const contra = { ...DIAGRAMA, nodes: DIAGRAMA.nodes.map((n) => (n.id === 'ENG-7' ? { ...n, kind: 'contradiccion' } : n)) }
+    eq(attrs(nodoDe(svgDe(pintar({ kinds }, contra)), 'ENG-7'))['aria-label'], 'Abrir ENG-7 (contradicción)')
+    eq(attrs(nodoDe(svgDe(pintar({}, contra)), 'ENG-7'))['aria-label'], 'Abrir ENG-7 (contradiccion)')
+    // Un kinds con la etiqueta HEREDADA del prototipo no cuela: sólo claves propias con cadena.
+    const raro = Object.create({ riesgo: 'HEREDADO' })
+    eq(attrs(nodoDe(svgDe(pintar({ kinds: raro })), 'ENG-7'))['aria-label'], 'Abrir ENG-7 (riesgo)')
+    // Y una etiqueta de la tabla que no es cadena tampoco: vuelve al kind.
+    eq(attrs(nodoDe(svgDe(pintar({ kinds: { riesgo: 7 } })), 'ENG-7'))['aria-label'], 'Abrir ENG-7 (riesgo)', 'una etiqueta que no es cadena cae en el kind')
+  })
+  // Y en pantalla, los dos tipos rojos y los dos dorados no son la misma regla.
+  const css = readFileSync(join(ROOT, 'src', 'panel', 'panel.css'), 'utf8').replace(/\r\n/g, '\n')
+  const regla = (k) => (new RegExp('\\n\\.dg-' + k + ' \\{([^}]*)\\}').exec(css) || [])[1]
+  eq(regla('contradiccion'), ' fill: var(--danger-bg); stroke: var(--danger); stroke-dasharray: 4 4; ')
+  eq(regla('supuesto'), ' fill: var(--gold-bg); stroke: var(--gold); stroke-dasharray: 4 4; ')
+  assert(regla('riesgo') && regla('riesgo') !== regla('contradiccion'), 'riesgo y contradicción se distinguen sin el color')
+  assert(regla('hueco') && regla('hueco') !== regla('supuesto'), 'hueco y supuesto se distinguen sin el color')
+})
+
+const dosNodos = (a, b = {}) => ({
+  ok: true,
+  direction: 'TD',
+  nodes: [
+    { id: 'A', label: 'a', shape: 'rect', kind: '', ref: null, note: 0, sub: '', ...a },
+    { id: 'B', label: 'b', shape: 'rect', kind: '', ref: null, note: 0, sub: '', ...b },
+  ],
+  edges: [{ from: 'A', to: 'B', label: '', style: 'solid', arrow: 'arrow' }],
+  subgraphs: [],
+  errores: [],
+})
+const dosSitios = (a = {}) => ({
+  width: 200,
+  height: 200,
+  nodes: [{ id: 'A', x: 0, y: 0, w: 100, h: 36, lines: ['a'], ...a }, { id: 'B', x: 0, y: 80, w: 100, h: 36, lines: ['b'] }],
+  edges: [],
+  subgraphs: [],
+})
+
+test('H24: un kind que no es de NOTE_KINDS no da clase, aunque sea una clase de la propia vista', () => {
+  conDocument(() => {
+    const TIPOS = /const TIPOS = Object\.freeze\((\[[^\]]*\])\)/.exec(sinComentarios(FUENTE))
+    assert(TIPOS, 'la vista tiene su lista cerrada TIPOS')
+    eq(JSON.parse(TIPOS[1].replace(/'/g, '"')), NOTE_KINDS, 'TIPOS es NOTE_KINDS, en su orden')
+    for (const kind of ['label', 'note', 'link', 'edge', 'sub', 'svg', 'node', 'rect']) {
+      const fig = diagramNode(dosNodos({ kind }), dosSitios())
+      eq(clases(porClase(fig, 'dg-node')[0]), ['dg-node', 'dg-rect'], `kind «${kind}»`)
+      eq(hijos(hijos(hijos(fig)[1])[1]).map((li) => li.textContent), ['a → b'], `kind «${kind}»: ni una fila de tipo`)
+    }
+    for (const kind of NOTE_KINDS) {
+      const g = porClase(diagramNode(dosNodos({ kind }), dosSitios()), 'dg-node')[0]
+      eq(clases(g), ['dg-node', 'dg-rect', `dg-${kind}`], `kind «${kind}»`)
+    }
+  })
+})
+
+test('H24: un layout con NaN, Infinity o negativos da atributos finitos y medidas ≥ 0', () => {
+  conDocument(() => {
+    const l = { ...dosSitios({ x: NaN, y: -Infinity, w: -5, h: Infinity }), width: Infinity, height: -5, subgraphs: [{ id: 'S', x: 0, y: 0, w: -1, h: NaN }] }
+    const d = { ...dosNodos({ sub: 'S', note: 1 }), subgraphs: [{ id: 'S', label: 'S', nodes: ['A'] }] }
+    const fig = diagramNode(d, l, { notes: new Set([1]) })
+    const svg = hijos(fig)[0]
+    eq(attrs(svg).viewBox, '0 0 0 0')
+    eq([attrs(svg).width, attrs(svg).height], ['0', '0'])
+    const numericos = ['x', 'y', 'cx', 'cy', 'r', 'rx', 'width', 'height']
+    let vistos = 0
+    for (const n of todos(fig)) {
+      for (const k of numericos) {
+        if (!(k in attrs(n))) continue
+        vistos++
+        const v = Number(attrs(n)[k])
+        assert(Number.isFinite(v), `<${n.tagName} ${k}="${attrs(n)[k]}">`)
+        if (k === 'width' || k === 'height' || k === 'r') assert(v >= 0, `<${n.tagName} ${k}="${attrs(n)[k]}">`)
+      }
+    }
+    assert(vistos > 10, 'se han mirado los atributos del subgrafo, los nodos y la insignia')
+  })
+})
+
+test('H24: los renglones de una etiqueta van centrados en la caja, a LAYOUT_LIMITS.lineH uno de otro', () => {
+  const L = LAYOUT_LIMITS.lineH
+  const d = { ...DIAGRAMA, nodes: [{ id: 'T', label: 'a b c', shape: 'rect', kind: '', ref: null, note: 0, sub: '' }], edges: [], subgraphs: [] }
+  const tres = { width: 120, height: 88, nodes: [{ id: 'T', x: 12, y: 12, w: 96, h: 64, lines: ['a', 'b', 'c'] }], edges: [], subgraphs: [] }
+  conDocument(() => {
+    const ys = porTag(porClase(nodoDe(pintar({}, d, tres), 'T'), 'dg-label')[0], 'tspan').map((s) => Number(attrs(s).y))
+    eq(ys, [44 - L, 44, 44 + L], 'tres renglones: el del medio en el centro (cy = 12 + 64/2)')
+    const dos = { ...tres, nodes: [{ id: 'T', x: 12, y: 12, w: 96, h: 48, lines: ['a', 'b'] }] }
+    const ys2 = porTag(porClase(nodoDe(pintar({}, d, dos), 'T'), 'dg-label')[0], 'tspan').map((s) => Number(attrs(s).y))
+    eq(ys2, [36 - L / 2, 36 + L / 2], 'dos renglones: repartidos alrededor del centro')
+  })
+})
+
+// La última: cruza la vista con un layout REAL (la cabecera lo dice).
+test('H24: con un layout REAL, cada renglón cae dentro de su caja con padY arriba y abajo', () => {
+  const d = {
+    ok: true,
+    direction: 'TD',
+    nodes: [
+      { id: 'A', label: 'una etiqueta bastante larga que el layout parte en tres renglones seguro', shape: 'rect', kind: '', ref: null, note: 0, sub: '' },
+      { id: 'B', label: 'B', shape: 'rect', kind: '', ref: null, note: 0, sub: '' },
+    ],
+    edges: [{ from: 'A', to: 'B', label: '', style: 'solid', arrow: 'arrow' }],
+    subgraphs: [],
+    errores: [],
+  }
+  const l = layoutDiagram(d)
+  const a = l.nodes.find((n) => n.id === 'A')
+  assert(a.lines.length >= 2, 'el caso necesita una etiqueta de varios renglones: ' + JSON.stringify(a.lines))
+  conDocument(() => {
+    const ys = porTag(porClase(nodoDe(pintar({}, d, l), 'A'), 'dg-label')[0], 'tspan').map((s) => Number(attrs(s).y))
+    const L = LAYOUT_LIMITS.lineH
+    eq(ys.length, a.lines.length, 'un tspan por renglón del layout')
+    eq(ys[0] - L / 2, a.y + LAYOUT_LIMITS.padY, 'el primero, a padY del borde de arriba')
+    eq(ys[ys.length - 1] + L / 2, a.y + a.h - LAYOUT_LIMITS.padY, 'el último, a padY del de abajo')
+  })
 })

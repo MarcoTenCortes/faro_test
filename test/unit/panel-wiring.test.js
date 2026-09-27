@@ -2081,7 +2081,41 @@ test('H8: una fila de la lista no navega por su cuenta — pasa por el índice y
     assert(CSS_LIMPIO.includes('.' + clase), 'clase sin estilo: ' + clase)
   }
 
-  const abrir = sinComentarios(JS.slice(JS.indexOf('function openIssueFromResults'), JS.indexOf('async function offerNotes')))
+  // El recorte iba hasta `offerNotes` y H24 metió en medio toda su sección de
+  // diagramas: `noticeNode(` casaba con el de drawCodeBlock y quitar el aviso de
+  // aquí dejaba todo en verde (revisión adversaria de H24, D05). Ahora es la
+  // función ENTERA, de su firma al `}` de la columna 0, sin comentarios ni
+  // líneas vacías, y comparada con `eq`.
+  const sinVaciasH8 = (s) => s.split('\n').filter((l) => l.trim()).join('\n')
+  const firmaH8 = 'async function openIssueFromResults('
+  const limpioH8 = sinVaciasH8(sinComentarios(JS))
+  const iH8 = limpioH8.indexOf(firmaH8)
+  assert(iH8 >= 0, 'falta openIssueFromResults')
+  const abrir = limpioH8.slice(iH8, limpioH8.indexOf('\n}\n', iH8)) + '\n}'
+  eq(
+    abrir,
+    [
+      'async function openIssueFromResults(key, { site, card }) {',
+      '  const r = validatePlan(',
+      "    { navigate: true, mode: 'direct', destination: { kind: 'jira-issue', id: key } },",
+      '    { index: state.index, origin: site.origin, host: site.host, here: state.tabUrl, site }',
+      '  )',
+      '  if (!r.ok || !r.plan?.navigate) {',
+      "    const motivo = r.reason || 'el plan no vale'",
+      "    log.warn('Navegación fallida', `${key} · ${motivo}`)",
+      '    const aviso = `No puedo abrir ${key}: ${motivo}`',
+      '    card.appendChild(noticeNode(aviso, true))',
+      '    announce(aviso)',
+      '    return',
+      '  }',
+      "  await runPlan(r.plan, 'direct', card)",
+      "  for (const b of card.querySelectorAll('.result-row, .' + NEEDS_IDLE)) {",
+      '    b.disabled = b.classList.contains(NEEDS_IDLE) ? state.streaming : false',
+      '  }',
+      '}',
+    ].join('\n'),
+    'la fila (y el nodo del diagrama, H24) valida, avisa en la tarjeta y lo anuncia si no vale (§8.14), y sólo entonces viaja'
+  )
   assert(
     /validatePlan\(\s*\{ navigate: true, mode: 'direct', destination: \{ kind: 'jira-issue', id: key \} \},/.test(abrir),
     'el destino se valida como cualquier otro'
@@ -7658,7 +7692,11 @@ test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibu
   }
 
   // (1) Los tres módulos, con lo que el panel usa de cada uno.
-  una(LIMPIO, "\nimport { readFlowchart, toMermaid, citedIssueKeys, DIAGRAM_LIMITS } from './diagram-parse.js'\n", 'el parser')
+  una(LIMPIO, "\nimport { readFlowchart, toMermaid, offerDiagramKeys, DIAGRAM_LIMITS } from './diagram-parse.js'\n", 'el parser')
+  // EL CAMBIO (revisión adversaria de H24, D01): los proyectos conocidos salen
+  // del indexador, el mismo filtro de M4, y el panel ya no cuenta claves sin él.
+  una(LIMPIO, "\nimport { buildContext, harvestIndex, harvestFromSearch, indexFromSpacePages, countWithParent, knownProjectsFor } from './indexer.js'\n", 'los proyectos conocidos')
+  assert(!/citedIssueKeys/.test(LIMPIO), 'el panel no cuenta claves sin filtrar por proyecto (D01: «UTF-8, SHA-256» no son incidencias)')
   una(LIMPIO, "\nimport { layoutDiagram } from './diagram-layout.js'\n", 'el layout')
   una(LIMPIO, "\nimport { diagramNode, textMeasurer } from './diagram-view.js'\n", 'la vista')
 
@@ -7680,11 +7718,11 @@ test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibu
     funcion('function drawCodeBlock('),
     lineas(
       'function drawCodeBlock(block, pre) {',
-      "  if (block.lang !== 'mermaid' || !block.closed) return null",
+      "  if (block.lang.toLowerCase() !== 'mermaid' || !block.closed) return null",
       '  const t0 = performance.now()',
       '  const d = readFlowchart(block.text)',
-      '  const nuevo = block.text !== ultimoDiagramaRegistrado',
-      '  ultimoDiagramaRegistrado = block.text',
+      '  const nuevo = !diagramasRegistrados.has(block.text)',
+      '  diagramasRegistrados.add(block.text)',
       '  if (!d.ok) {',
       "    if (nuevo) log.info('Diagrama', 'no dibujado · ' + d.errores[0])",
       "    const caja = document.createElement('div')",
@@ -7700,6 +7738,7 @@ test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibu
       '    notes: new Set(state.notes.map((n) => n.n)),',
       '    mermaid: toMermaid(d),',
       "    uid: 'dg' + (++contadorDiagramas),",
+      '    kinds: KIND_LABELS,',
       '  })',
       "  if (nuevo) log.ok('Diagrama', `${d.nodes.length} nodos · ${d.edges.length} aristas · ${d.nodes.filter((n) => n.ref).length} con clave · ${Math.round(performance.now() - t0)} ms`)",
       '  return figure',
@@ -7707,7 +7746,53 @@ test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibu
     ),
     'drawCodeBlock: sólo la valla mermaid cerrada, el fallo visible, la vista con sus insignias y un registro por texto'
   )
-  una(LIMPIO, "\nlet ultimoDiagramaRegistrado = ''\n", 'el último texto registrado vive en el módulo')
+  // EL CAMBIO (revisión adversaria de H24): la valla sin mayúsculas (D18: un
+  // ```Mermaid no se dibujaba, no avisaba y sacaba el botón), el tipo de cada
+  // nodo con las etiquetas de la tarjeta (D15, `kinds: KIND_LABELS`) y un
+  // registro por texto y SESIÓN (D04).
+  una(LIMPIO, '\nconst diagramasRegistrados = new Set()\n', 'los textos ya registrados viven en el módulo, en un conjunto')
+  // Y lo que hace, no sólo cómo se escribe: el cuerpo REAL de drawCodeBlock con
+  // dos diagramas en la misma respuesta, repintados como los repinta paintTurn
+  // (A, B, A, B…). Con «el último texto» (al cerrar H24) salían seis registros:
+  // cada repintado apuntaba los dos (D04).
+  {
+    const registros = []
+    const vistas = []
+    const hacer = new Function(
+      'readFlowchart', 'log', 'layoutDiagram', 'diagramNode', 'medirTextoDelPanel', 'noticeNode', 'toMermaid',
+      'abrirNodoDelDiagrama', 'focusNote', 'copiarMermaid', 'state', 'performance', 'document', 'KIND_LABELS',
+      'const diagramasRegistrados = new Set()\nlet contadorDiagramas = 0\n' + funcion('function drawCodeBlock(') +
+        '\nreturn { drawCodeBlock, vaciar: () => diagramasRegistrados.clear() }'
+    )
+    const TABLA = { riesgo: 'riesgo', contradiccion: 'contradicción' }
+    const { drawCodeBlock, vaciar } = hacer(
+      (t) => (t === 'malo' ? { ok: false, errores: ['no es un flowchart'] } : { ok: true, nodes: [], edges: [] }),
+      { ok: (t) => registros.push(t), info: (t) => registros.push(t) },
+      () => ({}), (d, layout, vista) => (vistas.push(vista), { figura: true }), () => null, () => ({}), () => '',
+      null, null, null, { notes: [] }, { now: () => 0 },
+      { createElement: () => ({ append() {} }) },
+      TABLA
+    )
+    for (const text of ['A', 'B', 'A', 'B', 'A', 'B']) drawCodeBlock({ lang: 'mermaid', text, closed: true }, null)
+    eq(registros.length, 2, 'dos diagramas en la misma respuesta, tres repintados: un registro por texto')
+    for (const text of ['A', 'malo', 'A', 'malo']) drawCodeBlock({ lang: 'mermaid', text, closed: true }, null)
+    eq(registros.length, 3, 'y el que no se dibuja, también una vez, alternando con uno ya apuntado')
+    vaciar()
+    drawCodeBlock({ lang: 'mermaid', text: 'A', closed: true }, null)
+    eq(registros.length, 4, 'con el conjunto vacío (sesión nueva), el mismo se vuelve a apuntar')
+    eq(drawCodeBlock({ lang: 'Mermaid', text: 'C', closed: true }, null), { figura: true }, 'D18: ```Mermaid con mayúscula también se dibuja')
+    eq(drawCodeBlock({ lang: 'MERMAID', text: 'C', closed: false }, null), null, 'y abierta, con mayúsculas o sin ellas, sigue siendo código')
+    eq(drawCodeBlock({ lang: 'js', text: 'C', closed: true }, null), null, 'y otro lenguaje, también')
+    assert(vistas.length > 0 && vistas.every((v) => v.kinds === TABLA), 'D15: la vista recibe la tabla de la tarjeta, la misma, sin copiarla')
+  }
+  una(funcion('async function newSession('), '\n  diagramasRegistrados.clear()\n', 'la sesión nueva vacía los diagramas apuntados')
+  eq(LIMPIO.split('diagramasRegistrados.clear()').length - 1, 2, 'y «Olvidar este sitio» también: newSession y btn-forget, nadie más')
+  una(
+    corte(LIMPIO, "$('btn-forget').addEventListener", "$('mem-enabled').addEventListener"),
+    '\n    state.pendingDiagram = null\n    diagramasRegistrados.clear()\n',
+    'al olvidar el sitio, junto al armado de «Dibujar el flujo»'
+  )
+  assert(!funcion('async function restoreConversation(').includes('diagramasRegistrados'), 'reabrir el panel no vuelve a apuntar lo que ya estaba')
   una(LIMPIO, '\nlet contadorDiagramas = 0\n', 'y el contador de los uid, para que dos diagramas no compartan marcador')
   eq(
     funcion('function medirTextoDelPanel('),
@@ -7796,21 +7881,62 @@ test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibu
   const consumo = lineas(
     '\n  const diagrama = state.pendingDiagram',
     '  state.pendingDiagram = null',
-    '  const diagramaAlPedir = !!diagrama && diagrama.host === state.site.host\n'
+    '  const diagramaAlPedir = text === DIAGRAM_QUESTION || (!!diagrama && diagrama.host === state.site.host && /mermaid/i.test(text))\n'
   )
   una(envio, consumo, 'se consume al mandar, y sólo vale en el host donde se pulsó (§8.22)')
   orden(envio, ['const preloadAlPedir =', consumo.trim(), 'runTurn('], 'junto a la precarga y antes de mandar el turno')
+  // EL CAMBIO (revisión adversaria de H24, D02): la pregunta intacta cuenta
+  // aunque el armado se haya consumido («Reintentar con X», «Elegir otro
+  // modelo»); una pregunta que ya no pide Mermaid no cuenta aunque se pulsara el
+  // botón; y «Parar» mientras se lee la página devuelve el armado con la pregunta.
+  una(
+    envio,
+    lineas('\n    if (abort.signal.aborted) {', '      el.input.value = text', '      state.pendingDiagram = diagrama', '      return', '    }\n'),
+    'Parar al leer la página devuelve la pregunta Y su armado'
+  )
+  // Y ejecutada, la condición entera sacada del cuerpo real: las cuatro salidas
+  // que el refutador de D02 vio mal al cerrar H24.
+  {
+    const linea = consumo.trim().split('\n').pop()
+    const cuenta = new Function('text', 'diagrama', 'state', 'DIAGRAM_QUESTION', linea + '\nreturn diagramaAlPedir')
+    const Q = 'Dibuja el flujo … bloque ```mermaid …'
+    const aqui = { site: { host: 'jira.example.com' } }
+    eq(cuenta(Q, null, aqui, Q), true, 'la pregunta intacta sin armado (reintento): cuenta')
+    eq(cuenta(Q, { host: 'otro.example.com' }, aqui, Q), true, 'la pregunta intacta cuenta en cualquier sitio: se capturó al pedir')
+    eq(cuenta('dibújalo en mermaid, pero en TD', { host: 'jira.example.com' }, aqui, Q), true, 'retocada y aún pidiendo Mermaid, con el armado de aquí: cuenta')
+    eq(cuenta('dibújalo en mermaid, pero en TD', { host: 'otro.example.com' }, aqui, Q), false, 'con el armado de otro sitio, no (§8.22)')
+    eq(cuenta('¿Qué incidencias están bloqueadas?', { host: 'jira.example.com' }, aqui, Q), false, 'otra pregunta encima del armado: no cuenta')
+    eq(cuenta('¿Qué incidencias están bloqueadas?', null, aqui, Q), false, 'y sin armado, tampoco')
+  }
   una(envio, "\n        diagramaAlPedir ? 'dibujar el flujo' : '',\n", 'se dice bajo la pregunta')
   orden(envio, ['addUserMessage(', 'preloadNote(preloadDelTurno),', "diagramaAlPedir ? 'dibujar el flujo' : '',", 'state.lastQuestion = text'], 'en la nota, junto a la de la precarga')
+  // EL CAMBIO (revisión adversaria de H24): sólo cuentan las claves de un
+  // proyecto conocido —el de la pestaña, los del índice, los que devolvió Jira
+  // en este turno y los de los perfiles— (D01: «UTF-8, ISO-8601 y SHA-256» ya
+  // no ofrecen dibujar); la valla se mira sin mayúsculas (D18, `/im`); y la fila
+  // lleva la marca `dg-offer` con la que el envío siguiente la retira (D03).
   const oferta = lineas(
-    "\n    if (productoAlPedir === 'jira' && citedIssueKeys(answer).length >= DIAGRAM_LIMITS.offerMinKeys && !/^\\s*(```|~~~)\\s*mermaid/m.test(answer)) {",
+    '\n    const proyectosDelTurno = [',
+    '      ...knownProjectsFor(turn.parts, { site: sitioAlPedir, index: state.index, allowedHosts: linkedHost() ? [linkedHost()] : [] }),',
+    '      ...Object.keys(state.profiles?.byProject || {}),',
+    '    ]',
+    "    if (productoAlPedir === 'jira' && offerDiagramKeys(answer, proyectosDelTurno).length >= DIAGRAM_LIMITS.offerMinKeys && !/^\\s*(```|~~~)\\s*mermaid/im.test(answer)) {",
     "      const fila = document.createElement('div')",
-    "      fila.className = 'nav-actions'",
+    "      fila.className = 'nav-actions dg-offer'",
     '      fila.appendChild(diagramButton())',
     '      attachToBubble(bubble, fila)',
     '    }\n'
   )
-  una(envio, oferta, 'el botón sólo en Jira, con tres claves o más y sin un diagrama ya en la respuesta')
+  una(envio, oferta, 'el botón sólo en Jira, con tres claves o más de proyectos conocidos y sin un diagrama ya en la respuesta')
+  // D03: la pregunta dice «tu última respuesta», así que la oferta sólo vive
+  // bajo la última: cada envío retira las de antes, SIEMPRE (fuera del if de la
+  // oferta: una respuesta sin claves también deja de ofrecer la de antes) y
+  // antes de mandar el turno.
+  const retirada = "\n  for (const f of el.chat.querySelectorAll('.dg-offer')) f.remove()\n"
+  una(envio, retirada, 'cada envío retira la oferta de dibujar de las respuestas anteriores')
+  orden(envio, [consumo.trim(), retirada.trim(), 'runTurn(', oferta.trim()], 'al consumir, antes de mandar y antes de colgar la nueva')
+  eq(JS_SIN.split("'.dg-offer'").length - 1, 1, 'nadie más retira ofertas')
+  eq(JS_SIN.split('dg-offer').length - 1, 2, 'la marca se pone en un sitio y se busca en otro')
   orden(
     envio,
     ['if (!mismoSitio) {', 'paintTurn(turn, toolsBox, cuerpo, true)', 'announce(answerAnnouncement(answer))', oferta.trim(), 'await offerNotes('],
@@ -7887,6 +8013,12 @@ test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibu
   }
   for (const kind of NOTE_KINDS) assert(CSS_LIMPIO.includes(`.dg-${kind} {`), 'tipo de observación sin color en el diagrama: ' + kind)
   assert(/\.dg-edge-dotted \{[^}]*stroke-dasharray:/.test(CSS_LIMPIO), 'el punteado va por CLASE, no en la vista')
+  // EL CAMBIO (revisión adversaria de H24, D13): el SVG sale a su width y
+  // .dg-wrap desplaza; encogido sin suelo, la letra bajaba a 2-5 px.
+  assert(
+    /(?:^|\n)\.dg-svg \{[^}]*max-width: none;/.test(CSS_LIMPIO) && !/\.dg-svg \{[^}]*max-width: 100%/.test(CSS_LIMPIO),
+    'el SVG sale a su width y .dg-wrap desplaza: max-width: 100% lo encogía sin suelo'
+  )
   // Y cada color del diagrama es una pareja que test/contrast-pairs.js MIDE en
   // los dos temas: medir un token no basta si la regla pinta con otro (L3-18).
   // Los nodos, las etiquetas y las aristas viven sobre el fondo del chat (--ground).
@@ -7970,5 +8102,13 @@ test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibu
   eq(d.nodes.filter((n) => n.ref).length, 6, 'todas con clave')
   eq(d.nodes.map((n) => n.note).filter(Boolean), [1, 2, 3], 'y tres observaciones, las del Set de notas')
   assert(d.edges.some((e) => e.label) && fuente.some((l) => l.includes(' & ')), 'con una arista con etiqueta y un «&»')
-  assert(corte(espejo, 'const CAJAS = [', 'function check()').includes("'.dg-wrap'"), 'check() mide la figura a lo ancho')
+  // EL CAMBIO (D13): la figura desplaza a propósito; lo que se caza es que la
+  // lista o la fila de «Copiar como Mermaid» se salgan.
+  const cajas = corte(espejo, 'const CAJAS = [', 'function check()')
+  assert(
+    cajas.includes("'.dg-list'") && cajas.includes("'.dg-actions'") && !cajas.includes("'.dg-wrap'"),
+    'check() mide la lista y los botones, no la figura, que desplaza a propósito'
+  )
+  // Y el espejo dibuja como el panel: la valla sin mayúsculas (D18).
+  assert(tercera.includes("if (block.lang.toLowerCase() !== 'mermaid' || !block.closed) return null"), 'el espejo mira la valla como drawCodeBlock')
 })

@@ -291,6 +291,35 @@ test('estilo: cada tamaño de pieza está en la escala o es una excepción con m
 })
 
 /**
+ * Los trazos del SVG del diagrama (H24) van SIN «px» (unidades de usuario, 1:1
+ * con el px del panel) y `pxLiterals` no los ve: al cerrar H24 un
+ * `stroke-width: 3` a ojo pasaba sin que nadie lo mirara, y cualquier otro
+ * número también. Se miran aparte, en las dos direcciones, como EXCEPCIONES
+ * (revisión adversaria de H24, D18).
+ */
+const TRAZOS_PROPIOS = new Map([
+  [3, 'halo de la etiqueta de una arista del diagrama: 1,5 por lado, lo justo para que la línea que pasa por debajo no la tache'],
+])
+
+test('estilo: los trazos del SVG (stroke-width, stroke-dasharray) salen de la escala o son un trazo propio con motivo', () => {
+  const trazos = []
+  for (const m of CSS.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    if (m[1].includes(':root')) continue
+    for (const d of m[2].matchAll(/(stroke-width|stroke-dasharray)\s*:\s*([^;]+)/g)) {
+      for (const n of d[2].matchAll(/-?\d*\.?\d+/g)) trazos.push({ selector: m[1].trim(), prop: d[1], n: Number(n[0]) })
+    }
+  }
+  assert(trazos.length >= 4, 'el diagrama tiene trazos: si esto es 0, la regex no está leyendo nada')
+  eq(
+    trazos.filter((t) => !ESCALA.has(Math.abs(t.n)) && !TRAZOS_PROPIOS.has(Math.abs(t.n))).map((t) => `${t.selector} { ${t.prop}: ${t.n} }`),
+    [],
+    'un trazo a ojo: 0, 1, 2, la escala o una entrada en TRAZOS_PROPIOS con su motivo'
+  )
+  const usados = new Set(trazos.map((t) => Math.abs(t.n)))
+  eq([...TRAZOS_PROPIOS.keys()].filter((n) => !usados.has(n)), [], 'un trazo propio que ya no se usa se borra de la lista')
+})
+
+/**
  * Las duraciones que NO son tokens: cada animación de espera tiene su propio
  * ritmo y no hay ningún paso de escala que las una. Se declaran con su motivo, y
  * el test comprueba también que cada una siga existiendo.

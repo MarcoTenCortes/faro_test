@@ -101,7 +101,7 @@ import {
 import { renderMarkdown } from './markdown.js'
 // Los diagramas del chat (H24): un ```mermaid cerrado se lee con un parser
 // propio, se coloca y se pinta en SVG sin innerHTML (`drawCodeBlock`).
-import { readFlowchart, toMermaid, citedIssueKeys, DIAGRAM_LIMITS } from './diagram-parse.js'
+import { readFlowchart, toMermaid, offerDiagramKeys, DIAGRAM_LIMITS } from './diagram-parse.js'
 import { layoutDiagram } from './diagram-layout.js'
 import { diagramNode, textMeasurer } from './diagram-view.js'
 import { SKILLS, DEFAULT_SKILL, skillById } from './skills.js'
@@ -133,7 +133,7 @@ import {
   scrubConfirmText,
   PRODUCTS,
 } from './setup.js'
-import { buildContext, harvestIndex, harvestFromSearch, indexFromSpacePages, countWithParent } from './indexer.js'
+import { buildContext, harvestIndex, harvestFromSearch, indexFromSpacePages, countWithParent, knownProjectsFor } from './indexer.js'
 import { planNavigation, shouldPlan, currentPageId, jqlDestination, jqlLink, jqlPlan } from './planner.js'
 import {
   SOURCE_LIMITS,
@@ -3215,10 +3215,19 @@ async function send() {
   state.pendingPreload = null
   const preloadAlPedir = preload?.host === state.site.host ? preload : null
   // Y «Dibujar el flujo» (H24), igual: la pregunta que dejó escrita el botón es
-  // ESTA, y sólo cuenta en el sitio donde se pulsó (§8.22).
+  // ESTA, y sólo cuenta en el sitio donde se pulsó (§8.22). La pregunta INTACTA
+  // cuenta sola aunque el armado ya se consumiera (vuelve con «Reintentar con X»
+  // y «Elegir otro modelo»), y una pregunta que ya no pide Mermaid no cuenta
+  // aunque se pulsara el botón («Preguntar sobre estos» encima): al cerrar H24
+  // se miraba sólo el armado (revisión adversaria de H24, D02).
   const diagrama = state.pendingDiagram
   state.pendingDiagram = null
-  const diagramaAlPedir = !!diagrama && diagrama.host === state.site.host
+  const diagramaAlPedir = text === DIAGRAM_QUESTION || (!!diagrama && diagrama.host === state.site.host && /mermaid/i.test(text))
+  // Y la oferta de dibujar sólo vive bajo la ÚLTIMA respuesta: la pregunta dice
+  // «tu última respuesta», y con una pregunta nueva la de antes deja de serlo;
+  // al cerrar H24 el botón de una respuesta vieja dibujaba la última. Se quita
+  // SIEMPRE, ofrezca o no la nueva (revisión adversaria de H24, D03).
+  for (const f of el.chat.querySelectorAll('.dg-offer')) f.remove()
 
   el.input.value = ''
   autoGrow()
@@ -3303,9 +3312,12 @@ async function send() {
     if (skill === 'analisis') cron.mark('página')
 
     // Parar mientras se leía la página: no se manda nada, y la pregunta
-    // vuelve al cuadro.
+    // vuelve al cuadro, y con ella su armado de «Dibujar el flujo»: se consumió
+    // arriba y, sin devolverlo, el reenvío salía sin él (revisión adversaria de
+    // H24, D02).
     if (abort.signal.aborted) {
       el.input.value = text
+      state.pendingDiagram = diagrama
       return
     }
 
@@ -3573,9 +3585,19 @@ async function send() {
     // más ofrece dibujarlas, y el botón sólo deja la pregunta escrita (§8.20).
     // No con una respuesta que ya trae su diagrama. Ya se sabe que el panel
     // sigue en el sitio que preguntó: la salida de `!mismoSitio` va arriba.
-    if (productoAlPedir === 'jira' && citedIssueKeys(answer).length >= DIAGRAM_LIMITS.offerMinKeys && !/^\s*(```|~~~)\s*mermaid/m.test(answer)) {
+    // Sólo cuentan las claves de un proyecto conocido —el de la pestaña, los del
+    // índice, los que devolvió Jira en este turno y los de los perfiles—, la
+    // lección M4 del indexador: al cerrar H24 «UTF-8, ISO-8601 y SHA-256»
+    // ofrecían dibujar (revisión adversaria de H24, D01). La valla se mira sin
+    // mayúsculas, como `drawCodeBlock` (D18). La fila lleva `dg-offer` para que
+    // el envío siguiente la retire (D03).
+    const proyectosDelTurno = [
+      ...knownProjectsFor(turn.parts, { site: sitioAlPedir, index: state.index, allowedHosts: linkedHost() ? [linkedHost()] : [] }),
+      ...Object.keys(state.profiles?.byProject || {}),
+    ]
+    if (productoAlPedir === 'jira' && offerDiagramKeys(answer, proyectosDelTurno).length >= DIAGRAM_LIMITS.offerMinKeys && !/^\s*(```|~~~)\s*mermaid/im.test(answer)) {
       const fila = document.createElement('div')
-      fila.className = 'nav-actions'
+      fila.className = 'nav-actions dg-offer'
       fila.appendChild(diagramButton())
       attachToBubble(bubble, fila)
     }
@@ -5393,11 +5415,16 @@ function diagramButton() {
 }
 
 /**
- * El último texto de diagrama que se apuntó en el Registro: `paintTurn` repinta
- * la burbuja entera en cada trozo del streaming, y el mismo diagrama se dibuja
- * muchas veces; se apunta una.
+ * Los textos de diagrama ya apuntados en el Registro en esta sesión: `paintTurn`
+ * repinta la burbuja entera en cada trozo del streaming, y cada diagrama se dibuja
+ * muchas veces; se apunta una. Un conjunto y no «el último»: con dos diagramas en
+ * la misma respuesta cada repintado alternaba A→B y apuntaba los dos (19
+ * registros donde van 2, con el Registro topado en 400; revisión adversaria de
+ * H24, D04). Se vacía con el chat (`newSession`, «Olvidar este sitio»); reabrir
+ * el panel (`restoreConversation`) no, a propósito: no vuelve a apuntar lo que
+ * ya estaba. Sin tope: guarda bloques cerrados, copia de lo que ya hay en el chat.
  */
-let ultimoDiagramaRegistrado = ''
+const diagramasRegistrados = new Set()
 /** Los `uid` de los diagramas: dos en el mismo chat no comparten `marker` ni título. */
 let contadorDiagramas = 0
 /** El medidor de texto con la fuente del chat, creado una vez (`medirTextoDelPanel`). */
@@ -5414,13 +5441,17 @@ let medidorDelPanel = null
  * código de siempre con el motivo DEBAJO (§8.14: un fallo silencioso no). Un
  * nodo con clave no navega por su cuenta: `abrirNodoDelDiagrama` valida al hacer
  * clic (§8.3). Las insignias [n], sólo de las observaciones que hay (`state.notes`).
+ * La valla se mira sin mayúsculas: un ```Mermaid no se dibujaba, no avisaba y
+ * sacaba el botón (revisión adversaria de H24, D18). El tipo de cada nodo se dice
+ * con las etiquetas de la tarjeta (`KIND_LABELS`, con su tilde), no sólo con el
+ * color (D15).
  */
 function drawCodeBlock(block, pre) {
-  if (block.lang !== 'mermaid' || !block.closed) return null
+  if (block.lang.toLowerCase() !== 'mermaid' || !block.closed) return null
   const t0 = performance.now()
   const d = readFlowchart(block.text)
-  const nuevo = block.text !== ultimoDiagramaRegistrado
-  ultimoDiagramaRegistrado = block.text
+  const nuevo = !diagramasRegistrados.has(block.text)
+  diagramasRegistrados.add(block.text)
   if (!d.ok) {
     if (nuevo) log.info('Diagrama', 'no dibujado · ' + d.errores[0])
     const caja = document.createElement('div')
@@ -5436,6 +5467,7 @@ function drawCodeBlock(block, pre) {
     notes: new Set(state.notes.map((n) => n.n)),
     mermaid: toMermaid(d),
     uid: 'dg' + (++contadorDiagramas),
+    kinds: KIND_LABELS,
   })
   if (nuevo) log.ok('Diagrama', `${d.nodes.length} nodos · ${d.edges.length} aristas · ${d.nodes.filter((n) => n.ref).length} con clave · ${Math.round(performance.now() - t0)} ms`)
   return figure
@@ -8898,8 +8930,10 @@ function wireEvents() {
     // olvidar, con unos resultados que ya no se ven (revisión adversaria de H12;
     // el mismo motivo que en `newSession`).
     state.pendingPreload = null
-    // Y «Dibujar el flujo» (H24), por lo mismo.
+    // Y «Dibujar el flujo» (H24), por lo mismo, con los diagramas ya apuntados
+    // (revisión adversaria de H24, D04).
     state.pendingDiagram = null
+    diagramasRegistrados.clear()
     state.sourceHistory = emptyHistory()
     state.references = { propio: null, enlazado: null, index: null, items: null }
     state.today = emptyToday()
@@ -10906,6 +10940,9 @@ async function newSession() {
   state.pendingPreload = null
   // Y «Dibujar el flujo» (H24): la respuesta que había que dibujar se va con el chat.
   state.pendingDiagram = null
+  // Y los diagramas ya apuntados: en la sesión nueva, el mismo se vuelve a apuntar
+  // (revisión adversaria de H24, D04).
+  diagramasRegistrados.clear()
   forgetNotes()
   log.ok('Sesión nueva', state.settings.crossSessionMemory ? 'la anterior quedó resumida' : '')
   state.sessionID = null

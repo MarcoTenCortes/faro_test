@@ -22,23 +22,26 @@
  * índice de ESE momento al hacer clic (`validatePlan` + `runPlan('direct')`).
  * Una insignia `[n]` sólo se pinta si esa observación existe (`notes`).
  *
- * Sin imports: recibe todo por parámetros (ni panel.js ni un módulo con
- * estado). DOM, pero no toca `document` al importarse (§9). Las medidas de las
- * figuras van como ATRIBUTOS del SVG, no en el CSS (sólo px de la escala ahí).
+ * Un solo import, las medidas de `LAYOUT_LIMITS` (diagram-layout.js, puro y sin
+ * estado): el alto de renglón y la estimación por carácter tienen dueño y no se
+ * repiten (§9). Lo demás, por parámetros (ni panel.js ni un módulo con estado).
+ * Al cerrar H24 la vista no importaba nada y copiaba `lineH` y `charW`: un
+ * `lineH` distinto del del layout sacaba los renglones de su caja y ninguna
+ * prueba lo veía (revisión adversaria de H24, D17). DOM, pero no toca
+ * `document` al importarse (§9). Las medidas de las figuras van como ATRIBUTOS
+ * del SVG, no en el CSS (sólo px de la escala ahí).
  */
+
+import { LAYOUT_LIMITS } from './diagram-layout.js'
 
 const SVG_NS = 'http://www.w3.org/2000/svg'
 
 /**
- * Las medidas de la vista, las que no da el layout. `lineH` y `charW` son las
- * de `LAYOUT_LIMITS` (diagram-layout.js): se repiten aquí porque la vista no
- * importa nada, y lo que las une es que el layout mide con el MISMO
- * `textMeasurer` de aquí (la estimación de 6,6 px/carácter sólo sale sin
- * canvas, en Node).
+ * Las medidas de la vista, las que no da el layout. El alto de renglón y los
+ * px por carácter son los de `LAYOUT_LIMITS`: la caja que calculó el layout
+ * (`h = renglones · lineH + 2 · padY`) y los `tspan` de aquí miden con el MISMO.
  */
 const VIEW_LIMITS = Object.freeze({
-  lineH: 16,
-  charW: 6.6,
   rectR: 4,
   roundR: 10,
   subroutineInset: 6,
@@ -67,18 +70,30 @@ const ESTILOS = ['solid', 'dotted', 'thick']
 const PUNTAS = { arrow: 'arrow', cross: 'cross', circle: 'circle' }
 
 /**
+ * Los tipos de observación que dan clase y se dicen en texto: los de
+ * `NOTE_KINDS` (notes.js), repetidos porque la vista sólo importa las medidas
+ * del layout, y diagram-view.test.js los cruza. Una lista CERRADA y no una
+ * forma: al cerrar H24 valía cualquier `/^[a-z]{1,24}$/`, y un kind `label`,
+ * `note` o `link` chocaba con las clases de la propia vista (el nodo se pintaba
+ * como su etiqueta o con la mano de un botón; revisión adversaria de H24, D16).
+ */
+const TIPOS = Object.freeze(['dato', 'supuesto', 'hueco', 'contradiccion', 'riesgo'])
+
+/**
  * El diagrama entero, listo para colgar del chat.
  *
  * @param {object} diagram  la forma de `readFlowchart` (con `ok: true`)
  * @param {object} layout   la de `layoutDiagram` (nodos y subgrafos con `x`/`y` en su esquina superior izquierda)
- * @param {{onOpen?:Function, onNote?:Function, onCopy?:Function, notes?:Set<number>, mermaid?:string, uid?:string}} opts
+ * @param {{onOpen?:Function, onNote?:Function, onCopy?:Function, notes?:Set<number>, mermaid?:string, uid?:string, kinds?:object}} opts
  *        `onOpen(ref, figure)` al pulsar un nodo con clave; `onNote(n)` al
  *        pulsar su insignia (sólo si `notes.has(n)`); `onCopy(texto, boton)`
  *        con el Mermaid que da quien llama (sin `mermaid`, no hay botón);
- *        `uid` distingue los ids de dos diagramas del mismo chat.
+ *        `uid` distingue los ids de dos diagramas del mismo chat; `kinds`,
+ *        la etiqueta de cada tipo para decirlo en texto (la de la tarjeta de
+ *        observaciones; sin ella, el kind tal cual).
  * @returns {HTMLElement} `<figure class="dg-wrap">`
  */
-export function diagramNode(diagram, layout, { onOpen, onNote, onCopy, notes = new Set(), mermaid = '', uid = 'dg' } = {}) {
+export function diagramNode(diagram, layout, { onOpen, onNote, onCopy, notes = new Set(), mermaid = '', uid = 'dg', kinds = {} } = {}) {
   const d = diagram && typeof diagram === 'object' ? diagram : {}
   const l = layout && typeof layout === 'object' ? layout : {}
   const vista = {
@@ -87,6 +102,7 @@ export function diagramNode(diagram, layout, { onOpen, onNote, onCopy, notes = n
     subgraphs: lista(d.subgraphs),
     uid: String(uid ?? '').replace(/[^A-Za-z0-9_-]/g, '') || 'dg',
     notes: notes && typeof notes.has === 'function' ? notes : new Set(),
+    kinds: kinds && typeof kinds === 'object' ? kinds : {},
     onOpen,
     onNote,
   }
@@ -109,7 +125,7 @@ export function diagramNode(diagram, layout, { onOpen, onNote, onCopy, notes = n
  */
 export function textMeasurer(font) {
   const ctx = contexto2d()
-  if (!ctx) return (text) => String(text ?? '').length * VIEW_LIMITS.charW
+  if (!ctx) return (text) => String(text ?? '').length * LAYOUT_LIMITS.charW
   if (font) ctx.font = font
   return (text) => ctx.measureText(String(text ?? '')).width
 }
@@ -127,8 +143,8 @@ function contexto2d() {
 // ------------------------------------------------------------------- el SVG
 
 function dibujo(vista, l) {
-  const ancho = numero(l.width)
-  const alto = numero(l.height)
+  const ancho = medida(l.width)
+  const alto = medida(l.height)
   const { uid } = vista
   const raiz = svg('svg', {
     class: 'dg-svg',
@@ -176,7 +192,7 @@ function dibujo(vista, l) {
   const colocados = new Map(lista(l.nodes).map((n) => [n.id, n]))
   for (const nodo of vista.nodes) {
     const sitio = colocados.get(nodo.id)
-    if (sitio) raiz.appendChild(nodoSvg(nodo, sitio, ancho, alto, vista))
+    if (sitio) raiz.append(...nodoSvg(nodo, sitio, ancho, alto, vista))
   }
   return raiz
 }
@@ -230,7 +246,7 @@ function subgrafo(s, nombre) {
   const g = svg('g', { class: 'dg-sub' })
   const x = numero(s.x)
   const y = numero(s.y)
-  g.appendChild(svg('rect', { x, y, width: numero(s.w), height: numero(s.h), rx: VIEW_LIMITS.subR }))
+  g.appendChild(svg('rect', { x, y, width: medida(s.w), height: medida(s.h), rx: VIEW_LIMITS.subR }))
   const t = svg('text', { x: numero(x + VIEW_LIMITS.subLabelX), y: numero(y + VIEW_LIMITS.subLabelY) })
   t.textContent = String(nombre)
   g.appendChild(t)
@@ -239,14 +255,14 @@ function subgrafo(s, nombre) {
 
 function nodoSvg(nodo, sitio, ancho, alto, vista) {
   const forma = Object.hasOwn(FIGURAS, nodo.shape) ? nodo.shape : 'rect'
-  const kind = typeof nodo.kind === 'string' && /^[a-z]{1,24}$/.test(nodo.kind) ? nodo.kind : ''
+  const kind = TIPOS.includes(nodo.kind) ? nodo.kind : ''
   const ref = nodo.ref && nodo.ref.kind === 'jira-issue' && typeof nodo.ref.id === 'string' && nodo.ref.id ? nodo.ref.id : ''
   // El layout da la ESQUINA superior izquierda del nodo (como la de un subgrafo y la de un
   // <rect>); las figuras trabajan con el centro, así que se deriva aquí y en ningún otro sitio.
   // Al cerrar H24 la vista tomaba x/y como el centro y cada nodo salía medio ancho a la
   // izquierda de sus aristas (docs/BITACORA.md §12.5).
-  const w = numero(sitio.w)
-  const h = numero(sitio.h)
+  const w = medida(sitio.w)
+  const h = medida(sitio.h)
   const caja = { cx: numero(numero(sitio.x) + w / 2), cy: numero(numero(sitio.y) + h / 2), w, h }
 
   const g = svg('g', { class: ['dg-node', `dg-${forma}`, kind && `dg-${kind}`, ref && 'dg-link'].filter(Boolean).join(' '), 'data-id': nodo.id })
@@ -256,7 +272,10 @@ function nodoSvg(nodo, sitio, ancho, alto, vista) {
   if (ref) {
     g.setAttribute('tabindex', '0')
     g.setAttribute('role', 'button')
-    g.setAttribute('aria-label', `Abrir ${ref}`)
+    // El tipo, en texto: el color solo no lo dice (WCAG 1.4.1). Nunca la etiqueta del nodo:
+    // sólo la clave validada y un tipo de TIPOS o de la tabla de quien llama (D15).
+    const tipo = tipoDe(nodo, vista)
+    g.setAttribute('aria-label', `Abrir ${ref}` + (tipo ? ` (${tipo})` : ''))
     g.setAttribute('data-ref', `jira-issue:${ref}`)
     const abrir = () => {
       if (typeof vista.onOpen === 'function') vista.onOpen({ kind: 'jira-issue', id: ref }, vista.figure)
@@ -272,15 +291,19 @@ function nodoSvg(nodo, sitio, ancho, alto, vista) {
   const n = Number.isInteger(nodo.note) && nodo.note > 0 && vista.notes.has(nodo.note) ? nodo.note : 0
   if (n) {
     g.setAttribute('data-note', String(n))
-    g.appendChild(insignia(n, caja, ancho, alto, vista.onNote))
+    return [g, insignia(n, caja, ancho, alto, vista.onNote)]
   }
-  return g
+  return [g]
 }
 
 /**
  * La insignia de la observación, en la esquina de arriba a la derecha y
- * dentro del viewBox. Para el evento: pulsarla lleva a la marca, no abre la
- * incidencia del nodo de debajo.
+ * dentro del viewBox. Es HERMANA del nodo, justo detrás de él (encima al
+ * pintar, la siguiente al tabular), nunca su hija: un botón dentro del «Abrir
+ * KEY» es nested-interactive (axe, WCAG 4.1.2), y pulsarla no abre la
+ * incidencia porque el clic no sube por el nodo, sin `stopPropagation`. Al
+ * cerrar H24 colgaba del nodo y sólo el `stopPropagation` lo impedía
+ * (revisión adversaria de H24, D14).
  */
 function insignia(n, { cx, cy, w, h }, ancho, alto, onNote) {
   const r = VIEW_LIMITS.noteR
@@ -291,15 +314,14 @@ function insignia(n, { cx, cy, w, h }, ancho, alto, onNote) {
   const t = svg('text', { x, y, 'text-anchor': 'middle', 'dominant-baseline': 'central' })
   t.textContent = String(n)
   g.appendChild(t)
-  const ir = (ev) => {
-    ev.stopPropagation()
+  const ir = () => {
     if (typeof onNote === 'function') onNote(n)
   }
   g.addEventListener('click', ir)
   g.addEventListener('keydown', (ev) => {
     if (!esPulsar(ev)) return
     ev.preventDefault()
-    ir(ev)
+    ir()
   })
   return g
 }
@@ -311,9 +333,9 @@ function esPulsar(ev) {
 
 function etiqueta({ cx, cy }, renglones) {
   const t = svg('text', { class: 'dg-label', x: cx, y: cy, 'text-anchor': 'middle', 'dominant-baseline': 'central' })
-  const arriba = cy - ((renglones.length - 1) * VIEW_LIMITS.lineH) / 2
+  const arriba = cy - ((renglones.length - 1) * LAYOUT_LIMITS.lineH) / 2
   renglones.forEach((renglon, i) => {
-    const s = svg('tspan', { x: cx, y: numero(arriba + i * VIEW_LIMITS.lineH) })
+    const s = svg('tspan', { x: cx, y: numero(arriba + i * LAYOUT_LIMITS.lineH) })
     s.textContent = String(renglon)
     t.appendChild(s)
   })
@@ -365,7 +387,26 @@ function poligono(puntos) {
 
 // ------------------------------------------------------- la lista y el botón
 
-/** «Ver como lista»: una fila por arista y otra por nodo sin aristas, en texto. */
+/**
+ * El tipo de un nodo en TEXTO (riesgo, hueco, contradicción…): el color no basta
+ * (WCAG 1.4.1). La etiqueta la da quien llama (`kinds`, la de la tarjeta de
+ * observaciones); sin ella, el kind tal cual. Sólo un kind de `TIPOS` y sólo
+ * claves PROPIAS de la tabla con una cadena: una heredada del prototipo no
+ * cuela. Pura.
+ */
+function tipoDe(nodo, vista) {
+  const kind = TIPOS.includes(nodo.kind) ? nodo.kind : ''
+  if (!kind) return ''
+  const dicho = Object.hasOwn(vista.kinds, kind) ? vista.kinds[kind] : ''
+  return typeof dicho === 'string' && dicho ? dicho : kind
+}
+
+/**
+ * «Ver como lista»: una fila por arista y otra por nodo sin aristas o con tipo
+ * («Etiqueta: tipo», y no «(tipo)», que es como va la etiqueta de una arista),
+ * en texto. Al cerrar H24 la lista perdía el tipo, que es lo central del
+ * diagrama (revisión adversaria de H24, D15).
+ */
 function listaEquivalente(vista) {
   const nombre = new Map(vista.nodes.map((n) => [n.id, n.label || n.id]))
   const de = (id) => nombre.get(id) ?? String(id ?? '')
@@ -383,9 +424,10 @@ function listaEquivalente(vista) {
     ol.appendChild(li)
   }
   for (const n of vista.nodes) {
-    if (conArista.has(n.id)) continue
+    const tipo = tipoDe(n, vista)
+    if (conArista.has(n.id) && !tipo) continue
     const li = document.createElement('li')
-    li.textContent = de(n.id)
+    li.textContent = de(n.id) + (tipo ? `: ${tipo}` : '')
     ol.appendChild(li)
   }
   details.append(summary, ol)
@@ -416,10 +458,20 @@ function svg(tag, atributos = {}) {
   return el
 }
 
-/** Un número para un atributo: finito y con un decimal como mucho. */
+/**
+ * Un número para un atributo: finito y con un decimal como mucho. Al cerrar H24
+ * `Number(valor) || 0` dejaba pasar Infinity (`height="Infinity"`) y el
+ * comentario decía «finito» (revisión adversaria de H24, D16).
+ */
 function numero(valor) {
-  const n = Math.round((Number(valor) || 0) * 10) / 10
+  const bruto = Number(valor)
+  const n = Number.isFinite(bruto) ? Math.round(bruto * 10) / 10 : 0
   return Object.is(n, -0) ? 0 : n
+}
+
+/** Un ancho o un alto: el número de arriba y nunca negativo (un viewBox con alto negativo no se pinta). */
+function medida(valor) {
+  return Math.max(0, numero(valor))
 }
 
 function lista(valor) {

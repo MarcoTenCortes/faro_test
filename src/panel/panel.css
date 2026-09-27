@@ -1497,10 +1497,14 @@ html.faro-still .busy-bar i { animation: none; width: 100%; }
    sólo caben px de la escala. Los colores se ponen en el `<g>` del nodo y los
    heredan su rect, su polygon o su ellipse: `fill` y `stroke` se heredan en
    SVG, y así un tipo de observación cambia la figura sin nombrar cada forma.
-   La figura cabe a lo ancho encogiéndose (`max-width: 100%` con su viewBox);
-   `overflow-x: auto` es la red si algo no encoge. */
+   La figura sale a su tamaño (el `width` del layout) y `.dg-wrap` desplaza a lo
+   ancho: la letra se queda en su `--text-xs` y los trazos en 1 px. Al cerrar H24
+   encogía con `max-width: 100%` sin suelo —una épica con cuatro hijas en TD a
+   escala 0,42, la letra a 4,6 px a 320; un flujo LR a 3,3 px— y el
+   `overflow-x: auto` que este comentario llamaba «la red» nunca actuaba
+   (revisión adversaria de H24, D13). */
 .dg-wrap { margin: var(--s2) 0; overflow-x: auto; }
-.dg-svg { display: block; max-width: 100%; height: auto; }
+.dg-svg { display: block; max-width: none; height: auto; }
 
 /* Los subgrafos, debajo de todo: un marco decorativo con su título. */
 .dg-sub { fill: none; stroke: var(--hairline); }
@@ -1526,12 +1530,18 @@ html.faro-still .busy-bar i { animation: none; width: 100%; }
 .dg-node { fill: var(--surface); stroke: var(--hairline-strong); }
 .dg-label { fill: var(--ink); stroke: none; font-size: var(--text-xs); }
 
-/* Los tipos de observación de NOTE_KINDS, con los colores de la tarjeta de
-   observaciones: lo que falla en rojo, lo que falta o se supone en dorado. */
+/* Los tipos de observación de NOTE_KINDS: lo que falla en rojo, lo que falta o
+   se supone en dorado, y el borde a trazos separa contradicción de riesgo y
+   supuesto de hueco. El color no es lo único: el tipo va en TEXTO en «Ver como
+   lista» y en el aria-label del nodo (diagram-view.js, tipoDe). La tarjeta de
+   observaciones no los colorea (una etiqueta, no un color); al cerrar H24 este
+   comentario decía «con los colores de la tarjeta», el tipo sólo se veía por el
+   color y cada pareja era la MISMA regla (WCAG 1.4.1; revisión adversaria de
+   H24, D15). */
 .dg-riesgo { fill: var(--danger-bg); stroke: var(--danger); }
-.dg-contradiccion { fill: var(--danger-bg); stroke: var(--danger); }
+.dg-contradiccion { fill: var(--danger-bg); stroke: var(--danger); stroke-dasharray: 4 4; }
 .dg-hueco { fill: var(--gold-bg); stroke: var(--gold); }
-.dg-supuesto { fill: var(--gold-bg); stroke: var(--gold); }
+.dg-supuesto { fill: var(--gold-bg); stroke: var(--gold); stroke-dasharray: 4 4; }
 .dg-dato { stroke: var(--ok); }
 
 /* Un nodo con clave es un botón: navega al pulsarlo (por validatePlan). Con el
