@@ -3,11 +3,14 @@
  * barrera que lo reconstruye con claves blancas y la vuelta a Mermaid (H24).
  *
  * Todo lo que llega aquí lo escribió el modelo (§8.12): las pruebas SEGURIDAD
- * lo ejecutan de verdad —lo que en Mermaid ejecuta o carga algo se rechaza con
- * su motivo, una etiqueta hostil es un texto de una línea, `ref` sólo por
- * `validIssueKey`, `kind` sólo de `NOTE_KINDS`— y la ida y vuelta de
+ * lo ejecutan de verdad —lo que en Mermaid navega o ejecuta algo se rechaza con
+ * su motivo, lo que sólo pinta (`classDef`, `style`, `linkStyle`) se ignora sin
+ * aplicarlo desde H26, una etiqueta hostil es un texto de una línea, `ref` sólo
+ * por `validIssueKey`, `kind` sólo de `NOTE_KINDS`— y la ida y vuelta de
  * `toMermaid` se compara con el objeto ENTERO.
  */
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { test, eq, assert } from '../harness.js'
 import {
   DIAGRAM_LIMITS,
@@ -261,22 +264,31 @@ test('diagrama: el sentido (TB es TD; sin sentido, TD)', () => {
   eq(readFlowchart('flowchart XY\n  A --> B').errores, ['línea 1: no es un flowchart'])
 })
 
-test('SEGURIDAD: click, href, callback, style, classDef y linkStyle se rechazan con su motivo y su línea', () => {
+// EL CAMBIO (H26): `style`, `classDef` y `linkStyle` salen de esta lista: ya no
+// se rechazan, se ignoran sin aplicarlas («H26: las líneas de presentación…»,
+// abajo). Lo que navega o ejecuta sigue rechazado, también con `href` o
+// `callback` detrás de un `click`.
+test('SEGURIDAD: click, href y callback (lo que navega o ejecuta) se rechazan con su motivo y su línea', () => {
   const casos = [
     ['click A "https://evil.example" _blank', 'click'],
     ['click A call alert()', 'click'],
+    ['click A href "javascript:alert(1)"', 'click'],
+    ['click A callback', 'click'],
     ['href A "javascript:alert(1)"', 'href'],
     ['callback A fn', 'callback'],
-    ['style A fill:url(https://evil.example/x)', 'style'],
-    ['classDef x fill:#f00', 'classDef'],
-    ['linkStyle 0 stroke:red', 'linkStyle'],
     ['CLICK A x', 'CLICK'],
+    ['Href A x', 'Href'],
   ]
   for (const [linea, palabra] of casos) {
     const d = readFlowchart(`flowchart TD\n  A --> B\n  ${linea}`)
     eq([d.ok, d.errores, d.nodes, d.edges], [false, [`línea 3: «${palabra}» no se admite`], [], []], linea)
   }
   eq(readFlowchart('graph TD;A-->B;click A x').errores, ['línea 1: «click» no se admite'], 'también detrás de un «;»')
+  eq(
+    corto('flowchart TD\n  clickable --> hrefs --> callbackX'),
+    { nodos: ['clickable=clickable', 'hrefs=hrefs', 'callbackX=callbackX'], aristas: ['clickable>hrefs', 'hrefs>callbackX'] },
+    'decide la primera palabra ENTERA: un id que sólo empieza así es un id'
+  )
 })
 
 test('SEGURIDAD: las directivas %%{init}%% se rechazan, también antes de la cabecera', () => {
@@ -590,8 +602,9 @@ test('diagrama: las flechas de doble punta se leen como una línea sin punta (no
   eq(aristasDe('flowchart TD\n  A o--o B\n  B x--x C'), ['A>B:solid/none', 'B>C:solid/none'])
   eq(aristasDe('flowchart TD\n  A <-->|t| B'), ['A>B:solid/none«t»'])
   eq(aristasDe('flowchart TD\n  A <== t ==> B\n  B <-. u .-> C'), ['A>B:thick/none«t»', 'B>C:dotted/none«u»'])
-  // El del README, sin classDef/class (que se rechazan aparte, §8.12) ni <br/>.
-  const readme = readFlowchart('flowchart LR\n  PAGINA["Jira"]\n  EXT["Faro"]\n  PAGINA <-- "marca, navega y lee el árbol" --> EXT')
+  // La flecha doble del README, con sus dos nodos y sin <br/>. EL CAMBIO (H26):
+  // el README ENTERO, con sus classDef, se lee en la prueba de H26 (abajo).
+  const readme =readFlowchart('flowchart LR\n  PAGINA["Jira"]\n  EXT["Faro"]\n  PAGINA <-- "marca, navega y lee el árbol" --> EXT')
   eq(readme.ok, true)
   eq(readme.edges, [{ from: 'PAGINA', to: 'EXT', label: 'marca, navega y lee el árbol', style: 'solid', arrow: 'none' }])
   eq(readFlowchart(toMermaid(readme)), readme, 'ida y vuelta exacta')
@@ -689,4 +702,97 @@ test('diagrama: offerDiagramKeys sólo cuenta las claves de un proyecto conocido
   eq(offerDiagramKeys('Para ENG-1 ejecuta:\n```jql\nkey in (ENG-2, ENG-3)\n```', new Set(['ENG'])), ['ENG-1', 'ENG-2', 'ENG-3'])
   for (const p of [null, undefined, 'ENG', {}, new Set()]) eq(offerDiagramKeys('ENG-1, ENG-2, ENG-3', p), [])
   eq(offerDiagramKeys(null, new Set(['ENG'])), [])
+})
+
+// ---- H26: el turno real de «Dibujar el flujo» (2026-09-27) ----
+
+/**
+ * El bloque que escribió github-copilot/gpt-5.6-luna con el `system` del panel,
+ * letra a letra: un nodo `:::riesgo` y, por costumbre, su `classDef` debajo.
+ * Con H24 esa línea tumbaba el diagrama entero («classDef» no se admite).
+ */
+const TURNO_REAL = [
+  'flowchart LR',
+  '    SIN_DATOS["SIN_DATOS No se pudo localizar la épica ni sus incidencias"]:::riesgo',
+  '    classDef riesgo fill:#fdd,stroke:#c00',
+].join('\n')
+
+test('H26: las líneas de presentación classDef/style/linkStyle se ignoran sin aplicarlas', () => {
+  // El bloque del turno, tal cual: la línea ya no cuenta, y lo que queda es que
+  // el modelo, sin datos, dibujó UN nodo.
+  eq(readFlowchart(TURNO_REAL).errores, ['menos de dos nodos'], 'el del turno real ya no cae por su classDef')
+  // El mismo con otro nodo, para que haya dos: se dibuja, y manda el :::riesgo.
+  const otro = '    SIN_DATOS --> ENG-7["ENG-7 Definir la API de rotación"]'
+  const d = readFlowchart(TURNO_REAL + '\n' + otro)
+  eq(d, {
+    ok: true,
+    direction: 'LR',
+    nodes: [
+      nodo('SIN_DATOS', 'SIN_DATOS No se pudo localizar la épica ni sus incidencias', { kind: 'riesgo' }),
+      nodo('ENG-7', 'ENG-7 Definir la API de rotación', { ref: jira('ENG-7') }),
+    ],
+    edges: [arista('SIN_DATOS', 'ENG-7')],
+    subgraphs: [],
+    errores: [],
+  })
+  const sinLaLinea = TURNO_REAL.split('\n').filter((l) => !l.includes('classDef')).join('\n') + '\n' + otro
+  eq(d, readFlowchart(sinLaLinea), 'igual que si la línea no estuviera')
+  eq(parseFlowchart(TURNO_REAL + '\n' + otro), parseFlowchart(sinLaLinea), 'también en la lectura en crudo')
+  const todo = JSON.stringify(d)
+  for (const rastro of ['fill', '#fdd', '#c00', 'stroke', 'classDef']) assert(!todo.includes(rastro), `ni rastro de «${rastro}» en etiquetas, ids ni clases`)
+  eq(readFlowchart(toMermaid(d)), d, 'ida y vuelta exacta sobre lo leído')
+  assert(!/classDef|fill|stroke/.test(toMermaid(d)), 'la copia sale sin la línea ignorada')
+
+  // style y linkStyle igual, y classDef en todas sus formas: la sentencia entera
+  // se va, no declara ningún nodo (Z) y no le pone clase a nadie.
+  const base = 'flowchart TD\n  A[ENG-1 uno]:::riesgo --> B'
+  for (const linea of [
+    'style A fill:#f00',
+    'linkStyle 0 stroke:#f00',
+    'classDef x fill:#f00',
+    'style Z fill:url(https://evil.example/x)',
+    'linkStyle default stroke:red,stroke-width:4px',
+    'classDef riesgo,hueco fill:#fdd;',
+    'classDef default fill:#f00',
+    'ClassDef x fill:#f00',
+    'STYLE A color:red',
+    'style',
+  ]) {
+    eq(readFlowchart(`${base}\n  ${linea}`), readFlowchart(base), linea)
+  }
+  eq(
+    readFlowchart('graph LR;A-->B;style A fill:#f00;linkStyle 0 stroke:red;B-->C'),
+    readFlowchart('graph LR;A-->B;B-->C'),
+    'también detrás de un «;»'
+  )
+  eq(
+    readFlowchart('flowchart TD\n  subgraph S [Lote]\n    style A fill:#f00\n    classDef x fill:#0f0\n    A --> B\n  end'),
+    readFlowchart('flowchart TD\n  subgraph S [Lote]\n    A --> B\n  end'),
+    'y dentro de un subgrafo'
+  )
+  eq(
+    corto('flowchart TD\n  styleA --> classDefs --> linkStyled'),
+    { nodos: ['styleA=styleA', 'classDefs=classDefs', 'linkStyled=linkStyled'], aristas: ['styleA>classDefs', 'classDefs>linkStyled'] },
+    'decide la primera palabra ENTERA: un id que sólo empieza así es un id'
+  )
+  // `class A kind` sigue aplicando, y sólo con las clases de NOTE_KINDS.
+  eq(
+    readFlowchart('flowchart TD\n  A --> B --> C\n  classDef caja fill:#F7F8F9\n  class A,B caja\n  class B hueco').nodes.map((n) => n.kind),
+    ['', 'hueco', '']
+  )
+  // Lo que navega sigue fuera, aunque venga detrás de una línea ignorada.
+  eq(readFlowchart('flowchart TD\n  A --> B\n  classDef x fill:#f00\n  click A href "javascript:alert(1)"').errores, ['línea 4: «click» no se admite'])
+
+  // EL CAMBIO: el diagrama del README («Cómo funciona») no se dibujaba por sus
+  // dos classDef; ahora se lee entero, y sus clases «caja» y «faro», que no son
+  // de NOTE_KINDS, se quedan en ''.
+  const md = readFileSync(join(import.meta.dirname, '..', '..', 'README.md'), 'utf8').replace(/\r\n?/g, '\n')
+  const valla = /```mermaid\n([\s\S]*?)\n```/.exec(md)
+  assert(valla && valla[1].includes('classDef'), 'el README tiene su ```mermaid, con classDef')
+  const readme = readFlowchart(valla[1])
+  assert(readme.ok, 'el README se lee: ' + readme.errores.join(' · '))
+  eq(readme.nodes.map((n) => [n.id, n.kind]), [['PAGINA', ''], ['EXT', ''], ['OC', ''], ['LLM', ''], ['MCP', '']])
+  eq(readme.edges.map((e) => `${e.from}>${e.to}:${e.arrow}`), ['PAGINA>EXT:none', 'EXT>OC:arrow', 'OC>LLM:none', 'OC>MCP:arrow', 'MCP>PAGINA:arrow'])
+  assert(!/fill|stroke|#F7F8F9|#FFF6E4/.test(JSON.stringify(readme)), 'y sin rastro de sus colores')
+  eq(readFlowchart(toMermaid(readme)), readme, 'con su ida y vuelta exacta')
 })

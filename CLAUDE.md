@@ -46,7 +46,7 @@ Cinco piezas: la página (Jira/Confluence) · la extensión · opencode · el LL
 ## 2. Arrancar y comprobar
 
 ```bash
-npm run check              # sintaxis + TDZ + manifest + 1642 pruebas unitarias + docs (sólo si las unitarias pasan)
+npm run check              # sintaxis + TDZ + manifest + 1643 pruebas unitarias + docs (sólo si las unitarias pasan)
 npm run check:docs         # sólo el paso docs, informe entero; sale con 1 si hay errores
 npm run test:integration   # su propio opencode serve (4123) y el cliente real; GASTA turnos de pago
 npm run harness            # Confluence de mentira en http://127.0.0.1:5175 (preview_start "harness")
@@ -57,13 +57,11 @@ npm run sandbox            # H18/H19: escribe DE VERDAD en un opencode PROPIO ai
 npm run snapshots          # regenera test/fixtures/prompts/*.txt; sólo con un cambio de prompt intencionado, revisando el diff
 ```
 
-- Paso «docs» (`tools/check-docs.mjs`): el número de pruebas de README y de este
-  §2 es el real (`registry.length`); cada «`x.test.js` (…; N pruebas» de
-  docs/PINES.md §10 es lo que registra ese fichero (`porFichero`); cada título de
-  `log.(ok|info|warn|error)('Título'` de `src/` va entre «» en docs/INSTALL.md o
-  aquí; cada `MSG.X` tiene RECEPTOR y está en §5; cada `.js` de `src/` está en el
-  mapa §3. Todo es ERROR (`STRICT` en `{ titles: true, msgs: true, files: true }`),
-  y `MSG_SIN_EMISOR_HASTA` está vacía (0 notas).
+- Paso «docs» (`tools/check-docs.mjs`): el total de pruebas de README y de este
+  §2 (`registry.length`), el de cada «`x.test.js` (…; N pruebas» de
+  docs/PINES.md §10 (`porFichero`), cada título de `log.*('Título'` de `src/`
+  entre «» en docs/INSTALL.md o aquí, cada `MSG.X` con RECEPTOR y en §5, cada
+  `.js` de `src/` en §3. Todo ERROR (`STRICT`); `MSG_SIN_EMISOR_HASTA` vacía.
 - Extensión: `chrome://extensions` → modo desarrollador → cargar `.` (id fijo
   `ickohiffpicdfeameogbihbcanbjibmk`); tras cambiar código, recargar la extensión
   y la pestaña. opencode: `opencode serve --port 4096 --cors chrome-extension://ickohiffpicdfeameogbihbcanbjibmk --print-logs --log-level INFO`
@@ -71,20 +69,21 @@ npm run snapshots          # regenera test/fixtures/prompts/*.txt; sólo con un 
   `tools/instalar.ps1` deja uv y mcp-atlassian y `tools/arrancar-opencode.ps1` lo arranca.
 - Banco: `http://127.0.0.1:5175/`, botón **Autocomprobación completa** (o
   `await faroHarness.actions.selfcheck()`), con el Browser pane VISIBLE a
-  1280×900: oculto no hay frames y caen la 27 y la 41. Hoy 66 tramos, 150 `ok(`,
+  1258×597 (H26: 149/149 con frames de verdad; a 1280×900 emulado no hay
+  frames): oculto caen la 27 y la 41. Hoy 66 tramos, 150 `ok(`,
   149 resultados. Con el pane oculto se sustituye `window.requestAnimationFrame`
   por un `setTimeout` de 16 ms, y se dice.
 - Espejo del panel: `harness/panel-preview.html` (el `panel.html` real en un
   iframe; seis conversaciones, diez pantallas). `window.faroPreview.check()` a
-  320/420 × claro y oscuro devuelve `{ok, motivo, overflowX, topHeight,
-  composerMetaHeight, screenHeadsVisible, emptyStateRows, chipRows,
-  chipsClipped, emptyFits, todayRows, todayLine}`; mandos `setTheme`,
+  320/420 × claro y oscuro devuelve `{ok, motivo, overflowX, …}` (las doce
+  claves, en REFERENCIA §2); mandos `setTheme`,
   `setWidth`, `setStatus`, `setChat`, `setScreen`, `setPick`, `setSources`,
   `setFifth`, `setToday`, `setClaves`, `setQuitar`.
 - Windows: el Bash tool trunca >8 KB y mangla `\` en heredocs: JS con
   Write/Edit, nunca con heredoc. PowerShell 5.1 no tiene `&&`.
 - Prohibido: `node --test` a secas; `test:integration` y las sondas de modelo
-  gastan turnos de pago (no sin permiso); el sandbox sólo contra un opencode
+  gastan turnos de pago (no sin permiso; la integración, al cerrar un plan y con
+  `FARO_TEST_MODEL=github-copilot/gpt-5.6-luna`, H26); el sandbox sólo contra un opencode
   aislado con el HOME entero redirigido y `GET /path` comprobado antes de
   escribir (`OPENCODE_CONFIG_DIR` no basta), nunca el del 4096.
 - `turn`: copia opencode.db y abre LA COPIA en sólo lectura (la original no se
@@ -202,7 +201,7 @@ docs/INSTALL.md  instalación y títulos del registro (docs/MAPA.md)
 README.md  lo mismo, para personas (docs/MAPA.md)
 AGENTS.md  puntero a CLAUDE.md (docs/MAPA.md)
 docs/PLAN.md  primer plan, H0-H13 (docs/MAPA.md)
-docs/PLAN2.md  segundo plan, H15-H26 (docs/MAPA.md)
+docs/PLAN2.md  segundo plan, H15-H26, CERRADO (docs/MAPA.md)
 docs/plan/  anexos y handoff (docs/MAPA.md)
 docs/REFERENCIA.md  §2, §6, §7, §8, §9 y §11 enteros (el preámbulo de este fichero)
 docs/MAPA.md  §3: el mapa largo (el preámbulo de este fichero)
@@ -229,8 +228,8 @@ Los flujos viven ENTEROS en `docs/FLUJOS.md` (§4.1-4.11, con su numeración de 
 
 ## 5. Mensajería (`src/shared/messages.js`)
 - panel → SW: START_PLAN, CANCEL_PLAN, NAVIGATE_DIRECT, REQUEST_HOST_PERMISSION, CONTENT_STATUS.
-- SW → content: PING, STEP, ANCHOR, CANCEL, SETTINGS, TREE_SNAPSHOT, TREE_DEBUG. `SETTINGS` (`pushSettings`) se manda al lanzar un recorrido, al retomarlo cuando la pestaña avisa (CONTENT_READY con recorrido), cuando CAMBIAN los ajustes (H6) y, desde la revisión de H23, cada vez que el panel comprueba la pestaña (CONTENT_STATUS con un PING que contesta, `contentStatus`) o el SW inyecta el content script (`ensureContentScript`, «Dar permiso»); una carga sin recorrido no, para que el aviso siga ligero (arrancaría el content script entero en cada página). Lo de H6: `chrome.storage.onChanged.addListener((changes, area) => …)` en el service worker, con `area === 'local'` y `STORAGE_KEYS.settings in changes`, busca la pestaña activa (`chrome.tabs.query({ active: true, lastFocusedWindow: true })`) y le hace `pushSettings(tab.id)`. Así «Reducir animaciones», el estilo del subrayado, su color (`highlightColor`, H23: claves EXACTAS del mensaje `['highlightColor', 'highlightStyle', 'reduceMotion', 'timing', 'type']`) y la pausa entre pasos llegan a la página al momento y no al navegar. Ningún mensaje nuevo.
-- panel → content: PICK_START, PICK_CANCEL, PAGE_DIGEST (→ `{ok, text, blocks, count, chars, truncated, title, url, issue, ms}`; `issue` = `jiraIssueFields()` o null; `ms` = lo que costó leer la página, sin la espera a que pinte), PAGE_ANCESTORS, PAGE_SEARCH (`{query, wikiPrefix, cloud, limit}` → `searchPages`), ANNOTATE (→ `{ok, placed, missed, detail, ms}`; `ms` = lo que costó marcar: desde que la página tiene texto (tras el `waitFor`) hasta que las marcas están puestas, sin el desplazamiento suave hasta la primera), FOCUS_NOTE, CLEAR_NOTES; y de H10 PAGE_LINKS (`{remote, confluenceHost, cloud}` → `{ok, links, issue, issueKey, remote, title, url, ms}` o `{ok:false, reason:'editando'}` con la misma guarda que PAGE_DIGEST; `remote` es `restTools` llevado al content script y `confluenceHost` sólo filtra hosts, nunca monta una URL: el contrato entero, en docs/FLUJOS.md §4.4). Lo manda `paintSuggestedSources` del panel (§4.4). Desde un Jira DC, PAGE_ANCESTORS/PAGE_SEARCH no se mandan: el panel llama a `fetchAncestors`/`searchPages` contra el Confluence enlazado (§4.8).
+- SW → content: PING, STEP, ANCHOR, CANCEL, SETTINGS, TREE_SNAPSHOT, TREE_DEBUG. `SETTINGS` (`pushSettings`) se manda al lanzar un recorrido, al retomarlo cuando la pestaña avisa (CONTENT_READY con recorrido), cuando CAMBIAN los ajustes (H6) y, desde la revisión de H23, cada vez que el panel comprueba la pestaña (CONTENT_STATUS con un PING que contesta, `contentStatus`) o el SW inyecta el content script (`ensureContentScript`, «Dar permiso»); una carga sin recorrido no, para que el aviso siga ligero (arrancaría el content script entero en cada página). Lo de H6: `chrome.storage.onChanged.addListener((changes, area) => …)` en el service worker, con `area === 'local'` y `STORAGE_KEYS.settings in changes`, busca la pestaña activa (`chrome.tabs.query({ active: true, lastFocusedWindow: true })`) y le hace `pushSettings(tab.id)`. Así «Reducir animaciones», el estilo del subrayado, su color (`highlightColor`, H23; las claves EXACTAS del mensaje, en REFERENCIA §6) y la pausa entre pasos llegan a la página al momento y no al navegar. Ningún mensaje nuevo.
+- panel → content: PICK_START, PICK_CANCEL, PAGE_DIGEST (→ `{ok, text, blocks, count, chars, truncated, title, url, issue, ms}`; `issue` = `jiraIssueFields()` o null; `ms` = lo que costó leer la página, sin la espera a que pinte), PAGE_ANCESTORS, PAGE_SEARCH (`{query, wikiPrefix, cloud, limit}` → `searchPages`), ANNOTATE (→ `{ok, placed, missed, detail, ms}`; `ms` = lo que costó marcar, sin el `waitFor` ni el desplazamiento suave: docs/FLUJOS.md §4.4), FOCUS_NOTE, CLEAR_NOTES; y de H10 PAGE_LINKS (`{remote, confluenceHost, cloud}` → `{ok, links, issue, issueKey, remote, title, url, ms}` o `{ok:false, reason:'editando'}` con la misma guarda que PAGE_DIGEST; `remote` es `restTools` llevado al content script y `confluenceHost` sólo filtra hosts, nunca monta una URL: el contrato entero, en docs/FLUJOS.md §4.4). Lo manda `paintSuggestedSources` del panel (§4.4). Desde un Jira DC, PAGE_ANCESTORS/PAGE_SEARCH no se mandan: el panel llama a `fetchAncestors`/`searchPages` contra el Confluence enlazado (§4.8).
 - panel → content, **lecturas REST del propio sitio con la sesión del navegador** (H7): el content script deduce de SU pestaña lo que decide a qué ruta se pide —`jiraContextPath(location.pathname)` en Jira, `resolveWikiPrefix` en Confluence— en CADA petición, y el panel nunca manda el origen, una URL ni la ruta de contexto de Jira (el `wikiPrefix?` de los mensajes de Confluence es una PROPUESTA que `resolveWikiPrefix` sólo acepta con forma de ruta, como en PAGE_ANCESTORS y PAGE_SEARCH; revisión adversaria de H7). JQL_SEARCH (`{jql, limit?, fields?, cloud?}` → lo que devuelve `searchIssues`), RECENT_ISSUES (`{kind:'history'|'mine'|'project'|'related', projectKey?, issueKey?, days?, limit?}` → la plantilla fija de jira-rest.js; por defecto 7 días «lo tuyo» y 3 «el proyecto»), RECENT_PAGES (`{kind:'viewed'|'mine'|'ids', ids?, days?, limit?, wikiPrefix?, cloud?}` → `viewedCql`/`mineCql`/`idsCql` + `searchContent`), SPACE_PAGES (`{spaceKey, limit?, wikiPrefix?, cloud?}` → `fetchSpacePages`; los topes son los de `INDEX_LIMITS` y NO viajan en el mensaje, para que no haya dos topes de lo mismo diciendo cosas distintas), FAVOURITE_FILTERS (`{}` → `fetchFavouriteFilters`). Un `kind` que no esté en la lista, o un parámetro que no valide, → `{ok:false, reason:'consulta no permitida'}` **sin pedir nada**. Y `PAGE_DIGEST` admite además `{fieldsOnly: true}` → `{ok:true, issue, url, ms}` sin trocear la página y antes de la guarda de «editando». Los cinco nacieron sin emisor (H7) y desde H11 lo tienen (historia en docs/BITACORA.md): `RECENT_ISSUES` y `RECENT_PAGES` los manda `readToday` de panel.js, uno por `kind` y con los parámetros validados del sitio CAPTURADO, nunca con una consulta, un origen, una URL ni una ruta (§4.10). `JQL_SEARCH` lo mandan `attachJqlResults` (la lista de la tarjeta y la búsqueda directa) y, desde H9, `countProfile` (la muestra con la que se cuenta el perfil), y son exactamente DOS apariciones de `MSG.JQL_SEARCH` en el panel, cada una en su función, pinadas; `FAVOURITE_FILTERS` lo manda `loadSearchChipSources`, una vez por sitio y sólo con un chat vacío delante (una sola aparición); y `SPACE_PAGES` lo manda `restIndexFor` desde H9 para leer el árbol del espacio antes de gastar un turno del modelo. `PAGE_DIGEST {fieldsOnly}` lo manda `readIssueFieldsQuick`.
 - panel → content (H25): ISSUE_LINKS (`{keys, cloud?}` → `fetchIssueLinks`), sólo claves del índice, revalidadas con `validIssueKey`; con menos de dos, `{ok:false, reason:'consulta no permitida'}` **sin pedir nada**. Lo manda `contrastarConJira`, una vez (docs/FLUJOS.md §4.4, §4.9).
 - content → SW/panel: CONTENT_READY, URL_CHANGED, PICK_RESULT, NOTE_CLICKED. SW → panel: PLAN_PROGRESS, PLAN_FINISHED. Desde H11 `CONTENT_READY` y `URL_CHANGED` llevan además `pageId` (`pageIdFromDom()`: la meta `ajs-page-id`, `''` si no hay) y NADA más, y con ellos el service worker apunta la visita en el diario (§4.10); también apunta por `chrome.tabs.onUpdated` con `changeInfo.url`, que es lo que cubre el panel cerrado y los hosts registrados dinámicamente — el filtro no ahorra visitas de más (`recordVisit` funde por su clave los avisos de la misma navegación), ahorra los ajustes y el mapa de sitios LEÍDOS en cada uno de los cuatro o cinco avisos de cada carga de cualquier pestaña (revisión adversaria de H11). Ese id sale de `src/content/page-id.js`, un módulo sin un solo import, porque el aviso corre en cada carga de página. Que bootstrap.js los MANDE lo pina `bootstrap-wiring.test.js`; que el SW los use y no lea ni escriba nada con los interruptores apagados, el sitio sin configurar o sin `changeInfo.url`, `service-worker.test.js`.
@@ -305,19 +304,19 @@ Cada contrato con su porqué y sus bordes, en docs/REFERENCIA.md §6; aquí, la 
 - Un turno son varios mensajes del asistente (uno por vuelta de herramientas): `runTurn` junta partes, `restoreConversation` agrupa.
 - `GET /config` trae los `environment` de los MCP con las claves EN CLARO: sólo hosts, nunca se guarda ni registra.
 - `GET /mcp` en frío 14 463 ms (caliente 2 ms): motivó P5.
-- `PATCH /global/config` escribe el fichero global (`opencode.jsonc` > `opencode.json` > `config.json`; sin ninguno crea `.jsonc`), fusión profunda, `disposeAll()` sin await: aborta TODOS los turnos y rearranca los MCP; entrada nueva «connected» en ~64-210 ms; `PATCH {}` recarga lo pegado. `POST /mcp` sólo memoria (`GET /mcp` no lo ve). Sin borrado por API: entrada entera con `enabled: false` y variables a `""`. La respuesta del PATCH y el 500 `ConfigJsonError` llevan los tokens → `sensitive`. `OPENCODE_CONFIG_DIR` NO aísla: HOME entero + `GET /path`. uvx ausente → «Connection closed» en ~40 ms; `timeout` es plazo de arranque; `POST /mcp/{name}/connect` ~12 s y dice `true` aunque falle. `PATCH /config` escribe `<cwd>/config.json`, que no se carga; tras el PATCH un `GET /mcp` inmediato puede contestar la instancia vieja (esperar `pollMs`) y se cierra el SSE `/event`. `POST /pty` y `/session/:id/shell` son RCE: no usar; las herramientas propias en `{tool,tools}/*.{js,ts}` quedan fuera de `SAFE_PERMISSIONS`.
+- `PATCH /global/config` escribe el fichero global (`opencode.jsonc` > `opencode.json` > `config.json`; sin ninguno crea `.jsonc`), fusión profunda, `disposeAll()` sin await: aborta TODOS los turnos y rearranca los MCP; `PATCH {}` recarga lo pegado. `POST /mcp` sólo memoria. Sin borrado por API: entrada entera con `enabled: false` y variables a `""`. La respuesta del PATCH y el 500 `ConfigJsonError` llevan los tokens → `sensitive`. `OPENCODE_CONFIG_DIR` NO aísla: HOME entero + `GET /path`. `PATCH /config` escribe `<cwd>/config.json`, que no se carga. `POST /pty` y `/session/:id/shell` son RCE: no usar. Los tiempos, uvx ausente, `connect`, la instancia vieja tras el PATCH y las herramientas propias: docs/REFERENCIA.md §7.
 - mcp-atlassian 0.23.1: `uvx mcp-atlassian@0.23.1` arranca; `TOOLSETS=all` (sin ella el defecto bajará a seis); `npx mcp-atlassian` es de otro autor.
 - `tools` del mensaje se respeta como permiso PERSISTENTE: Faro no lo manda (el alcance exclusivo va por prompt + `consultedOutside`).
-- Permisos (S1): manda la ÚLTIMA regla que casa (`findLast`; sin ninguna, «ask»); el `pattern` se casa contra el ARGUMENTO; una MCP es `<cliente>_<herramienta>` con `patterns: ['*']`; las reglas de sesión no quitan herramientas, dan `DeniedError`. Las aprobaciones «always» guardadas del proyecto (tabla `permission`) van DETRÁS de la sesión y ganan a su `deny`: Faro nunca crea ninguna y rechaza todo `permission.asked`. `GET /experimental/tool/ids`: invalid, question, bash, read, glob, grep, edit, write, task, webfetch, todowrite, websearch, codesearch, skill, apply_patch.
+- Permisos (S1): manda la ÚLTIMA regla que casa (`findLast`; sin ninguna, «ask»); el `pattern` se casa contra el ARGUMENTO; una MCP es `<cliente>_<herramienta>` con `patterns: ['*']`; las reglas de sesión no quitan herramientas, dan `DeniedError`. Las aprobaciones «always» guardadas del proyecto (tabla `permission`) van DETRÁS de la sesión y ganan a su `deny`: Faro nunca crea ninguna y rechaza todo `permission.asked`. La lista de `GET /experimental/tool/ids`, en REFERENCIA §7.
 - `DELETE /session/:id` NO cancela el turno: abortar antes (`_abandoned`).
 - `GET /session/:id/message?limit=N` da los últimos N en orden ASCENDENTE.
 - `summarize` exige `{providerID, modelID}`; sin ellos, 400 (R4).
 - `info.tokens` `{total, input, output, reasoning, cache}` e `info.cost` por mensaje; `total` = `input + output + cache.read`; `cost` 0 en copilot y `-free` → «sin dato» es `null`; `message.updated` se repite y se suma por mensaje (`this.usage.set(info.id, uso)`).
 - Poda: protege los últimos 40 000 tokens (`PRUNE_PROTECT`), marca `time.compacted`; por eso `heavyToolChars` 200 000.
 - `confluence_get_page` lee por `page_id`, URL, enlace corto o `title`+`space_key`.
-- Modelos: el free tier de opencode no vale desde `serve`; funciona `github-copilot/gpt-5.6-luna`. Nada en `/config/providers` dice si el plan lo permite. Rechazos reales (`APIError`, `isRetryable: false`): `openai/gpt-5.4` 400 «not supported»; `github-copilot/claude-sonnet-4.6` 400 con «Available models» (57 ids; faltan 3 de los 32 de Copilot: `claude-sonnet-4.6`, `gpt-5.4-nano`, `mai-code-1-flash-picker`); `opencode/big-pickle` 403 free tier (veredicto de proveedor).
+- Modelos: el free tier de opencode no vale desde `serve`; funciona `github-copilot/gpt-5.6-luna`. Nada en `/config/providers` dice si el plan lo permite. Rechazos reales (`APIError`, `isRetryable: false`): `openai/gpt-5.4` 400 «not supported»; `github-copilot/claude-sonnet-4.6` 400 con «Available models» (los ids que faltan, en REFERENCIA §7); `opencode/big-pickle` 403 free tier (veredicto de proveedor).
 - `probeModel` (H17): sesión «Faro · probando modelo» con `SAFE_PERMISSIONS`, UN turno «Responde sólo: ok», `variant` más barato (`none` → `minimal` → `low`), plazo `MODEL_LIMITS.probeMs` 15 s; abort ANTES de DELETE; sin probar contra modelo real.
-- `~/.local/share/opencode/opencode.db` (SQLite WAL) guarda cada turno, sistema incluido; `npm run turn` copia con `-wal`/`-shm` y abre la COPIA en sólo lectura (la original no se toca). `session.title` es columna; `message.data` `{role, time, system, modelID, providerID, tokens, finish, error?}`; `part.data.tool` lleva el prefijo del MCP; compactación = `user` con parte `compaction` + asistente `summary: true`.
+- `~/.local/share/opencode/opencode.db` (SQLite WAL) guarda cada turno, sistema incluido (lo lee `npm run turn`, §2). `session.title` es columna; `message.data` `{role, time, system, modelID, providerID, tokens, finish, error?}`; `part.data.tool` lleva el prefijo del MCP; compactación = `user` con parte `compaction` + asistente `summary: true`.
 
 Detalle y cómo se midió cada cosa: docs/REFERENCIA.md §7
 
@@ -350,7 +349,7 @@ Sólo el enunciado; el porqué, el incidente que la motivó y sus matices están
 24. **Faro sólo escribe MCP en opencode** — una barrera (`mcp-config.js`) y dos puertas: `updateMcpEntries` y `reloadGlobalConfig`, nunca un PATCH genérico ni `POST /mcp`; nunca `/config` de proyecto ni `agent`/`permission`/`plugin`/`command`; sin configuración legible no se escribe. Con permiso, `reconfiguring()`, `sensitive`, sin pisar lo que no pidió; quitar = entrada entera `enabled: false`. Pruebas sólo en `npm run sandbox`.
 25. **El modelo es de la persona** — `settings.model` global; `resolveModel` nunca elige solo, se elige en «Elige el modelo». Fallos clasificados gratis en `faro:model-checks` con TTL; la única sonda es «Comprobar» (`probeModel`).
 26. **El ámbito, unidad del contexto** — contexto por `space:`/`project:`/`'*'` en la misma clave, índice por host sin partir; migración a `'*'` en la duda. «Tiene mapa» = `hasMap` (sólo `indexedAt`); tope total sin desalojo; ninguna clave nueva en `STORAGE_KEYS` por ámbito. En Jira (H22), por proyecto también el perfil (`byProject`) y el contexto del enlazado que viaja (`linkedSpacesFor`; lo elegido a mano manda).
-27. **Diagramas** — el modelo escribe Mermaid `flowchart`; la extensión lo valida con claves blancas y lo pinta con `createElementNS`, sin dependencias ni `innerHTML`; un nodo navega sólo al hacer clic, por `validatePlan` y con la clave en el índice; nada del diagrama se vuelve consulta (el contraste de H25 manda claves del índice, cosechadas por M4, a una plantilla fija); «Dibujar el flujo» no manda nada; sin viñeta en el prompt ni MCP de dibujo.
+27. **Diagramas** — el modelo escribe Mermaid `flowchart`; la extensión lo valida con claves blancas y lo pinta con `createElementNS`, sin dependencias ni `innerHTML`; un nodo navega sólo al hacer clic, por `validatePlan` y con la clave en el índice; nada del diagrama se vuelve consulta (el contraste de H25 manda claves del índice, cosechadas por M4, a una plantilla fija); `classDef`/`style`/`linkStyle` se ignoran y `click`/`href`/`callback` se rechazan (H26); «Dibujar el flujo» no manda nada; sin viñeta en el prompt ni MCP de dibujo.
 28. **El subrayado** (H23) — «Señalar» siempre azul; la tinta de las marcas a elegir (azul por defecto, ámbar); insignias y botones de Faro en ámbar; el relleno en dos `::highlight` DISJUNTOS debajo del texto (≥4,5 en los dos temas) y el trazo en el overlay; sin `mix-blend-mode` (forma B, H25, sólo tras medir).
 
 ## 9. Convenciones de código
@@ -431,8 +430,9 @@ Los pasos completos, con el porqué de cada regla: docs/REFERENCIA.md §11.
 | H24 | Diagramas: parser, layout y SVG propios, «Dibujar el flujo» | `plan/h24-diagramas` · e8b950f + 512e8a1 | 1580 |
 | H23 | Subrayado (forma A): tinta azul/ámbar bajo el texto, trazo, insignias en superíndice, cursor subrayador | `plan/h23-subrayado` · 5184261 + 65adb9c + 3cd6ae3 → fusión 39ef839 | 1505; fundido, 1607 |
 | H25 | «Contrastar con Jira»: las `issuelinks` reales, el diagrama «Según Jira» y la comparación (H25a descartada) | `plan/h25-issuelinks` · 8928c60 + dfabd81 | 1642 |
+| H26 | Cierre: docs definitivos, banco con frames de verdad, integración, sandbox, el turno real; classDef tolerado y la pregunta sin classDef | `plan/h26-cierre` · (cierre al cerrar) | 1643 |
 
-Ramas `plan/…`. **Dónde vive:** 22 ramas apiladas sobre `40f56d7` (H0-H21), nada pusheado ni PR, `main` local en `523c25f`; H20 saltado (manual, con gasto); encima `plan/docs-mapa` (este mapa, Tarea 0), `plan/h22-jira-por-proyecto` (bd01fa2 + a7b781a + 9cfc93d), `plan/h24-diagramas` (e8b950f + 512e8a1 + 8a98d94) `plan/h23-fusion` (39ef839 + 225421e: H23 se construyó en su carril, `plan/h23-subrayado` sobre 6256545, 5184261 + 65adb9c + 3cd6ae3, y se fusionó sobre 8a98d94 conservando los dos lados) y la punta, `plan/h25-issuelinks` · 8928c60 + dfabd81 + el commit de los hashes (docs/plan/handoff/ESTADO.md).
+Ramas `plan/…`. **Dónde vive:** 22 ramas apiladas sobre `40f56d7` (H0-H21), nada pusheado ni PR, `main` local en `523c25f`; H20 saltado (manual, con gasto); encima `plan/docs-mapa` (este mapa, Tarea 0), `plan/h22-jira-por-proyecto` (bd01fa2 + a7b781a + 9cfc93d), `plan/h24-diagramas` (e8b950f + 512e8a1 + 8a98d94), `plan/h23-fusion` (39ef839 + 225421e: H23, hecho en su carril `plan/h23-subrayado` sobre 6256545, fundido sobre 8a98d94), `plan/h25-issuelinks` · 8928c60 + dfabd81 + 149ddf0 y la punta, `plan/h26-cierre` (el cierre; docs/plan/handoff/ESTADO.md). El segundo plan queda CERRADO el 2026-09-27.
 
 **Límites que no son de ningún hito:**
 - Jira Cloud sin REST de Jira (410): todo por el MCP (`sinRestDeJira`).
@@ -442,16 +442,18 @@ Ramas `plan/…`. **Dónde vive:** 22 ramas apiladas sobre `40f56d7` (H0-H21), n
 - Hosts propios: sin permiso no hay content script («Dar permiso»).
 - Faro no arranca opencode; la configuración la escribe opencode (§8.24).
 
-**Sin verificar:** desde H0 nadie ha cargado la extensión en Chrome (el panel no se ha visto); las capturas 2×2 del espejo (sólo medido);
-el banco con frames de verdad; `npm run test:integration` desde H3 (lo corre el orquestador) y `npm run turn` desde H1;
-el service worker, nunca ejercitado; las lecturas del panel al Confluence enlazado; ningún lector de pantalla;
-de H23, el cursor, la selección azul, el trazo dibujándose y el color en caliente, sólo con la extensión cargada.
+**Sin verificar:** desde H0 nadie ha cargado la extensión en Chrome (el panel no se ha visto); el service worker, nunca ejercitado;
+las lecturas del panel al Confluence enlazado; ningún lector de pantalla; las capturas 2×2 del espejo (vistas con los ojos por el
+orquestador en H23-H26 a 320/420, sin ficheros); de H23, el cursor, la selección azul, el trazo y el color en caliente; de H26,
+la pregunta nueva y el parser tolerante frente a un modelo con datos reales, y el MCP de Jira con un token válido.
+**Verificado en H26** (2026-09-27): el banco con frames de verdad (149/149 con rAF nativo a 1258×597 emulado, pane visible),
+`npm run test:integration` (18/18 con `FARO_TEST_MODEL=github-copilot/gpt-5.6-luna`), `npm run turn` (probado) y el sandbox (9/9).
 Detalle por hito: docs/BITACORA.md §12.2.
 
 **Decisiones pendientes de Marco:**
 1. ~~`minimum_chrome_version`~~ RESUELTA en H14: 130.
 2. ~~P5, MCP fuera del camino crítico~~ RESUELTA en H14: hecho.
-3. `test:integration` gasta turnos de pago: cuándo correrlo.
+3. ~~`test:integration`: cuándo correrlo~~ RESUELTA en H26: al cerrar cada plan, con `FARO_TEST_MODEL` fijado (la sonda de seis modelos a la vez deja a Copilot sin contestar en 15 s).
 4. `jiraPrefix` no se guarda (sin instancia con ruta de contexto).
 5. ~~Un perfil por host~~ RESUELTA en H22: uno por proyecto (`byProject`).
 6. Las ramas, sin push ni PR: apiladas o aplastadas.
@@ -463,4 +465,6 @@ Detalle por hito: docs/BITACORA.md §12.2.
 12. Decisión 3 de PLAN2 §8: TOMADA en H19 (no hay quitar UN producto).
 13. Decisión 9 de PLAN2 §8: TOMADA en H21 y H22 (lo de Jira, hecho; «manual manda», desvío anotado).
 14. Decisión 11 de PLAN2 §8 (subrayado): TOMADA en H23; la forma B (H25a) DESCARTADA en H25 (BITACORA §12.4).
+15. La viñeta del diagrama en el prompt: FUERA hasta un turno real con datos (el MCP de Jira entraba como anónimo).
+16. El token de Jira del MCP de opencode: caducado o sin permiso (anónimo el 2026-09-27); lo renueva Marco.
 Detalle: docs/BITACORA.md §12.3.

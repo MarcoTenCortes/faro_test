@@ -1,5 +1,28 @@
 # Segundo plan de evolución de Faro · septiembre 2026
 
+> **Plan CERRADO el 2026-09-27.** Están hechos **H15-H19 y H21-H25**, cada uno
+> en su rama y con su revisión adversaria aplicada antes del siguiente (1 642
+> pruebas al cerrar la revisión de H25), y **H26**, el cierre (1 643): uv y el
+> MCP caído con «Reintentar» (H15), el modelo de la persona y «Elige el modelo»
+> (H16-H17), el MCP escrito y quitado solo por `PATCH /global/config` (H18-H19),
+> el contexto y el mapa por espacio o proyecto (H21-H22), los diagramas en el
+> chat (H24), el subrayado con la tinta debajo del texto y el cursor subrayador
+> (H23, en su carril y fundido sobre la pila) y «Contrastar con Jira» (H25b).
+> **H20 se saltó** (la verificación en real con un compañero: es manual y
+> necesita el permiso de gasto de Marco), y **H25a, el «Rotulador» de mezcla, se
+> DESCARTÓ** con su motivo (docs/BITACORA.md §12.4). El cierre corrió el banco
+> con frames de verdad (149/149), `npm run test:integration` con
+> `FARO_TEST_MODEL` (18/18), el sandbox (9/9), el metro y `npm run turn`, e hizo
+> el turno real de «Dibujar el flujo»: el parser ignora desde entonces
+> `classDef`/`style`/`linkStyle` y la pregunta pide «sin classDef, style, click
+> ni enlaces». **Lo que queda para Marco**: cargar la extensión y ver el panel
+> (nadie lo ha visto desde H0), renovar el token de Jira del MCP de opencode
+> (entra como anónimo), decidir la viñeta del diagrama en el prompt con un turno
+> real con datos, H20, y cómo subir las ramas (apiladas o aplastadas). El
+> estado hito a hito está en **CLAUDE.md §12** y en **docs/BITACORA.md §12.1**;
+> la bitácora completa, en **§12.5**; lo que sigue sin verificar, en **§12.2**, y
+> las decisiones pendientes, en **§12.3**. Nada se ha pusheado.
+
 Plan para lo que el equipo de Marco pidió después de usar Faro: que instalar
 uv no sea un problema, que el MCP de Atlassian se cree y se quite solo, que la
 lista de modelos sea la de cada persona y se elija ANTES de construir el
@@ -121,7 +144,10 @@ empieza en **H15** y no reabre nada de aquél.
     `innerHTML` y lleva 19 `innerHTML` dentro; una prueba de concepto propia
     de 309 líneas parsea, valida, coloca (5 capas, 0 cruces) y pinta un flujo
     de 6 nodos en ~1 ms, con ida y vuelta a Mermaid idéntica, y rechaza
-    `click`, `style`, `classDef`, `<img onerror>` y `javascript:`.
+    `click`, `style`, `classDef`, `<img onerror>` y `javascript:` (H26:
+    `classDef`, `style` y `linkStyle` pasan a IGNORARSE sin aplicarlas, porque
+    el modelo las escribe por costumbre y tumbaban el diagrama entero; `click`,
+    `href` y `callback` siguen rechazados).
   - En oscuro, el texto bajo una marca baja de **8,95:1 a 3,63:1** (el overlay
     pinta ENCIMA de la letra y se suma a la Custom Highlight de debajo); sólo
     con la Custom Highlight sería 4,91. Las insignias tapan las dos o tres
@@ -813,7 +839,9 @@ condicionada.
   palabra de la etiqueta pasa `validIssueKey` (o `confluence-page` por id
   numérico); `note` = el primer `[n]` de la etiqueta. Se RECHAZAN con motivo
   `click`, `href`, `callback`, `style`, `classDef`, `linkStyle`,
-  `%%{init}%%` y cualquier otro tipo de diagrama. Tolerancia a ampliar antes
+  `%%{init}%%` y cualquier otro tipo de diagrama (H26: `classDef`, `style` y
+  `linkStyle` se ignoran sin aplicarlas desde el turno real del 2026-09-27; lo
+  demás sigue rechazado con su línea). Tolerancia a ampliar antes
   de dar el hito por bueno: `A --> B & C`, comillas con corchetes, `--x`/`--o`
   e ids con guion (la PoC entiende 5 de 9 variantes típicas). `toMermaid` con
   ida y vuelta exacta.
@@ -1612,7 +1640,8 @@ Reglas transversales, que salen de los dos juicios y valen para todos:
   `skills.js` sólo si Marco decide la viñeta, CLAUDE.md §3, §4.4, §4.7, §6,
   §8 (§8.27), §9, §10; INSTALL; README.
 - **Pruebas** (~60): parser con sus casos de SEGURIDAD (click/href/callback/
-  style/classDef/linkStyle/`%%{init}%%` rechazados con motivo; `<img
+  style/classDef/linkStyle/`%%{init}%%` rechazados con motivo —H26:
+  style/classDef/linkStyle pasan a ignorarse, con su prueba—; `<img
   onerror>` y `javascript:` como texto; NEL/U+2028/RLO/ZWSP fuera; `ref` sólo
   por `validIssueKey`; `kind` sólo de `NOTE_KINDS` sin `__proto__`; topes),
   `toMermaid` ida y vuelta; layout (0 cruces en el caso de la PoC, ciclo sin
@@ -1715,6 +1744,33 @@ Reglas transversales, que salen de los dos juicios y valen para todos:
   H18 y, con permiso, `npm run test:integration`.
 - **Depende de**: todo lo anterior.
 - **Riesgo**: bajo en código.
+- **Hecho el 2026-09-27** (rama `plan/h26-cierre` sobre 149ddf0: (cierre al
+  cerrar)). La bitácora de H15-H25 ya estaba escrita hito a hito en
+  docs/BITACORA.md §12.5 (CLAUDE.md es un mapa desde la Tarea 0, y §12 vive
+  allí); el cierre añade su bloque, «H26 · cierre», la fila de §12.1 y lo que
+  queda sin verificar, y deja CLAUDE.md, README, INSTALL, REFERENCIA, FLUJOS y
+  MAPA definitivos, con este plan marcado como cerrado (arriba). Lo medido por
+  el orquestador: **el banco 1-66 con frames de verdad**, `requestAnimationFrame`
+  nativo en el Browser pane visible —149/149 en 100,0 s a 1258×597 emulado y
+  148/149 a 1041 nativo, donde cae sólo el quinto `ok(` del 64, un límite de
+  H23—; **`npm run test:integration` 18/18** con
+  `FARO_TEST_MODEL=github-copilot/gpt-5.6-luna` (sin la variable, la sonda de
+  seis modelos a la vez deja a Copilot sin contestar en 15 s); **`npm run
+  sandbox` 9/9**; `npm run bench` sin cambios; `npm run turn` probado; y el
+  espejo medido en H22-H25 a 320/420 × claro y oscuro y visto con los ojos a
+  320, sin ficheros de captura (las capturas 2×2 guardadas quedan sin hacer).
+  **El turno real de «Dibujar el flujo»** (un opencode propio con la
+  configuración de Marco, `github-copilot/gpt-5.6-luna`): el MCP de Jira entró
+  como ANÓNIMO (el token de Marco caducó o no tiene permiso) y el modelo, sin
+  datos, dibujó un nodo con un `classDef` debajo, que tumbaba el diagrama
+  entero; desde H26 `diagram-parse.js` IGNORA `classDef`, `style` y `linkStyle`
+  sin aplicarlas (`click`, `href` y `callback` siguen rechazados), el diagrama
+  del README se dibuja, y `DIAGRAM_QUESTION` pide «sin classDef, style, click ni
+  enlaces». **La viñeta del prompt, FUERA** hasta un turno real con datos (las
+  40 instantáneas intactas). 1642 → 1643 pruebas. La integración «gratis» de
+  H18 es el sandbox (9/9). Decisiones nuevas para Marco: la viñeta (15) y el
+  token (16), en docs/BITACORA.md §12.3; la 3, cuándo correr la integración,
+  RESUELTA: al cerrar cada plan, con `FARO_TEST_MODEL`.
 
 **Orden y motivo.** H15 → H16 → H17 → H18 → H19 → H20 (verificación en real
 del bloque de la petición principal) → H21 → H22 → H24, con **H23 en carril
@@ -2005,7 +2061,9 @@ Las tomo así si no dices lo contrario:
     pegado (hoy es un supuesto); el MCP de Excalidraw se descarta; `dagre`
     vendorizado sólo si el layout se queda corto (rompería «sin
     dependencias» en un único fichero de 284 KB); el grafo exacto de
-    `issuelinks` por la API, condicionado (H25b).
+    `issuelinks` por la API, condicionado (H25b). (H26: el turno real se
+    hizo sin datos —el MCP de Jira entró como anónimo— y la viñeta sigue
+    FUERA; docs/BITACORA.md §12.3, decisión 15.)
 11. **Subrayado**: herramienta de «Señalar» azul; marcas azules por defecto
     con ámbar a elegir; insignias y botones de Faro en ámbar; dos estilos
     (Subrayado y Foco); insignias como superíndice; el «Rotulador» de mezcla
@@ -2018,7 +2076,8 @@ Las tomo así si no dices lo contrario:
     detrás (H16-H17), y el MCP automático después. Alternativa: modelos
     primero, porque es «el principal».
 14. **Permiso de gasto** para H17 (una sonda), H20 (la sesión con el
-    compañero) y H26 (`npm run test:integration`).
+    compañero) y H26 (`npm run test:integration`). (H26: la corrió el
+    orquestador, 18/18 con `FARO_TEST_MODEL=github-copilot/gpt-5.6-luna`.)
 15. **La copia `opencode.json.faro-bak-2026-09-25`** con tus tokens, que
     quedó junto al fichero real: bórrala cuando quieras; no la toco.
 

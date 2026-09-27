@@ -5382,8 +5382,14 @@ async function openIssueFromResults(key, { site, card }) {
  * que el parser sabe leer (`readFlowchart`): un `flowchart` en su valla, la
  * clave como primera palabra de cada etiqueta —de ahí sale el nodo que navega—
  * y las clases de `NOTE_KINDS`.
+ *
+ * H26: pide también «sin classDef, style, click ni enlaces». En el turno real
+ * del 2026-09-27 (github-copilot/gpt-5.6-luna) el modelo puso un `classDef`
+ * debajo de su `:::riesgo`, por costumbre. El parser ya ignora las líneas de
+ * presentación, pero rechaza `click` y los enlaces (§8.3), y con ellos el
+ * diagrama entero: mejor que el modelo no los escriba.
  */
-const DIAGRAM_QUESTION = 'Dibuja el flujo entre las incidencias de tu última respuesta como un diagrama Mermaid «flowchart LR» dentro de un bloque ```mermaid: como mucho 15 nodos, cada nodo con la clave de la incidencia como primera palabra de su etiqueta y después su resumen corto; :::riesgo, :::hueco o :::contradiccion en lo que falle, y el número [n] de la observación que lo respalde. Sólo el diagrama y una frase.'
+const DIAGRAM_QUESTION = 'Dibuja el flujo entre las incidencias de tu última respuesta como un diagrama Mermaid «flowchart LR» dentro de un bloque ```mermaid: como mucho 15 nodos, cada nodo con la clave de la incidencia como primera palabra de su etiqueta y después su resumen corto; :::riesgo, :::hueco o :::contradiccion en lo que falle, y el número [n] de la observación que lo respalde; sin classDef, style, click ni enlaces. Sólo el diagrama y una frase.'
 
 /**
  * «Dibujar el flujo»: el botón que cuelga de una respuesta de Jira que cita tres

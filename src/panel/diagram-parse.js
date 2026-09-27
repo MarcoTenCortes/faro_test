@@ -13,9 +13,19 @@
  * diagram-view.js).
  *
  * Todo lo que llega aquí es contenido del modelo (§8.12): se lee, nunca se
- * interpreta. Lo que en Mermaid ejecuta o carga algo —`click`, `href`,
- * `callback`, `style`, `classDef`, `linkStyle`, las directivas `%%{…}%%`— se
- * RECHAZA con su motivo; una etiqueta `<img onerror=…>` o `javascript:` es un
+ * interpreta. Lo que en Mermaid navega o ejecuta algo —`click`, `href` y
+ * `callback` (§8.3: el modelo no emite URLs ni acciones) y las directivas
+ * `%%{…}%%`— se RECHAZA con su motivo y su línea. Las líneas de PRESENTACIÓN
+ * —`classDef`, `style` y `linkStyle`— se IGNORAN, sin aplicarlas y sin error
+ * (H26). Hasta H26 también se rechazaban, y en el turno real del 2026-09-27
+ * («Dibujar el flujo» con github-copilot/gpt-5.6-luna y el `system` del panel)
+ * el modelo escribió un nodo `:::riesgo` y, por costumbre, debajo
+ * `classDef riesgo fill:#fdd,stroke:#c00`: esa línea tumbaba el diagrama
+ * ENTERO y el panel enseñaba el código. Ignorarlas es tan seguro como
+ * rechazarlas: de ellas no sale nada —ni a un nodo, ni a una clase CSS, ni a un
+ * atributo; la vista sólo conoce las cinco clases de `NOTE_KINDS`, por
+ * `:::kind` o por `class A kind`— y el diagrama se lee igual que si no
+ * estuvieran. Una etiqueta `<img onerror=…>` o `javascript:` es un
  * texto de una línea como cualquier otro; la forma interna se reconstruye con
  * claves blancas (`validateDiagram`); `ref` sale sólo de `validIssueKey` y
  * `kind` sólo de `NOTE_KINDS`. Un nodo no navega por sí mismo: la navegación la
@@ -83,8 +93,16 @@ const RESERVADAS = [
   'flowchart',
 ]
 
-/** Lo que en Mermaid ejecuta, enlaza o pinta con CSS del modelo. */
-const PROHIBIDAS = /^(click|href|callback|style|classDef|linkStyle)(?=\s|$)/i
+/** Lo que en Mermaid navega o ejecuta: se rechaza con su línea (§8.3). */
+const PROHIBIDAS = /^(click|href|callback)(?=\s|$)/i
+
+/**
+ * Lo que en Mermaid sólo pinta con CSS del modelo: la sentencia entera se
+ * IGNORA sin aplicarla (H26: un `classDef` junto a su `:::riesgo` tumbaba el
+ * diagrama del turno real). Decide la primera palabra, como en `PROHIBIDAS`;
+ * `styleA --> B` es una arista de un nodo llamado así.
+ */
+const PRESENTACION = /^(classDef|style|linkStyle)(?=\s|$)/i
 
 /**
  * Las formas de Mermaid, las largas antes que las cortas (`((` antes que `(`).
@@ -385,6 +403,8 @@ function leerFlechaSimple(s, i) {
  * nodos llevan `{id, label, shape, kind, sub}` en crudo (`kind` es la clase que
  * escribió el modelo, sea cual sea) y la barrera es `validateDiagram`. Se para
  * en el primer error, que nombra su línea (1-based): el panel sólo enseña uno.
+ * Las sentencias `classDef`, `style` y `linkStyle` no dejan rastro en lo leído
+ * (H26): se saltan como un comentario.
  *
  * @param {string} src el texto de dentro de la valla ```mermaid
  * @returns {{ok: boolean, direction: string, nodes: object[], edges: object[], subgraphs: object[], errores: string[]}}
@@ -451,6 +471,7 @@ function leerFlowchart(src) {
   const sentencia = (s, n) => {
     const prohibida = PROHIBIDAS.exec(s)
     if (prohibida) return `línea ${n}: «${prohibida[1]}» no se admite`
+    if (PRESENTACION.test(s)) return ''
     const sg = RE_SUBGRAFO.exec(s)
     if (sg) {
       if (abierto) return `línea ${n}: un subgrafo dentro de otro no se admite`
@@ -690,7 +711,10 @@ const OPERADORES = {
  * Confluence, en GitHub o en Excalidraw, que lo importa). Primero todos los
  * nodos en su orden, luego los subgrafos con sus miembros y al final las
  * aristas, todas las etiquetas entre comillas: `readFlowchart(toMermaid(d))` es
- * EXACTAMENTE `d` (pinado).
+ * EXACTAMENTE `d` (pinado). La ida y vuelta es exacta sobre lo LEÍDO: las
+ * líneas de presentación que se ignoraron al leer (`classDef`, `style`,
+ * `linkStyle`, H26) no se reproducen, porque nunca entraron en `d`; la copia
+ * sale sin ellas.
  *
  * @param {object} diagram un diagrama con `ok: true`
  * @returns {string} el texto, o '' si no es un diagrama válido

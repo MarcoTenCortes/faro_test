@@ -287,6 +287,14 @@ las claves, no. Si recargas el panel a mitad y el MCP ya estaba conectado sin
 que se llegaran a comprobar los tokens, el chat te lo dice («las claves no se
 han comprobado todavía») con un botón **Comprobar las claves**.
 
+Si más adelante el modelo contesta que en Jira algo «no está disponible para el
+usuario anónimo», el MCP está conectado pero **tu
+token ha caducado o no tiene permiso**, y Atlassian te trata como a alguien sin
+sesión: crea uno nuevo y guárdalo desde **Ajustes → Cambiar las claves**, que lo
+escribe en la configuración de opencode. Lo que Faro lee con tu sesión del
+navegador (la lista de una búsqueda, los chips, «qué mirar hoy», «Contrastar con
+Jira») no depende de ese token y sigue funcionando.
+
 Luego te ofrecerá construir el contexto, traer el tuyo, o empezar sin él.
 
 Los detalles están en [`docs/INSTALL.md`](docs/INSTALL.md).
@@ -596,8 +604,12 @@ Veintiuna decisiones que sostienen el diseño:
      pinta él mismo, sin librerías y sin ejecutar nada de lo que escribió el
      modelo—; cada nodo con su clave te lleva a la incidencia por el mismo
      camino que una fila de la lista, «Ver como lista» lo cuenta en texto y
-     «Copiar como Mermaid» lo deja listo para pegar en Excalidraw. Si Faro no
-     entiende el diagrama, deja el código y dice por qué.
+     «Copiar como Mermaid» lo deja listo para pegar en Excalidraw. Las líneas
+     con las que el modelo pinta a su gusto (`classDef`, `style`, `linkStyle`)
+     se ignoran y el dibujo sale igual, con los colores de Faro; lo que navega
+     o ejecuta (`click`, un enlace) no se admite, y la pregunta del botón le
+     pide que no escriba nada de eso. Si Faro no entiende el diagrama, deja el
+     código y dice por qué.
    - **Y contrastar ese dibujo con Jira** (desde H25). El diagrama es lo que el
      modelo cree que se relaciona; en un Jira propio, con dos incidencias o más
      del diagrama que ya estén en el mapa del sitio, *Contrastar con Jira* lee
@@ -785,7 +797,7 @@ cuáles no), que desde H16 son tuyos y no de un sitio.
 ## Comprobaciones
 
 ```bash
-npm run check              # sintaxis + orden + manifest + 1642 pruebas unitarias + docs
+npm run check              # sintaxis + orden + manifest + 1643 pruebas unitarias + docs
 npm run check:docs         # sólo el paso docs: número de pruebas, títulos del registro, mensajes y ficheros del mapa
 npm run test:integration   # contra un opencode real que arranca la propia prueba
 npm run harness            # banco de pruebas visual en http://127.0.0.1:5175
@@ -800,9 +812,10 @@ Con el banco levantado hay dos páginas:
 
 - <http://127.0.0.1:5175/> — la Confluence de mentira, para ver el foco, el
   anillo, el cartel y el recorrido asistido funcionando de verdad.
-- <http://127.0.0.1:5175/harness/panel-preview.html> — el panel real con cinco
+- <http://127.0.0.1:5175/harness/panel-preview.html> — el panel real con seis
   conversaciones de ejemplo (una de Confluence, una de Jira, la de una búsqueda
-  de Jira con su lista dentro, y los dos chats vacíos), para recorrer sus diez
+  de Jira con su lista dentro, y tres chats vacíos: el de Confluence, el de Jira
+  y el de un espacio sin mapa), para recorrer sus diez
   pantallas sin tener que instalar nada. Sus mandos cambian el tema
   (claro/oscuro), la anchura (320, 360 y 420), el estado del faro y la pantalla
   abierta, y `faroPreview.check()` mide en cada combinación lo que hay que mirar:
@@ -826,7 +839,7 @@ Con el banco levantado hay dos páginas:
   permisos de sesión contra una copia de cómo los evalúa opencode (todo
   denegado salvo el MCP), que todo lo que el content script carga está entre
   los recursos que el manifest expone, y los prompts completos
-  de 37 escenarios comparados byte a byte con sus instantáneas (dos de ellos
+  de 40 escenarios comparados byte a byte con sus instantáneas (dos de ellos
   con contexto, memoria y Confluence enlazado más largos que el presupuesto,
   para que los recortes se vean). El panel, el overlay y el ejecutor de pasos
   —que sólo viven en el navegador— se comprueban por regex sobre su propio
@@ -853,16 +866,28 @@ Con el banco levantado hay dos páginas:
 - **`npm run test:integration`** arranca su propio `opencode serve` con
   contraseña y CORS, y ejercita el mismo cliente que usa la extensión:
   autenticación, CORS, lista de modelos, sesiones, streaming por SSE y salida
-  estructurada con el esquema real de navegación. Gasta turnos de verdad: sin
-  `FARO_TEST_MODEL=proveedor/modelo` sondea los candidatos con un turno de dos
-  palabras —los gratuitos primero— y cae en `github-copilot/gpt-5.6-luna`, que
-  paga la suscripción de Copilot, porque el nivel gratuito de opencode ya no vale
-  desde `opencode serve`.
+  estructurada con el esquema real de navegación. Gasta turnos de verdad, así
+  que se corre al cerrar cada plan (y cuando se toca `src/opencode/`), y **con el
+  modelo fijado**:
+
+  ```bash
+  FARO_TEST_MODEL=github-copilot/gpt-5.6-luna npm run test:integration
+  ```
+
+  Sin `FARO_TEST_MODEL` sondea los candidatos a la vez con un turno de dos
+  palabras —los gratuitos primero— para caer en `github-copilot/gpt-5.6-luna`,
+  que paga la suscripción de Copilot, porque el nivel gratuito de opencode ya no
+  vale desde `opencode serve`; pero con seis sondas en paralelo Copilot en frío
+  no contesta en los 15 s de plazo, y la corrida falla antes de empezar (pasó al
+  cerrar el segundo plan: sin la variable, fallo en la sonda; con ella, 18/18).
 
 - **`npm run harness`** levanta una Confluence de mentira —con cabecera
   pegajosa, árbol lateral y navegación por pushState— y ejecuta encima las
-  piezas reales. El botón **Autocomprobación completa** recorre los casos que
-  sólo se pueden verificar con DOM: anclaje exacto, aproximado y por encabezado,
+  piezas reales. El botón **Autocomprobación completa** recorre —hoy en 66
+  tramos (149 comprobaciones), que se corren con frames de verdad en un Browser
+  pane visible a 1258×597 (así dio 149/149 al cerrar el segundo plan; con la
+  ventana oculta, o emulada a 1280×900, el navegador deja de pintar y caen las
+  que esperan un fotograma)— los casos que sólo se pueden verificar con DOM: anclaje exacto, aproximado y por encabezado,
   que el contenido no se muta, el desplazamiento por debajo de la cabecera, el
   recorrido asistido de tres pasos, la lista blanca de clics, el aislamiento del
   overlay, y los casos que más cuestan en un Confluence real: **un árbol de seis
@@ -1003,8 +1028,8 @@ Con el banco levantado hay dos páginas:
   exactamente lo que se compara byte a byte. No tiene umbrales, no falla nunca y
   no entra en `npm run check`: los tiempos de una máquina no son un contrato,
   sirven para comparar dos ejecuciones de la MISMA máquina antes y después de un
-  cambio. Hoy el `system` va de 2 767 a 29 159 caracteres (mediana 8 139) y
-  ningún módulo puro pasa de 5 ms.
+  cambio. Hoy (al cerrar el segundo plan) el `system` va de 2 125 a 29 159
+  caracteres (mediana 8 042) y ningún módulo puro pasa de 5 ms.
 
 - **`npm run contrast`** imprime la tabla de contraste del panel y del overlay,
   tema a tema: ratio, nivel (AA/AAA) y qué dibuja cada pareja de colores. No
@@ -1028,18 +1053,22 @@ Con el banco levantado hay dos páginas:
   configuración global, y una prueba que lo creía escribió una vez en el fichero
   de verdad), en un puerto alto que nunca es el 4096, y ANTES de escribir nada
   pregunta a ese opencode dónde tiene su configuración; si no está dentro de la
-  carpeta temporal, se va sin tocar nada. Con un MCP de juguete comprueba siete
+  carpeta temporal, se va sin tocar nada. Con un MCP de juguete comprueba nueve
   casos: que lo que no pasa la barrera no se manda, que una entrada nueva
   conecta en menos de 2 s, que una entrada desactivada deja el fichero sin el
   token, que un bloque pegado a mano se carga sin reiniciar, que con el fichero
   roto no se escribe nada y el token no llega a ningún registro, que una ruta
-  con espacios arranca, y que opencode no carga ningún AGENTS.md ni CLAUDE.md.
+  con espacios arranca, que opencode no carga ningún AGENTS.md ni CLAUDE.md,
+  que «Quitar las claves» es UNA escritura que deja las entradas deshabilitadas
+  y sin token y que volver a guardarlas reutiliza la entrada, y que una entrada
+  deshabilitada a mano no se adopta y guardar las claves la reutiliza.
   Al acabar mata el proceso y sus hijos y borra la carpeta, también si algo
   falla. Queda fuera de `npm run check` porque arranca un servidor; lo que no
-  puede dejar de hacer lo vigila una prueba que sí corre ahí. Hoy: 7/7.
+  puede dejar de hacer lo vigila una prueba que sí corre ahí. Hoy: 9/9 (la
+  última vez, al cerrar el segundo plan).
 
 - **`npm run snapshots`** reescribe `test/fixtures/prompts/*.txt` con los
-  prompts que el código produce hoy para 39 escenarios fijos (Confluence y Jira
+  prompts que el código produce hoy para 40 escenarios fijos (Confluence y Jira
   Data Center × cada Skill × con y sin página en bloques, páginas base,
   contexto, memoria y Confluence enlazado, más los turnos internos).
   `npm run check` los compara byte a byte y, si difieren, enseña la primera

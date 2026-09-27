@@ -814,16 +814,20 @@ Junto al selector de modelo, abajo, hay otras dos cosas:
   respuesta». Como «Preguntar
   sobre estos», pulsarlo **no manda nada**: te deja escrita en el cuadro la
   pregunta que pide el diagrama (un Mermaid «flowchart» con la clave de cada
-  incidencia como primera palabra de su nodo, como mucho 15 nodos, y
-  «:::riesgo», «:::hueco» o «:::contradiccion» en lo que falle); cámbiala o
+  incidencia como primera palabra de su nodo, como mucho 15 nodos,
+  «:::riesgo», «:::hueco» o «:::contradiccion» en lo que falle, y desde H26
+  «sin classDef, style, click ni enlaces»); cámbiala o
   bórrala, enviar lo haces tú, y bajo tu pregunta se dice «dibujar el flujo».
   Cualquier respuesta que traiga un bloque ```mermaid **cerrado** se dibuja en
   el chat —en Jira y en Confluence, lo pida el botón o no—: mientras llega a
   trozos se ve el código, y al cerrarse el bloque aparece el diagrama. Faro lo
   dibuja **él mismo**, sin Mermaid ni ninguna otra librería (lee sólo un
   subconjunto de `flowchart`, y todo lo que escribió el modelo pasa por una
-  barrera: `click`, `style`, `classDef` y las directivas `%%{init}%%` se
-  rechazan). Un nodo cuya etiqueta empieza por una clave de incidencia es un
+  barrera: lo que navega o ejecuta —`click`, `href`, `callback` y las
+  directivas `%%{init}%%`— se rechaza, y las líneas con las que el modelo pinta
+  a su gusto —`classDef`, `style`, `linkStyle`— se IGNORAN sin aplicarlas, desde
+  H26: los modelos las escriben por costumbre, y en el primer turno real una
+  sola línea de color tumbaba el dibujo entero). Un nodo cuya etiqueta empieza por una clave de incidencia es un
   botón: al pulsarlo (o con Enter) Faro te lleva a esa incidencia **por el mismo
   camino que una fila de la lista de una búsqueda**, sólo si la clave está en el
   mapa del sitio; si no, lo dice dentro del diagrama. Un «[n]» de una
@@ -1312,7 +1316,11 @@ Si no encuentra la base de datos, dice dónde ha mirado: pásale la ruta con
 SQLite o no es de opencode (sin tabla `session`), lo dice en una línea
 (««ruta» no es una base de datos de opencode») y sale con 1, sin traza. Si
 opencode no está en esta máquina o nunca se ha usado el panel, no hay sesiones
-«Faro · …» y lo dice.
+«Faro · …» y lo dice. Elige por el título de la sesión, así que una abierta
+fuera del panel con otro título no sale: al cerrar el segundo plan (H26,
+2026-09-27) el comando funcionó —copió una base de 176 MB, contó 84 sesiones de
+chat y 5 internas y enseñó la última de chat— y la sesión del turno real de ese
+día, «Faro · turno real H26 (épica)», no estaba en la lista.
 
 ### `npm run check` y el paso «docs»
 
@@ -1380,15 +1388,42 @@ reutiliza. Sale con 1 si alguno falla. Al acabar, pase lo
 que pase, mata opencode y sus hijos y borra la carpeta temporal (`--conservar`
 la deja, con los registros de opencode dentro; `--exe <ruta>` usa otro
 `opencode.exe`). Sólo Windows, fuera de `npm run check`, y no manda ningún turno
-de modelo.
+de modelo. La última corrida, al cerrar el segundo plan (H26, 2026-09-27): 9/9.
+
+### `npm run test:integration`: el cliente contra un opencode de verdad
+
+`npm run test:integration` arranca su propio `opencode serve` (puerto 4123, con
+contraseña y CORS) y ejercita el MISMO cliente que usa la extensión: la
+autenticación, la lista de modelos, las sesiones, el streaming por SSE, el orden
+de los mensajes, `summarize`, la salida estructurada con el esquema real de
+navegación, una imagen adjunta y el MCP listado. **Gasta turnos de pago** (de la
+suscripción de Copilot), así que no entra en `npm run check`: se corre al cerrar
+cada plan y cuando se toca `src/opencode/`, y **con el modelo fijado**:
+
+```bash
+FARO_TEST_MODEL=github-copilot/gpt-5.6-luna npm run test:integration
+```
+
+(En PowerShell: `$env:FARO_TEST_MODEL = 'github-copilot/gpt-5.6-luna'; npm run
+test:integration`.) Sin la variable, la prueba sondea antes los modelos
+candidatos con un turno de dos palabras, seis a la vez, y con Copilot en frío
+el plazo de 15 s no llega: al cerrar el segundo plan la primera corrida falló
+en la sonda («no contesta en 15 s»; los demás candidatos eran los rechazos de
+siempre, y sin modelo cinco comprobaciones más cayeron con un 400), y la
+segunda, con la variable, dio **18/18**.
 
 ### El banco de pruebas
 
 `npm run harness` levanta en <http://127.0.0.1:5175> una Confluence y un Jira de
 mentira con las piezas reales encima. El botón **Autocomprobación completa**
 recorre hoy **66 tramos numerados (149 comprobaciones)**; hay que correrla con el panel del navegador a
-la vista y a 1280×900, porque con la ventana oculta Chrome estrangula los
-temporizadores y no ejecuta los fotogramas.
+la vista y a 1258×597, porque con la ventana oculta Chrome estrangula los
+temporizadores y no ejecuta los fotogramas. Así, con frames de verdad (sin
+sustituir `requestAnimationFrame`), dio **149/149 en 100 s** al cerrar el
+segundo plan (H26, 2026-09-27); con el viewport emulado a 1280×900 el panel se
+queda sin fotogramas y la 41 no termina, y al ancho natural del panel (1041 px)
+cae el quinto `ok(` del 64, cuya cita de segunda línea se eligió a 1258 px y a
+1041 envuelve distinto.
 
 Los dos últimos (65 y 66) son **«Contrastar con Jira»** (H25). La Jira de
 mentira tiene ahora relaciones de verdad entre incidencias (`issueLinks` de
@@ -2056,6 +2091,19 @@ fuera del mapa → CLAUDE.md §5 y §3; «nadie lo manda» es aviso, no error.
 **«opencode no responde»**
 El servidor no está arrancado, o el puerto de los ajustes no coincide. El panel
 te muestra el comando exacto, con el `--cors` ya relleno.
+
+**El modelo dice que algo «no está disponible para el usuario anónimo»**
+El MCP de Atlassian está conectado, pero Jira lo trata como a alguien sin
+sesión: **el token ha caducado o no tiene permiso**. Pasó de verdad al cerrar
+el segundo plan (2026-09-27): en el Jira Data Center de Marco, `jira_search`
+contestó «issuetype no está disponible para el usuario anónimo» con el MCP en
+«connected», y el modelo no pudo leer nada de Jira. Crea un token nuevo (en
+Data Center, un *Personal Access Token* de tu perfil con permiso de lectura; en
+Cloud, un API token en `id.atlassian.com`) y guárdalo desde **Ajustes →
+Cambiar las claves**: Faro lo escribe en la configuración de opencode y
+reinicia el MCP. Lo que Faro lee con tu sesión del navegador (la lista de una
+búsqueda, los chips, «Qué mirar hoy», «Contrastar con Jira») no depende de ese
+token y sigue funcionando mientras tanto.
 
 **El panel dice que la página no contesta justo después de actualizar la extensión**
 Recarga la pestaña: el content script se inyecta al cargar la página, y el
