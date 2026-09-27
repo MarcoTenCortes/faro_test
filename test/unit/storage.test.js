@@ -19,13 +19,13 @@ import { test, eq, assert } from '../harness.js'
 import { listJsFiles } from '../syntax.js'
 import { STORAGE_AREAS, STORAGE_KEYS } from '../../src/shared/config.js'
 import { INDEX_VERSION } from '../../src/atlassian/index-store.js'
-import { PROFILE_VERSION } from '../../src/shared/jira-rest.js'
+import { PROFILE_VERSION, PROFILES_VERSION, emptyProfiles, normalizeProfiles, withProfile } from '../../src/shared/jira-rest.js'
 import {
   getIndex,
   getSite,
   getSiteBundle,
-  getProfile,
-  saveProfile,
+  getProfiles,
+  saveProfiles,
   forgetEverythingFor,
   FORGET_KEEPS,
   bundleKeys,
@@ -124,6 +124,10 @@ test('H9: el perfil viaja en el paquete, y una clave que no existe se ignora', (
   // La regla para quien añada la suya: el nombre tiene que existir y tiene que
   // ser por host (STORAGE_KEYS.sites es una cadena, no vale).
   assert(Array.isArray(BUNDLE_EXTRA_KEYS), 'BUNDLE_EXTRA_KEYS es una lista')
+  // EL CAMBIO (H22): `profile` sigue siendo la MISMA clave y sigue viajando aquí,
+  // pero desde H22 guarda un contenedor con un perfil por proyecto (o, hasta el
+  // siguiente guardado, el perfil suelto de antes): sale crudo igual y lo migra
+  // el panel con normalizeProfiles (la prueba «H22: el perfil suelto…», abajo).
   eq(BUNDLE_EXTRA_KEYS, ['profile', 'sourceHistory', 'activity'], 'la de H9, la de H10 y la de H11')
   for (const name of BUNDLE_EXTRA_KEYS) {
     eq(typeof STORAGE_KEYS[name], 'function', `STORAGE_KEYS.${name} tiene que ser una clave por host`)
@@ -272,50 +276,97 @@ const PERFIL = {
 }
 const CLAVE_PERFIL = `faro:profile:${HOST}`
 
-test('H9: el perfil entra y sale por normalizeProfile, y el de otra versión no se sirve', async () => {
-  // De aquí sale texto que entra DELIMITADO en un `system` (profileBlock), así
-  // que lo guardado se reconstruye con claves blancas al leerlo: un perfil
-  // editado a mano no puede colar una clave de más ni un tipo raro.
-  await conChrome({ [CLAVE_PERFIL]: PERFIL }, async (diario) => {
-    eq(await getProfile(HOST), PERFIL)
+/** Un contenedor de perfiles (H22) con los perfiles que se le den, bajo su proyecto. */
+function contenedor(...perfiles) {
+  const byProject = {}
+  for (const p of perfiles) byProject[p.projectKey] = p
+  return { version: PROFILES_VERSION, byProject }
+}
+const PERFIL_OPS = { ...PERFIL, projectKey: 'OPS', sampled: 12, at: 1757664000001 }
+
+test('H9: los perfiles entran y salen por normalizeProfiles, uno por proyecto, y lo de otra versión no se sirve', async () => {
+  // EL CAMBIO (H22): la MISMA clave guarda desde H22 un contenedor
+  // `{ version, byProject }` con un perfil por proyecto, y getProfile pasa a
+  // getProfiles. Lo de antes sigue siendo verdad para cada perfil: de aquí sale
+  // texto que entra DELIMITADO en un `system` (profileBlock), así que lo
+  // guardado se reconstruye con claves blancas al leerlo, y un perfil editado a
+  // mano no puede colar una clave de más ni un tipo raro.
+  await conChrome({ [CLAVE_PERFIL]: contenedor(PERFIL, PERFIL_OPS) }, async (diario) => {
+    eq(await getProfiles(HOST), contenedor(PERFIL, PERFIL_OPS))
     eq(diario.gets, [CLAVE_PERFIL], 'se pide exactamente su clave')
-    eq(await getProfile(OTRO), null, 'el perfil es de ESTE host')
+    eq(await getProfiles(OTRO), emptyProfiles(), 'los perfiles son de ESTE host')
     eq(diario.sets, [], 'leer no escribe')
   })
-  await conChrome({ [CLAVE_PERFIL]: { ...PERFIL, onclick: 'x', types: [{ name: 'Story', count: 30, id: '10001', extra: 1 }] } }, async () => {
-    const p = await getProfile(HOST)
+  const sucio = { version: PROFILES_VERSION, onclick: 'x', byProject: { SIMPL: { ...PERFIL, onclick: 'x', types: [{ name: 'Story', count: 30, id: '10001', extra: 1 }] }, 'NO VALE': PERFIL } }
+  await conChrome({ [CLAVE_PERFIL]: sucio }, async () => {
+    const todos = await getProfiles(HOST)
+    eq(Object.keys(todos), ['version', 'byProject'])
+    eq(Object.keys(todos.byProject), ['SIMPL'], 'una clave que no es de proyecto se cae')
+    const p = todos.byProject.SIMPL
     eq(Object.keys(p).sort(), ['at', 'components', 'labels', 'prefixes', 'projectKey', 'sampled', 'statuses', 'types', 'version'])
     eq(p.types, [{ name: 'Story', count: 30, id: '10001' }], 'y cada entrada también')
   })
-  // Otra versión: null, y se vuelve a contar. NO se borra del almacén, a
+  // Otra versión: vacío, y se vuelve a contar. NO se borra del almacén, a
   // diferencia del índice: un índice viejo lleva a un 404 y hay que tirarlo en
   // el acto; un perfil es un conteo que se escribe encima.
-  await conChrome({ [CLAVE_PERFIL]: { ...PERFIL, version: PROFILE_VERSION + 1 } }, async (diario, local) => {
-    eq(await getProfile(HOST), null)
-    eq(diario.removed, [], 'leer no borra')
-    assert(CLAVE_PERFIL in local)
-  })
+  for (const otraVersion of [{ ...contenedor(PERFIL), version: PROFILES_VERSION + 1 }, { ...PERFIL, version: PROFILE_VERSION + 1 }]) {
+    await conChrome({ [CLAVE_PERFIL]: otraVersion }, async (diario, local) => {
+      eq(await getProfiles(HOST), emptyProfiles())
+      eq(diario.removed, [], 'leer no borra')
+      assert(CLAVE_PERFIL in local)
+    })
+  }
   for (const malo of [null, 'abc', 7, [], {}]) {
     await conChrome({ [CLAVE_PERFIL]: malo }, async () => {
-      eq(await getProfile(HOST), null, JSON.stringify(malo) ?? String(malo))
+      eq(await getProfiles(HOST), emptyProfiles(), JSON.stringify(malo) ?? String(malo))
     })
   }
 })
 
-test('H9: guardar el perfil lo normaliza antes, y guardar nada quita la clave', async () => {
+test('H9: guardar los perfiles los normaliza antes, y guardar ninguno quita la clave', async () => {
+  // EL CAMBIO (H22): saveProfile pasa a saveProfiles y guarda el contenedor
+  // entero; «nada que guardar» es un contenedor sin proyectos.
   await conChrome({}, async (diario, local) => {
-    const guardado = await saveProfile(HOST, { ...PERFIL, onclick: 'x' })
-    eq(guardado, PERFIL, 'devuelve lo que quedó guardado')
-    eq(local[CLAVE_PERFIL], PERFIL, 'y en el almacén no hay ni una clave de más')
+    const guardado = await saveProfiles(HOST, { ...contenedor(PERFIL), onclick: 'x', byProject: { SIMPL: { ...PERFIL, onclick: 'x' } } })
+    eq(guardado, contenedor(PERFIL), 'devuelve lo que quedó guardado')
+    eq(local[CLAVE_PERFIL], contenedor(PERFIL), 'y en el almacén no hay ni una clave de más')
     eq(diario.sets, [[CLAVE_PERFIL]], 'una sola escritura, bajo la clave del host')
-    eq(await getProfile(HOST), PERFIL, 'leerlo devuelve lo mismo')
+    eq(await getProfiles(HOST), contenedor(PERFIL), 'leerlo devuelve lo mismo')
   })
+  for (const nada of [emptyProfiles(), { version: PROFILES_VERSION + 1 }, { ...PERFIL, version: PROFILE_VERSION + 1 }, null]) {
+    await conChrome({ [CLAVE_PERFIL]: contenedor(PERFIL) }, async (diario, local) => {
+      eq(await saveProfiles(HOST, nada), emptyProfiles(), JSON.stringify(nada))
+      eq(CLAVE_PERFIL in local, false, 'sin ningún proyecto no se queda nada guardado')
+      eq(diario.removed, [CLAVE_PERFIL])
+      eq(diario.sets, [], 'y no se escribe nada')
+    })
+  }
+})
+
+test('H22: el perfil suelto guardado ANTES de H22 se lee como contenedor bajo su clave, y al guardar queda escrito como contenedor', async () => {
+  // Lo que Marco tiene hoy en `faro:profile:<host>`: UN perfil v2 suelto. No se
+  // tira ni se vuelve a contar: migra bajo su projectKey al leerlo…
   await conChrome({ [CLAVE_PERFIL]: PERFIL }, async (diario, local) => {
-    eq(await saveProfile(HOST, { version: PROFILE_VERSION + 1 }), null)
-    eq(CLAVE_PERFIL in local, false, 'un perfil que no vale no se queda guardado')
-    eq(diario.removed, [CLAVE_PERFIL])
-    eq(diario.sets, [], 'y no se escribe nada')
+    eq(await getProfiles(HOST), contenedor(PERFIL), 'el suelto, bajo SIMPL')
+    eq(diario.sets, [], 'leer no escribe: la migración se escribe con el siguiente guardado')
+    eq(local[CLAVE_PERFIL], PERFIL, 'y lo guardado sigue como estaba')
+    // …y al guardar el siguiente proyecto, la clave queda como contenedor, con
+    // los dos: el de antes no se pierde.
+    const actuales = await getProfiles(HOST)
+    const guardado = await saveProfiles(HOST, withProfile(actuales, PERFIL_OPS))
+    eq(guardado, contenedor(PERFIL, PERFIL_OPS))
+    eq(local[CLAVE_PERFIL], contenedor(PERFIL, PERFIL_OPS), 'escrito como contenedor')
   })
+  // En el paquete del sitio sigue saliendo CRUDO, sea el suelto de antes o el
+  // contenedor nuevo: lo migra el panel con normalizeProfiles.
+  for (const guardado of [PERFIL, contenedor(PERFIL, PERFIL_OPS)]) {
+    await conChrome({ [CLAVE_PERFIL]: guardado }, async (diario) => {
+      const bundle = await getSiteBundle(HOST)
+      eq(bundle.extras.profile, guardado, 'tal cual está guardado')
+      eq(normalizeProfiles(bundle.extras.profile).byProject.SIMPL, PERFIL, 'y el panel lo lee con su migración')
+      eq(diario.gets.length, 1, 'sigue siendo una sola lectura')
+    })
+  }
 })
 
 // ---- «Olvidar este sitio»: una sola puerta y ninguna clave suelta (H13) ------

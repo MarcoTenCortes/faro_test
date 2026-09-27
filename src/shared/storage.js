@@ -2,7 +2,7 @@
 
 import { DEFAULT_SETTINGS, STORAGE_AREAS, STORAGE_KEYS, migrateSettings } from './config.js'
 import { INDEX_VERSION } from '../atlassian/index-store.js'
-import { normalizeProfile } from './jira-rest.js'
+import { emptyProfiles, normalizeProfiles } from './jira-rest.js'
 import { MODEL_CHECKS_VERSION, normalizeModelChecks, recordVerdicts } from './models.js'
 // El diario tiene su propia puerta de borrado (deja una marca y va por su cola),
 // y «Olvidar este sitio» pasa por ella: mira `forgetEverythingFor`. shared →
@@ -159,7 +159,7 @@ async function takeIndex(host, index) {
  * diario de actividad (H11). Quien añada una pone aquí el NOMBRE de su clave en
  * `STORAGE_KEYS` y su valor sale en `bundle.extras` SIN TOCAR: la forma de cada
  * una la decide su hito con sus propias claves blancas, no este módulo (el
- * perfil, por `normalizeProfile`, que es lo que hace `getProfile`; el historial,
+ * perfil, por `normalizeProfiles`, que es lo que hace `getProfiles`; el historial,
  * por `normalizeHistory`, que vive en `src/panel/source-history.js` y aquí no se
  * puede importar, igual que `normalizeMemory`; el diario, por
  * `pruneActivity`/`normalizeActivity`, que es lo que hace `getActivity`).
@@ -236,33 +236,41 @@ export async function saveIndex(host, index) {
 }
 
 /**
- * El perfil del proyecto de un Jira: lo que la extensión contó de una muestra
- * (tipos, estados con su categoría, componentes, etiquetas y convenciones de
- * nombre). De aquí sale texto que entra DELIMITADO en un `system`, así que
- * entra y sale por `normalizeProfile`, que lo reconstruye con claves blancas y
- * devuelve null si es de otra versión (CLAUDE.md §9).
+ * Los perfiles de proyecto de un Jira: lo que la extensión contó de una muestra
+ * de cada proyecto (tipos, estados con su categoría, componentes, etiquetas y
+ * convenciones de nombre). De aquí sale texto que entra DELIMITADO en un
+ * `system`, así que entran y salen por `normalizeProfiles`, que los reconstruye
+ * con claves blancas (CLAUDE.md §9).
  *
- * Un perfil de otra versión NO se borra del almacén al leerlo, a diferencia del
+ * Desde H22 la MISMA clave (`faro:profile:<host>`) guarda un contenedor
+ * `{ version, byProject }` con UN perfil por proyecto: hasta H22 guardaba uno
+ * solo por host, y alternar entre dos proyectos del mismo Jira volvía a contar
+ * la muestra en cada salto. El perfil suelto de antes migra aquí, al leerlo,
+ * bajo su proyecto; se escribe con la forma nueva en el siguiente guardado, no
+ * en la lectura.
+ *
+ * Lo de otra versión NO se borra del almacén al leerlo, a diferencia del
  * índice: el índice viejo trae rutas que llevan a un 404 y por eso se tira en el
  * acto, mientras que un perfil es sólo un conteo que se vuelve a hacer y a
  * escribir encima. Borrarlo sería una escritura dentro de una lectura para nada.
  */
-export async function getProfile(host) {
+export async function getProfiles(host) {
   const key = STORAGE_KEYS.profile(host)
   const got = await chrome.storage.local.get(key)
-  return normalizeProfile(got[key])
+  return normalizeProfiles(got[key])
 }
 
 /**
- * Guarda el perfil ya normalizado, o quita la clave si no hay nada que guardar.
- * Como `saveMemory`: por aquí no pasa nada sin reconstruir, para que lo que se
- * lea mañana sea lo que este módulo promete. Devuelve lo que quedó guardado.
+ * Guarda los perfiles ya normalizados, o quita la clave si no queda ningún
+ * proyecto. Como `saveMemory`: por aquí no pasa nada sin reconstruir, para que
+ * lo que se lea mañana sea lo que este módulo promete. Devuelve lo que quedó
+ * guardado (un contenedor vacío si se quitó la clave).
  */
-export async function saveProfile(host, profile) {
-  const limpio = normalizeProfile(profile)
-  if (!limpio) {
+export async function saveProfiles(host, profiles) {
+  const limpio = normalizeProfiles(profiles)
+  if (!Object.keys(limpio.byProject).length) {
     await chrome.storage.local.remove(STORAGE_KEYS.profile(host))
-    return null
+    return emptyProfiles()
   }
   await chrome.storage.local.set({ [STORAGE_KEYS.profile(host)]: limpio })
   return limpio
@@ -271,8 +279,8 @@ export async function saveProfile(host, profile) {
 /**
  * Lo que Faro sabe de cada modelo (H16, `faro:model-checks`): qué contestó y qué
  * falló, con su motivo y su caducidad. Es GLOBAL (el modelo es de la persona,
- * no de un sitio) y entra y sale por `normalizeModelChecks`, como el perfil por
- * `normalizeProfile`: con otro servidor de opencode u otros proveedores
+ * no de un sitio) y entra y sale por `normalizeModelChecks`, como los perfiles por
+ * `normalizeProfiles`: con otro servidor de opencode u otros proveedores
  * conectados (`fingerprint`) lo guardado no dice nada y se lee vacío.
  *
  * `forgetEverythingFor` NO la toca: no es de ningún host. Se borra con su propio

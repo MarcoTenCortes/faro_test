@@ -19,6 +19,7 @@ import {
   SEARCH_FIELDS,
   SAMPLE_FIELDS,
   PROFILE_VERSION,
+  PROFILES_VERSION,
   cleanJql,
   jqlQuote,
   clampResults,
@@ -41,6 +42,9 @@ import {
   profileFromSample,
   normalizeProfile,
   profileForProject,
+  emptyProfiles,
+  normalizeProfiles,
+  withProfile,
   suggestedQueries,
   normalizeRecentJql,
   rememberJql,
@@ -825,15 +829,132 @@ test('H14: el id de un tipo o un estado es el del primer ejemplar que lo traiga,
 test('SEGURIDAD: profileForProject sólo deja pasar el perfil del proyecto que hay delante', () => {
   // El perfil se guarda por host y un Jira tiene muchos proyectos: el de SIMPL
   // no son «los nombres exactos» de OPS (revisión adversaria de H9).
-  const perfil = { version: PROFILE_VERSION, projectKey: 'SIMPL', statuses: [{ name: 'Pending PSO review', count: 9, category: 'indeterminate' }] }
-  assert(profileForProject(perfil, 'SIMPL') === perfil, 'el mismo objeto, sin copiar')
-  assert(profileForProject(perfil, 'simpl') === perfil, 'la clave no distingue mayúsculas: validProjectKey la sube')
-  for (const otro of ['OPS', 'SIMPLE', 'SIM', '', null, undefined, 'SIMPL-12', 'SIMPL OR 1=1', {}]) {
-    eq(profileForProject(perfil, otro), null, JSON.stringify(otro) ?? String(otro))
+  // EL CAMBIO (H22): desde H22 se guarda UN perfil por proyecto dentro del
+  // host, en un contenedor `{version, byProject}`, y profileForProject busca en
+  // él: el perfil suelto de antes ya no es algo que tenga el panel.
+  const simpl = profileFromSample(MUESTRA, { projectKey: 'SIMPL', now: 1789000000000 })
+  const ops = profileFromSample(MUESTRA, { projectKey: 'OPS', now: 1789000000001 })
+  const perfiles = withProfile(withProfile(emptyProfiles(), simpl), ops)
+  const delMapa = perfiles.byProject.SIMPL
+  assert(profileForProject(perfiles, 'SIMPL') === delMapa, 'el mismo objeto del mapa, sin copiar')
+  assert(profileForProject(perfiles, 'simpl') === delMapa, 'la clave no distingue mayúsculas: validProjectKey la sube')
+  eq(profileForProject(perfiles, 'OPS').projectKey, 'OPS', 'cada proyecto, el suyo')
+  for (const otro of ['SIMPLE', 'SIM', '', null, undefined, 'SIMPL-12', 'SIMPL OR 1=1', {}, '__proto__', 'constructor', 'toString']) {
+    eq(profileForProject(perfiles, otro), null, JSON.stringify(otro) ?? String(otro))
   }
-  for (const sinPerfil of [null, undefined, 'SIMPL', 7, {}, { projectKey: '' }, { projectKey: 'OPS' }]) {
-    eq(profileForProject(sinPerfil, 'SIMPL'), null, JSON.stringify(sinPerfil) ?? String(sinPerfil))
+  // Un perfil SUELTO (la forma de antes de H22) no es un contenedor: el panel
+  // sólo tiene contenedores, porque todo lo que lee pasa por normalizeProfiles.
+  eq(profileForProject(simpl, 'SIMPL'), null, 'un perfil suelto no se sirve')
+  for (const sinPerfiles of [null, undefined, 'SIMPL', 7, {}, [], { byProject: null }, { version: 1, byProject: [] }, { version: 2, byProject: { SIMPL: simpl } }, { version: 1, byProject: { SIMPL: 'texto' } }]) {
+    eq(profileForProject(sinPerfiles, 'SIMPL'), null, JSON.stringify(sinPerfiles) ?? String(sinPerfiles))
   }
+  // Un `constructor` que llega PROPIO por JSON.parse no es un proyecto.
+  const trampa = JSON.parse('{"version":1,"byProject":{"__proto__":{"projectKey":"X"},"CONSTRUCTOR":null}}')
+  eq(profileForProject(trampa, '__proto__'), null)
+  eq(profileForProject(trampa, 'constructor'), null)
+  // Y una entrada que dice ser de otro proyecto no se sirve bajo éste.
+  eq(profileForProject({ version: 1, byProject: { SIMPL: ops } }, 'SIMPL'), null, 'el de OPS guardado bajo SIMPL no es el de SIMPL')
+})
+
+test('H22: normalizeProfiles — el contenedor por proyecto, con claves blancas, y el perfil suelto de antes migra bajo su clave', () => {
+  eq(PROFILES_VERSION, 1)
+  eq(PROFILE_VERSION, 2, 'la del perfil de cada proyecto no cambia')
+  eq(JIRA_REST_LIMITS.profileProjects, 20)
+  eq(emptyProfiles(), { version: 1, byProject: {} })
+  assert(emptyProfiles() !== emptyProfiles(), 'uno nuevo cada vez: nadie comparte el vacío')
+
+  const eng = profileFromSample(MUESTRA, { projectKey: 'ENG', now: 1789000000000 })
+  // El perfil v2 SUELTO que guardaba `faro:profile:<host>` antes de H22.
+  const migrado = normalizeProfiles(JSON.parse(JSON.stringify(eng)))
+  eq(Object.keys(migrado), ['version', 'byProject'], 'claves exactas y en su orden')
+  eq(migrado, { version: 1, byProject: { ENG: eng } }, 'migra bajo su projectKey')
+  // Un suelto sin proyecto, o de la versión 1, no migra: no se sabe de quién es.
+  eq(normalizeProfiles({ ...eng, projectKey: '' }), emptyProfiles())
+  eq(normalizeProfiles({ ...eng, projectKey: 'no vale' }), emptyProfiles())
+  eq(normalizeProfiles({ ...eng, version: 1 }), emptyProfiles(), 'un v1 suelto no migra: le faltan los ids')
+
+  // El contenedor: sólo claves PROPIAS que sean clave de proyecto, cuyo valor
+  // sea un perfil y sea de ESE proyecto.
+  const ops = profileFromSample(MUESTRA, { projectKey: 'OPS', now: 1789000000005 })
+  const sucio = JSON.parse(JSON.stringify({
+    version: 1,
+    extra: 'no',
+    byProject: { ENG: eng, OPS: ops, 'NO VALE': eng, SIMPL: ops, VACIO: null, TEXTO: 'x', VIEJO: { ...eng, projectKey: 'VIEJO', version: 1 } },
+  }))
+  const limpio = normalizeProfiles(sucio)
+  eq(Object.keys(limpio), ['version', 'byProject'])
+  eq(Object.keys(limpio.byProject), ['ENG', 'OPS'], 'lo que no es de su clave o no es un perfil se cae')
+  eq(limpio.byProject.ENG, eng)
+  // Idempotente.
+  eq(JSON.stringify(normalizeProfiles(limpio)), JSON.stringify(limpio))
+  // SEGURIDAD: `__proto__` y `constructor` llegan PROPIOS por JSON.parse.
+  const proto = normalizeProfiles(JSON.parse('{"version":1,"byProject":{"__proto__":{"version":2,"projectKey":"X"},"constructor":{"version":2,"projectKey":"CONSTRUCTOR"}}}'))
+  eq(Object.keys(proto.byProject), ['CONSTRUCTOR'], 'constructor es una clave de proyecto válida si su perfil lo dice; __proto__ no')
+  eq(Object.getPrototypeOf(proto.byProject), Object.prototype, 'el prototipo no se toca')
+  // Otra versión, una lista o basura: vacío, sin lanzar.
+  for (const raro of [null, undefined, 7, 'cadena', [], [eng], { version: 2, byProject: { ENG: eng } }, { version: 1 }, { version: 1, byProject: [eng] }, { version: 1, byProject: 'x' }]) {
+    eq(normalizeProfiles(raro), emptyProfiles(), JSON.stringify(raro) ?? String(raro))
+  }
+  const hostil = { version: 1, get byProject() { throw new Error('trampa') } }
+  eq(normalizeProfiles(hostil), emptyProfiles(), 'nunca lanza')
+  // No muta lo que recibe.
+  const antes = JSON.stringify(sucio)
+  normalizeProfiles(sucio)
+  eq(JSON.stringify(sucio), antes)
+})
+
+test('H22: el tope de proyectos con perfil conserva los más recientes, y withProfile no tira el recién contado', () => {
+  const N = JIRA_REST_LIMITS.profileProjects
+  const byProject = {}
+  // P0 es el MÁS reciente y P24 el más viejo, pero van en orden de nombre.
+  for (let i = 0; i < N + 5; i++) {
+    const k = 'P' + i
+    byProject[k] = profileFromSample(MUESTRA, { projectKey: k, now: 1789000000000 - i * 1000 })
+  }
+  const topado = normalizeProfiles({ version: 1, byProject })
+  eq(Object.keys(topado.byProject).length, N)
+  eq(Object.keys(topado.byProject), Object.keys(byProject).slice(0, N), 'los más recientes, en el orden en que estaban')
+  // Un `at` del futuro no se vuelve inmortal: para el tope cuenta como ahora.
+  // N perfiles contados «ahora» y uno del futuro, el último: si el futuro contara
+  // como futuro, echaría a uno de hoy y no caducaría nunca; contando como ahora,
+  // empata y pierde por posición.
+  const ahora = 1789000000000
+  const deHoy = {}
+  for (let i = 0; i < N; i++) deHoy['H' + i] = profileFromSample(MUESTRA, { projectKey: 'H' + i, now: ahora })
+  deHoy.FUT = profileFromSample(MUESTRA, { projectKey: 'FUT', now: ahora + 10 ** 9 })
+  const conFuturo = normalizeProfiles({ version: 1, byProject: deHoy }, { now: ahora })
+  eq(Object.keys(conFuturo.byProject), Object.keys(deHoy).slice(0, N), 'el del futuro compite como ahora, y pierde por posición')
+  // Y el dato no se toca: sólo cuenta como ahora al elegir.
+  eq(normalizeProfiles({ version: 1, byProject: { FUT: deHoy.FUT } }, { now: ahora }).byProject.FUT.at, ahora + 10 ** 9)
+
+  // withProfile: el recién contado se queda aunque sea el más viejo de todos.
+  const lleno = normalizeProfiles({ version: 1, byProject })
+  const viejo = profileFromSample(MUESTRA, { projectKey: 'NUEVO', now: 1 })
+  const con = withProfile(lleno, viejo)
+  eq(Object.keys(con.byProject).length, N)
+  assert(Object.hasOwn(con.byProject, 'NUEVO'), 'lo recién escrito no lo tira el tope')
+  assert(!Object.hasOwn(con.byProject, 'P' + (N - 1)), 'se cae el más viejo de los DEMÁS')
+})
+
+test('H22: withProfile no muta, pone o sustituye bajo su proyecto, y con un perfil que no vale devuelve el mismo contenido', () => {
+  const eng = profileFromSample(MUESTRA, { projectKey: 'ENG', now: 1789000000000 })
+  const base = withProfile(emptyProfiles(), eng)
+  eq(base, { version: 1, byProject: { ENG: eng } })
+  const congelado = JSON.stringify(base)
+  const eng2 = profileFromSample(MUESTRA.slice(0, 2), { projectKey: 'ENG', now: 1789000009999 })
+  const otra = withProfile(base, eng2)
+  eq(JSON.stringify(base), congelado, 'lo que recibe no cambia')
+  assert(otra !== base && otra.byProject !== base.byProject, 'un contenedor NUEVO')
+  eq(otra.byProject.ENG.sampled, 2, 'el nuevo sustituye al de su mismo proyecto')
+  eq(Object.keys(otra.byProject), ['ENG'])
+  // Acepta también el perfil suelto de antes como punto de partida (migra).
+  eq(withProfile(eng, profileFromSample(MUESTRA, { projectKey: 'OPS', now: 1789000000001 })).byProject.ENG, eng)
+  // Un perfil que no vale (sin proyecto, de otra versión, basura) no escribe nada.
+  for (const malo of [null, 'x', {}, { ...eng, version: 1 }, { ...eng, projectKey: '' }]) {
+    eq(withProfile(base, malo), base, JSON.stringify(malo) ?? String(malo))
+  }
+  // Y con un contenedor que no vale, empieza de cero.
+  eq(withProfile('basura', eng), { version: 1, byProject: { ENG: eng } })
 })
 
 test('normalizeProfile: lo guardado se reconstruye con claves blancas, y otra versión se descarta', () => {

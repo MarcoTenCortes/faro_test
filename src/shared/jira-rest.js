@@ -105,6 +105,12 @@ export const JIRA_REST_LIMITS = {
   profilePrefixes: 6,
   profileExamples: 3,
   profileSummaryChars: 120,
+  /**
+   * Cuántos proyectos con perfil se guardan por host (H22). Veinte: un perfil
+   * pesa unos pocos KB y quien trabaja en un Jira toca un puñado de proyectos;
+   * al pasarse se conservan los contados más recientemente.
+   */
+  profileProjects: 20,
 }
 
 /**
@@ -128,6 +134,15 @@ export const JQL_LIMITS = {
  * de modelo.
  */
 export const PROFILE_VERSION = 2
+
+/**
+ * Versión del CONTENEDOR de perfiles de un host (H22): `{ version, byProject }`,
+ * un perfil (de la versión `PROFILE_VERSION`) por proyecto. Hasta H22 la clave
+ * `faro:profile:<host>` guardaba UN perfil suelto, y alternar entre dos
+ * proyectos del mismo Jira volvía a contar la muestra en cada salto; ese perfil
+ * suelto migra al leerlo, bajo su `projectKey` (`normalizeProfiles`).
+ */
+export const PROFILES_VERSION = 1
 
 /**
  * Los campos que se pueden pedir. Lista blanca: un nombre que no esté aquí se
@@ -871,22 +886,139 @@ function normalizeCounted(v, tope, { conId = false } = {}) {
 }
 
 /**
- * El perfil, sólo si es del proyecto que hay delante. Pura.
+ * El perfil del proyecto que hay delante, sacado del contenedor del host. Pura.
  *
- * POR QUÉ EXISTE: el perfil se guarda por HOST (`faro:profile:<host>`) y un Jira
- * tiene muchos proyectos. Sin este cruce, el de SIMPL entraba en la Búsqueda, en
- * los chips y en el indexador de OPS como «los nombres EXACTOS: cópialos tal
- * cual» —y un estado que no existe en ese proyecto no da cero resultados, da un
- * 400— con sólo navegar de una incidencia a otra en la misma pestaña (revisión
- * adversaria de H9). Se cruza DONDE SE CONSUME, como `state.issueFields` se
- * cruza con `samePage`: quien lo guarda no sabe qué habrá delante después.
+ * POR QUÉ EXISTE: un Jira tiene muchos proyectos, y el perfil de SIMPL no son
+ * «los nombres EXACTOS: cópialos tal cual» de OPS —un estado que no existe en
+ * ese proyecto no da cero resultados, da un 400— (revisión adversaria de H9).
+ * Hasta H22 se guardaba UN perfil por host y aquí se cruzaba su `projectKey`;
+ * desde H22 se guarda uno POR PROYECTO (`{ version, byProject }`) y aquí se
+ * busca el suyo, así que volver a un proyecto ya contado no vuelve a contar.
+ * Se busca DONDE SE CONSUME, como `state.issueFields` se cruza con `samePage`.
  *
- * @returns el mismo objeto, o null si no hay perfil, no hay proyecto o no casan
+ * SÓLO acepta el contenedor: un perfil suelto (la forma de antes de H22) no es
+ * algo que tenga el panel, porque todo lo que lee pasa por `normalizeProfiles`.
+ * La clave se lee con `Object.hasOwn` (por `JSON.parse` un `__proto__` o un
+ * `constructor` llegan como claves PROPIAS) y la entrada tiene que decir ser de
+ * ese mismo proyecto.
+ *
+ * @returns el mismo objeto del mapa (sin copiar), o null
  */
-export function profileForProject(profile, projectKey) {
+export function profileForProject(profiles, projectKey) {
   const key = validProjectKey(projectKey)
-  if (!key || !profile || typeof profile !== 'object') return null
-  return validProjectKey(profile.projectKey) === key ? profile : null
+  if (!key || !esContenedor(profiles)) return null
+  if (!Object.hasOwn(profiles.byProject, key)) return null
+  const perfil = profiles.byProject[key]
+  if (!perfil || typeof perfil !== 'object') return null
+  return validProjectKey(perfil.projectKey) === key ? perfil : null
+}
+
+/** ¿Tiene la forma del contenedor de perfiles de H22? Puro. */
+function esContenedor(v) {
+  return (
+    !!v &&
+    typeof v === 'object' &&
+    !Array.isArray(v) &&
+    v.version === PROFILES_VERSION &&
+    !!v.byProject &&
+    typeof v.byProject === 'object' &&
+    !Array.isArray(v.byProject)
+  )
+}
+
+/** Un contenedor de perfiles vacío, nuevo cada vez. Puro. */
+export function emptyProfiles() {
+  return { version: PROFILES_VERSION, byProject: {} }
+}
+
+/**
+ * Los perfiles de un host, en la forma de H22. Pura, idempotente, nunca lanza y
+ * no muta lo que recibe.
+ *
+ * - El perfil v2 SUELTO que guardaba `faro:profile:<host>` antes de H22 migra
+ *   bajo su `projectKey` (sin clave de proyecto válida no se sabe de quién es, y
+ *   no migra).
+ * - Un contenedor de esta versión: sólo las claves PROPIAS que son clave de
+ *   proyecto (por `validProjectKey`, así que llegan en mayúsculas) cuyo valor
+ *   pasa `normalizeProfile` y dice ser de ESE proyecto; lo demás se cae. Si dos
+ *   claves acaban en la misma mayúscula, gana la de `at` más reciente.
+ * - Tope `JIRA_REST_LIMITS.profileProjects`, conservando los contados más
+ *   recientemente y en el orden en que estaban. Un `at` del futuro cuenta como
+ *   ahora AL ELEGIR (si no, un reloj adelantado lo haría inmortal), pero el dato
+ *   no se toca: la antigüedad del perfil la decide quien lo usa.
+ * - Otra versión, una lista o basura: vacío.
+ */
+export function normalizeProfiles(raw, { now = Date.now() } = {}) {
+  try {
+    const ahora = Number.isFinite(now) ? now : Date.now()
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return emptyProfiles()
+    if (raw.version === PROFILE_VERSION) {
+      const suelto = normalizeProfile(raw)
+      if (!suelto || !suelto.projectKey) return emptyProfiles()
+      return { version: PROFILES_VERSION, byProject: { [suelto.projectKey]: suelto } }
+    }
+    if (!esContenedor(raw)) return emptyProfiles()
+
+    const origen = raw.byProject
+    const entradas = []
+    const dondeEsta = new Map()
+    for (const k of Object.keys(origen)) {
+      if (!Object.hasOwn(origen, k)) continue
+      const key = validProjectKey(k)
+      if (!key) continue
+      const perfil = normalizeProfile(origen[k])
+      if (!perfil || perfil.projectKey !== key) continue
+      if (dondeEsta.has(key)) {
+        const i = dondeEsta.get(key)
+        if (perfil.at > entradas[i].perfil.at) entradas[i] = { key, perfil }
+        continue
+      }
+      dondeEsta.set(key, entradas.length)
+      entradas.push({ key, perfil })
+    }
+
+    let quedan = entradas
+    const tope = JIRA_REST_LIMITS.profileProjects
+    if (entradas.length > tope) {
+      const elegidos = new Set(
+        entradas
+          .map((x, i) => ({ i, at: Math.min(x.perfil.at, ahora) }))
+          .sort((a, b) => b.at - a.at || a.i - b.i)
+          .slice(0, tope)
+          .map((x) => x.i)
+      )
+      quedan = entradas.filter((_, i) => elegidos.has(i))
+    }
+    const byProject = {}
+    for (const { key, perfil } of quedan) byProject[key] = perfil
+    return { version: PROFILES_VERSION, byProject }
+  } catch {
+    return emptyProfiles()
+  }
+}
+
+/**
+ * Un contenedor NUEVO con `perfil` puesto (o sustituido) bajo su proyecto. No
+ * muta. Un perfil que no vale (sin proyecto, de otra versión, basura) deja el
+ * contenedor como estaba, normalizado. Lo recién contado no lo tira el tope:
+ * si hace falta sitio se cae el más viejo de los DEMÁS (la lección de
+ * `withContext`, revisión adversaria de H21). Pura.
+ */
+export function withProfile(profiles, perfil) {
+  const base = normalizeProfiles(profiles)
+  const nuevo = normalizeProfile(perfil)
+  if (!nuevo || !nuevo.projectKey) return base
+  const byProject = { ...base.byProject, [nuevo.projectKey]: nuevo }
+  const claves = Object.keys(byProject)
+  const tope = JIRA_REST_LIMITS.profileProjects
+  if (claves.length > tope) {
+    const otras = claves
+      .filter((k) => k !== nuevo.projectKey)
+      .map((k, i) => ({ k, i, at: byProject[k].at }))
+      .sort((a, b) => b.at - a.at || a.i - b.i)
+    for (const { k } of otras.slice(tope - 1)) delete byProject[k]
+  }
+  return normalizeProfiles({ version: PROFILES_VERSION, byProject })
 }
 
 /**
