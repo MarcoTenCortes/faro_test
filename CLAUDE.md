@@ -465,6 +465,6 @@ Detalle por hito: docs/BITACORA.md §12.2.
 12. Decisión 3 de PLAN2 §8: TOMADA en H19 (no hay quitar UN producto).
 13. Decisión 9 de PLAN2 §8: TOMADA en H21 y H22 (lo de Jira, hecho; «manual manda», desvío anotado).
 14. Decisión 11 de PLAN2 §8 (subrayado): TOMADA en H23; la forma B (H25a) DESCARTADA en H25 (BITACORA §12.4).
-15. La viñeta del diagrama en el prompt: FUERA hasta un turno real con datos (el MCP de Jira entraba como anónimo).
-16. El token de Jira del MCP de opencode: caducado o sin permiso (anónimo el 2026-09-27); lo renueva Marco.
+15. La viñeta del diagrama en el prompt: FUERA. Con datos (2026-09-28) el modelo ya dibuja bien, pero mete `:::hueco [n]` DENTRO de las comillas de la etiqueta: la pregunta necesita el ejemplo de forma.
+16. ~~El token de Jira del MCP~~ RESUELTA el 2026-09-28: Marco lo renovó a mano y un turno real lo confirmó (épica SIMPL-31748 leída).
 Detalle: docs/BITACORA.md §12.3.
