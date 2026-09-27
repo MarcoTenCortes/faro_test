@@ -425,9 +425,9 @@ Los pasos completos, con el porqué de cada regla: docs/REFERENCIA.md §11.
 | H19 | «Quitar las claves de este sitio» | `…h19-quitar-claves` · 9f65b73 + 8bb5298 | 1431 |
 | H21 | Contexto y mapa por ámbito (`scopes.js`) | `…h21-multi-espacio` · 4a62170 + 9a7780a | 1478 |
 | H22 | Jira por proyecto: perfiles `byProject`, `linkedSpacesFor` y su selector | `plan/h22-jira-por-proyecto` · bd01fa2 + a7b781a | 1498 |
-| H24 | Diagramas: parser, layout y SVG propios, «Dibujar el flujo» | `plan/h24-diagramas` · (construcción al cerrar) | 1555 |
+| H24 | Diagramas: parser, layout y SVG propios, «Dibujar el flujo» | `plan/h24-diagramas` · e8b950f + 512e8a1 | 1580 |
 
-Ramas `plan/…`. **Dónde vive:** 22 ramas apiladas sobre `40f56d7`, nada pusheado ni PR, `main` local en `523c25f`; H20 saltado (manual, con gasto); H22 en `plan/h22-jira-por-proyecto` · bd01fa2 (construido y verificado por el orquestador: banco 130/130, espejo 4 combinaciones) y su revisión adversaria encima (docs/plan/handoff/ESTADO.md); este mapa (Tarea 0, 2026-09-27) es la rama `plan/docs-mapa`, sobre `2684f14` y debajo de H22; H24 construido en `plan/h24-diagramas` sobre 9cfc93d, sin commit, pendiente de la verificación del orquestador y de su revisión adversaria (H23 va en su carril).
+Ramas `plan/…`. **Dónde vive:** 22 ramas apiladas sobre `40f56d7`, nada pusheado ni PR, `main` local en `523c25f`; H20 saltado (manual, con gasto); H22 en `plan/h22-jira-por-proyecto` · bd01fa2 (construido y verificado por el orquestador: banco 130/130, espejo 4 combinaciones) y su revisión adversaria encima (docs/plan/handoff/ESTADO.md); este mapa (Tarea 0, 2026-09-27) es la rama `plan/docs-mapa`, sobre `2684f14` y debajo de H22; H24 CERRADO en `plan/h24-diagramas` sobre 9cfc93d · e8b950f (construido y verificado por el orquestador: espejo 4 combinaciones) + 512e8a1 (su revisión adversaria: 19 decisiones) y el commit de los hashes encima (H23 va en su carril, `../faro-h23`, y se fusiona sobre esta punta).
 
 **Límites que no son de ningún hito:**
 - Jira Cloud sin REST de Jira (410): todo por el MCP (`sinRestDeJira`).

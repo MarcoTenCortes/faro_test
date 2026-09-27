@@ -1565,9 +1565,10 @@ Reglas transversales, que salen de los dos juicios y valen para todos:
   `panel-css`/`contrast` en verde; espejo a 320.
 - **Riesgo**: medio. La tolerancia del parser a lo que escriben los modelos
   pequeños y el layout propio en grafos densos.
-- **Hecho el 2026-09-27** (rama `plan/h24-diagramas` sobre 9cfc93d, sin
-  commit todavía: pendiente de la verificación del orquestador y de su
-  revisión adversaria; contrato en `docs/plan/handoff/h24-contrato.md`): todo
+- **Hecho el 2026-09-27** (rama `plan/h24-diagramas` sobre 9cfc93d:
+  e8b950f la construcción, verificada por el orquestador en el espejo, y
+  512e8a1 su revisión adversaria; contrato en
+  `docs/plan/handoff/h24-contrato.md` y decisiones en `h24-rev-decisiones.md`): todo
   lo de «Qué» menos lo que se deja a propósito —la viñeta del prompt, que
   espera a `npm run turn` sobre un Análisis real (un turno de pago: Marco), y
   «Descargar .excalidraw», que no hace falta porque Excalidraw importa el
