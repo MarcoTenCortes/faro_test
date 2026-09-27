@@ -773,7 +773,7 @@ Con el banco levantado hay dos páginas:
   instala y se suelta donde toca, que las marcas exigen una caja visible.
 
   El último paso, «docs», vigila que README y CLAUDE.md digan el número real
-  de pruebas (el total, y el de cada fichero de test que CLAUDE.md §10
+  de pruebas (el total, y el de cada fichero de test que `docs/PINES.md` §10
   declara), que cada título del registro esté documentado (en
   `docs/INSTALL.md` o en CLAUDE.md), que cada mensaje entre las piezas tenga
   quien lo atienda y esté descrito —y avisa del que nadie manda—, y que ningún
@@ -1398,5 +1398,10 @@ tools/                      generación de iconos, clave del manifest, servidor 
   prompt-snapshots.mjs      comprobar o regenerar (--update) las instantáneas de los prompts (npm run snapshots)
   instalar.ps1              Windows: deja uv y mcp-atlassian en la versión fijada, mira Node y opencode, y avisa si hay un opencode abierto que no verá uvx (-SoloComprobar, -Si); nunca toca la configuración de opencode ni la contraseña
   arrancar-opencode.ps1     Windows: arranca opencode con el PATH releído, en una carpeta propia y pidiendo la contraseña sin guardarla (-Port, -SoloMostrar)
-AGENTS.md                   puntero a CLAUDE.md, que es el mapa del proyecto para una sesión nueva
+AGENTS.md                   puntero a CLAUDE.md, que es el mapa del proyecto para una sesión nueva (≤60 KB: se inyecta entero en cada sesión)
+docs/REFERENCIA.md          lo largo de CLAUDE.md §2, §6, §7, §8, §9 y §11 (herramientas, contratos, opencode, decisiones con su historia, convenciones, cómo añadir cosas), con su numeración
+docs/MAPA.md                el mapa de ficheros largo (§3): qué hizo cada hito en cada fichero
+docs/FLUJOS.md              los flujos paso a paso (§4.1-4.11)
+docs/PINES.md               lo que los tests pinan (§10): docs.test.js lo cruza con el código y el paso «docs» lee de ahí el número de pruebas de cada fichero
+docs/BITACORA.md            el estado, lo que sigue sin verificar, las ideas descartadas y la bitácora hito a hito (§12)
 ```

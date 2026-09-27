@@ -11,11 +11,15 @@
  *
  * Compara cuatro cosas leyendo los ficheros reales:
  *   1. «N pruebas unitarias» en README.md y CLAUDE.md §2 === las que hay, y
- *      cada «`x.test.js` (…; N pruebas» de CLAUDE.md §10 === las que registra
- *      ese fichero («N pruebas más» son las añadidas en un hito y no se pueden
- *      comprobar: se saltan). Siempre ERROR (§10 ya lo exigía a mano). Lo del
- *      fichero lo destapó la revisión de H1: sólo se vigilaba el total y §10
- *      ya decía 22 de un fichero que registraba 24.
+ *      cada «`x.test.js` (…; N pruebas» de la sección §10 de docs/PINES.md ===
+ *      las que registra ese fichero («N pruebas más» son las añadidas en un
+ *      hito y no se pueden comprobar: se saltan). Siempre ERROR (§10 ya lo
+ *      exigía a mano). Lo del fichero lo destapó la revisión de H1: sólo se
+ *      vigilaba el total y §10 ya decía 22 de un fichero que registraba 24.
+ *      §10 («Lo que los tests pinan») vivió en CLAUDE.md hasta el 2026-09-27,
+ *      cuando se movió byte a byte a docs/PINES.md para que CLAUDE.md fuera un
+ *      mapa corto (se inyecta entero en cada sesión); conserva su encabezado
+ *      «## 10.» y allí no lleva ninguna «## 11.» detrás.
  *   2. Cada título de `log.(ok|info|warn|error)('Título', …)` de src/ aparece
  *      entre «» en docs/INSTALL.md o en CLAUDE.md.
  *   3. Cada constante de MSG tiene RECEPTOR (`case MSG.X` en bootstrap.js o
@@ -90,6 +94,8 @@ export const MSG_SIN_EMISOR_HASTA = {
 export const DOC_FILES = {
   readme: 'README.md',
   claude: 'CLAUDE.md',
+  // La sección §10 «Lo que los tests pinan», movida aquí desde CLAUDE.md.
+  pines: 'docs/PINES.md',
   install: 'docs/INSTALL.md',
   messages: 'src/shared/messages.js',
   bootstrap: 'src/content/bootstrap.js',
@@ -341,14 +347,16 @@ const TEST_ENTRY = /`([\w.-]+\.test\.js)`\s*\(((?:[^()]|\([^()]*\))*)\)/g
 const TEST_ENTRY_COUNT = /\b(\d+) pruebas\b(\s+más)?/
 
 /**
- * Lo que CLAUDE.md §10 dice de cada fichero de test: por cada
- * «`x.test.js` (…; N pruebas…)» de esa sección, `{file, count, added, line}`
- * con `line` la de CLAUDE.md (1-based) y `added` true si dice «N pruebas más».
- * Un fichero nombrado dos veces sale dos veces; un paréntesis sin «N pruebas»
- * no cuenta. Sólo §10 (lo de §3 o §12 son prosa). Pura.
+ * Lo que la sección §10 de un markdown (hoy docs/PINES.md) dice de cada
+ * fichero de test: por cada «`x.test.js` (…; N pruebas…)» de esa sección,
+ * `{file, count, added, line}` con `line` la de ese markdown (1-based) y
+ * `added` true si dice «N pruebas más». La sección va de «## 10.» a la
+ * siguiente «## » o al final del texto. Un fichero nombrado dos veces sale dos
+ * veces; un paréntesis sin «N pruebas» no cuenta. Sólo §10 (lo de fuera son
+ * prosa). Pura.
  */
-export function docTestCounts(claudeMd) {
-  const lines = nl(claudeMd).split('\n')
+export function docTestCounts(pinesMd) {
+  const lines = nl(pinesMd).split('\n')
   const r = sectionRange(lines, 10)
   if (!r) return []
   const out = []
@@ -363,11 +371,13 @@ export function docTestCounts(claudeMd) {
 }
 
 /**
- * Las discrepancias entre lo que CLAUDE.md §10 dice de cada fichero de test y
- * lo que registra de verdad (`porFichero`: nombre del fichero → pruebas
- * registradas, como lo cuenta test/run.js). Una línea por mención con los dos
- * números; un fichero de §10 que no registra nada (renombrado o borrado)
- * también. Sin `porFichero`, nada. Pura.
+ * Las discrepancias entre lo que la §10 de docs/PINES.md dice de cada fichero
+ * de test y lo que registra de verdad (`porFichero`: nombre del fichero →
+ * pruebas registradas, como lo cuenta test/run.js). Una línea por mención con
+ * los dos números; un fichero de §10 que no registra nada (renombrado o
+ * borrado) también. Sin `porFichero`, nada. Pura: recibe el TEXTO de PINES.
+ * El parámetro conserva su nombre de cuando §10 vivía en CLAUDE.md porque
+ * docs/PINES.md cita esta firma tal cual (y docs.test.js la busca en el código).
  */
 export function testCountMismatches(claudeMd, porFichero) {
   if (!porFichero || typeof porFichero !== 'object') return []
@@ -375,8 +385,8 @@ export function testCountMismatches(claudeMd, porFichero) {
   for (const { file, count, added, line } of docTestCounts(claudeMd)) {
     if (added) continue
     const real = porFichero[file]
-    if (real == null) out.push(`${DOC_FILES.claude} §10 (línea ${line}): «${file}» dice ${count} pruebas y no hay ningún fichero con ese nombre en test/unit/`)
-    else if (real !== count) out.push(`${DOC_FILES.claude} §10 (línea ${line}): «${file}» dice ${count} pruebas y registra ${real}`)
+    if (real == null) out.push(`${DOC_FILES.pines} §10 (línea ${line}): «${file}» dice ${count} pruebas y no hay ningún fichero con ese nombre en test/unit/`)
+    else if (real !== count) out.push(`${DOC_FILES.pines} §10 (línea ${line}): «${file}» dice ${count} pruebas y registra ${real}`)
   }
   return out
 }
@@ -474,12 +484,13 @@ function readOrNull(root, relPath) {
 }
 
 /**
- * Lee README.md, CLAUDE.md, docs/INSTALL.md y src/**\/*.js de `root` y devuelve
+ * Lee README.md, CLAUDE.md, docs/PINES.md, docs/INSTALL.md y src/**\/*.js de `root` y devuelve
  * `{errors, warnings, notes}`: listas de hallazgos `{kind, title, items}` con
  * `kind` ∈ 'tests' | 'titles' | 'msgs' | 'files' (`notes` es informativo: hoy
  * sólo los mensajes que esperan a su hito). `tests` es el número real de
  * pruebas unitarias y `porFichero` las que registra cada test/unit/x.test.js
- * (`{'x.test.js': N}`); lo que no se pasa no se comprueba.
+ * (`{'x.test.js': N}`); lo que no se pasa no se comprueba. El total se compara
+ * con README.md y CLAUDE.md §2; `porFichero`, con la §10 de docs/PINES.md.
  */
 export function checkDocs(root, { tests, porFichero } = {}) {
   const errors = []
@@ -489,6 +500,7 @@ export function checkDocs(root, { tests, porFichero } = {}) {
 
   const readme = readOrNull(root, DOC_FILES.readme)
   const claude = readOrNull(root, DOC_FILES.claude)
+  const pines = readOrNull(root, DOC_FILES.pines)
   const install = readOrNull(root, DOC_FILES.install)
   const srcFiles = walk(join(root, 'src'), (name) => name.endsWith('.js')).map((p) => rel(root, p))
 
@@ -508,10 +520,20 @@ export function checkDocs(root, { tests, porFichero } = {}) {
   }
   if (cuenta.length) errors.push({ kind: 'tests', title: 'Número de pruebas unitarias', items: cuenta })
 
-  // 1b. Pruebas por fichero en §10: siempre estricto, y sólo si nos dan el recuento.
-  const porFicheroMal = claude == null ? [] : testCountMismatches(claude, porFichero)
+  // 1b. Pruebas por fichero en la §10 de docs/PINES.md: siempre estricto, y
+  //     sólo si nos dan el recuento. Sin el fichero no hay con qué comparar, y
+  //     eso también es error: sin él, un número desfasado pasaría en silencio.
+  const conRecuento = !!porFichero && typeof porFichero === 'object'
+  if (conRecuento && pines == null) {
+    errors.push({
+      kind: 'tests',
+      title: `Pruebas por fichero en ${DOC_FILES.pines} §10`,
+      items: [`${DOC_FILES.pines}: no se ha podido leer, y es donde §10 dice cuántas pruebas registra cada fichero`],
+    })
+  }
+  const porFicheroMal = pines == null ? [] : testCountMismatches(pines, porFichero)
   if (porFicheroMal.length) {
-    errors.push({ kind: 'tests', title: `Pruebas por fichero en ${DOC_FILES.claude} §10 (${porFicheroMal.length})`, items: porFicheroMal })
+    errors.push({ kind: 'tests', title: `Pruebas por fichero en ${DOC_FILES.pines} §10 (${porFicheroMal.length})`, items: porFicheroMal })
   }
 
   // 2. Títulos del registro emitidos en src/ que ningún documento nombra.
@@ -642,7 +664,9 @@ async function main() {
   if (lines.length) console.log(lines.join('\n'))
   console.log(
     `\n${report.errors.length} error(es) · ${report.warnings.length} aviso(s) · ${report.notes.length} nota(s)` +
-      (report.errors.length ? '' : ' · número de pruebas al día en README.md y CLAUDE.md (§2 y §10)')
+      (report.errors.length
+        ? ''
+        : ` · número de pruebas al día: el total en ${DOC_FILES.readme} y ${DOC_FILES.claude} §2, el de cada fichero en ${DOC_FILES.pines} §10`)
   )
   process.exitCode = report.errors.length ? 1 : 0
 }

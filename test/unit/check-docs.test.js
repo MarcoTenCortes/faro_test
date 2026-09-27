@@ -5,10 +5,12 @@
  * entero corre y que el número de pruebas del README es coherente consigo mismo.
  */
 import { test, eq, assert } from '../harness.js'
-import { readFileSync } from 'node:fs'
+import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import {
   STRICT,
+  DOC_FILES,
   MSG_SIN_EMISOR_HASTA,
   pendingSenders,
   stripComments,
@@ -421,7 +423,8 @@ test('testCountMismatches: §10 dice 3 y el fichero registra 2 → un ítem con 
   const items = testCountMismatches(DIEZ, { 'a.test.js': 2, 'b.test.js': 12, 'c.test.js': 40, 'f.test.js': 40 })
   eq(items.length, 2, 'las dos menciones de a.test.js fallan; b coincide; c y f son «más» y se saltan')
   assert(/a\.test\.js/.test(items[0]) && /dice 3 pruebas/.test(items[0]) && /registra 2/.test(items[0]), items[0])
-  assert(/línea 5/.test(items[0]) && /línea 10/.test(items[1]), 'cada ítem dice la línea de CLAUDE.md')
+  assert(/línea 5/.test(items[0]) && /línea 10/.test(items[1]), 'cada ítem dice la línea de docs/PINES.md')
+  assert(items.every((i) => i.startsWith('docs/PINES.md §10 (línea ')), 'y nombra docs/PINES.md, que es donde vive §10: ' + items[0])
   eq(testCountMismatches(DIEZ, { 'a.test.js': 3, 'b.test.js': 12 }), [], 'con los números reales, nada')
 })
 
@@ -504,10 +507,14 @@ test('checkDocs sobre el repo: un mensaje con receptor y sin emisor es aviso, nu
   for (const e of r.errors) assert(e.kind !== 'msgs', 'ningún mensaje sin receptor, sin §5 ni cableado con la lista puesta: ' + JSON.stringify(e))
 })
 
-test('checkDocs sobre el repo: el recuento por fichero de §10 se compara con `porFichero` y una discrepancia es error', () => {
-  const claude = readFileSync(join(ROOT, 'CLAUDE.md'), 'utf8')
-  const declarados = docTestCounts(claude).filter((d) => !d.added)
-  assert(declarados.length >= 5, '§10 declara el número de pruebas de varios ficheros de H1')
+test('checkDocs sobre el repo: el recuento por fichero de §10 (docs/PINES.md) se compara con `porFichero` y una discrepancia es error', () => {
+  // §10 se movió byte a byte de CLAUDE.md a docs/PINES.md (2026-09-27): el
+  // recuento por fichero se lee de ahí, y CLAUDE.md ya no tiene §10.
+  eq(DOC_FILES.pines, 'docs/PINES.md', 'el fichero de los pines está en DOC_FILES')
+  eq(DOC_FILES.claude, 'CLAUDE.md', 'y CLAUDE.md sigue siendo el de §2, §3 y §5')
+  const pines = readFileSync(join(ROOT, DOC_FILES.pines), 'utf8')
+  const declarados = docTestCounts(pines).filter((d) => !d.added)
+  assert(declarados.length >= 5, 'la §10 de docs/PINES.md declara el número de pruebas de varios ficheros de H1')
   const porFichero = Object.fromEntries(declarados.map((d) => [d.file, d.count]))
   const bien = checkDocs(ROOT, { porFichero })
   eq(bien.errors.filter((e) => e.kind === 'tests'), [], 'con los números que dice §10, ninguna discrepancia')
@@ -518,4 +525,32 @@ test('checkDocs sobre el repo: el recuento por fichero de §10 se compara con `p
   eq(tests.length, 1)
   eq(tests[0].items.length, declarados.filter((d) => d.file === uno.file).length, 'una línea por mención del fichero')
   assert(tests[0].items[0].includes(uno.file) && tests[0].items[0].includes(`dice ${uno.count} pruebas`) && tests[0].items[0].includes(`registra ${uno.count + 1}`), tests[0].items[0])
+  assert(tests[0].items[0].startsWith('docs/PINES.md §10 (línea '), 'el ítem dice docs/PINES.md: ' + tests[0].items[0])
+  assert(tests[0].title.includes('docs/PINES.md §10'), 'y el título también: ' + tests[0].title)
+
+  // Con un repo inventado: el recuento por fichero sale de docs/PINES.md y NO
+  // de CLAUDE.md. Va en esta misma prueba y no en una nueva para no mover el
+  // recuento de este fichero, que la propia §10 declara.
+  const raiz = mkdtempSync(join(tmpdir(), 'faro-pines-'))
+  try {
+    mkdirSync(join(raiz, 'docs'))
+    writeFileSync(join(raiz, 'README.md'), 'npm run check   # 7 pruebas unitarias\n')
+    // CLAUDE.md con un §10 que dice OTRO número: si se leyera de aquí, el error
+    // hablaría de CLAUDE.md o de 5 pruebas.
+    writeFileSync(join(raiz, 'CLAUDE.md'), '# Faro\n## 2. Arrancar\nnpm run check   # 7 pruebas unitarias\n## 10. Viejo\n- `a.test.js` (H1; 5 pruebas)\n')
+    writeFileSync(join(raiz, 'docs', 'PINES.md'), '# Pines\n\n<!-- nota -->\n\n## 10. Lo que los tests pinan\n- `a.test.js` (H1; 3 pruebas)\n')
+    const coincide = checkDocs(raiz, { tests: 7, porFichero: { 'a.test.js': 3 } })
+    eq(coincide.errors.filter((e) => e.kind === 'tests'), [], 'PINES dice 3 y registra 3: ninguna discrepancia (el 5 de CLAUDE.md no cuenta)')
+    const discrepa = checkDocs(raiz, { tests: 7, porFichero: { 'a.test.js': 4 } }).errors.filter((e) => e.kind === 'tests')
+    eq(discrepa.length, 1)
+    eq(discrepa[0].items, ['docs/PINES.md §10 (línea 6): «a.test.js» dice 3 pruebas y registra 4'], 'la discrepancia es la de PINES, con su línea')
+    // Sin docs/PINES.md, con recuento que comparar, es error y lo dice.
+    rmSync(join(raiz, 'docs', 'PINES.md'))
+    const sinPines = checkDocs(raiz, { tests: 7, porFichero: { 'a.test.js': 5 } }).errors.filter((e) => e.kind === 'tests')
+    eq(sinPines.length, 1, 'sin PINES no se cae a leer CLAUDE.md: es un error propio')
+    assert(/docs\/PINES\.md: no se ha podido leer/.test(sinPines[0].items[0]), sinPines[0].items[0])
+    eq(checkDocs(raiz, { tests: 7 }).errors, [], 'y sin recuento por fichero no hay nada que comparar')
+  } finally {
+    rmSync(raiz, { recursive: true, force: true })
+  }
 })

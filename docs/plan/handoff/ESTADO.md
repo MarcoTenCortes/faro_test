@@ -1,0 +1,30 @@
+# Estado del traspaso — 2026-09-27 (sesión b9c80fa3: Tarea 0 hecha; H22 sigue a medias)
+
+Este fichero es el punto de entrada de la sesión siguiente. Se actualiza en cada hito (cierre, commit, decisiones) y sustituye a pegar resúmenes de sesiones anteriores en el chat.
+
+## Dónde está el repo
+
+- **Ramas apiladas** `plan/h0…h14` → `plan/h15-preparacion` → `plan/h15-uv` → `plan/h16-modelos-i` → `plan/h17-modelos-ii` → `plan/h18-mcp-automatico` → `plan/h19-quitar-claves` → `plan/h21-multi-espacio` (2684f14) → **`plan/docs-mapa`** (la Tarea 0) → **`plan/h22-jira-por-proyecto`** (rebasada encima, con su commit WIP). Nada pusheado; sin PR; `main` local en `523c25f`.
+- **Tarea 0 HECHA (2026-09-27, `plan/docs-mapa`)**: CLAUDE.md pasa de 1,41 MB a un mapa de ≤60 KB (hoy ~56 KB, pinado en `docs.test.js`), y lo largo vive en `docs/` **byte a byte y con la numeración de siempre**: `docs/REFERENCIA.md` (§2, §6, §7, §8, §9, §11), `docs/MAPA.md` (§3), `docs/FLUJOS.md` (§4), `docs/PINES.md` (§10) y `docs/BITACORA.md` (§12). El paso «docs» de `npm run check` lee el recuento por fichero de `docs/PINES.md` (el total sigue en README y CLAUDE.md §2; los títulos en INSTALL o CLAUDE.md; los MSG en §5; los ficheros en §3) y `docs.test.js` cruza PINES con el código. Verificado: reparto idéntico al original con script (`verify-split.mjs`, cada sección un substring exacto de su destino), `npm run check` ×3 en verde (1478), revisión adversaria de tres cazadores Opus (34 hallazgos, todos aplicados salvo uno por decisión —el de traer aquí el handoff, que se resolvió trayéndolo—), dos pines nuevos demostrados por mutación (el tope de 60 KB y que §10 llega al final de PINES).
+- **Regla nueva de documentación**: al cerrar un hito, el bloque largo de bitácora va a `docs/BITACORA.md` §12.5, los pines nuevos a `docs/PINES.md` §10 (con su «N pruebas»), los flujos a `docs/FLUJOS.md`, la fila de estado y las decisiones pendientes a CLAUDE.md §12 (corto), y el mapa §3 de CLAUDE.md gana una línea por fichero nuevo. CLAUDE.md no puede pasar de 60 KB: si un hito necesita sitio, se recorta CLAUDE.md remitiendo a docs/, no al revés. A cada agente de un flujo se le dice QUÉ apartado de qué fichero leer (los ficheros largos van de 160 a 460 KB).
+- **H21 CERRADO**: `4a62170` + `9a7780a` + `2684f14`. 1478 pruebas, banco 1-63 129/129, espejo medido.
+- **H22 A MEDIAS**: el constructor A se paró a mitad; su commit **WIP** («H22 WIP: constructor A a medias — SIN verificar») lleva sólo `src/shared/jira-rest.js`, `src/shared/storage.js`, `test/unit/jira-rest.test.js` y `test/unit/storage.test.js` (el contenedor `{version: 1, byProject}`, `normalizeProfiles`/`withProfile`/`profileForProject` sobre el mapa y `getProfiles`/`saveProfiles`, según el contrato). **`npm run check` NO pasa en ese commit**: el panel todavía importa los nombres viejos (`getProfile`/`saveProfile`, `state.profile`, `linkedContextFor`). Quedan de A: `src/shared/scopes.js` (`linkedSpacesFor`, `normalizeLinkedSpaces`, `withLinkedSpace`, borrar `linkedContextFor`), `src/panel/prompts.js` (`linkedScopesLine` + escenario nuevo `jira-general-enlazado-sin-texto`), `harness/harness.js` tramo 52 con ENG y OPS, y sus tests (`scopes.test.js`, `seleccion.test.js`, `dead-exports`). Después B (panel: `state.profiles`, `state.linkedSpaces`, `applyLinkedScope()`, el selector `#set-linked-space` en Ajustes, la fila «perfiles de proyectos», los pines) y C (docs, ahora repartidas: FLUJOS §4.6/§4.7/§4.11, PINES §10, BITACORA §12.5, CLAUDE.md §3/§6/§12 cortos). Todo está en **`h22-contrato.md`** (firmas exactas y reparto) y **`h22-hechos.json`** (líneas y fragmentos del código de hoy; sus números de línea de CLAUDE.md se leen hoy en el fichero de docs/ que toque, con la misma numeración de secciones).
+- **H20** se saltó (manual, con un compañero, y necesita permiso de gasto de Marco). Quedan **H22, H23, H24, H25, H26** (`docs/PLAN2.md` §4, líneas 1460-1600).
+
+## Lo que la sesión siguiente tiene que hacer primero
+
+1. Decidir qué hacer con el WIP de H22: verificar lo que A dejó (correr sus dos ficheros de test sueltos con un corredor de un fichero) y continuar desde el contrato, o `git reset --hard plan/docs-mapa` en la rama de H22 y rehacer A entero. El contrato es el mismo en los dos casos.
+2. Seguir el ciclo de `PROMPT-NUEVA-SESION.md` §4 (lectores → contrato → constructores → verificación → commit → revisión adversaria → docs), con la regla nueva de documentación de arriba.
+
+## Decisiones ya tomadas que hay que respetar (no volver a debatirlas)
+
+- H21 (revisión): `hasMap` = SÓLO `indexedAt` (PLAN2 §3.4); `spaceOverflow` cuenta sólo páginas con espacio (es una puerta al construir, no un tope del índice); `preferSpace` desempata dentro de la relevancia; el índice se escribe sobre lo releído del almacén; `state.contextLegacy` en las tres relecturas; `showWelcome({ replace })`. Todo documentado en docs/FLUJOS.md §4.6, CLAUDE.md §8.26 y docs/BITACORA.md §12.5.
+- H22 (contrato): la elección MANUAL del selector manda sobre las reglas (a)-(c) (PLAN2 la llamaba «respaldo»: desvío anotado); la regla (b) se conserva (decisión 9 de PLAN2 §8): el historial elige la CLAVE del contexto enlazado, nunca aporta texto, y la promesa de §4.4 se reescribe con verdad. Título de registro nuevo: «Espacio enlazado».
+- Tarea 0: CLAUDE.md ≤60 KB, con los ficheros largos en docs/ y la numeración conservada; ninguna referencia «CLAUDE.md §N.x» de README, INSTALL, PLAN2 o el código se reescribió (se leen en el fichero que dice la tabla del preámbulo de CLAUDE.md).
+- Lección de gasto: un flujo de 37 agentes tumbó el límite mensual (429) en los refutadores; desde entonces ≤25 agentes por flujo y refutadores por GRUPO de hallazgos deduplicados, no por hallazgo.
+
+## Ficheros de este directorio
+
+- `PROMPT-NUEVA-SESION.md`: el prompt completo para arrancar la sesión siguiente (su Tarea 0 ya está hecha).
+- `h22-contrato.md`, `h22-hechos.json`: el contrato de H22 y los hechos del código que lo sustentan.
+- `h21-rev-decisiones.md`: las 17 decisiones de la revisión adversaria de H21 (ya aplicadas y documentadas en docs/BITACORA.md §12.5; aquí sólo como referencia).

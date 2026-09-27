@@ -1193,7 +1193,7 @@ declararse), manifest, las pruebas unitarias y, sólo si todas pasan, «docs»:
 compara los documentos con el código. Si sale en rojo por «README.md: dice N
 pruebas unitarias y hay M», actualiza el número en README.md y en CLAUDE.md
 §2 (es el `M/M` que imprime el propio `npm run check`); si sale por
-«CLAUDE.md §10 (línea L): «x.test.js» dice N pruebas y registra M», pon M en
+«docs/PINES.md §10 (línea L): «x.test.js» dice N pruebas y registra M», pon M en
 esa línea de §10 (o «N pruebas más» si esa entrada sólo cuenta las que añadió
 un hito a un fichero que ya existía: ésas no se comprueban). Si sale por
 «Títulos de registro sin documentar», cada título nuevo que emita
@@ -1826,7 +1826,7 @@ en Confluence no hay nada de esto.
 **`npm run check` acaba en rojo por «docs»**
 Es el quinto paso, que compara los documentos con el código. «README.md: dice
 N pruebas unitarias y hay M» → pon M en README.md y en CLAUDE.md §2.
-«CLAUDE.md §10 (línea L): «x.test.js» dice N pruebas y registra M» → pon M en
+«docs/PINES.md §10 (línea L): «x.test.js» dice N pruebas y registra M» → pon M en
 esa línea de §10. Un título del registro sin documentar → una línea en la
 lista de arriba. Un mensaje sin receptor o sin mención, o un fichero de `src/`
 fuera del mapa → CLAUDE.md §5 y §3; «nadie lo manda» es aviso, no error.

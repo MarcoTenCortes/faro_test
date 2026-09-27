@@ -73,7 +73,8 @@ async function main() {
   console.log(`${GREEN}✓${OFF} manifest    ${DIM}MV3 válido · id ${man.id}${OFF}`)
 
   // ---- 4. unitarias -------------------------------------------------------
-  // Cuántas registra cada fichero: CLAUDE.md §10 dice «`x.test.js` (…; N
+  // Cuántas registra cada fichero: la §10 de docs/PINES.md (hasta el
+  // 2026-09-27, de CLAUDE.md) dice «`x.test.js` (…; N
   // pruebas» de los de H1 y el paso «docs» lo compara (sólo el total se
   // quedaba atrás sin que nada avisara: la revisión de H1 encontró un 22 que
   // registraba 24).
@@ -118,7 +119,8 @@ async function main() {
   // La documentación es el mapa para una sesión nueva y se quedaba atrás sin
   // que nada avisara (docs/PLAN.md §2.7 D2: 35 títulos del registro sin
   // documentar y el número de pruebas del README a mano). El número de pruebas
-  // (el total y el de cada fichero que §10 declara) es estricto; títulos,
+  // (el total, en README y CLAUDE.md §2, y el de cada fichero que declara la
+  // §10 de docs/PINES.md) es estricto; títulos,
   // mensajes y ficheros son error según `STRICT` de tools/check-docs.mjs, y un
   // mensaje con receptor y sin emisor sólo avisa. Sólo corre si las unitarias
   // pasan: `registry.length` es el número que tienen que decir README y CLAUDE.md.
@@ -132,7 +134,7 @@ async function main() {
     return
   }
   console.log(
-    `${GREEN}✓${OFF} docs        ${DIM}README y CLAUDE.md dicen ${registry.length} pruebas` +
+    `${GREEN}✓${OFF} docs        ${DIM}README y CLAUDE.md dicen ${registry.length} pruebas y docs/PINES.md las de cada fichero` +
       (docs.warnings.length ? ` · ${docs.warnings.length} aviso(s)` : '') +
       `${OFF}`
   )

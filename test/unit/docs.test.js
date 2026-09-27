@@ -1,10 +1,14 @@
 /**
- * Los documentos frente al código: AGENTS.md, §10 de CLAUDE.md y la
+ * Los documentos frente al código: AGENTS.md, §10 de docs/PINES.md y la
  * numeración del selfcheck del banco.
  *
- * Por qué existe. CLAUDE.md es el mapa del proyecto y su §10 dice, fragmento
- * a fragmento, qué pinan los tests; nadie comprobaba que esos fragmentos
- * siguieran existiendo. La auditoría del plan (docs/plan/anexo-hallazgos.md;
+ * Por qué existe. CLAUDE.md es el mapa del proyecto y la sección §10 «Lo que
+ * los tests pinan» dice, fragmento a fragmento, qué pinan los tests; nadie
+ * comprobaba que esos fragmentos siguieran existiendo. §10 vivió en CLAUDE.md
+ * hasta el 2026-09-27, cuando se movió byte a byte (con su encabezado
+ * «## 10.») a docs/PINES.md para que CLAUDE.md fuera un mapa corto: se inyecta
+ * entero en cada sesión y en cada subagente. La regla no cambia, sólo el
+ * fichero del que se lee. La auditoría del plan (docs/plan/anexo-hallazgos.md;
  * filas D1 y D5 de docs/PLAN.md) encontró AGENTS.md congelado en el commit
  * 7833bab (464 pruebas, ni una palabra de Jira), pines de §10 que ya no eran
  * los del test («mcpStatusFor(mcp, state.site.host, saved?.mcpName)»,
@@ -12,7 +16,8 @@
  * llevaba número. Esto lee los documentos y el código y falla cuando se
  * separan.
  *
- * Qué se comprueba de §10 (de «## 10.» hasta «## 11.»): cada fragmento entre
+ * Qué se comprueba de §10 (de «## 10.» hasta el siguiente «## » o hasta el
+ * final del fichero: en docs/PINES.md no hay «## 11.»): cada fragmento entre
  * acentos graves tiene que aparecer en el código o en los tests: los .js de
  * src/, panel.html, panel.css, los .js de test/ (menos este fichero, que
  * citaría lo que busca), los .js y .html de harness/, los .js y .mjs de
@@ -85,11 +90,14 @@ export function normalizar(texto) {
   return texto.replace(/\r\n?/g, '\n').replace(/[ \t]+/g, ' ').replace(/\n /g, '\n')
 }
 
-/** Pura: la sección «## 10.» de un CLAUDE.md, hasta «## 11.»; '' si no está. */
+/**
+ * Pura: la sección «## 10.» de un markdown (hoy docs/PINES.md), hasta la
+ * siguiente línea que empiece por «## » o hasta el final; '' si no está.
+ */
 export function seccion10(md) {
   const ini = md.indexOf('\n## 10.')
   if (ini < 0) return ''
-  const fin = md.indexOf('\n## 11.', ini + 1)
+  const fin = md.indexOf('\n## ', ini + 1)
   return md.slice(ini, fin < 0 ? undefined : fin)
 }
 
@@ -195,9 +203,15 @@ test('docs: normalizar deja un espacio y quita la sangría tras el salto', () =>
   eq(normalizar('a   b\r\n    c\t d\n'), 'a b\nc d\n')
 })
 
-test('docs: seccion10 corta de «## 10.» a «## 11.»', () => {
+test('docs: seccion10 corta de «## 10.» a la siguiente «## », o llega al final si no hay otra', () => {
   eq(seccion10('x\n## 9. a\n## 10. b\nuno\n## 11. c\ndos'), '\n## 10. b\nuno')
   eq(seccion10('sin secciones'), '')
+  // Un §10 sin «## 11.» detrás, que es como está en docs/PINES.md: cabecera,
+  // un comentario y la sección hasta el final. Va en esta misma prueba y no en
+  // una nueva para no mover el recuento que la propia §10 declara del fichero.
+  eq(seccion10('# Pines\n\n<!-- nota -->\n\n## 10. Lo que los tests pinan\n- uno\n- dos\n'), '\n## 10. Lo que los tests pinan\n- uno\n- dos\n')
+  eq(seccion10('## 9. a\n## 10. b\nuno\n## 12. c\ndos'), '\n## 10. b\nuno', 'la siguiente sección no tiene por qué ser la 11')
+  eq(seccion10('\n## 10. b\nuno\n### sub\ndos'), '\n## 10. b\nuno\n### sub\ndos', 'un «### » no es otra sección')
 })
 
 test('docs: motivoParaSaltar reconoce lo que no se comprueba', () => {
@@ -253,15 +267,25 @@ test('docs: tramosDelSelfcheck lee «// N. …» y cuenta sus ok(', () => {
 test('AGENTS.md no se queda atrás de CLAUDE.md', () => {
   const a = leer('AGENTS.md')
   const c = leer('CLAUDE.md')
+  // Tarea 0 del segundo plan (2026-09-27): CLAUDE.md se inyecta entero en cada
+  // sesión y en cada subagente, así que es un MAPA de ≤60 KB y lo largo vive en
+  // docs/ (REFERENCIA, MAPA, FLUJOS, PINES, BITACORA). Sin este pin, el siguiente
+  // hito que documente aquí «con la densidad de siempre» lo rompería en silencio.
+  assert(Buffer.byteLength(c, 'utf8') <= 60 * 1024, `CLAUDE.md es un mapa de ≤60 KB (mide ${Buffer.byteLength(c, 'utf8')}): lo largo va a docs/`)
   assert(a === c || /Lee CLAUDE\.md/.test(a), 'AGENTS.md es una copia exacta de CLAUDE.md o un puntero que dice «Lee CLAUDE.md»')
   if (a !== c) {
     assert(a.trim().split('\n').length <= 6 && !/^## /m.test(a), 'el puntero es corto y no lleva secciones: nada que pueda quedarse atrás')
   }
 })
 
-test('§10 de CLAUDE.md no contradice al código', () => {
-  const s10 = seccion10(leer('CLAUDE.md'))
-  assert(s10.length > 1000, 'CLAUDE.md tiene una sección «## 10.» seguida de «## 11.»')
+test('§10 de docs/PINES.md no contradice al código', () => {
+  const pinesMd = leer('docs/PINES.md')
+  const s10 = seccion10(pinesMd)
+  assert(s10.length > 1000, 'docs/PINES.md tiene una sección «## 10.» con los pines')
+  // En PINES §10 es la última sección: un «## » suelto metido dentro la cortaría
+  // en silencio y dejaría fuera la mayor parte de los pines y de los recuentos
+  // por fichero con todo en verde (revisión de la Tarea 0, 2026-09-27).
+  eq(s10.length, pinesMd.length - pinesMd.indexOf('\n## 10.'), '§10 llega hasta el final de docs/PINES.md: un «## » suelto dentro la cortaría en silencio')
   const fragmentos = fragmentosDe(s10)
   assert(fragmentos.length > 100, `§10 cita fragmentos entre acentos graves (${fragmentos.length})`)
   const corpus = corpusDelRepo()
@@ -275,7 +299,7 @@ test('§10 de CLAUDE.md no contradice al código', () => {
   assert(comprobados > 50, `las reglas de exclusión no se lo comen todo (${comprobados} comprobados)`)
   assert(
     faltan.length === 0,
-    `${faltan.length} fragmento(s) de §10 no aparecen en el código ni en los tests (CLAUDE.md va por delante o por detrás):\n     ` +
+    `${faltan.length} fragmento(s) de §10 de docs/PINES.md no aparecen en el código ni en los tests (docs/PINES.md va por delante o por detrás):\n     ` +
       faltan.map((f) => '`' + f + '`').join('\n     ')
   )
 })
