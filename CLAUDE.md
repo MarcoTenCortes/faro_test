@@ -419,7 +419,7 @@ Los pasos completos, con el porqué de cada regla: docs/REFERENCIA.md §11.
 | H18 | MCP por `PATCH /global/config`, sandbox | `…h18-mcp-automatico` · 80e7ce9 + 8188813 | 1416 |
 | H19 | «Quitar las claves de este sitio» | `…h19-quitar-claves` · 9f65b73 + 8bb5298 | 1431 |
 | H21 | Contexto y mapa por ámbito (`scopes.js`) | `…h21-multi-espacio` · 4a62170 + 9a7780a | 1478 |
-| H22 | Jira por proyecto: perfiles `byProject`, `linkedSpacesFor` y su selector | `plan/h22-jira-por-proyecto` · bd01fa2 + (revisión al cerrar) | 1498 |
+| H22 | Jira por proyecto: perfiles `byProject`, `linkedSpacesFor` y su selector | `plan/h22-jira-por-proyecto` · bd01fa2 + a7b781a | 1498 |
 
 Ramas `plan/…`. **Dónde vive:** 22 ramas apiladas sobre `40f56d7`, nada pusheado ni PR, `main` local en `523c25f`; H20 saltado (manual, con gasto); H22 en `plan/h22-jira-por-proyecto` · bd01fa2 (construido y verificado por el orquestador: banco 130/130, espejo 4 combinaciones) y su revisión adversaria encima (docs/plan/handoff/ESTADO.md); este mapa (Tarea 0, 2026-09-27) es la rama `plan/docs-mapa`, sobre `2684f14` y debajo de H22.
 
