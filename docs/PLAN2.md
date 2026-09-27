@@ -1744,8 +1744,7 @@ Reglas transversales, que salen de los dos juicios y valen para todos:
   H18 y, con permiso, `npm run test:integration`.
 - **Depende de**: todo lo anterior.
 - **Riesgo**: bajo en código.
-- **Hecho el 2026-09-27** (rama `plan/h26-cierre` sobre 149ddf0: (cierre al
-  cerrar)). La bitácora de H15-H25 ya estaba escrita hito a hito en
+- **Hecho el 2026-09-27** (rama `plan/h26-cierre` sobre 149ddf0: (d2e243b el cierre, 7e48237 su revisión adversaria)). La bitácora de H15-H25 ya estaba escrita hito a hito en
   docs/BITACORA.md §12.5 (CLAUDE.md es un mapa desde la Tarea 0, y §12 vive
   allí); el cierre añade su bloque, «H26 · cierre», la fila de §12.1 y lo que
   queda sin verificar, y deja CLAUDE.md, README, INSTALL, REFERENCIA, FLUJOS y
