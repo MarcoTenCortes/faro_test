@@ -206,6 +206,7 @@ test('last-turn: sessionKind distingue el chat («Faro · host») de las sesione
   eq(sessionKind('Faro · índice de confluence.simplprogramme.eu'), 'desechable')
   eq(sessionKind('Faro · comprobación'), 'desechable')
   eq(sessionKind('Faro · integración'), 'desechable')
+  eq(sessionKind('Faro · turno real H26 (épica)'), 'desechable', 'un título sin host sale con --all')
   // Un título con la codificación rota sigue siendo de Faro (sólo con --all).
   eq(sessionKind('Faro \uFFFD sec'), 'desechable')
   eq(sessionKind('otra sesión'), '')

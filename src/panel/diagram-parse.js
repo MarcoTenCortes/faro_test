@@ -536,7 +536,10 @@ function leerFlowchart(src) {
     const n = li + 1
     const linea = unaLinea(lineas[li])
     if (!linea) continue
-    if (linea.startsWith('%%{')) return fallo([`línea ${n}: las directivas «%%{…}%%» no se admiten`])
+    // En cualquier sitio de la línea, no sólo al principio: una línea de
+    // presentación se ignora entera sin que nadie la mire, y una etiqueta la
+    // copiaría toMermaid tal cual (revisión adversaria de H26).
+    if (linea.includes('%%{')) return fallo([`línea ${n}: las directivas «%%{…}%%» no se admiten`])
     if (linea.startsWith('%%')) continue
     const partes = sentencias(linea)
     let desde = 0

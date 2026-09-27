@@ -443,8 +443,8 @@ Ramas `plan/…`. **Dónde vive:** 22 ramas apiladas sobre `40f56d7` (H0-H21), n
 - Faro no arranca opencode; la configuración la escribe opencode (§8.24).
 
 **Sin verificar:** desde H0 nadie ha cargado la extensión en Chrome (el panel no se ha visto); el service worker, nunca ejercitado;
-las lecturas del panel al Confluence enlazado; ningún lector de pantalla; las capturas 2×2 del espejo (vistas con los ojos por el
-orquestador en H23-H26 a 320/420, sin ficheros); de H23, el cursor, la selección azul, el trazo y el color en caliente; de H26,
+las lecturas del panel al Confluence enlazado; ningún lector de pantalla; las capturas 2×2 del espejo (medidas con check() a 320/420 × claro y oscuro
+en H22-H25 y vistas con los ojos a 320 en claro en H23-H25, sin ficheros); de H23, el cursor, la selección azul, el trazo y el color en caliente; de H26,
 la pregunta nueva y el parser tolerante frente a un modelo con datos reales, y el MCP de Jira con un token válido.
 **Verificado en H26** (2026-09-27): el banco con frames de verdad (149/149 con rAF nativo a 1258×597 emulado, pane visible),
 `npm run test:integration` (18/18 con `FARO_TEST_MODEL=github-copilot/gpt-5.6-luna`), `npm run turn` (probado) y el sandbox (9/9).

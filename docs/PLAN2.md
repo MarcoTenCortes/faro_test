@@ -14,8 +14,8 @@
 > con frames de verdad (149/149), `npm run test:integration` con
 > `FARO_TEST_MODEL` (18/18), el sandbox (9/9), el metro y `npm run turn`, e hizo
 > el turno real de «Dibujar el flujo»: el parser ignora desde entonces
-> `classDef`/`style`/`linkStyle` y la pregunta pide «sin classDef, style, click
-> ni enlaces». **Lo que queda para Marco**: cargar la extensión y ver el panel
+> `classDef`/`style`/`linkStyle` y la pregunta pide «sin classDef, style, click,
+> href ni URL». **Lo que queda para Marco**: cargar la extensión y ver el panel
 > (nadie lo ha visto desde H0), renovar el token de Jira del MCP de opencode
 > (entra como anónimo), decidir la viñeta del diagrama en el prompt con un turno
 > real con datos, H20, y cómo subir las ramas (apiladas o aplastadas). El
@@ -1765,8 +1765,8 @@ Reglas transversales, que salen de los dos juicios y valen para todos:
   datos, dibujó un nodo con un `classDef` debajo, que tumbaba el diagrama
   entero; desde H26 `diagram-parse.js` IGNORA `classDef`, `style` y `linkStyle`
   sin aplicarlas (`click`, `href` y `callback` siguen rechazados), el diagrama
-  del README se dibuja, y `DIAGRAM_QUESTION` pide «sin classDef, style, click ni
-  enlaces». **La viñeta del prompt, FUERA** hasta un turno real con datos (las
+  del README se dibuja, y `DIAGRAM_QUESTION` pide «sin classDef, style, click,
+  href ni URL». **La viñeta del prompt, FUERA** hasta un turno real con datos (las
   40 instantáneas intactas). 1642 → 1643 pruebas. La integración «gratis» de
   H18 es el sandbox (9/9). Decisiones nuevas para Marco: la viñeta (15) y el
   token (16), en docs/BITACORA.md §12.3; la 3, cuándo correr la integración,

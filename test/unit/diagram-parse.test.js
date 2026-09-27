@@ -303,6 +303,20 @@ test('SEGURIDAD: las directivas %%{init}%% se rechazan, también antes de la cab
   for (const directiva of ['%%{ init: {"securityLevel":"loose"} }%%', '%%{config: {"flowchart":{"htmlLabels":true}}}%%', '%%{wrap}%%', '    %%{init: {}}%%']) {
     eq(readFlowchart(`flowchart TD\n  A --> B\n${directiva}`).errores, ['línea 3: las directivas «%%{…}%%» no se admiten'], directiva)
   }
+  // En cualquier sitio de la línea, no sólo al principio (revisión adversaria de
+  // H26): dentro de una línea de presentación, que desde H26 se ignora entera;
+  // detrás de un «;»; detrás de una arista; y en una etiqueta, que toMermaid
+  // copiaría tal cual en «Copiar como Mermaid».
+  for (const linea of [
+    '  classDef x fill:#f00 %%{init: {"securityLevel":"loose"}}%%',
+    '  style A fill:#f00 %%{init}%%',
+    '  linkStyle 0 stroke:red %%{init}%%',
+    '  A --> C;style A fill:#f00 %%{init}%%',
+    '  A --> C %%{init}%%',
+    '  C["%%{init: {\'securityLevel\':\'loose\'}}%%"] --> A',
+  ]) {
+    eq(readFlowchart(`flowchart TD\n  A --> B\n${linea}`).errores, ['línea 3: las directivas «%%{…}%%» no se admiten'], linea)
+  }
 })
 
 test('SEGURIDAD: <img onerror> y javascript: en una etiqueta son TEXTO de una línea', () => {
@@ -765,11 +779,20 @@ test('H26: las líneas de presentación classDef/style/linkStyle se ignoran sin 
     readFlowchart('graph LR;A-->B;B-->C'),
     'también detrás de un «;»'
   )
+  // La sentencia, no la línea: lo que va detrás de un «;» en una línea que
+  // EMPIEZA por style/classDef/linkStyle se sigue leyendo (y un click, rechazando).
+  eq(readFlowchart('flowchart TD\n  A --> B\n  style A fill:#f00; click A href "javascript:alert(1)"').errores, ['línea 3: «click» no se admite'], 'un click detrás de un style en su misma línea')
+  eq(readFlowchart('flowchart TD\n  A --> B\n  style A fill:#f00; B --> C'), readFlowchart('flowchart TD\n  A --> B\n  B --> C'), 'la sentencia, no la línea')
   eq(
     readFlowchart('flowchart TD\n  subgraph S [Lote]\n    style A fill:#f00\n    classDef x fill:#0f0\n    A --> B\n  end'),
     readFlowchart('flowchart TD\n  subgraph S [Lote]\n    A --> B\n  end'),
     'y dentro de un subgrafo'
   )
+  // La cabecera sigue siendo la primera sentencia: una línea de presentación
+  // delante no se salta, igual que en Mermaid.
+  for (const linea of ['classDef x fill:#f00', 'style A fill:#f00', 'linkStyle 0 stroke:red']) {
+    eq(readFlowchart(`${linea}\nflowchart TD\n  A --> B`).errores, ['línea 1: no es un flowchart'], `${linea} antes de la cabecera`)
+  }
   eq(
     corto('flowchart TD\n  styleA --> classDefs --> linkStyled'),
     { nodos: ['styleA=styleA', 'classDefs=classDefs', 'linkStyled=linkStyled'], aristas: ['styleA>classDefs', 'classDefs>linkStyled'] },

@@ -816,7 +816,7 @@ Junto al selector de modelo, abajo, hay otras dos cosas:
   pregunta que pide el diagrama (un Mermaid «flowchart» con la clave de cada
   incidencia como primera palabra de su nodo, como mucho 15 nodos,
   «:::riesgo», «:::hueco» o «:::contradiccion» en lo que falle, y desde H26
-  «sin classDef, style, click ni enlaces»); cámbiala o
+  «sin classDef, style, click, href ni URL»); cámbiala o
   bórrala, enviar lo haces tú, y bajo tu pregunta se dice «dibujar el flujo».
   Cualquier respuesta que traiga un bloque ```mermaid **cerrado** se dibuja en
   el chat —en Jira y en Confluence, lo pida el botón o no—: mientras llega a
@@ -1316,11 +1316,13 @@ Si no encuentra la base de datos, dice dónde ha mirado: pásale la ruta con
 SQLite o no es de opencode (sin tabla `session`), lo dice en una línea
 (««ruta» no es una base de datos de opencode») y sale con 1, sin traza. Si
 opencode no está en esta máquina o nunca se ha usado el panel, no hay sesiones
-«Faro · …» y lo dice. Elige por el título de la sesión, así que una abierta
-fuera del panel con otro título no sale: al cerrar el segundo plan (H26,
-2026-09-27) el comando funcionó —copió una base de 176 MB, contó 84 sesiones de
-chat y 5 internas y enseñó la última de chat— y la sesión del turno real de ese
-día, «Faro · turno real H26 (épica)», no estaba en la lista.
+«Faro · …» y lo dice. Elige por el título de la sesión: una cuyo título no
+empieza por «Faro» no sale; una «Faro · …» sin host (las internas) sale sólo
+con `npm run turn -- --all`. Al cerrar el segundo plan (H26, 2026-09-27) el
+comando funcionó —copió una base de 176 MB, contó 84 sesiones de chat y 5
+desechables y enseñó la última de chat—; la sesión del turno real de ese día,
+«Faro · turno real H26 (épica)», no lleva host en el título, así que cuenta como
+desechable y sale con `--all`.
 
 ### `npm run check` y el paso «docs»
 

@@ -7870,14 +7870,15 @@ test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibu
 
   // (5) «Dibujar el flujo»: la pregunta fija, sin claves ni host (§8.20), y el
   // botón ENTERO, que la deja escrita y no manda nada.
-  // EL CAMBIO (H26): la pregunta pide además «sin classDef, style, click ni
-  // enlaces»: en el turno real del 2026-09-27 el modelo escribió un classDef
+  // EL CAMBIO (H26): la pregunta pide además «sin classDef, style, click, href
+  // ni URL»: en el turno real del 2026-09-27 el modelo escribió un classDef
   // debajo de su :::riesgo, por costumbre (diagram-parse.js ya lo ignora; un
-  // click o un enlace siguen tumbando el diagrama).
+  // click o un href siguen tumbando el diagrama). No dice «enlaces» (revisión
+  // adversaria de H26): en Mermaid un «link» es una arista.
   const pregunta = JS.slice(JS.indexOf('const DIAGRAM_QUESTION'), JS.indexOf('\n', JS.indexOf('const DIAGRAM_QUESTION')))
   eq(
     pregunta.trim(),
-    "const DIAGRAM_QUESTION = 'Dibuja el flujo entre las incidencias de tu última respuesta como un diagrama Mermaid «flowchart LR» dentro de un bloque ```mermaid: como mucho 15 nodos, cada nodo con la clave de la incidencia como primera palabra de su etiqueta y después su resumen corto; :::riesgo, :::hueco o :::contradiccion en lo que falle, y el número [n] de la observación que lo respalde; sin classDef, style, click ni enlaces. Sólo el diagrama y una frase.'",
+    "const DIAGRAM_QUESTION = 'Dibuja el flujo entre las incidencias de tu última respuesta como un diagrama Mermaid «flowchart LR» dentro de un bloque ```mermaid: como mucho 15 nodos, cada nodo con la clave de la incidencia como primera palabra de su etiqueta y después su resumen corto; :::riesgo, :::hueco o :::contradiccion en lo que falle, y el número [n] de la observación que lo respalde; sin classDef, style, click, href ni URL. Sólo el diagrama y una frase.'",
     'la pregunta que deja escrita el botón'
   )
   for (const prohibido of ['jql', 'host', 'key', 'site', '${']) assert(!pregunta.includes(prohibido), 'la pregunta no lleva ' + prohibido)
