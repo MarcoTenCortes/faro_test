@@ -1,6 +1,14 @@
-# Estado del traspaso — 2026-09-27 (sesión b9c80fa3: el SEGUNDO PLAN está CERRADO: Tarea 0, H22, H24, H23, H25 y H26 hechos con su revisión adversaria; H20 saltado; H25a descartada)
+# Estado del traspaso — 2026-09-28 (sesión cfd7a5ee: el TERCER PLAN está ESCRITO en `docs/PLAN3.md` y PENDIENTE de la orden de Marco para ejecutarlo; el segundo plan sigue CERRADO)
 
 Este fichero es el punto de entrada de la sesión siguiente. Se actualiza en cada hito (cierre, commit, decisiones) y sustituye a pegar resúmenes de sesiones anteriores en el chat.
+
+## 2026-09-28 · Tercer plan: la extensión cargada de verdad (LEER PRIMERO)
+
+- Marco cargó POR FIN la extensión en su Chrome 153 (jira/confluence.simplprogramme.eu, Confluence 9.2.23 DC en español) y vio cinco cosas: el Análisis no subraya (B1), la guiada sólo «lleva» (B2), «Failed to fetch dynamically imported module» en la consola (B3), «Señalar» dice «No he podido activar la selección» (B4), «Dibujar el flujo» deja la pregunta escrita en vez de mandarla (B5).
+- **Causa raíz MEDIDA en su Chrome** (sin tocar nada): con `use_dynamic_url: true` (S7, H2) la URL con GUID se sirve por redirección al id fijo, la base del módulo pasa a ser el id fijo y sus `import './x.js'` se deniegan: cargan las hojas (`messages.js`, `page-id.js`) y falla todo lo que importa algo (`runner.js`, `dom-utils.js`, `config.js`). B1, B2 y B4 cuelgan de eso más el `ok:true` falso de `ensureContentScript` (reinyecta en el mismo mundo, `__faroBooted` lo anula, no vuelve a hacer PING). B5 es un cambio de diseño (§8.27 → decisión 17).
+- **El plan** (`docs/PLAN3.md`, en la rama `plan/plan3-preparacion` sobre `plan/h26-cierre`): H27 el content script vuelve a cargar y su fallo se ve (`use_dynamic_url` fuera con motivo; PING/SETTINGS antes de `boot()`; re-PING tras inyectar; el SW nunca pide permiso y reconcilia los registros en `onInstalled`), H28 lo que consume el content script dice la verdad + el árbol del DC (chevron con verbo prohibido en el título: medido «Contract + Billing»), H29 «Dibujar el flujo» manda solo (decisiones 17 y 18), H30 verificación en real con Marco. Método: PROMPT-NUEVA-SESION.md §4 (lectores → contrato → constructores Opus → verificación → commit → revisión adversaria → docs), ≤25 agentes por flujo, todo en Opus.
+- **NO EJECUTAR hasta que Marco lo diga por chat.** Cuando lo diga: rama `plan/h27-content-script` sobre `plan/plan3-preparacion`, lectores de H27 (bootstrap.js, service-worker.js, `ensureContentAccess`/`togglePick` de panel.js, service-worker.test.js, bootstrap-wiring.test.js, test/manifest.js, web-accessible.test.js), contrato en `docs/plan/handoff/h27-contrato.md`.
+- Lo que el orquestador puede hacer en el Chrome de Marco (extensión Claude in Chrome): leer páginas y consola, ejecutar JS de lectura en la página; NO puede abrir el panel lateral (`chrome.tabs.query({active, currentWindow})`), ni `chrome://extensions` (recargar la extensión lo hace Marco), ni escribir ni borrar nada en Jira/Confluence (regla de Marco). El tool de JS bloquea salidas con URLs con consulta: devolver sólo recuentos y rutas sin `?`.
 
 ## Dónde está el repo
 
