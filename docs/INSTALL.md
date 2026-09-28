@@ -815,13 +815,20 @@ Junto al selector de modelo, abajo, hay otras dos cosas:
   mapa, los que devolvió Jira en ese turno y los de los perfiles: «UTF-8» o
   «SHA-256» no son incidencias), lleva debajo un botón «Dibujar el flujo»; en
   cuanto preguntas otra cosa desaparece, porque la pregunta habla de «tu última
-  respuesta». Como «Preguntar
-  sobre estos», pulsarlo **no manda nada**: te deja escrita en el cuadro la
-  pregunta que pide el diagrama (un Mermaid «flowchart» con la clave de cada
-  incidencia como primera palabra de su nodo, como mucho 15 nodos,
-  «:::riesgo», «:::hueco» o «:::contradiccion» en lo que falle, y desde H26
-  «sin classDef, style, click, href ni URL»); cámbiala o
-  bórrala, enviar lo haces tú, y bajo tu pregunta se dice «dibujar el flujo».
+  respuesta». Pulsarlo **manda** la pregunta que pide el diagrama (un Mermaid
+  «flowchart» con la clave de cada incidencia como primera palabra de su nodo,
+  como mucho 15 nodos, «:::riesgo», «:::hueco» o «:::contradiccion» en lo que
+  falle, y desde H26 «sin classDef, style, click, href ni URL»), como las
+  sugerencias del chat vacío o «Reintentar con X», y bajo tu pregunta se dice
+  «dibujar el flujo». Hasta H29 no mandaba nada: la dejaba escrita en el cuadro,
+  como «Preguntar sobre estos», y enviarla lo hacías tú; Marco pidió que lo
+  hiciera directamente (decisión 17). Lo que tuvieras escrito en el cuadro se
+  sustituye por esa pregunta, que es lo único que manda el botón; lo que
+  tuvieras preparado —un fragmento señalado en la página, una lista de
+  «Preguntar sobre estos»— viaja con ella, como con cualquier envío, y la nota
+  bajo tu pregunta lo dice. Con una respuesta todavía en camino el botón está
+  apagado, y si en ese momento Faro no puede mandar (sin conexión preparada con
+  opencode), la pregunta se queda escrita en el cuadro, como antes: mándala tú.
   Cualquier respuesta que traiga un bloque ```mermaid **cerrado** se dibuja en
   el chat —en Jira y en Confluence, lo pida el botón o no—: mientras llega a
   trozos se ve el código, y al cerrarse el bloque aparece el diagrama. Faro lo
@@ -847,7 +854,11 @@ Junto al selector de modelo, abajo, hay otras dos cosas:
   Si Faro no entiende el diagrama, deja el código tal cual y dice debajo por
   qué («No he podido dibujarlo: línea 3: «click» no se admite»). Una respuesta
   a «Dibujar el flujo» en Análisis no se subraya en la página: es un dibujo, no
-  un análisis.
+  un análisis. Y desde H29 ninguna respuesta a «Dibujar el flujo» ofrece
+  llevarte a ningún sitio (ni «Llévame» ni «Paso a paso» debajo): es un mapa de
+  lo que ya se ha contado, y como va lleno de claves, antes ponía a trabajar al
+  planificador —un segundo turno de pago— para una tarjeta que sobraba
+  (decisión 18). Para ir a una incidencia del dibujo, pulsa su nodo.
 
 - **Contrastar con Jira** (H25) — el diagrama lo dibuja el modelo, y una
   flecha «ENG-7 → ENG-3» es lo que **cree** que hay. En un **Jira propio (Data
@@ -1883,9 +1894,12 @@ corto y un detalle. Todos los títulos, por dónde salen:
   apunta nada). **Sin marcas** (en gris): «sin marcas: la pregunta era dibujar
   el flujo», en Análisis la respuesta a «Dibujar el flujo» no se subraya en la
   página: lo que se ve es el diagrama, así que no sale ningún aviso en el chat
-  (y por eso no es un «Sin marcas», que siempre lleva el suyo). **Pregunta
-  preparada** (en gris): «pregunta preparada · sin mandar», pulsaste «Dibujar
-  el flujo» y la pregunta está escrita en el cuadro; no se ha mandado nada.
+  (y por eso no es un «Sin marcas», que siempre lleva el suyo). **Pedido desde
+  el botón** (en gris): «pedido desde el botón», pulsaste «Dibujar el flujo» y
+  su pregunta se escribió en el cuadro y se mandó (desde H29, decisión 17; hasta
+  entonces decía «pregunta preparada · sin mandar» y la mandabas tú): detrás
+  viene «Turno enviado». Si no viene, Faro no pudo mandarla en ese momento y la
+  pregunta se quedó escrita en el cuadro, como antes: mándala tú.
 - «Relaciones de Jira» — (H25) pulsaste «Contrastar con Jira» bajo un
   diagrama, con tres detalles. **Leídas** (en verde): el mismo resumen que el
   pie de la figura «Según Jira» («Según Jira: 3 relaciones entre 4 incidencias
@@ -1978,7 +1992,10 @@ corto y un detalle. Todos los títulos, por dónde salen:
   espacio de Confluence que todavía no tiene mapa y la respuesta apuntaba a
   algún sitio; bajo ella sale la tarjeta «Me falta el mapa de este espacio»
   con su «Construir». Un destino de OTRO espacio que sí tenga mapa sigue dando
-  su tarjeta de siempre.
+  su tarjeta de siempre. Desde H29 (decisión 18), con el detalle «una respuesta
+  a «Dibujar el flujo» no es un sitio al que llevar»: el diagrama va lleno de
+  claves, y antes eso ponía a trabajar al planificador —un segundo turno de
+  pago— para una tarjeta «Llévame» que sobraba; ahora no se mira nada más.
 - «Camino leído de Confluence» — la cadena de padres del destino se leyó de
   la API REST del sitio (ramas, versión de la API, milisegundos).
 - «Sin camino» — no se pudo leer (sin acceso a la pestaña, 401/403, login,

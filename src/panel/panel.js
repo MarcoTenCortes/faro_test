@@ -540,10 +540,11 @@ const state = {
   // panel puede haberse ido a otro sitio (§8.22). Nunca se guardan: son los
   // resultados de AHORA, y una lista de ayer no es una precarga, es un engaño.
   pendingPreload: null,
-  // «Dibujar el flujo» (H24): `{host}` o null. El botón deja la pregunta ESCRITA
-  // y apunta aquí que la próxima es para dibujar, con el host donde se pulsó;
-  // `send()` lo consume como la precarga, y `offerNotes` sabe así que una
-  // respuesta que es un diagrama no es un análisis que marcar. Sólo memoria.
+  // «Dibujar el flujo» (H24): `{host}` o null. El botón manda su pregunta
+  // (decisión 17) y, antes, apunta aquí que es para dibujar, con el host
+  // donde se pulsó; `send()` lo consume como la precarga, y `offerNotes` sabe
+  // así que una respuesta que es un diagrama no es un análisis que marcar.
+  // Sólo memoria.
   pendingDiagram: null,
   // La intención de «Analizar» que dejó una fila de «hoy»: se navega y, cuando
   // la pestaña llega a esa página, se fija la Skill Análisis y se deja la
@@ -3349,7 +3350,7 @@ async function send() {
   const preload = state.pendingPreload
   state.pendingPreload = null
   const preloadAlPedir = preload?.host === state.site.host ? preload : null
-  // Y «Dibujar el flujo» (H24), igual: la pregunta que dejó escrita el botón es
+  // Y «Dibujar el flujo» (H24), igual: la pregunta que mandó el botón es
   // ESTA, y sólo cuenta en el sitio donde se pulsó (§8.22). La pregunta INTACTA
   // cuenta sola aunque el armado ya se consumiera (vuelve con «Reintentar con X»
   // y «Elegir otro modelo»), y una pregunta que ya no pide Mermaid no cuenta
@@ -3721,7 +3722,7 @@ async function send() {
     announce(answerAnnouncement(answer))
 
     // «Dibujar el flujo» (H24): una respuesta de Jira que cita tres incidencias o
-    // más ofrece dibujarlas, y el botón sólo deja la pregunta escrita (§8.20).
+    // más ofrece dibujarlas, y el botón manda su pregunta fija (decisión 17).
     // No con una respuesta que ya trae su diagrama. Ya se sabe que el panel
     // sigue en el sitio que preguntó: la salida de `!mismoSitio` va arriba.
     // Sólo cuentan las claves de un proyecto conocido —el de la pestaña, los del
@@ -3861,8 +3862,10 @@ async function send() {
     cron.mark('índice')
 
     // Y, si procede, ofrecer llevar al usuario allí (necesita el índice de
-    // arriba: el destino sólo vale si está en él).
-    await offerNavigation(answer, bubble, skill, turn.parts, { preloaded: !!preloadDelTurno })
+    // arriba: el destino sólo vale si está en él). Una respuesta a «Dibujar el
+    // flujo» no procede: `diagramaAlPedir` es lo capturado al pedir, como en
+    // `offerNotes` (decisión 18).
+    await offerNavigation(answer, bubble, skill, turn.parts, { preloaded: !!preloadDelTurno, diagrama: diagramaAlPedir })
 
     // Y una sola escritura del índice por turno, con todo lo que haya crecido
     // (las herramientas, el árbol, el camino que leyó el planificador). Si el
@@ -5101,7 +5104,17 @@ function warnAboutSources(parts, bubble, { sources, pageId = '', issueKey = '', 
  *        `jira_search`, el destino es esa búsqueda (la lista de tickets vive
  *        en el buscador), y no hace falta índice.
  */
-async function offerNavigation(answer, bubble, skillId = state.skill, parts = [], { preloaded = false } = {}) {
+async function offerNavigation(answer, bubble, skillId = state.skill, parts = [], { preloaded = false, diagrama = false } = {}) {
+  // Una respuesta a «Dibujar el flujo» es un mapa de lo que ya se ha contado, no
+  // un sitio al que ir. Va llena de claves, así que `shouldPlan` decía que sí y
+  // el planificador gastaba un segundo turno de pago para una tarjeta «Llévame»
+  // que sobra (decisión 18, 2026-09-28; PLAN3 §3.3). Es la primera salida,
+  // delante del modo y de la búsqueda de Jira, y con registro: una salida muda
+  // no se ve (§8.14).
+  if (diagrama) {
+    log.info('Sin navegación', 'una respuesta a «Dibujar el flujo» no es un sitio al que llevar')
+    return
+  }
   const skill = skillById(skillId)
 
   // Resumir o analizar lo que ya tienes delante no es ir a ningún sitio, y una
@@ -5593,14 +5606,14 @@ async function openIssueFromResults(key, { site, card }) {
 // ------------------------------------------------------------ diagramas (H24)
 
 /**
- * La pregunta que deja ESCRITA «Dibujar el flujo».
+ * La pregunta que manda «Dibujar el flujo» (decisión 17, H29).
  *
  * Sin claves, sin host y sin título (§8.20, la misma regla que
- * `PRELOAD_QUESTION`): «tu última respuesta» ya está en la sesión, y lo que se
- * ofrece escrito acaba en un prompt en cuanto el usuario pulsa enviar. Pide lo
- * que el parser sabe leer (`readFlowchart`): un `flowchart` en su valla, la
- * clave como primera palabra de cada etiqueta —de ahí sale el nodo que navega—
- * y las clases de `NOTE_KINDS`.
+ * `PRELOAD_QUESTION`): «tu última respuesta» ya está en la sesión, y lo que
+ * manda el botón es exactamente esta constante. Pide lo que el parser sabe
+ * leer (`readFlowchart`): un `flowchart` en su valla, la clave como primera
+ * palabra de cada etiqueta —de ahí sale el nodo que navega— y las clases de
+ * `NOTE_KINDS`.
  *
  * H26: pide también «sin classDef, style, click, href ni URL». En el turno real
  * del 2026-09-27 (github-copilot/gpt-5.6-luna) el modelo puso un `classDef`
@@ -5616,28 +5629,44 @@ const DIAGRAM_QUESTION = 'Dibuja el flujo entre las incidencias de tu última re
  * «Dibujar el flujo»: el botón que cuelga de una respuesta de Jira que cita tres
  * incidencias o más (H24).
  *
- * NO manda nada (§8.20), como «Preguntar sobre estos»: escribe la pregunta en el
- * cuadro, deja el foco ahí y apunta con el host del momento que el turno
- * siguiente es para dibujar (`state.pendingDiagram`, que consume `send()`). La
- * viñeta en el prompt de Análisis se descartó a propósito (docs/PLAN2.md §8.10):
- * las 40 instantáneas no cambian. `NEEDS_IDLE`, como los demás botones del chat:
- * nace con el turno todavía en vuelo.
+ * MANDA su pregunta al pulsarlo (decisión 17, H29). En H24 sólo la dejaba
+ * escrita, como «Preguntar sobre estos», por una regla heredada de §8.20 sin
+ * motivo propio; el 2026-09-28 Marco pidió que no fuera «copiar y pegar un
+ * prompt en el input del chat» sino que lo hiciera directamente, como ya hacen
+ * las sugerencias del chat vacío, «Reintentar con X» y «Pedirlo numerado». Lo
+ * que sale es sólo `DIAGRAM_QUESTION`, y una vez: apunta con el host del
+ * momento que el turno es para dibujar (`state.pendingDiagram`, que consume
+ * `send()`) ANTES de mandar, o el armado quedaría vivo para la pregunta
+ * siguiente; y escribe la pregunta antes de `send()`, o mandaría el borrador.
+ * Lo que esté armado —lo señalado en la página, lo precargado con «Preguntar
+ * sobre estos»— viaja con ella, como con cualquier envío, y la nota bajo la
+ * pregunta lo dice.
+ *
+ * El foco va al cuadro ANTES de `send()`: la fila del botón desaparece al
+ * mandar, y si `send()` sale pronto —sin cliente o sin sitio— la pregunta se
+ * queda escrita con el foco ahí, como antes (el Registro dice «pedido desde el
+ * botón» sin «Turno enviado»). Sin `announce`: el clic ya tiene eco (la fila se
+ * va, la burbuja sale con su nota y el chat se pone `aria-busy`). `send()` no
+ * tiene ningún `await` antes de `setStreaming(true)`, así que un doble clic no
+ * abre dos turnos. La viñeta en el prompt de Análisis se descartó a propósito
+ * (docs/PLAN2.md §8.10): las 40 instantáneas no cambian. `NEEDS_IDLE`, como los
+ * demás botones del chat: nace con el turno todavía en vuelo.
  */
 function diagramButton() {
   const b = document.createElement('button')
   b.className = 'ghost small ' + NEEDS_IDLE
   b.type = 'button'
   b.textContent = 'Dibujar el flujo'
-  b.title = 'Deja escrita la pregunta que pide el diagrama: la mandas tú'
+  b.title = 'Manda la pregunta que pide el diagrama'
   b.disabled = state.streaming
   b.addEventListener('click', () => {
     if (state.streaming) return
     state.pendingDiagram = { host: state.site?.host || '' }
-    log.info('Diagrama', 'pregunta preparada · sin mandar')
+    log.info('Diagrama', 'pedido desde el botón')
     el.input.value = DIAGRAM_QUESTION
     autoGrow()
     el.input.focus()
-    announce('Pregunta preparada: puedes cambiarla antes de enviarla.')
+    send()
   })
   return b
 }

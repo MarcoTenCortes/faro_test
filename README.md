@@ -620,18 +620,21 @@ Veintiuna decisiones que sostienen el diseño:
      resumen; nunca de quién es una incidencia.
    - **Y puedes pedir el flujo dibujado** (desde H24). Bajo la última respuesta,
      si cita tres incidencias o más de proyectos que Faro conoce, hay un botón,
-     *Dibujar el flujo*: como el de arriba, te deja la pregunta escrita y no
-     manda nada, y desaparece en cuanto preguntas otra cosa. Cualquier respuesta
-     que traiga un bloque ```mermaid cerrado se dibuja en el chat —Faro lo
-     pinta él mismo, sin librerías y sin ejecutar nada de lo que escribió el
-     modelo—; cada nodo con su clave te lleva a la incidencia por el mismo
-     camino que una fila de la lista, «Ver como lista» lo cuenta en texto y
-     «Copiar como Mermaid» lo deja listo para pegar en Excalidraw. Las líneas
-     con las que el modelo pinta a su gusto (`classDef`, `style`, `linkStyle`)
-     se ignoran y el dibujo sale igual, con los colores de Faro; lo que navega
-     o ejecuta (`click`, un enlace) no se admite, y la pregunta del botón le
-     pide que no escriba nada de eso. Si Faro no entiende el diagrama, deja el
-     código y dice por qué.
+     *Dibujar el flujo*: al pulsarlo manda su pregunta fija, sin que tengas que
+     enviarla tú (desde H29; hasta entonces la dejaba escrita, como el de
+     arriba), y desaparece en cuanto preguntas otra cosa. La respuesta es un
+     dibujo, no un sitio al que ir: no sale debajo ninguna tarjeta para
+     llevarte, y así no se gasta un segundo turno en planificarla. Cualquier
+     respuesta que traiga un bloque ```mermaid cerrado se dibuja en el chat
+     —Faro lo pinta él mismo, sin librerías y sin ejecutar nada de lo que
+     escribió el modelo—; cada nodo con su clave te lleva a la incidencia por
+     el mismo camino que una fila de la lista, «Ver como lista» lo cuenta en
+     texto y «Copiar como Mermaid» lo deja listo para pegar en Excalidraw. Las
+     líneas con las que el modelo pinta a su gusto (`classDef`, `style`,
+     `linkStyle`) se ignoran y el dibujo sale igual, con los colores de Faro;
+     lo que navega o ejecuta (`click`, un enlace) no se admite, y la pregunta
+     del botón le pide que no escriba nada de eso. Si Faro no entiende el
+     diagrama, deja el código y dice por qué.
    - **Y contrastar ese dibujo con Jira** (desde H25). El diagrama es lo que el
      modelo cree que se relaciona; en un Jira propio, con dos incidencias o más
      del diagrama que ya estén en el mapa del sitio, *Contrastar con Jira* lee

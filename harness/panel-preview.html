@@ -1689,9 +1689,9 @@ async function arrancar() {
     b1.appendChild(avisoConversacionPesada())
     chat.appendChild(b1)
 
-    // H24: el usuario pulsó «Dibujar el flujo» y mandó la pregunta que dejó
-    // escrita (la de `DIAGRAM_QUESTION` del panel), con su nota debajo; y la
-    // respuesta trae el diagrama, dibujado.
+    // H24: el usuario pulsó «Dibujar el flujo», que manda su pregunta al
+    // pulsarlo desde H29 (decisión 17; la de `DIAGRAM_QUESTION` del panel), con
+    // su nota debajo; y la respuesta trae el diagrama, dibujado.
     chat.appendChild(
       burbujaUsuario(
         'Dibuja el flujo entre las incidencias de tu última respuesta como un diagrama Mermaid «flowchart LR» dentro de un bloque ```mermaid: como mucho 15 nodos, cada nodo con la clave de la incidencia como primera palabra de su etiqueta y después su resumen corto; :::riesgo, :::hueco o :::contradiccion en lo que falle, y el número [n] de la observación que lo respalde; sin classDef, style, click, href ni URL. Sólo el diagrama y una frase.',

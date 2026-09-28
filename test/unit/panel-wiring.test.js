@@ -453,7 +453,12 @@ test('EL CAMBIO: en Jira la tarjeta abre la búsqueda que hizo el modelo, y el i
   // consulta JQL que produjo la lista, leída de la llamada real a jira_search
   // (las partes del turno), y no necesita índice.
   const envio = JS.slice(JS.indexOf('async function send('), JS.indexOf('function paintTurn('))
-  assert(/offerNavigation\(answer, bubble, skill, turn\.parts, \{ preloaded: !!preloadDelTurno \}\)/.test(envio), 'las partes del turno llegan a la navegación')
+  // EL CAMBIO (decisión 18, H29): la llamada lleva además si la pregunta era
+  // «Dibujar el flujo», y con ella offerNavigation sale sin planificar.
+  assert(
+    /offerNavigation\(answer, bubble, skill, turn\.parts, \{ preloaded: !!preloadDelTurno, diagrama: diagramaAlPedir \}\)/.test(envio),
+    'las partes del turno llegan a la navegación'
+  )
   const nav = JS.slice(JS.indexOf('async function offerNavigation'), JS.indexOf('async function learnAncestry'))
   assert(/jqlDestination\(parts, \{ origin: state\.site\.origin \}\)/.test(nav), 'la URL se construye contra el origen de la pestaña')
   assert(/navCard\(jqlPlan\(busqueda\)\)/.test(nav))
@@ -2216,9 +2221,12 @@ test('H12: lo precargado se consume en el turno siguiente, se dice bajo la pregu
   assert(descarte.length > 20 && /'Búsqueda precargada'/.test(descarte) && /showNotice\(/.test(descarte), 'un descarte se registra y se dice')
   // Y sin búsqueda nueva no se planifica: la pregunta era sobre la lista.
   const navH12 = sinComentarios(JS.slice(JS.indexOf('async function offerNavigation'), JS.indexOf('async function learnAncestry')))
-  assert(/async function offerNavigation\(answer, bubble, skillId = state\.skill, parts = \[\], \{ preloaded = false \} = \{\}\)/.test(navH12))
+  // EL CAMBIO (decisión 18, H29): la firma gana `diagrama`, y su salida va
+  // delante de todo (la pina entera la prueba de H24).
+  assert(/async function offerNavigation\(answer, bubble, skillId = state\.skill, parts = \[\], \{ preloaded = false, diagrama = false \} = \{\}\)/.test(navH12))
   const salida = navH12.indexOf('if (preloaded) {')
   assert(salida > navH12.indexOf('jqlDestination(parts') && salida < navH12.indexOf('planNavigation('), 'tras mirar si hubo búsqueda y ANTES de planificar')
+  assert(navH12.indexOf('if (diagrama) {') > 0 && navH12.indexOf('if (diagrama) {') < salida, 'la salida de un diagrama, delante de la de la lista ya leída')
   assert(/'Sin navegación', 'la pregunta era sobre una lista ya leída'/.test(navH12))
   assert(!/preloadedSearchBlock|SEARCH_OPEN/.test(sinComentarios(JS)), 'el bloque lo monta prompts.js, no el panel')
 
@@ -7683,12 +7691,13 @@ test('H22 revisión: los cuerpos que deciden en el selector, generateContext y e
   eq(apunte.split('applyLinkedScope(').length - 1, 1, 'y sólo ahí dentro')
 })
 
-test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibujar el flujo» no manda nada', async () => {
+test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibujar el flujo» manda su pregunta al pulsarlo', async () => {
   // H24 (docs/plan/handoff/h24-contrato.md §3): un ```mermaid CERRADO de la
   // respuesta se dibuja con el parser, el layout y la vista propios; un nodo con
   // clave navega AL HACER CLIC por el mismo camino que una fila de la lista de
-  // Jira (validatePlan + runPlan 'direct'); y «Dibujar el flujo» deja escrita la
-  // pregunta, como «Preguntar sobre estos». Cuerpos ENTEROS, como en «H22 revisión».
+  // Jira (validatePlan + runPlan 'direct'); y «Dibujar el flujo» manda su
+  // pregunta fija al pulsarlo desde H29 (decisión 17; en H24 la dejaba escrita,
+  // como «Preguntar sobre estos»). Cuerpos ENTEROS, como en «H22 revisión».
   const JS_SIN = sinComentarios(JS)
   const LIMPIO = JS_SIN.split('\n')
     .filter((l) => l.trim())
@@ -7879,7 +7888,7 @@ test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibu
   assert(!/innerHTML|insertAdjacentHTML|outerHTML/.test(dibujo), 'SEGURIDAD: el panel no dibuja con innerHTML')
 
   // (5) «Dibujar el flujo»: la pregunta fija, sin claves ni host (§8.20), y el
-  // botón ENTERO, que la deja escrita y no manda nada.
+  // botón ENTERO, que la manda y no manda nada más que ella.
   // EL CAMBIO (H26): la pregunta pide además «sin classDef, style, click, href
   // ni URL»: en el turno real del 2026-09-27 el modelo escribió un classDef
   // debajo de su :::riesgo, por costumbre (diagram-parse.js ya lo ignora; un
@@ -7889,10 +7898,15 @@ test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibu
   eq(
     pregunta.trim(),
     "const DIAGRAM_QUESTION = 'Dibuja el flujo entre las incidencias de tu última respuesta como un diagrama Mermaid «flowchart LR» dentro de un bloque ```mermaid: como mucho 15 nodos, cada nodo con la clave de la incidencia como primera palabra de su etiqueta y después su resumen corto; :::riesgo, :::hueco o :::contradiccion en lo que falle, y el número [n] de la observación que lo respalde; sin classDef, style, click, href ni URL. Sólo el diagrama y una frase.'",
-    'la pregunta que deja escrita el botón'
+    'la pregunta que manda el botón'
   )
   for (const prohibido of ['jql', 'host', 'key', 'site', '${']) assert(!pregunta.includes(prohibido), 'la pregunta no lleva ' + prohibido)
   const boton = funcion('function diagramButton(')
+  // EL CAMBIO (decisión 17, H29; 2026-09-28, lo pidió Marco): el clic manda la
+  // pregunta, como las sugerencias del chat vacío, «Reintentar con X» y «Pedirlo
+  // numerado». Fuera el announce: el clic ya tiene eco (la fila se va, la burbuja
+  // sale con su nota y el chat se pone aria-busy). El foco va ANTES de send():
+  // si send() sale pronto, la pregunta se queda escrita con el foco en el cuadro.
   eq(
     boton,
     lineas(
@@ -7901,23 +7915,82 @@ test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibu
       "  b.className = 'ghost small ' + NEEDS_IDLE",
       "  b.type = 'button'",
       "  b.textContent = 'Dibujar el flujo'",
-      "  b.title = 'Deja escrita la pregunta que pide el diagrama: la mandas tú'",
+      "  b.title = 'Manda la pregunta que pide el diagrama'",
       '  b.disabled = state.streaming',
       "  b.addEventListener('click', () => {",
       '    if (state.streaming) return',
       "    state.pendingDiagram = { host: state.site?.host || '' }",
-      "    log.info('Diagrama', 'pregunta preparada · sin mandar')",
+      "    log.info('Diagrama', 'pedido desde el botón')",
       '    el.input.value = DIAGRAM_QUESTION',
       '    autoGrow()',
       '    el.input.focus()',
-      "    announce('Pregunta preparada: puedes cambiarla antes de enviarla.')",
+      '    send()',
       '  })',
       '  return b',
       '}'
     ),
-    'el botón deja la pregunta escrita con el host del momento, nace apagado con un turno en vuelo, y nada más'
+    'el botón manda la pregunta fija con el host del momento, nace apagado con un turno en vuelo, y nada más'
   )
-  assert(!/\bsend\(/.test(boton), 'SEGURIDAD (§8.20): el botón no manda nada')
+  // SEGURIDAD (decisión 17), en lugar de «el botón no manda nada» (§8.20): lo
+  // único que sale es la constante, y una vez.
+  eq(boton.split('send()').length - 1, 1, 'SEGURIDAD (decisión 17): el botón manda UNA vez')
+  eq(
+    boton.match(/\bel\.input\b.*$/gm),
+    ['el.input.value = DIAGRAM_QUESTION', 'el.input.focus()'],
+    'SEGURIDAD (decisión 17): lo único que el botón escribe en el cuadro es la pregunta fija'
+  )
+  eq((boton.match(/\.value\s*[-+]?=(?!=)/g) || []).length, 1, 'SEGURIDAD (decisión 17): y es su única escritura de un valor')
+  // Y EJECUTADO: el cuerpo real del botón con new Function y los dobles como
+  // parámetros (nada global). El `send` doble apunta cómo estaba todo AL
+  // LLAMARLO y hace lo que hace el de verdad: sale pronto con la cabecera REAL
+  // de send() y, si pasa, consume el armado y vacía el cuadro.
+  {
+    const cabecera = lineas(
+      '  const text = el.input.value.trim()',
+      '  if (!text || state.streaming || !state.site) return',
+      '  if (!state.client) return'
+    )
+    una(funcion('async function send('), 'async function send() {\n' + cabecera + '\n', 'send() sale pronto sin texto, con un turno en vuelo, sin sitio o sin cliente, antes de consumir nada')
+    const pasaLaCabecera = new Function('el', 'state', cabecera + '\nreturn true')
+    const Q = 'Dibuja el flujo … bloque ```mermaid …'
+    const crear = new Function('document', 'NEEDS_IDLE', 'state', 'el', 'log', 'autoGrow', 'send', 'announce', 'DIAGRAM_QUESTION', boton + '\nreturn diagramButton()')
+    const pulsar = ({ streaming = false, client = {} } = {}) => {
+      const r = { envios: [], registro: [], focos: 0, anuncios: [] }
+      const state = { streaming, client, site: { host: 'jira.example.com' }, pendingDiagram: null }
+      const el = { input: { value: 'mi borrador', focus: () => r.focos++ } }
+      const log = { info: (...a) => r.registro.push(a) }
+      const send = () => {
+        r.envios.push({ valor: el.input.value, armado: state.pendingDiagram })
+        if (!pasaLaCabecera(el, state)) return
+        r.registro.push(['Turno enviado'])
+        state.pendingDiagram = null
+        el.input.value = ''
+      }
+      const oyentes = {}
+      const document = { createElement: (tag) => ({ tag, addEventListener: (tipo, fn) => (oyentes[tipo] = fn) }) }
+      const b = crear(document, 'needs-idle', state, el, log, () => {}, send, (t) => r.anuncios.push(t), Q)
+      oyentes.click()
+      return { ...r, b, state, el }
+    }
+    const clic = pulsar()
+    eq(clic.envios, [{ valor: Q, armado: { host: 'jira.example.com' } }], 'un clic manda UNA vez, con la pregunta fija en el cuadro (no el borrador) y el armado con el host del momento')
+    eq(clic.state.pendingDiagram, null, 'send() consume el armado: nada queda vivo para la pregunta siguiente')
+    eq(clic.focos, 1, 'con el foco en el cuadro')
+    eq(clic.registro, [['Diagrama', 'pedido desde el botón'], ['Turno enviado']], 'el Registro: pedido desde el botón, y el turno')
+    eq(clic.anuncios, [], 'sin «Pregunta preparada»: el clic ya tiene eco')
+    const enVuelo = pulsar({ streaming: true })
+    eq(
+      [enVuelo.b.disabled, enVuelo.envios.length, enVuelo.el.input.value, enVuelo.state.pendingDiagram, enVuelo.registro],
+      [true, 0, 'mi borrador', null, []],
+      'con un turno en vuelo nace apagado, y un clic no manda, no pisa el borrador ni arma nada'
+    )
+    const sinCliente = pulsar({ client: null })
+    eq(
+      [sinCliente.envios.length, sinCliente.el.input.value, sinCliente.state.pendingDiagram, sinCliente.focos, sinCliente.registro],
+      [1, Q, { host: 'jira.example.com' }, 1, [['Diagrama', 'pedido desde el botón']]],
+      'sin cliente send() sale pronto: la pregunta se queda ESCRITA con el foco en el cuadro, como antes, y el Registro dice «pedido desde el botón» sin «Turno enviado»'
+    )
+  }
   eq(JS_SIN.split('diagramButton(').length - 1, 2, 'la declaración y un solo sitio que lo cuelga')
   eq(JS_SIN.split('state.pendingDiagram = {').length - 1, 1, 'y sólo el botón lo arma')
 
@@ -8014,6 +8087,49 @@ test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibu
     'la salida va justo detrás de la del modo'
   )
   orden(notas, ['if (esDiagrama) {', 'const respuestaCorta', 'segmentedPassNotes('], 'antes de medir la respuesta y de la pasada que trocea')
+  // EL CAMBIO (decisión 18, H29; 2026-09-28, PLAN3 §3.3): una respuesta a
+  // «Dibujar el flujo» no ofrece navegación. Está llena de claves, así que
+  // shouldPlan decía que sí y el planificador gastaba un segundo turno de pago
+  // para una tarjeta «Llévame» que sobra. send() se lo dice con lo capturado al
+  // pedir, y la salida es la PRIMERA línea del cuerpo: antes del modo, de la
+  // búsqueda de Jira y del índice. Con registro: una salida muda no se ve (§8.14).
+  una(
+    envio,
+    '\n    await offerNavigation(answer, bubble, skill, turn.parts, { preloaded: !!preloadDelTurno, diagrama: diagramaAlPedir })\n',
+    'una respuesta a «Dibujar el flujo» no ofrece navegación: send() pasa lo capturado al pedir'
+  )
+  const navegar = funcion('async function offerNavigation(')
+  assert(
+    navegar.startsWith(
+      lineas(
+        'async function offerNavigation(answer, bubble, skillId = state.skill, parts = [], { preloaded = false, diagrama = false } = {}) {',
+        '  if (diagrama) {',
+        "    log.info('Sin navegación', 'una respuesta a «Dibujar el flujo» no es un sitio al que llevar')",
+        '    return',
+        '  }',
+        '  const skill = skillById(skillId)\n'
+      )
+    ),
+    'una respuesta a «Dibujar el flujo» no ofrece navegación: la guarda es la PRIMERA línea del cuerpo, y lo dice:\n' + navegar.slice(0, 400)
+  )
+  // Y EJECUTADA: el cuerpo real con dobles como parámetros. Un modo que no ofrece
+  // navegación corta justo detrás, así que sin diagrama no se llega más allá.
+  {
+    const hacer = new Function('state', 'log', 'skillById', navegar + '\nreturn offerNavigation')
+    const probar = async (opciones) => {
+      const r = { registro: [], modos: [] }
+      const nav = hacer({ skill: 'rapida' }, { info: (...a) => r.registro.push(a) }, (id) => (r.modos.push(id), { offersNavigation: false }))
+      eq(await nav('SIMPL-1 → SIMPL-2 → SIMPL-3', {}, 'busqueda', [], opciones), undefined)
+      return r
+    }
+    eq(
+      await probar({ preloaded: false, diagrama: true }),
+      { registro: [['Sin navegación', 'una respuesta a «Dibujar el flujo» no es un sitio al que llevar']], modos: [] },
+      'con un diagrama, lo dice y sale antes de mirar nada: ni el modo'
+    )
+    eq(await probar({ preloaded: false, diagrama: false }), { registro: [], modos: ['busqueda'] }, 'sin diagrama, lo de siempre')
+    eq(await probar(undefined), { registro: [], modos: ['busqueda'] }, 'y sin opciones, también')
+  }
 
   // (8) Se olvida donde la precarga: al cambiar de página, con una sesión nueva
   // y al olvidar el sitio (antes de repintar).

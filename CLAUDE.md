@@ -307,12 +307,9 @@ Cada contrato con su porqué y sus bordes, en docs/REFERENCIA.md §6; aquí, la 
 - `system` se guarda por mensaje de usuario y sólo va el del último: contexto grande por turno sin acumularlo.
 - `GET /config` trae los `environment` de los MCP con las claves EN CLARO: sólo hosts, nunca se guarda ni registra.
 - `PATCH /global/config` escribe el fichero global con fusión profunda y rearranca los MCP abortando TODOS los turnos; `PATCH {}` recarga lo pegado; `POST /mcp` sólo memoria; sin borrado por API (`enabled: false` y variables a `""`); su respuesta lleva los tokens → `sensitive`; `OPENCODE_CONFIG_DIR` NO aísla (HOME entero + `GET /path`); `POST /pty` y `/session/:id/shell` son RCE: no usar. El resto, en REFERENCIA §7.
-- mcp-atlassian 0.23.1: `uvx mcp-atlassian@0.23.1` arranca; `TOOLSETS=all` (sin ella el defecto bajará a seis); `npx mcp-atlassian` es de otro autor.
-- `tools` del mensaje se respeta como permiso PERSISTENTE: Faro no lo manda (el alcance exclusivo va por prompt + `consultedOutside`).
 - Permisos (S1): manda la ÚLTIMA regla que casa (sin ninguna, «ask»); el `pattern` se casa contra el ARGUMENTO; las reglas de sesión dan `DeniedError`; las «always» guardadas del proyecto ganan a su `deny`: Faro nunca crea ninguna y rechaza todo `permission.asked`.
 - `info.tokens` e `info.cost` por mensaje; `total` = `input + output + cache.read`; `cost` 0 en copilot y `-free` → «sin dato» es `null`; `message.updated` se repite: se suma por mensaje.
 - Modelos: el free tier de opencode no vale desde `serve`; funciona `github-copilot/gpt-5.6-luna`; nada en `/config/providers` dice si el plan lo permite; los rechazos reales (`APIError`, `isRetryable: false`), en REFERENCIA §7.
-- `probeModel` (H17): sesión desechable con `SAFE_PERMISSIONS`, UN turno, `variant` más barato, plazo `MODEL_LIMITS.probeMs` 15 s; abort ANTES de DELETE.
 - `~/.local/share/opencode/opencode.db` (SQLite WAL) guarda cada turno, sistema incluido: lo lee `npm run turn` (§2); su forma, en REFERENCIA §7.
 
 Detalle y cómo se midió cada cosa: docs/REFERENCIA.md §7
@@ -346,7 +343,7 @@ Sólo el enunciado; el porqué, el incidente que la motivó y sus matices están
 24. **Faro sólo escribe MCP en opencode** — una barrera (`mcp-config.js`) y dos puertas: `updateMcpEntries` y `reloadGlobalConfig`, nunca un PATCH genérico ni `POST /mcp`; nunca `/config` de proyecto ni `agent`/`permission`/`plugin`/`command`; sin configuración legible no se escribe. Con permiso, `reconfiguring()`, `sensitive`, sin pisar lo que no pidió; quitar = entrada entera `enabled: false`. Pruebas sólo en `npm run sandbox`.
 25. **El modelo es de la persona** — `settings.model` global; `resolveModel` nunca elige solo, se elige en «Elige el modelo». Fallos clasificados gratis en `faro:model-checks` con TTL; la única sonda es «Comprobar» (`probeModel`).
 26. **El ámbito, unidad del contexto** — contexto por `space:`/`project:`/`'*'` en la misma clave, índice por host sin partir; migración a `'*'` en la duda. «Tiene mapa» = `hasMap` (sólo `indexedAt`); tope total sin desalojo; ninguna clave nueva en `STORAGE_KEYS` por ámbito. En Jira (H22), por proyecto también el perfil (`byProject`) y el contexto del enlazado que viaja (`linkedSpacesFor`; lo elegido a mano manda).
-27. **Diagramas** — el modelo escribe Mermaid `flowchart`; la extensión lo valida con claves blancas y lo pinta con `createElementNS`, sin dependencias ni `innerHTML`; un nodo navega sólo al hacer clic, por `validatePlan` y con la clave en el índice; nada del diagrama se vuelve consulta (el contraste de H25 manda claves del índice, cosechadas por M4, a una plantilla fija); `classDef`/`style`/`linkStyle` se ignoran y `click`/`href`/`callback` se rechazan (H26); «Dibujar el flujo» no manda nada; sin viñeta en el prompt ni MCP de dibujo.
+27. **Diagramas** — el modelo escribe Mermaid `flowchart`; la extensión lo valida con claves blancas y lo pinta con `createElementNS`, sin dependencias ni `innerHTML`; un nodo navega sólo al hacer clic, por `validatePlan` y con la clave en el índice; nada del diagrama se vuelve consulta (el contraste de H25 manda claves del índice, cosechadas por M4, a una plantilla fija); `classDef`/`style`/`linkStyle` se ignoran y `click`/`href`/`callback` se rechazan (H26); «Dibujar el flujo» manda su pregunta fija al pulsarlo (decisión 17) y no ofrece navegación (decisión 18); sigue sin mandar nada más que su texto fijo; sin viñeta en el prompt ni MCP de dibujo.
 28. **El subrayado** (H23) — «Señalar» siempre azul; la tinta de las marcas a elegir (azul por defecto, ámbar); insignias y botones de Faro en ámbar; el relleno en dos `::highlight` DISJUNTOS debajo del texto (≥4,5 en los dos temas) y el trazo en el overlay; sin `mix-blend-mode` (forma B, H25, sólo tras medir).
 29. **El SW nunca pide un permiso** (H27) — sólo `contains`; el diálogo, el panel con gesto. Registros reconciliados en `onInstalled` y `permissions.onAdded`/`onRemoved` (`originsToRegister`: sitios guardados y sus enlazados con permiso, nunca lo que ya cubre `content_scripts`). PING y SETTINGS no arrancan el content script, salvo el PING con `arrancar` al asegurarlo; uno vivo y roto no se reinyecta: se dice.
 
@@ -431,8 +428,9 @@ Los pasos completos, con el porqué de cada regla: docs/REFERENCIA.md §11.
 | H26 | Cierre: docs definitivos, banco con frames de verdad, integración, sandbox, el turno real; classDef tolerado y la pregunta sin classDef | `plan/h26-cierre` · d2e243b + 7e48237 | 1643 |
 | H27 | El content script vuelve a cargar (sin `use_dynamic_url`), y cuando no, se ve: PING/SETTINGS sin `boot()`, re-PING, el SW sin `request` y reconciliando | `plan/h27-content-script` · 7c729e4 + a024313 | 1666; revisión, 1679 |
 | H28 | Lo que consume el content script dice la verdad (`failReason`, `sinAccesoMotivo`, el vigilante del salto) y el árbol del DC (el título de la fila, `href-path`); revisión: el último clic del DC, «Llévame» sin permiso, `llevaAlPaso` | `plan/h28-la-verdad` · 6afde42 + ace17bc | 1707; revisión, 1730 |
+| H29 | «Dibujar el flujo» manda al pulsarlo y no ofrece navegación (decisiones 17 y 18) | `plan/h29-dibujar-manda` · sin commit | 1730 |
 
-Ramas `plan/…`. **Dónde vive:** 22 ramas apiladas sobre `40f56d7` (H0-H21), nada pusheado ni PR, `main` local en `523c25f`; H20 saltado (manual, con gasto); encima `plan/docs-mapa` (este mapa, Tarea 0), `plan/h22-jira-por-proyecto` (bd01fa2 + a7b781a + 9cfc93d), `plan/h24-diagramas` (e8b950f + 512e8a1 + 8a98d94), `plan/h23-fusion` (39ef839 + 225421e: H23, hecho en su carril `plan/h23-subrayado` sobre 6256545, fundido sobre 8a98d94), `plan/h25-issuelinks` · 8928c60 + dfabd81 + 149ddf0 y la punta, `plan/h26-cierre` · d2e243b + 7e48237 + el commit de los hashes (docs/plan/handoff/ESTADO.md). El segundo plan queda CERRADO el 2026-09-27. Encima, el TERCER plan (docs/PLAN3.md, H27-H30): `plan/plan3-preparacion` (13b70e8), `plan/h27-content-script` y `plan/h28-la-verdad`.
+Ramas `plan/…`. **Dónde vive:** 22 ramas apiladas sobre `40f56d7` (H0-H21), nada pusheado ni PR, `main` local en `523c25f`; H20 saltado (manual, con gasto); encima `plan/docs-mapa` (este mapa, Tarea 0), `plan/h22-jira-por-proyecto` (bd01fa2 + a7b781a + 9cfc93d), `plan/h24-diagramas` (e8b950f + 512e8a1 + 8a98d94), `plan/h23-fusion` (39ef839 + 225421e: H23, hecho en su carril `plan/h23-subrayado` sobre 6256545, fundido sobre 8a98d94), `plan/h25-issuelinks` · 8928c60 + dfabd81 + 149ddf0 y la punta, `plan/h26-cierre` · d2e243b + 7e48237 + el commit de los hashes (docs/plan/handoff/ESTADO.md). El segundo plan queda CERRADO el 2026-09-27. Encima, el TERCER plan (docs/PLAN3.md, H27-H30): `plan/plan3-preparacion` (13b70e8), `plan/h27-content-script`, `plan/h28-la-verdad` y `plan/h29-dibujar-manda`.
 
 **Límites que no son de ningún hito:**
 - Jira Cloud sin REST de Jira (410): todo por el MCP (`sinRestDeJira`).
@@ -443,10 +441,10 @@ Ramas `plan/…`. **Dónde vive:** 22 ramas apiladas sobre `40f56d7` (H0-H21), n
 - Faro no arranca opencode; la configuración la escribe opencode (§8.24).
 
 **Visto el 2026-09-28**: Marco cargó la extensión en su Chrome 153 y el content script no arrancaba (con `use_dynamic_url`, MEDIDO; PLAN3 §2); H27 lo arregla en código.
-**Sin verificar:** H27 y H28 en Chrome (la lista de H30, PLAN3 §7): el panel real, el SW y los SUPUESTOS de §8.29 (`request` sin gesto, la
+**Sin verificar:** H27-H29 en Chrome (la lista de H30, PLAN3 §7): el panel real, el SW y los SUPUESTOS de §8.29 (`request` sin gesto, la
 actualización que borra los registros, el mundo aislado nuevo) y, de su revisión, un `<div id="__faroBooted">` y el paso del huérfano; las lecturas del panel al Confluence enlazado; ningún lector de pantalla; las capturas 2×2 del espejo (medidas con check() a 320/420 × claro y oscuro
 en H22-H25 y vistas con los ojos a 320 en claro en H23-H25, sin ficheros); de H23, el cursor, la selección azul, el trazo y el color en caliente; de H26,
-la pregunta nueva y el parser tolerante frente a un modelo con datos reales; de H28, el banco con frames de verdad y, de su revisión, el último clic del DC y «Llévame» sin permiso (PLAN3 §7, 15-20).
+la pregunta nueva y el parser tolerante frente a un modelo con datos reales; de H28, el banco con frames de verdad y, de su revisión, el último clic del DC y «Llévame» sin permiso (PLAN3 §7, 15-20); de H29, el botón que manda (§7, 5).
 **Verificado en H26** (2026-09-27): el banco con frames de verdad (149/149 con rAF nativo a 1258×597 emulado, pane visible),
 `npm run test:integration` (18/18 con `FARO_TEST_MODEL=github-copilot/gpt-5.6-luna`), `npm run turn` (probado) y el sandbox (9/9).
 Detalle por hito: docs/BITACORA.md §12.2.
@@ -468,4 +466,6 @@ Detalle por hito: docs/BITACORA.md §12.2.
 14. Decisión 11 de PLAN2 §8 (subrayado): TOMADA en H23; la forma B (H25a) DESCARTADA en H25 (BITACORA §12.4).
 15. La viñeta del diagrama en el prompt: FUERA. Con datos (2026-09-28) el modelo ya dibuja bien, pero mete `:::hueco [n]` DENTRO de las comillas de la etiqueta: la pregunta necesita el ejemplo de forma.
 16. ~~El token de Jira del MCP~~ RESUELTA el 2026-09-28: Marco lo renovó a mano y un turno real lo confirmó (épica SIMPL-31748 leída).
+17. «Dibujar el flujo» manda al pulsarlo (lo pidió Marco): TOMADA el 2026-09-28, en H29.
+18. Sin navegación tras un diagrama: TOMADA el 2026-09-28, en H29.
 Detalle: docs/BITACORA.md §12.3.
