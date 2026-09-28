@@ -220,5 +220,9 @@ test('H23: el color del subrayado llega de MSG.SETTINGS al overlay por el ejecut
   const estilo = caso.indexOf('if (msg.highlightStyle) runner.setHighlightStyle(msg.highlightStyle)')
   const color = caso.indexOf('if (msg.highlightColor) runner.setHighlightColor(msg.highlightColor)')
   assert(estilo >= 0 && color > estilo, 'el color, detrás del estilo y sólo si viene')
-  assert(color < caso.indexOf('sendResponse({ ok: true })'), 'antes de contestar')
+  // EL CAMBIO (H27): SETTINGS se contesta también sin haber arrancado (se guarda
+  // en `pendientes` y se aplica al arrancar, lo pina bootstrap-wiring.test.js),
+  // así que la primera respuesta del trozo es la de esa rama; la del ejecutor
+  // arrancado es la que va DETRÁS del color.
+  assert(color >= 0 && caso.indexOf('sendResponse({ ok: true })', color) > color, 'antes de contestar')
 })

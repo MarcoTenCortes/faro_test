@@ -8914,3 +8914,221 @@ test('H23: el color del subrayado se elige en Ajustes y viaja a la página; los 
   una(t23, 'Math.abs(parseFloat(insigniaUno.style.left) - (finDeLaCita.right + 1)) <= 1 &&', 'el 23 pone la insignia a 1 px del último carácter, con 1 px de tolerancia')
   una(t23, 'Math.abs(parseFloat(insigniaUno.style.top) - Math.max(0, finDeLaCita.top - 5)) <= 1,', 'y 5 px por encima de la línea, con 1 px')
 })
+
+/**
+ * H27 (PLAN3 §3.1): el panel sabe distinguir «falta el permiso» de «el content
+ * script está y no arranca». Los cuerpos se leen SIN comentarios y sin líneas
+ * vacías, como en las revisiones de H17-H22: un orden de cadenas dejaba pasar
+ * una rama que pide permiso detrás de la del script roto.
+ *
+ * Sin comentarios, pero sólo los que EMPIEZAN una línea: `sinComentarios` toma
+ * el `'/*'` de un patrón de permisos (`origin.replace(…) + '/*'`, en
+ * hasHostPermission y en requestHostPermission) por el principio de un
+ * comentario y se come el código hasta el siguiente cierre. Pasó al escribir
+ * estas pruebas: la del `await` delante de `permissions.request` comparaba -1
+ * con -1 y pasaba con el `await` puesto (mutación sobre una copia).
+ */
+const H27_LIMPIO = JS.replace(/^[ \t]*\/\*[\s\S]*?\*\//gm, '')
+  .replace(/^[ \t]*\/\/.*$/gm, '')
+  .split('\n')
+  .filter((l) => l.trim())
+  .join('\n')
+function h27Corte(src, desde, hasta) {
+  const i = src.indexOf(desde)
+  assert(i >= 0, 'falta la marca de inicio del recorte: ' + desde)
+  const j = src.indexOf(hasta, i + desde.length)
+  assert(j > i, 'falta la marca de final del recorte (o va antes): ' + hasta)
+  return src.slice(i, j)
+}
+const h27Funcion = (firma) => h27Corte(H27_LIMPIO, firma, '\n}\n') + '\n}'
+const h27Una = (src, linea, msg) => eq(src.split(linea).length - 1, 1, msg + ': «' + linea.trim() + '»')
+const h27Lineas = (...ls) => ls.join('\n')
+
+test('H27: un content script roto se registra como “Content script roto” y no pide permiso', () => {
+  // Visto el 2026-09-28 al cargar Faro en el Chrome de Marco (PLAN3 §2, B4 y
+  // G2): el arranque del content script fallaba (G1) y contestaba `{ok:false}`
+  // a todo, PING incluido; `contentStatus` lo reducía a `ready: false`, el panel
+  // lo tomaba por «no hay script» y, con el permiso dado, pedía
+  // REQUEST_HOST_PERMISSION; el SW reinyectaba en el mismo mundo (donde
+  // `__faroBooted` ya era true) y decía `{ok:true}` sin mirar: «Content script
+  // inyectado» en verde y la acción fallando detrás, o la tarjeta de «Falta un
+  // permiso» pidiendo lo que ya estaba dado. Desde H27 el SW distingue vivo y
+  // roto (`alive`, `error`, `kind`) y el panel lo dice.
+
+  // (1) ensureContentAccess, ENTERA. Sigue devolviendo un booleano (más de
+  // veinte llamadas sólo quieren saber si pueden hablar con la pestaña); lo
+  // nuevo es la rama del script vivo y roto, ANTES de la del permiso, y lo que
+  // el SW contesta tras inyectar («roto», «huerfano»), que ya no es un `ok` sin
+  // mirar.
+  const acceso = h27Funcion('async function ensureContentAccess(')
+  eq(
+    acceso,
+    h27Lineas(
+      'async function ensureContentAccess({ announce = true } = {}) {',
+      '  if (!state.site || !state.tabId) return false',
+      '  const status = await chrome.runtime',
+      '    .sendMessage({ type: MSG.CONTENT_STATUS, tabId: state.tabId, origin: state.site.origin })',
+      '    .catch(() => null)',
+      '  if (status?.ready) {',
+      '    state.contentProblem = null',
+      '    return true',
+      '  }',
+      '  if (status?.alive && status?.error) {',
+      '    noteContentProblem(status.error)',
+      '    if (announce) showContentProblem()',
+      '    return false',
+      '  }',
+      '  if (status?.granted) {',
+      '    const r = await chrome.runtime',
+      '      .sendMessage({ type: MSG.REQUEST_HOST_PERMISSION, origin: state.site.origin, tabId: state.tabId })',
+      '      .catch(() => null)',
+      '    if (r?.ok) {',
+      '      state.contentProblem = null',
+      "      log.ok('Content script inyectado', state.site.host)",
+      '      return true',
+      '    }',
+      "    if (r && r.ok === false && (r.kind === 'roto' || r.kind === 'huerfano')) {",
+      '      noteContentProblem(r.error)',
+      '      if (announce) showContentProblem()',
+      '      return false',
+      '    }',
+      '  }',
+      '  state.contentProblem = null',
+      '  if (announce) showPermissionNotice()',
+      '  return false',
+      '}'
+    ),
+    'ensureContentAccess: vivo y roto se apunta y se dice sin pedir permiso ni reinyectar; «roto» y «huerfano» tras inyectar, igual; lo demás, como siempre'
+  )
+  // Lo que el cuerpo de arriba ya dice, con el porqué a la vista.
+  const rota = h27Corte(acceso, 'if (status?.alive && status?.error) {', 'if (status?.granted) {')
+  assert(!rota.includes('showPermissionNotice()') && !rota.includes('REQUEST_HOST_PERMISSION'), 'con el script vivo y roto ni se pide permiso ni se reinyecta: el permiso ya está')
+  assert(acceso.indexOf('status?.alive') < acceso.indexOf('status?.granted'), 'la rama del script roto va antes que la del permiso')
+
+  // (2) Las dos funciones nuevas, ENTERAS: el motivo se apunta con la pestaña y
+  // el host, y se registra UNA vez por pestaña y motivo (ensureContentAccess
+  // corre en casi cada acción); el aviso dice el motivo y qué hacer.
+  const apuntar = h27Funcion('function noteContentProblem(')
+  eq(
+    apuntar,
+    h27Lineas(
+      'function noteContentProblem(error) {',
+      "  const texto = String(error || 'el content script no arranca')",
+      '  if (state.contentProblem?.tabId !== state.tabId || state.contentProblem?.error !== texto) {',
+      "    log.error('Content script roto', state.site.host + ' · ' + texto)",
+      '  }',
+      '  state.contentProblem = { host: state.site.host, tabId: state.tabId, error: texto }',
+      '}'
+    ),
+    'noteContentProblem: un registro por pestaña y motivo, y el motivo guardado con su pestaña y su host'
+  )
+  eq(
+    h27Funcion('function showContentProblem('),
+    h27Lineas(
+      'function showContentProblem() {',
+      "  showNotice('Faro no ha podido arrancar en esta pestaña: ' + (state.contentProblem?.error || 'motivo desconocido') + '. Recarga la pestaña y, si sigue igual, la extensión.', true)",
+      '}'
+    ),
+    'showContentProblem: el motivo y qué hacer, en rojo'
+  )
+  // Detrás de showPermissionNotice y antes de requestHostPermission: ningún
+  // corte de este fichero pasa por ahí (bootForSite→ensureContentAccess,
+  // loadLinkedContext→ensureContentAccess y runPlan→togglePick, iguales).
+  const pos = (s) => JS.indexOf(s)
+  assert(
+    pos('function showPermissionNotice(') < pos('function noteContentProblem(') &&
+      pos('function noteContentProblem(') < pos('function showContentProblem(') &&
+      pos('function showContentProblem(') < pos('async function requestHostPermission('),
+    'noteContentProblem y showContentProblem van entre showPermissionNotice y requestHostPermission'
+  )
+
+  // (3) Quien llama con `announce: false` y pinta la tarjeta del permiso al
+  // recibir `false` (offerNotes, runPlan, togglePick) no sabe por qué fue: con
+  // el script de ESTA pestaña roto, la tarjeta pediría un permiso que ya está
+  // dado. showPermissionNotice lo cambia por el aviso de recargar antes de
+  // pintar nada; la tarjeta en sí no cambia (el espejo la copia).
+  const permiso = h27Funcion('function showPermissionNotice(')
+  h27Una(
+    permiso,
+    h27Lineas(
+      'function showPermissionNotice() {',
+      '  if (state.contentProblem?.tabId === state.tabId && state.contentProblem?.host === state.site?.host) {',
+      '    showContentProblem()',
+      '    return',
+      '  }',
+      '  clearEmpty()'
+    ),
+    'con el script de esta pestaña roto, la tarjeta del permiso no sale: sale el motivo'
+  )
+  h27Una(permiso, "kicker.textContent = 'Falta un permiso'", 'la tarjeta sigue siendo la de siempre')
+
+  // (4) El estado: la última clave, detrás de pendingIntent, y sólo lo escriben
+  // ensureContentAccess (a null, en sus tres salidas sin problema) y
+  // noteContentProblem.
+  h27Una(H27_LIMPIO, '\n  pendingIntent: null,\n  contentProblem: null,\n}\n', 'state.contentProblem existe, a null, como última clave')
+  const escrituras = (src) => src.split('state.contentProblem = ').length - 1
+  eq([escrituras(H27_LIMPIO), escrituras(acceso), escrituras(apuntar)], [4, 3, 1], 'state.contentProblem sólo se escribe en ensureContentAccess (tres veces a null) y en noteContentProblem')
+})
+
+test('H27: “Señalar” dice la causa', () => {
+  // Visto el 2026-09-28 (PLAN3 §2, B4): «No he podido activar la selección en
+  // esta pestaña. Recárgala y vuelve a intentarlo.» salía igual si la pestaña
+  // no contestaba que si el content script contestaba diciendo por qué no
+  // arrancaba, y recargar la pestaña no arregla un import denegado. Desde H27,
+  // `null` (nadie contesta) y `ok: false` (contesta, con su motivo) son dos
+  // avisos, los dos en el registro con el mismo título, y `setPicking(true)`
+  // sólo con un `ok`.
+  eq(
+    h27Funcion('async function togglePick('),
+    h27Lineas(
+      'async function togglePick() {',
+      '  if (state.picking) return stopPick()',
+      '  if (!state.site || !state.tabId) return',
+      '  const puede = await ensureContentAccess({ announce: false })',
+      '  if (!puede) {',
+      '    showPermissionNotice()',
+      '    return',
+      '  }',
+      '  const r = await chrome.tabs.sendMessage(state.tabId, { type: MSG.PICK_START }).catch(() => null)',
+      '  if (r == null) {',
+      "    log.warn('Señalar sin activar', 'la pestaña no contesta')",
+      "    showNotice('No he podido hablar con esta pestaña. Recárgala y vuelve a intentarlo.', true)",
+      '    return',
+      '  }',
+      '  if (!r.ok) {',
+      "    const motivo = r.error || 'motivo desconocido'",
+      "    log.warn('Señalar sin activar', motivo)",
+      "    showNotice('No he podido activar la selección: ' + motivo + '.', true)",
+      '    return',
+      '  }',
+      '  setPicking(true)',
+      '}'
+    ),
+    'togglePick: sin respuesta y con un motivo son dos avisos, y sólo un ok enciende «Señalar»'
+  )
+  assert(!JS.includes('No he podido activar la selección en esta pestaña.'), 'el aviso de antes, que valía para todo, ya no está')
+  eq(H27_LIMPIO.split('setPicking(true)').length - 1, 1, '«Señalar» sólo se enciende en togglePick')
+})
+
+test('H27: el comentario del gesto dice la verdad', () => {
+  // El comentario de requestHostPermission decía que el gesto «no viaja hasta
+  // el service worker por sendMessage», y es al revés (PLAN3 §2, G3, leído en
+  // Chromium: `HasTransientUserActivation` +
+  // `ExtensionInteractionProvider::Scope::ForWorker`): viaja, pero sólo
+  // mientras dura la activación y sólo en la parte síncrona del oyente, que en
+  // el SW nunca llega a `request` sin un await delante. Aquí se lee el fuente
+  // CRUDO: lo que se mira son los comentarios.
+  const firma = JS.indexOf('async function requestHostPermission(')
+  assert(firma > 0, 'falta requestHostPermission')
+  const doc = JS.slice(JS.lastIndexOf('/**', firma), firma)
+  assert(!JS.includes('no viaja hasta el service worker'), 'ningún comentario dice ya que el gesto no viaja')
+  assert(
+    doc.includes('SÍ viaja al service worker') && doc.includes('parte síncrona') && doc.includes('H27'),
+    'el de requestHostPermission dice lo que pasa y por qué el diálogo se abre aquí: ' + doc
+  )
+  // Y lo que ese porqué exige en el panel: ningún await delante de request.
+  const cuerpo = h27Funcion('async function requestHostPermission(')
+  const pedir = cuerpo.indexOf('await chrome.permissions.request(')
+  assert(pedir > 0, 'requestHostPermission pide el permiso con await chrome.permissions.request(')
+  eq(cuerpo.indexOf('await '), pedir, 'el primer await de requestHostPermission es el de permissions.request: cualquiera delante perdería el gesto')
+})

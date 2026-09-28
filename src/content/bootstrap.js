@@ -3,7 +3,11 @@
  *
  * Va declarado en el manifest como script clásico, porque los content scripts
  * no admiten `import` estático. Carga el resto por import dinámico desde
- * `web_accessible_resources`, que sí funciona y evita tener que empaquetar.
+ * `web_accessible_resources`, que sí funciona y evita tener que empaquetar
+ * mientras la entrada NO lleve `use_dynamic_url`: con él, Chrome sirve la URL
+ * con GUID redirigiendo al id fijo y deniega los imports relativos de cada
+ * módulo, así que cargaban las hojas y fallaba todo lo demás (medido al cargar
+ * la extensión por primera vez en Chrome, H27, PLAN3 §3.1).
  *
  * Este fichero no habla nunca con opencode ni conoce la contraseña del
  * servidor: sólo recibe órdenes ya validadas y contesta si pudo cumplirlas.
@@ -16,52 +20,188 @@
   window.__faroBooted = true
 
   const url = (p) => chrome.runtime.getURL(p)
+
+  // ------------------------------------------------------- el arranque (H27)
+  //
+  // El content script arranca ENTERO (runner.js, el overlay, dom-utils.js y lo
+  // que arrastran) detrás del primer mensaje que lo necesita, no de cualquiera:
+  // PING y SETTINGS se contestan sin arrancar, porque el service worker los
+  // manda a cada pestaña en cuanto se abre el panel y arrancar ahí sería cargar
+  // todo en páginas donde nadie va a usarlo. Y cuando el arranque falla se ve:
+  // hasta H27 un arranque roto contestaba `{ok:false}` a todo, PING incluido, y
+  // para el service worker y el panel «script roto» y «no hay script» eran lo
+  // mismo: se reinyectaba (en este mundo, `__faroBooted` lo deja en nada) y se
+  // daba por bueno un script que seguía roto (PLAN3 §3.1, visto al cargar la
+  // extensión en el Chrome de Marco).
+
+  /** La promesa del arranque en curso o hecho; null si no ha empezado o si el último intento falló. */
   let ready = null
+  /** `{ runner, getPicker }` en cuanto `boot()` acaba bien; null hasta entonces. */
+  let arrancado = null
+  /** El error del último arranque fallido: lo contesta el PING. */
+  let bootError = null
+  /** Cuántas veces se ha intentado arrancar (el tope está en `boot`). */
+  let bootAttempts = 0
+  /** Lo que llega antes de arrancar y se aplica al arrancar: los ajustes, que no pueden esperar al panel. */
+  const pendientes = { settings: null }
 
-  async function boot() {
+  /**
+   * El texto de un error para contestarlo al panel, que lo apunta en su
+   * registro, de donde sale con «Copiar registro»: sin la URL de la extensión
+   * delante de cada módulo (lleva el id fijo, o el GUID de sesión), sólo la
+   * ruta `src/…`, que es lo que sirve para saber qué falló.
+   */
+  const bootErrorText = (err) => String(err?.message || err).replace(/chrome-extension:\/\/[^/]+\//g, '').slice(0, 300)
+
+  /**
+   * Si la extensión que inyectó este content script sigue ahí. Tras recargarla
+   * sin recargar la pestaña, el content script viejo sigue corriendo sin
+   * extensión detrás (un huérfano): pierde el id y todo lo que mande revienta
+   * con «Extension context invalidated».
+   */
+  const contextoVivo = () => !!chrome.runtime?.id
+
+  /**
+   * Lo que un huérfano dejó en el DOM que compartimos con él: su host del
+   * overlay (overlay.js crearía otro con el mismo id y quedarían dos) y las
+   * clases de «Señalar» en `<html>`. Los `<style>` de id fijo no se tocan:
+   * overlay.js los reutiliza por su id y los reescribe si son de otra versión.
+   */
+  function limpiarRestos() {
+    for (const h of document.querySelectorAll('#faro-overlay-host')) h.remove()
+    document.documentElement.classList.remove('faro-picking', 'faro-picking-dark')
+  }
+
+  /**
+   * Arranca una vez y devuelve siempre la misma promesa: dos mensajes a la vez
+   * esperan el mismo arranque. Como mucho DOS intentos por instancia: Chromium
+   * guarda en su mapa de módulos el import que falló (whatwg/html#6768), así
+   * que dentro de la misma página reintentar no arregla un módulo denegado y
+   * sólo multiplica los errores; el segundo cubre un fallo pasajero anterior al
+   * import, y a partir de ahí `boot()` devuelve el error guardado sin volver a
+   * escribirlo (el `catch` del oyente sigue diciendo qué mensaje se quedó sin
+   * atender).
+   */
+  function boot() {
+    if (arrancado) return ready
     if (ready) return ready
+    if (bootAttempts >= 2) return Promise.reject(bootError)
+    bootAttempts++
     ready = (async () => {
-      const [{ NavRunner }, { MSG }, { onUrlChange }, { pageIdFromDom }, { NAV_TIMING }] = await Promise.all([
-        import(url('src/content/runner.js')),
-        import(url('src/shared/messages.js')),
-        import(url('src/content/dom-utils.js')),
-        import(url('src/content/page-id.js')),
-        import(url('src/shared/config.js')),
-      ])
+      try {
+        const [{ NavRunner }, { MSG }, { onUrlChange }, { pageIdFromDom }, { NAV_TIMING }] = await Promise.all([
+          import(url('src/content/runner.js')),
+          import(url('src/shared/messages.js')),
+          import(url('src/content/dom-utils.js')),
+          import(url('src/content/page-id.js')),
+          import(url('src/shared/config.js')),
+        ])
 
-      // Los tiempos viven en config.js; aquí sólo se copian, porque
-      // MSG.SETTINGS los muta con lo que ajusta el usuario y la constante
-      // compartida no debe cambiar por debajo. Nada de esto hace falta antes
-      // del import(): el NavRunner se construye después.
-      const runner = new NavRunner({ timing: { ...NAV_TIMING } })
+        // Con los módulos ya cargados y antes de que exista el overlay propio:
+        // si el import falla no se toca nada (el huérfano se apaga solo, ver
+        // `sigueVivo`), y si no, esta instancia es la que se queda la página.
+        limpiarRestos()
 
-      // El `pageId` va con el aviso porque en un Confluence Data Center la URL
-      // no lo lleva (`/display/ESPACIO/Título`) y el service worker, que es
-      // quien apunta la visita, no puede mirar el DOM (H11). Es lo ÚNICO que se
-      // añade: ni el título (lo sabe Chrome) ni nada de la página.
-      onUrlChange((href) => {
-        chrome.runtime.sendMessage({ type: MSG.URL_CHANGED, url: href, pageId: pageIdFromDom() }).catch(() => {})
-      })
+        // Los tiempos viven en config.js; aquí sólo se copian, porque
+        // MSG.SETTINGS los muta con lo que ajusta el usuario y la constante
+        // compartida no debe cambiar por debajo. Nada de esto hace falta antes
+        // del import(): el NavRunner se construye después.
+        const runner = new NavRunner({ timing: { ...NAV_TIMING } })
 
-      // Pulsar el número de una observación no navega: avisa al panel para que
-      // marque esa fila del análisis. Los dos sentidos, chat → página y
-      // página → chat, con el mismo número.
-      runner.overlay.onNote = (n) => {
-        chrome.runtime.sendMessage({ type: MSG.NOTE_CLICKED, n }).catch(() => {})
-      }
+        // El selector de página se carga la primera vez que se usa: la mayoría
+        // de las visitas no lo tocan, y el content script cuanto más ligero
+        // mejor. Se declara aquí arriba porque apagarse también lo cancela.
+        let picker = null
+        let parar = null
+        let apagado = false
 
-      // El selector de página se carga la primera vez que se usa: la mayoría de
-      // las visitas no lo tocan, y el content script cuanto más ligero mejor.
-      let picker = null
-      const getPicker = async () => {
-        if (!picker) {
-          const { Picker } = await import(url('src/content/picker.js'))
-          picker = new Picker(runner.overlay)
+        // El huérfano se apaga ENTERO y una sola vez: el sondeo de la URL, el
+        // overlay (sus marcas, su host, las clases de «Señalar» y sus oyentes)
+        // y el selector si estaba eligiendo. Nada de eso tiene ya a quién
+        // contarle nada.
+        const apagar = () => {
+          if (apagado) return
+          apagado = true
+          parar?.()
+          runner.overlay.destroy()
+          if (picker) picker.cancel()
         }
-        return picker
-      }
 
-      return { runner, MSG, getPicker }
+        // Lo que el sondeo de la URL pregunta en cada vuelta. La primera vez
+        // que la extensión ya no está, apaga todo y no sólo el sondeo: si sólo
+        // parase, las marcas del huérfano seguirían pintadas hasta que otro
+        // content script llegara a limpiarlas.
+        const sigueVivo = () => {
+          if (contextoVivo()) return true
+          apagar()
+          return false
+        }
+
+        // El `pageId` va con el aviso porque en un Confluence Data Center la URL
+        // no lo lleva (`/display/ESPACIO/Título`) y el service worker, que es
+        // quien apunta la visita, no puede mirar el DOM (H11). Es lo ÚNICO que se
+        // añade: ni el título (lo sabe Chrome) ni nada de la página. Se mira si
+        // la extensión sigue antes de mandar, y si mandar revienta, se apaga.
+        parar = onUrlChange(
+          (href) => {
+            try {
+              if (!contextoVivo()) {
+                apagar()
+                return
+              }
+              chrome.runtime.sendMessage({ type: MSG.URL_CHANGED, url: href, pageId: pageIdFromDom() }).catch(() => {})
+            } catch {
+              apagar()
+            }
+          },
+          { sigueVivo }
+        )
+
+        // Pulsar el número de una observación no navega: avisa al panel para que
+        // marque esa fila del análisis. Los dos sentidos, chat → página y
+        // página → chat, con el mismo número. En un huérfano, la insignia
+        // pulsada es la señal de apagarse.
+        runner.overlay.onNote = (n) => {
+          try {
+            if (!contextoVivo()) {
+              apagar()
+              return
+            }
+            chrome.runtime.sendMessage({ type: MSG.NOTE_CLICKED, n }).catch(() => {})
+          } catch {
+            apagar()
+          }
+        }
+
+        const getPicker = async () => {
+          if (!picker) {
+            const { Picker } = await import(url('src/content/picker.js'))
+            picker = new Picker(runner.overlay)
+          }
+          return picker
+        }
+
+        arrancado = { runner, getPicker }
+
+        // Los ajustes que llegaron antes de arrancar, con las MISMAS cuatro
+        // llamadas que el `case` de SETTINGS del oyente. Están repetidas a
+        // propósito: runner-wiring.test.js pina esas líneas DENTRO del `case`,
+        // y bootstrap-wiring.test.js exige que las de aquí sean idénticas.
+        if (pendientes.settings) {
+          const msg = pendientes.settings
+          pendientes.settings = null
+          runner.setReducedMotion(!!msg.reduceMotion)
+          if (msg.highlightStyle) runner.setHighlightStyle(msg.highlightStyle)
+          if (msg.highlightColor) runner.setHighlightColor(msg.highlightColor)
+          if (msg.timing) Object.assign(runner.timing, msg.timing)
+        }
+        return arrancado
+      } catch (err) {
+        bootError = err
+        ready = null
+        console.error('[faro] no se pudo arrancar el content script', err)
+        throw err
+      }
     })()
     return ready
   }
@@ -167,21 +307,43 @@
 
     ;(async () => {
       try {
-        const { runner, MSG, getPicker } = await boot()
+        // Los tipos se leen de messages.js, que es una hoja (no importa nada):
+        // cargaba incluso cuando no cargaba nada más, y el mapa de módulos la
+        // guarda para los mensajes siguientes y para `boot()`.
+        const { MSG } = await import(url('src/shared/messages.js'))
 
+        // PING y SETTINGS, sin arrancar (H27). El PING dice si el content
+        // script está sano —y si ya arrancó— o vivo pero roto, con el motivo;
+        // así el service worker sabe que reinyectar no lo arreglaría. SETTINGS
+        // se guarda hasta el arranque si todavía no lo hubo.
         switch (msg.type) {
           case MSG.PING:
-            sendResponse({ ok: true, url: location.href, title: document.title })
+            if (bootError && !arrancado) {
+              sendResponse({ ok: false, alive: true, booted: false, error: bootErrorText(bootError) })
+              return
+            }
+            sendResponse({ ok: true, url: location.href, title: document.title, booted: !!arrancado })
             return
 
-          case MSG.SETTINGS:
+          case MSG.SETTINGS: {
+            if (!arrancado) {
+              pendientes.settings = msg
+              sendResponse({ ok: true })
+              return
+            }
+            const { runner } = arrancado
             runner.setReducedMotion(!!msg.reduceMotion)
             if (msg.highlightStyle) runner.setHighlightStyle(msg.highlightStyle)
             if (msg.highlightColor) runner.setHighlightColor(msg.highlightColor)
             if (msg.timing) Object.assign(runner.timing, msg.timing)
             sendResponse({ ok: true })
             return
+          }
+        }
 
+        const { runner, getPicker } = await boot()
+
+        switch (msg.type) {
           case MSG.STEP:
             sendResponse(await runner.executeStep(msg))
             return
@@ -216,6 +378,10 @@
             const p = await getPicker()
             sendResponse({ ok: true })
             const pick = await p.start()
+            // Si mientras se elegía la extensión se fue (el huérfano cancela
+            // su selector al apagarse), el resultado ya no tiene a quién ir y
+            // mandarlo reventaría.
+            if (!contextoVivo()) return
             chrome.runtime
               .sendMessage({ type: MSG.PICK_RESULT, pick: pick || null, url: location.href })
               .catch(() => {})
@@ -478,7 +644,7 @@
         }
       } catch (err) {
         console.error('[faro] fallo en el content script', err)
-        sendResponse({ ok: false, error: String(err?.message || err) })
+        sendResponse({ ok: false, error: bootErrorText(err) })
       }
     })()
 
@@ -495,6 +661,10 @@
   // `dom-utils.js` —que arrastra tree-dom.js y config.js: unos 37 KB— para un
   // `querySelector` era el precio de una navegación entera (revisión adversaria
   // de H11).
+  //
+  // Si ni siquiera esos dos cargan, se dice en la consola (H27): antes se
+  // tragaba el fallo y una pestaña sin aviso no dejaba rastro (§8.14). El
+  // silencio que queda es el de un `sendMessage` sin nadie al otro lado.
   const announce = () => {
     Promise.all([import(url('src/shared/messages.js')), import(url('src/content/page-id.js'))])
       .then(([{ MSG }, { pageIdFromDom }]) =>
@@ -502,7 +672,7 @@
           .sendMessage({ type: MSG.CONTENT_READY, url: location.href, pageId: pageIdFromDom() })
           .catch(() => {})
       )
-      .catch(() => {})
+      .catch((err) => console.warn('[faro] aviso de carga sin mandar', err))
   }
 
   if (document.readyState === 'complete' || document.readyState === 'interactive') announce()

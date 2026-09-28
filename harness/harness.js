@@ -2094,7 +2094,8 @@ const actions = {
     const conCursor = document.documentElement.classList.contains('faro-picking')
     // H23: mientras se señala, el cursor es el subrayador de cursor.js —una URL
     // `data:`, nunca un recurso de la extensión, que dejaría a la vista de la
-    // página la dirección que `use_dynamic_url` esconde (S7)— con `text` de
+    // página la dirección de Faro (hasta H27 el GUID que `use_dynamic_url`
+    // escondía, S7; desde H27, sin esa clave, el id fijo)— con `text` de
     // respaldo detrás; y la selección azul vive en la misma hoja, sólo bajo
     // `html.faro-picking`. Se lee mientras dura, y se comprueba abajo.
     const cursorSenalando = getComputedStyle(document.documentElement).cursor

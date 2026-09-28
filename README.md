@@ -145,7 +145,7 @@ la respuesta**.
 | Qué | Por qué | Comprobado |
 |---|---|---|
 | `opencode` ≥ 1.2 | Es el motor. La extensión no habla con ninguna nube. | 1.2.25 |
-| Chrome ≥ 130 | `chrome.sidePanel` y la CSS Custom Highlight API existen desde la 116, pero la protección que hace que los módulos de la extensión sólo se sirvan a la página por una URL distinta en cada sesión (`use_dynamic_url`) sólo ACTÚA desde la 130: con 116-129 Chrome ignora esa clave y cualquier web puede comprobar si tienes Faro instalado. Chrome 130 es de octubre de 2024, así que el mínimo es 130 y esa protección no es opcional. | Chrome 153 |
+| Chrome ≥ 130 | `chrome.sidePanel` y la CSS Custom Highlight API existen desde la 116; el mínimo es 130 por lo verificado (el panel lateral, el subrayado y el registro del content script en tus dominios, probados en la 153). Hasta H27 el motivo era `use_dynamic_url`, una protección que sólo actúa desde la 130 y que, medido al cargar Faro en Chrome, impedía cargar el content script: se quitó (abajo, «Seguridad»). | Chrome 153 |
 | uv/`uvx` (lo instala `tools\instalar.ps1`) o Docker | Para ejecutar `mcp-atlassian`, en la versión fijada 0.23.1. | uvx en Windows |
 | Un API token por producto | Para leer Jira y Confluence. En Cloud el mismo vale para los dos; en Data Center es un token personal por instalación. | |
 
@@ -797,7 +797,7 @@ cuáles no), que desde H16 son tuyos y no de un sitio.
 ## Comprobaciones
 
 ```bash
-npm run check              # sintaxis + orden + manifest + 1643 pruebas unitarias + docs
+npm run check              # sintaxis + orden + manifest + 1666 pruebas unitarias + docs
 npm run check:docs         # sólo el paso docs: número de pruebas, títulos del registro, mensajes y ficheros del mapa
 npm run test:integration   # contra un opencode real que arranca la propia prueba
 npm run harness            # banco de pruebas visual en http://127.0.0.1:5175
@@ -1235,12 +1235,18 @@ de Confluence podría acabar ejecutando órdenes en tu equipo.
 
 Además: el MCP se configura en modo sólo lectura, las claves de Atlassian van
 al proceso local de opencode y no al `chrome.storage`, el panel construye
-todo el texto del modelo con `textContent`, nunca con `innerHTML`, y los
-módulos de la extensión que la página puede cargar se sirven con una URL
-distinta en cada sesión (`use_dynamic_url`), para que ninguna web detecte que
-tienes Faro — y desde H14 el mínimo del manifest es **Chrome 130**, que es a
-partir de donde esa protección actúa de verdad: antes se podía instalar en un
-Chrome que la ignoraba.
+todo el texto del modelo con `textContent`, nunca con `innerHTML`, y lo único
+que la página puede cargar de la extensión son los módulos del content script
+(`src/content/`, `src/shared/`, `src/atlassian/` y `src/nav/`): nada del panel,
+del service worker ni del cliente de opencode, y la contraseña de opencode sólo
+vive en el panel. Hasta H27 esos módulos se servían además con una URL
+distinta en cada sesión (`use_dynamic_url`), para que ninguna web detectara que
+tienes Faro; al cargar la extensión en Chrome de verdad (2026-09-28) se midió
+que esa protección rompía el content script entero —Chrome redirige esa URL a
+la del id fijo y deniega lo que cada módulo importa— y se quitó. Lo que se
+pierde es eso: una web puede comprobar si tienes Faro instalado. Recuperarlo
+exigiría empaquetar el content script en un solo fichero, y Faro no tiene paso
+de build.
 
 ---
 
@@ -1297,10 +1303,15 @@ La primera vez que pidas navegación en un dominio así, Faro te enseña una
 tarjeta pidiendo permiso. Al concederlo:
 
 1. registra el content script para ese dominio, y
-2. lo inyecta en la pestaña que ya tienes abierta, sin recargar.
+2. lo inyecta en la pestaña que ya tienes abierta, sin recargar, y comprueba
+   que contesta.
 
 Si el permiso falta, el aviso lo dice. Antes esto fallaba en silencio: pulsabas
-«Paso a paso» y no ocurría nada.
+«Paso a paso» y no ocurría nada. Y desde H27, si el permiso está pero el
+content script no arranca, el aviso dice por qué en vez de volver a pedir el
+permiso. El registro se rehace solo al instalar o actualizar Faro y cada vez
+que das o quitas un permiso, así que recargar la extensión no debería volver a
+pedírtelo (probado en Node; en Chrome se comprueba en H30).
 
 ## Elegir modelo
 

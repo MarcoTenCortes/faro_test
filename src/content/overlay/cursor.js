@@ -10,8 +10,13 @@
  *
  * Va en una URL `data:` y no en un fichero de la extensión, a propósito: la
  * hoja `#faro-pick-style` se cuelga del `<head>` de la página, y la URL de un
- * recurso de la extensión escrita ahí dejaría a la vista de la página el GUID
- * de sesión que `use_dynamic_url` existe para esconder (S7). Comprobado el
+ * recurso de la extensión escrita ahí la leería la página. Cuando se escribió
+ * (H23) esa URL llevaba el GUID de sesión que `use_dynamic_url` escondía (S7);
+ * desde H27 la clave no está (con ella el content script no cargaba, ver
+ * docs/PLAN3.md §3.1), así que llevaría el id fijo de Faro. Que una web pueda
+ * saber que Faro está instalado ya es posible por otros caminos, pero
+ * escribirlo en cada página que se señala no hace falta: la URL `data:` no
+ * cuesta nada y no pide ningún fichero accesible más. Comprobado el
  * 2026-09-27 en los dos sitios reales (sin sesión: login y dashboard): su CSP
  * sólo manda `frame-ancestors`, sin `img-src` ni `default-src`, así que un
  * cursor `data:` no queda bloqueado.

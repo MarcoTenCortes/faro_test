@@ -506,9 +506,11 @@ test('H23: el texto de la página bajo la tinta llega a 4,5 en los dos temas, y 
 
 test('H23: el overlay no mezcla colores, no escribe ninguna URL de la extensión en la página, y declara la tinta en sus cuatro hosts', () => {
   assert(!/mix-blend-mode/.test(OVERLAY_CSS), 'la mezcla es la forma B (H25), y en el host aislado es inerte')
-  // SEGURIDAD (S7, §8.21): lo que se escribe en el documento lo lee la página, y
-  // una URL de un recurso de la extensión le enseñaría el GUID de sesión que
-  // `use_dynamic_url` esconde. El cursor va en una URL data:.
+  // SEGURIDAD (§8.21): lo que se escribe en el documento lo lee la página, y
+  // una URL de un recurso de la extensión se la enseñaría. Hasta H27 llevaba
+  // el GUID de sesión que `use_dynamic_url` escondía (S7); desde H27 esa clave
+  // no está (con ella el content script no cargaba) y llevaría el id fijo, que
+  // no hace falta escribir en cada página. El cursor va en una URL data:.
   const cursor = readFileSync(join(ROOT, 'src', 'content', 'overlay', 'cursor.js'), 'utf8')
   for (const [nombre, texto] of [
     ['PICK_CSS', PICK_CSS],

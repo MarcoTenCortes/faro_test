@@ -250,10 +250,23 @@ const COMMENT_EDITORS = '#addcomment, #footer-comment-button, [data-testid*="com
 /**
  * Avisa cuando cambia la URL, incluidos los cambios por pushState que no
  * disparan ningún evento estándar.
+ *
+ * `opciones.sigueVivo`, si viene, se pregunta en cada comprobación ANTES de
+ * mirar la URL, y la primera vez que dice que no, esto se para solo (lo mismo
+ * que la función que devuelve) y no vuelve a avisar a nadie. Es para el
+ * content script huérfano de una extensión recargada sin recargar la pestaña:
+ * sin esto sondeaba cada 700 ms para siempre y cada aviso reventaba (H27,
+ * PLAN3 §3.1). Cómo se sabe si se sigue vivo lo decide quien llama, porque
+ * este módulo lo importan las pruebas en Node y el banco, donde no hay
+ * extensión a la que preguntar.
  */
-export function onUrlChange(callback) {
+export function onUrlChange(callback, opciones = {}) {
   let last = location.href
   const check = () => {
+    if (opciones.sigueVivo && !opciones.sigueVivo()) {
+      parar()
+      return
+    }
     if (location.href !== last) {
       const from = last
       last = location.href
@@ -279,9 +292,12 @@ export function onUrlChange(callback) {
   window.addEventListener('hashchange', check)
   const poll = setInterval(check, 700) // red de seguridad para routers raros
 
-  return () => {
+  // Repetirla no hace nada: `check` la llama cada vez que `sigueVivo` dice que
+  // no, y quien la recibe puede llamarla también.
+  const parar = () => {
     window.removeEventListener('popstate', check)
     window.removeEventListener('hashchange', check)
     clearInterval(poll)
   }
+  return parar
 }

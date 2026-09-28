@@ -139,11 +139,15 @@ en `shell:startup` que ejecute ese comando minimizado.
 ## 2. La extensión
 
 Hace falta **Chrome 130 o más nuevo** (`minimum_chrome_version` del manifest). El
-panel lateral y el subrayado existen desde la 116, pero la protección que hace
-que los módulos de Faro sólo se sirvan a la página por una URL distinta en cada
-sesión —para que ninguna web pueda comprobar si la tienes instalada— sólo actúa
-desde la 130; entre la 116 y la 129 Chrome ignoraba esa clave, así que el mínimo
-se subió para que no fuera opcional.
+panel lateral y el subrayado existen desde la 116; el mínimo es 130 porque es
+lo verificado (el panel lateral, el subrayado de la Custom Highlight API y el
+registro del content script en tus propios dominios, probados en la 153). Hasta
+H27 el motivo era otro: una protección que servía los módulos de Faro a la
+página por una URL distinta en cada sesión, para que ninguna web pudiera
+comprobar si la tienes instalada. Al cargar la extensión en Chrome de verdad
+(2026-09-28) se vio que esa protección impedía cargar el content script entero
+(sólo cargaban los módulos que no importan nada), y se quitó: hoy una web puede
+saber si tienes Faro, pero no llega a nada del panel ni de tu opencode.
 
 1. `chrome://extensions`
 2. Activa **Modo desarrollador**
@@ -1681,7 +1685,19 @@ corto y un detalle. Todos los títulos, por dónde salen:
   sitio, o «→ automático» si volviste a dejarlo en manos de Faro). Desde ese
   momento viaja lo que elegiste.
 - «Content script inyectado» — con el permiso ya concedido, el content script
-  se inyectó en la pestaña abierta sin recargarla.
+  se inyectó en la pestaña abierta sin recargarla. Desde H27 sólo sale si el
+  recién puesto CONTESTA bien: antes salía en verde aunque no arrancara.
+- «Content script roto» — (H27, en rojo) el content script está en la pestaña
+  pero no arranca: host y el motivo que da él mismo, recortado a la ruta del
+  módulo que falló (por ejemplo «Failed to fetch dynamically imported module:
+  src/content/runner.js»), o «el content script no contesta» si tras
+  inyectarlo nadie responde. Sale una vez por pestaña y motivo, y con él el
+  aviso «Faro no ha podido arrancar en esta pestaña…» en lugar de la tarjeta
+  de «Falta un permiso»: el permiso ya está. Recarga la pestaña y, si sigue
+  igual, la extensión.
+- «Señalar sin activar» — (H27, en amarillo) pulsaste el rotulador y la selección no se
+  encendió: «la pestaña no contesta» (recargarla suele bastar) o el motivo que
+  da el content script al negarse.
 - «Permiso concedido» — concediste el permiso sobre el dominio; el content
   script queda registrado para él.
 - «Permiso de host denegado» — cerraste o rechazaste el diálogo de permiso de
@@ -2109,14 +2125,19 @@ token y sigue funcionando mientras tanto.
 
 **El panel dice que la página no contesta justo después de actualizar la extensión**
 Recarga la pestaña: el content script se inyecta al cargar la página, y el
-que tiene cargado es el anterior. Si sigue igual, mira en la consola de la
-página si hay errores al cargar `chrome-extension://…/src/…`: Faro sirve sus
-módulos con `use_dynamic_url` (la URL cambia en cada sesión, para que ninguna web
-pueda detectar la extensión; esa protección sólo funciona desde Chrome 130, que
-es por eso el mínimo del manifest) y los pide siempre con
-`chrome.runtime.getURL()`, así que un módulo bloqueado significa que su carpeta
-no está en `web_accessible_resources` del manifest (lo vigila
-`web-accessible.test.js` en `npm run check`).
+que tiene cargado es el anterior, que se queda sin extensión detrás (desde H27
+se da cuenta solo y se apaga, con sus marcas). Si sigue igual, mira el
+Registro: «Content script roto» dice qué módulo no cargó, y la consola de la
+página lo repite con «[faro] no se pudo arrancar el content script». Faro pide
+sus módulos siempre con `chrome.runtime.getURL()` y los sirve por
+`web_accessible_resources` del manifest (lo vigila `web-accessible.test.js` en
+`npm run check`). Si en la consola ves «Denying load of
+chrome-extension://…/src/… Resources must be listed in the
+web_accessible_resources manifest key», no te fíes del texto: fue lo que salió
+el 2026-09-28 con los módulos BIEN listados, porque el manifest llevaba
+`use_dynamic_url` y con él Chrome deniega los imports relativos de cada
+módulo. Desde H27 esa clave está prohibida (`npm run check` la rechaza); si
+vuelve a salir, mira que tu copia de `manifest.json` no la lleve.
 
 **Cambié de pestaña a mitad de respuesta y el turno desapareció**
 Es lo previsto. Al pasar a una pestaña de OTRO host el panel reconstruye su
@@ -2649,7 +2670,13 @@ Faro te dirá por qué, debajo de la respuesta. Los motivos, por frecuencia:
    navegación paso a paso. Sale una tarjeta con **Dar permiso**; concédelo y
    vuelve a pedir el análisis. Si el diálogo no llega a aparecer,
    `chrome://extensions` → Faro → Detalles → Acceso al sitio → «En sitios
-   específicos» → añade tu dominio.
+   específicos» → añade tu dominio. **Si el permiso ya está y el content
+   script no arranca**, no sale la tarjeta sino un aviso en rojo, «Faro no ha
+   podido arrancar en esta pestaña: <motivo>. Recarga la pestaña y, si sigue
+   igual, la extensión.», con «Content script roto» en el registro (H27). Pasó
+   de verdad al cargar Faro por primera vez en Chrome (2026-09-28): el content
+   script no cargaba y el panel pedía un permiso que ya estaba dado, o decía
+   «Listo» sin poder marcar nada.
 2. **El modelo no ha numerado como se le pide.** Ya no es motivo para no
    marcar: si numeró a su manera —una lista «1.», «**1.**», «Observación 1:»,
    encabezados «### 1.», o la respuesta entera dentro de un bloque de código—
@@ -2762,8 +2789,14 @@ entera (TINTAS).
 
 **Pulso el rotulador y no pasa nada**
 Como la navegación paso a paso, señalar en la página necesita permiso sobre el
-dominio y que el content script esté cargado. Si acabas de conceder el permiso,
-recarga la pestaña. En `*.atlassian.net` funciona de fábrica.
+dominio y que el content script esté cargado. En `*.atlassian.net` funciona de
+fábrica. Desde H27 el panel dice cuál de las cosas pasa, y el registro lo
+apunta como «Señalar sin activar»: sin permiso, la tarjeta **Dar permiso**;
+con el content script roto, «Faro no ha podido arrancar en esta pestaña:
+<motivo>…»; si la pestaña no contesta, «No he podido hablar con esta pestaña.
+Recárgala y vuelve a intentarlo.» (una pestaña cargada antes de recargar la
+extensión, por ejemplo); y si contesta pero se niega, «No he podido activar la
+selección: <motivo>.».
 
 **Al señalar, el cursor es el de texto y no el subrayador azul**
 El subrayador es una imagen `data:` metida en la hoja que Faro cuelga de la

@@ -61,13 +61,21 @@ export function checkManifest(root) {
     errors.push('host_permissions debe incluir 127.0.0.1 para hablar con opencode')
   }
 
-  // SEGURIDAD (auditoría de 2026-09-13, docs/PLAN.md S7): con la `key` fija,
-  // un recurso accesible desde la web por su URL estable
-  // `chrome-extension://<id>/…` deja que cualquier página https compruebe si
-  // Faro está instalado (y con él un opencode local y el MCP de Atlassian).
-  // Con `use_dynamic_url` el content script sigue cargando sus módulos por
-  // `chrome.runtime.getURL()`, pero la URL con el id fijo deja de resolverse
-  // desde la página. Lo que cada patrón expone lo vigila web-accessible.test.js.
+  // EL CAMBIO (H27, docs/PLAN3.md §3.1): hasta aquí se EXIGÍA `use_dynamic_url`
+  // (S7, auditoría de 2026-09-13: con la `key` fija, la URL estable
+  // `chrome-extension://<id>/…` deja que cualquier web https sepa si Faro está
+  // instalado) y con él el content script no cargaba. Medido el 2026-09-28 en
+  // el Chrome 153 de Marco: la URL con GUID se sirve redirigiendo a la del id
+  // fijo, la base del módulo pasa a ser esa URL de respuesta y sus imports
+  // relativos se piden por el id fijo y se deniegan; cargaban las hojas y
+  // fallaba todo lo que importa algo. Sin build no hay arreglo a medias (una
+  // segunda entrada sin la clave vuelve a exponer lo mismo), así que S7 queda
+  // descartada (docs/BITACORA.md §12.4) y la clave, prohibida. Se rechaza sin
+  // mirar el código porque este paso corre antes que las unitarias (y en su
+  // prueba, sobre un directorio sin src/); la regla contra el cierre real del
+  // content script y lo que cada patrón expone los vigila
+  // web-accessible.test.js. Lo que se pierde: una web puede comprobar si Faro
+  // está instalado; nada de panel/, background/ ni opencode/ queda expuesto.
   const war = m.web_accessible_resources
   if (!Array.isArray(war) || !war.length) {
     errors.push('falta web_accessible_resources: el content script carga sus módulos por import()')
@@ -76,8 +84,8 @@ export function checkManifest(root) {
       if (!Array.isArray(w?.resources) || !w.resources.length || !Array.isArray(w?.matches) || !w.matches.length) {
         errors.push(`web_accessible_resources[${i}] necesita "resources" y "matches" no vacíos`)
       }
-      if (w?.use_dynamic_url !== true) {
-        errors.push(`SEGURIDAD: web_accessible_resources[${i}] tiene que llevar "use_dynamic_url": true (sin él, con el id fijo cualquier web detecta Faro)`)
+      if (w?.use_dynamic_url === true) {
+        errors.push(`EL CAMBIO (H27): web_accessible_resources[${i}] no puede llevar "use_dynamic_url": true: Chrome sirve la URL con GUID redirigiendo al id fijo y los imports relativos de los módulos del content script se deniegan (medido el 2026-09-28 en Chrome 153)`)
       }
     })
   }

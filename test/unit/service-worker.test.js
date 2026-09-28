@@ -26,6 +26,26 @@ const CAMBIOS = []
  * actividad (H11), con el panel cerrado y sin content script.
  */
 const ACTUALIZADAS = []
+/**
+ * Los oyentes de `chrome.runtime.onInstalled` y de `chrome.permissions.onAdded`
+ * / `onRemoved`, por lo mismo (H27): con ellos el worker vuelve a registrar el
+ * content script de cada host propio concedido, y lo quita cuando el permiso se
+ * va. Hasta H27 el mock DESCARTABA el de `onInstalled`, y del de los permisos no
+ * había ni el evento.
+ */
+const INSTALADO = []
+const PERMISOS_DADOS = []
+const PERMISOS_QUITADOS = []
+
+/**
+ * Lo que devuelve `chrome.runtime.getManifest().host_permissions` con el
+ * manifest real: son los orígenes que Chrome da al instalar y que el worker
+ * NUNCA registra a mano (ya los cubre `content_scripts`).
+ */
+const HOSTS_DEL_MANIFEST = ['http://127.0.0.1/*', 'http://localhost/*', 'https://*.atlassian.net/*']
+
+/** El error de Chrome al llamar a `permissions.request` sin gesto del usuario. */
+const SIN_GESTO = 'This function must be called during a user gesture'
 
 /** Construye un entorno `chrome` simulado y devuelve los mandos. */
 function makeChrome() {
@@ -57,19 +77,44 @@ function makeChrome() {
     lecturas: [],
     /** Cada `scripting.executeScript`: la pestaña a la que se le puso el content script. */
     inyecciones: [],
+    /**
+     * Los patrones de origen que `permissions.getAll()` da como concedidos
+     * (H27). Como en Chrome, ahí salen también los del manifest: el worker
+     * tiene que saber quitarlos él.
+     */
+    granted: [...HOSTS_DEL_MANIFEST],
+    /** Cada script que `scripting.registerContentScripts` dio de alta, en orden (H27). */
+    registros: [],
+    /** Cada id que `scripting.unregisterContentScripts` dio de baja, en orden (H27). */
+    desregistros: [],
+    /**
+     * Los registrados AHORA, id → script, que es lo que consultan
+     * `getRegisteredContentScripts` y los dos errores de Chrome de abajo: sin
+     * esto, «registrar dos veces» y «desregistrar lo que no está» no fallarían
+     * nunca en el mock y sí en Chrome.
+     */
+    vivos: new Map(),
+    /** Cada `sidePanel.setPanelBehavior`: `onInstalled` lo conserva (H27). */
+    comportamiento: [],
   }
 
   globalThis.chrome = {
     runtime: {
-      onInstalled: { addListener() {} },
+      onInstalled: { addListener: (fn) => INSTALADO.push(fn) },
       onMessage: { addListener: (fn) => listeners.push(fn) },
       sendMessage: async (m) => {
         state.panelMessages.push(m)
       },
       getURL: (p) => 'chrome-extension://test/' + p,
+      getManifest: () => ({ manifest_version: 3, host_permissions: [...HOSTS_DEL_MANIFEST] }),
     },
     action: { onClicked: { addListener() {} } },
-    sidePanel: { setPanelBehavior: async () => {}, open: async () => {} },
+    sidePanel: {
+      setPanelBehavior: async (o) => {
+        state.comportamiento.push(o)
+      },
+      open: async () => {},
+    },
     tabs: {
       onRemoved: { addListener() {} },
       onUpdated: { addListener: (fn) => ACTUALIZADAS.push(fn) },
@@ -89,7 +134,9 @@ function makeChrome() {
         // Con destinatario: lo que se manda a la pestaña activa y no a otra
         // sólo se puede comprobar si se apunta a quién iba.
         state.sentWithTab.push({ tabId: id, msg })
-        return state.contentReply(msg)
+        // La pestaña va detrás: con dos pestañas del mismo origen (H27), cada
+        // una contesta según tenga o no su content script.
+        return state.contentReply(msg, id)
       },
     },
     storage: {
@@ -111,10 +158,43 @@ function makeChrome() {
         remove: async (k) => delete state.local[k],
       },
     },
-    permissions: { contains: async () => true, request: async () => true },
+    permissions: {
+      contains: async () => true,
+      // EL CAMBIO (H27): como en el worker de verdad, que no tiene gesto del
+      // usuario: `request` LANZA aunque el permiso ya esté concedido (SUPUESTO
+      // leído en Chromium, a verificar en H30). Hasta H27 el mock contestaba
+      // `true` y escondía que el «Dar permiso» del worker podía fallar siempre.
+      request: async () => {
+        throw new Error(SIN_GESTO)
+      },
+      getAll: async () => ({ permissions: ['sidePanel', 'storage', 'scripting'], origins: [...state.granted] }),
+      onAdded: { addListener: (fn) => PERMISOS_DADOS.push(fn) },
+      onRemoved: { addListener: (fn) => PERMISOS_QUITADOS.push(fn) },
+    },
     scripting: {
-      getRegisteredContentScripts: async () => [],
-      registerContentScripts: async () => {},
+      getRegisteredContentScripts: async ({ ids } = {}) => [...state.vivos.values()].filter((s) => !ids || ids.includes(s.id)),
+      registerContentScripts: async (scripts) => {
+        // Como Chrome: un id que ya está tumba la llamada entera.
+        for (const s of scripts) if (state.vivos.has(s.id)) throw new Error(`Duplicate script ID '${s.id}'`)
+        for (const s of scripts) {
+          state.vivos.set(s.id, s)
+          state.registros.push(s)
+        }
+      },
+      unregisterContentScripts: async ({ ids } = {}) => {
+        // Como Chrome (scripting_utils.cc, RemoveScripts): sin `ids` se van
+        // TODOS, y un id que no existe tumba la llamada entera sin quitar ninguno.
+        if (!ids) {
+          state.desregistros.push('*')
+          state.vivos.clear()
+          return
+        }
+        for (const id of ids) if (!state.vivos.has(id)) throw new Error(`Nonexistent script ID '${id}'`)
+        for (const id of ids) {
+          state.vivos.delete(id)
+          state.desregistros.push(id)
+        }
+      },
       // Las inyecciones, apuntadas: con ellas se sabe que los ajustes salen
       // DETRÁS del content script recién puesto (revisión adversaria de H23).
       executeScript: async (o) => {
@@ -143,6 +223,16 @@ function makeChrome() {
      */
     async fireTabUpdated(tabId, changeInfo, tab = state.tabs[tabId]) {
       for (const fn of ACTUALIZADAS) fn(tabId, changeInfo, tab)
+      await new Promise((r) => setTimeout(r, 0))
+      await new Promise((r) => setTimeout(r, 0))
+    },
+    /**
+     * Dispara uno de los eventos de H27 (`INSTALADO`, `PERMISOS_DADOS`,
+     * `PERMISOS_QUITADOS`) como Chrome: sin esperar a nadie. El worker hace su
+     * trabajo en una promesa suelta, así que hay que dejar correr la cola.
+     */
+    async disparar(oyentes, ...args) {
+      for (const fn of oyentes) fn(...args)
       await new Promise((r) => setTimeout(r, 0))
       await new Promise((r) => setTimeout(r, 0))
     },
@@ -729,8 +819,10 @@ test('H23 revisión: la pestaña que el panel comprueba recibe los ajustes de la
   }
   try {
     // Sin recorrido: la pestaña 3 no tiene ninguno en marcha.
+    // EL CAMBIO (H27): la respuesta dice además si hay alguien al otro lado
+    // (`alive`) y, si está roto, por qué (`error`): siempre las cuatro claves.
     const res = await rig.send({ type: MSG.CONTENT_STATUS, tabId: 3, origin: 'https://acme.atlassian.net' })
-    eq(res, { granted: true, ready: true })
+    eq(res, { granted: true, ready: true, alive: true, error: '' })
     eq(rig.state.sentWithTab.map((s) => s.msg.type), ['faro:ping', 'faro:settings'], 'primero el PING y, si contesta, los ajustes, ANTES de contestar')
     const empujados = rig.state.sentWithTab.filter((s) => s.msg.type === MSG.SETTINGS)
     eq(empujados.length, 1, 'un solo SETTINGS')
@@ -761,7 +853,8 @@ test('H23 revisión: la pestaña que el panel comprueba y no contesta no recibe 
   rig.state.contentReply = () => null // sin content script
 
   const res = await rig.send({ type: MSG.CONTENT_STATUS, tabId: 3, origin: 'https://acme.atlassian.net' })
-  eq(res, { granted: true, ready: false })
+  // EL CAMBIO (H27): muda es `alive: false`, que no es lo mismo que rota.
+  eq(res, { granted: true, ready: false, alive: false, error: '' })
   eq(rig.state.sentWithTab.map((s) => s.msg.type), ['faro:ping'], 'sólo el PING: a una pestaña muda no se le empuja nada')
 })
 
@@ -777,7 +870,7 @@ test('H23 revisión: la pestaña que el panel comprueba sigue lista aunque el al
   }
   try {
     const res = await rig.send({ type: MSG.CONTENT_STATUS, tabId: 3, origin: 'https://acme.atlassian.net' })
-    eq(res, { granted: true, ready: true })
+    eq(res, { granted: true, ready: true, alive: true, error: '' })
   } finally {
     globalThis.chrome.storage.local.get = bueno
   }
@@ -794,16 +887,22 @@ test('H23 revisión: tras inyectar el content script, los ajustes van detrás', 
   const res = await rig.send({ type: MSG.REQUEST_HOST_PERMISSION, origin: 'https://confluence.simplprogramme.eu', tabId: 3 })
   eq(res, { ok: true })
   eq(rig.state.inyecciones.map((o) => o.target), [{ tabId: 3 }], 'se inyecta en la pestaña abierta')
-  eq(rig.state.sentWithTab.map((s) => s.msg.type), ['faro:ping', 'faro:settings'], 'y los ajustes salen detrás')
+  // EL CAMBIO (H27): tras inyectar se vuelve a hacer PING, y el `ok` y los
+  // ajustes sólo salen si ESE contesta bien (hasta H27, `{ ok: true }` sin mirar).
+  eq(rig.state.sentWithTab.map((s) => s.msg.type), ['faro:ping', 'faro:ping', 'faro:settings'], 'el PING otra vez tras inyectar, y los ajustes detrás')
   const [ajustes] = rig.state.sentWithTab.filter((s) => s.msg.type === MSG.SETTINGS)
   eq([ajustes.tabId, ajustes.msg.highlightColor], [3, 'ambar'])
 })
 
 test('H23 revisión: una carga sin recorrido no despierta el content script entero', async () => {
-  // Decisión de H11 que la revisión de H23 conserva: el content script arranca
-  // entero con el PRIMER mensaje que recibe, así que un SETTINGS en cada carga
-  // de cada página de un host registrado lo arrancaría siempre (18 módulos y un
-  // sondeo cada 700 ms). El aviso de «lista» sólo apunta la visita.
+  // Decisión de H11 que la revisión de H23 conserva: el aviso de «lista» sólo
+  // apunta la visita. Hasta H27 el motivo era que el content script arrancaba
+  // entero con el PRIMER mensaje que recibía (18 módulos y un sondeo cada
+  // 700 ms), y un SETTINGS en cada carga lo habría arrancado siempre. Desde H27
+  // SETTINGS ya no arranca nada (se guarda hasta el primer mensaje de verdad),
+  // pero empujarlo en cada carga de cada pestaña seguiría costando una lectura
+  // del almacén y un mensaje por página para nada: los ajustes llegan igual
+  // cuando el panel comprueba la pestaña, antes de marcar o señalar.
   const rig = makeChrome()
   await loadWorker(rig)
   rig.state.local['faro:settings'] = AJUSTES_AMBAR
@@ -812,4 +911,371 @@ test('H23 revisión: una carga sin recorrido no despierta el content script ente
   const res = await rig.send({ type: MSG.CONTENT_READY, url: rig.state.tabs[3].url, pageId: '200' }, { tab: { id: 3, title: 'ADR-014' } })
   eq(res, { ok: true })
   eq(rig.state.sentWithTab, [], 'ni un mensaje a la pestaña')
+})
+
+// --------------------------------------------------------------------- H27
+//
+// El content script vuelve a cargar, y cuando no, se ve (docs/PLAN3.md §3.1).
+// Visto en el Chrome de Marco el 2026-09-28: un content script que no arranca
+// contesta `{ ok: false }` a todo, PING incluido, y para el worker «hay un
+// script roto» y «no hay script» eran lo mismo: `ensureContentScript` volvía a
+// inyectar, devolvía `{ ok: true }` sin mirar, y el panel decía «Listo. Ya
+// puedo resaltar…» y no resaltaba nada. Y el «Dar permiso» del worker llamaba a
+// `permissions.request`, que en un worker, sin gesto del usuario, lanza.
+
+const CONF_ORIGEN = 'https://confluence.simplprogramme.eu'
+const CONF_ID = 'faro-https---confluence-simplprogramme-eu'
+const JIRA_ID = 'faro-https---jira-simplprogramme-eu'
+
+/**
+ * Lo que contesta al PING un content script cuyo arranque falló (H27,
+ * bootstrap.js): vivo, sin arrancar y con el motivo recortado a la ruta.
+ */
+const ROTO = {
+  ok: false,
+  alive: true,
+  booted: false,
+  error: 'Failed to fetch dynamically imported module: src/content/runner.js',
+}
+
+test('H27: con el PING muerto también después de inyectar, REQUEST_HOST_PERMISSION da ok:false y kind huerfano', async () => {
+  // Nadie contesta ni antes ni después de inyectar (la pestaña guarda la
+  // instancia de antes de recargar la extensión, o la inyección «funciona» y no
+  // arranca nada). Hasta H27 esto era `{ ok: true }`.
+  const rig = makeChrome()
+  await loadWorker(rig)
+  rig.state.local['faro:settings'] = AJUSTES_AMBAR
+  rig.state.contentReply = () => null
+
+  const res = await rig.send({ type: MSG.REQUEST_HOST_PERMISSION, origin: CONF_ORIGEN, tabId: 3 })
+  eq(res, { ok: false, kind: 'huerfano', error: 'el content script no contesta' })
+  eq(rig.state.inyecciones.map((o) => o.target), [{ tabId: 3 }], 'se intenta UNA vez')
+  eq(rig.state.sentWithTab.map((s) => s.msg.type), ['faro:ping', 'faro:ping'], 'y sin un PING bueno no se empujan los ajustes')
+})
+
+test('H27: un content script vivo y roto no se reinyecta y da kind roto', async () => {
+  // Reinyectar no arregla un arranque roto: Chrome guarda en su mapa de módulos
+  // el import que falló (whatwg/html#6768), y una segunda instancia en el mismo
+  // mundo sólo añadiría otro oyente compitiendo con el viejo. Lo que hace falta
+  // es DECIRLO, con el motivo que da el propio content script.
+  const rig = makeChrome()
+  await loadWorker(rig)
+  rig.state.local['faro:settings'] = AJUSTES_AMBAR
+  rig.state.contentReply = (msg) => (msg.type === MSG.PING ? ROTO : null)
+
+  const estado = await rig.send({ type: MSG.CONTENT_STATUS, tabId: 3, origin: CONF_ORIGEN })
+  eq(estado, { granted: true, ready: false, alive: true, error: ROTO.error })
+  const res = await rig.send({ type: MSG.REQUEST_HOST_PERMISSION, origin: CONF_ORIGEN, tabId: 3 })
+  eq(res, { ok: false, kind: 'roto', error: ROTO.error })
+  eq(rig.state.inyecciones, [], 'ni una inyección')
+  eq(rig.state.sentWithTab.map((s) => s.msg.type), ['faro:ping', 'faro:ping'], 'un PING por consulta y ningún SETTINGS')
+
+  // Sin motivo, uno genérico: un `error` vacío querría decir «no está roto».
+  rig.state.contentReply = (msg) => (msg.type === MSG.PING ? { ok: false } : null)
+  eq(await rig.send({ type: MSG.CONTENT_STATUS, tabId: 3, origin: CONF_ORIGEN }), {
+    granted: true,
+    ready: false,
+    alive: true,
+    error: 'el content script no arranca',
+  })
+
+  // Y roto DESPUÉS de inyectar (no había nadie, y el recién puesto no arranca):
+  // roto también, no `ok`.
+  rig.state.inyecciones.length = 0
+  rig.state.sentWithTab.length = 0
+  rig.state.contentReply = (msg) => (msg.type === MSG.PING && rig.state.inyecciones.length ? ROTO : null)
+  eq(await rig.send({ type: MSG.REQUEST_HOST_PERMISSION, origin: CONF_ORIGEN, tabId: 3 }), { ok: false, kind: 'roto', error: ROTO.error })
+  eq(rig.state.inyecciones.map((o) => o.target), [{ tabId: 3 }])
+  eq(rig.state.sentWithTab.map((s) => s.msg.type), ['faro:ping', 'faro:ping'])
+})
+
+test('H27: dos REQUEST_HOST_PERMISSION a la vez registran e inyectan UNA vez', async () => {
+  // Sin `request` ni gesto, el panel asegura el script desde varios sitios a la
+  // vez al abrirse (el arranque, los chips, los campos de la incidencia, «hoy»,
+  // el índice): sin serializar por origen, cada uno registraba e inyectaba el
+  // suyo y la pestaña acababa con dos content scripts compitiendo.
+  const rig = makeChrome()
+  await loadWorker(rig)
+  rig.state.contentReply = (msg, tabId) =>
+    msg.type === MSG.PING && rig.state.inyecciones.some((o) => o.target.tabId === tabId) ? { ok: true } : null
+  const pide = (tabId) => rig.send({ type: MSG.REQUEST_HOST_PERMISSION, origin: CONF_ORIGEN, tabId })
+
+  eq(await Promise.all([pide(3), pide(3), pide(1)]), [{ ok: true }, { ok: true }, { ok: true }])
+  eq(rig.state.registros.map((s) => s.id), [CONF_ID], 'un registro')
+  // La tercera es otra pestaña del mismo origen (otro panel, en otra ventana):
+  // compartir la respuesta de la primera la dejaría sin script diciéndole «ok»,
+  // así que espera su turno y se asegura la suya.
+  eq(rig.state.inyecciones.map((o) => o.target.tabId), [3, 1], 'una inyección por pestaña, y no dos en la misma')
+})
+
+test('H27: SEGURIDAD: el SW nunca llama a permissions.request', async () => {
+  // El gesto del clic viaja con el mensaje sólo mientras dura la parte
+  // síncrona de su oyente, y `request` lo exige aunque el permiso ya esté dado
+  // (los dos, SUPUESTOS leídos en Chromium hasta H30): el diálogo lo abre el
+  // panel, con el clic, y el worker sólo COMPRUEBA con `contains`. Hasta H27 lo
+  // pedía él y contestaba «permiso denegado» con el permiso concedido.
+  const rig = makeChrome()
+  await loadWorker(rig)
+  let pedidos = 0
+  globalThis.chrome.permissions.request = async () => {
+    pedidos++
+    throw new Error(SIN_GESTO)
+  }
+  rig.state.contentReply = (msg) => (msg.type === MSG.PING ? { ok: true } : null)
+
+  eq(await rig.send({ type: MSG.REQUEST_HOST_PERMISSION, origin: CONF_ORIGEN, tabId: 3 }), { ok: true }, 'con el permiso dado, asegura el script')
+
+  rig.state.sentWithTab.length = 0
+  rig.state.registros.length = 0
+  globalThis.chrome.permissions.contains = async () => false
+  eq(
+    await rig.send({ type: MSG.REQUEST_HOST_PERMISSION, origin: 'https://wiki.otra.example', tabId: 3 }),
+    { ok: false, needsPermission: true, error: 'permiso no concedido' },
+    'sin él, lo dice y no lo pide'
+  )
+  eq([rig.state.registros, rig.state.inyecciones, rig.state.sentWithTab], [[], [], []], 'sin permiso no se registra, ni se inyecta, ni se manda nada')
+  eq(pedidos, 0, 'ni una llamada a request')
+})
+
+test('H27: onInstalled registra cada origen concedido de un sitio guardado y ninguno del manifest', async () => {
+  // Una actualización (y recargar una extensión sin empaquetar lo es) puede
+  // llevarse los scripts registrados, y sin ellos el subrayado y «Paso a paso»
+  // de un host propio pedirían «Dar permiso» con el permiso dado. La concesión
+  // ES el consentimiento: un sitio guardado sin claves (`configured: false`
+  // tras «Quitar las claves», o sin `configured` si se saltaron) sigue siendo
+  // de la persona. Lo del manifest no: ya lo cubre `content_scripts`.
+  const rig = makeChrome()
+  await loadWorker(rig)
+  rig.state.local['faro:sites'] = {
+    'confluence.simplprogramme.eu': {
+      host: 'confluence.simplprogramme.eu',
+      configured: true,
+      product: 'confluence',
+      jiraHost: 'jira.simplprogramme.eu',
+    },
+    'wiki.quitado.example': { host: 'wiki.quitado.example', configured: false, product: 'confluence' },
+    'sin-permiso.example': { host: 'sin-permiso.example', configured: true, product: 'jira' },
+    'acme.atlassian.net': { host: 'acme.atlassian.net', configured: true, product: 'confluence', cloud: true },
+  }
+  // El Jira enlazado no es una clave de `faro:sites`, y ajeno.example tiene
+  // permiso pero no es un sitio de nadie.
+  rig.state.granted.push(
+    'https://confluence.simplprogramme.eu/*',
+    'https://jira.simplprogramme.eu/*',
+    'https://wiki.quitado.example/*',
+    'https://ajeno.example/*'
+  )
+
+  await rig.disparar(INSTALADO, { reason: 'update' })
+  eq(rig.state.registros.map((s) => s.id), [CONF_ID, JIRA_ID, 'faro-https---wiki-quitado-example'])
+  eq(rig.state.registros[0], {
+    id: CONF_ID,
+    matches: ['https://confluence.simplprogramme.eu/*'],
+    js: ['src/content/bootstrap.js'],
+    runAt: 'document_idle',
+    persistAcrossSessions: true,
+  })
+  eq(rig.state.comportamiento, [{ openPanelOnActionClick: true }], 'y el icono sigue abriendo el panel')
+
+  // Idempotente: otra vuelta no registra nada dos veces.
+  await rig.disparar(INSTALADO, { reason: 'install' })
+  eq(rig.state.registros.length, 3, 'nada nuevo en la segunda vuelta')
+
+  // Lo que el manifest ya declara no se registra aunque sea un sitio guardado
+  // y esté concedido (aquí con un manifest inventado que lo incluye).
+  rig.state.vivos.clear()
+  rig.state.registros.length = 0
+  globalThis.chrome.runtime.getManifest = () => ({ host_permissions: [...HOSTS_DEL_MANIFEST, 'https://jira.simplprogramme.eu/*'] })
+  await rig.disparar(INSTALADO, { reason: 'update' })
+  eq(rig.state.registros.map((s) => s.id), [CONF_ID, 'faro-https---wiki-quitado-example'])
+})
+
+test('H27: un «Duplicate script ID» cuenta como registrado, y un registro que falla no tumba los demás', async () => {
+  // Al dar el permiso corren a la vez `permissions.onAdded` (la reconciliación)
+  // y el REQUEST_HOST_PERMISSION del panel: los dos pueden ver el id libre y el
+  // segundo en registrar se lleva el «Duplicate» de Chrome, que es un éxito.
+  const rig = makeChrome()
+  await loadWorker(rig)
+  rig.state.contentReply = (msg) => (msg.type === MSG.PING ? { ok: true } : null)
+  rig.state.vivos.set(CONF_ID, { id: CONF_ID })
+  globalThis.chrome.scripting.getRegisteredContentScripts = async () => []
+  eq(await rig.send({ type: MSG.REQUEST_HOST_PERMISSION, origin: CONF_ORIGEN, tabId: 3 }), { ok: true })
+
+  // Y en la reconciliación, un origen que no se deja registrar se apunta en la
+  // consola y los demás siguen.
+  rig.state.local['faro:sites'] = {
+    'confluence.simplprogramme.eu': { host: 'confluence.simplprogramme.eu', configured: true, jiraHost: 'jira.simplprogramme.eu' },
+    'wiki.quitado.example': { host: 'wiki.quitado.example', configured: false },
+  }
+  rig.state.granted.push('https://confluence.simplprogramme.eu/*', 'https://jira.simplprogramme.eu/*', 'https://wiki.quitado.example/*')
+  const registra = globalThis.chrome.scripting.registerContentScripts
+  globalThis.chrome.scripting.registerContentScripts = async (scripts) => {
+    if (scripts.some((s) => s.id === JIRA_ID)) throw new Error('cuota de scripts llena')
+    return registra(scripts)
+  }
+  const avisos = []
+  const warn = console.warn
+  console.warn = (...args) => avisos.push(args.map(String).join(' '))
+  try {
+    await rig.disparar(INSTALADO, { reason: 'update' })
+  } finally {
+    console.warn = warn
+  }
+  eq(rig.state.registros.map((s) => s.id), ['faro-https---wiki-quitado-example'], 'el de detrás del que falla, registrado')
+  eq(avisos.length, 1, 'un aviso, el del que falla, y ninguno por el «Duplicate»: ' + JSON.stringify(avisos))
+  assert(avisos[0].startsWith('[faro] service worker') && avisos[0].includes('cuota de scripts llena'), avisos[0])
+})
+
+test('H27: un permiso añadido registra y uno quitado desregistra', async () => {
+  const rig = makeChrome()
+  await loadWorker(rig)
+  rig.state.local['faro:sites'] = {
+    'confluence.simplprogramme.eu': { host: 'confluence.simplprogramme.eu', configured: true, product: 'confluence' },
+  }
+
+  rig.state.granted.push('https://confluence.simplprogramme.eu/*')
+  await rig.disparar(PERMISOS_DADOS, { permissions: [], origins: ['https://confluence.simplprogramme.eu/*'] })
+  eq([...rig.state.vivos.keys()], [CONF_ID], 'dado el permiso, el script queda registrado')
+
+  // Quitado (desde chrome://extensions, o por el propio Chrome): el script se
+  // va con él. Con otro origen en el mismo aviso que nunca se registró: Chrome
+  // tumba la llamada ENTERA si un solo id no existe, así que van de uno en uno.
+  rig.state.granted = rig.state.granted.filter((o) => o !== 'https://confluence.simplprogramme.eu/*')
+  await rig.disparar(PERMISOS_QUITADOS, { permissions: [], origins: ['https://ajeno.example/*', 'https://confluence.simplprogramme.eu/*'] })
+  eq(rig.state.desregistros, [CONF_ID])
+  eq([...rig.state.vivos.keys()], [], 'y no queda ninguno')
+
+  // Un aviso sin orígenes (se quitó un permiso de API) no toca nada: un
+  // `unregisterContentScripts` sin `ids` los quitaría TODOS.
+  rig.state.vivos.set('faro-https---otro-example', { id: 'faro-https---otro-example' })
+  await rig.disparar(PERMISOS_QUITADOS, { permissions: ['tabs'] })
+  eq(rig.state.desregistros, [CONF_ID])
+  eq([...rig.state.vivos.keys()], ['faro-https---otro-example'])
+})
+
+test('H27: originsToRegister es pura', async () => {
+  // La regla de la reconciliación, sin chrome: los hosts de `faro:sites` y sus
+  // enlazados, sólo con el permiso concedido y nunca los del manifest, sin
+  // repetidos y en orden. Congelados: ordenar la lista de entrada en su sitio
+  // lanzaría.
+  const rig = makeChrome()
+  await loadWorker(rig)
+  const congela = (o) => Object.freeze(Object.fromEntries(Object.entries(o).map(([k, v]) => [k, Object.freeze(v)])))
+  const sites = congela({
+    'wiki.b.example': { configured: true, jiraHost: 'jira.enlazado.example' },
+    'a.example': { confluenceHost: 'wiki.b.example' },
+    'quitado.example': { configured: false, jiraHost: '' },
+    'manifiesto.example': { configured: true },
+    'sin-permiso.example': { configured: true },
+  })
+  const granted = Object.freeze([
+    'https://wiki.b.example/*',
+    'https://quitado.example/*',
+    'https://manifiesto.example/*',
+    'https://jira.enlazado.example/*',
+    'https://a.example/*',
+    'https://otro.example/*',
+    'http://localhost/*',
+  ])
+  const manifestOrigins = Object.freeze(['https://manifiesto.example/*', 'http://localhost/*'])
+
+  const guardado = globalThis.chrome
+  delete globalThis.chrome
+  try {
+    eq(loaded.originsToRegister({ sites, granted, manifestOrigins }), [
+      'https://a.example',
+      'https://jira.enlazado.example',
+      'https://quitado.example',
+      'https://wiki.b.example',
+    ])
+    eq(loaded.originsToRegister({}), [], 'sin nada, nada')
+    eq(loaded.originsToRegister({ sites: null, granted: null, manifestOrigins: null }), [], 'y con nulos tampoco lanza')
+  } finally {
+    globalThis.chrome = guardado
+  }
+})
+
+test('H27: un tipo que el SW no atiende no deja el canal abierto', async () => {
+  // Devolver `true` en `onMessage` promete una respuesta. Con un tipo que el
+  // worker no atiende (lo que el content script manda al panel, como
+  // PICK_RESULT), el canal se quedaba abierto y quien mandaba esperaba a que
+  // Chrome lo cerrara con un error.
+  const rig = makeChrome()
+  await loadWorker(rig)
+  const aTiempo = (msg, sender) => Promise.race([rig.send(msg, sender), esperar(50).then(() => 'colgado')])
+  for (const type of [MSG.PICK_RESULT, MSG.NOTE_CLICKED, MSG.PLAN_PROGRESS, 'faro:inventado']) {
+    eq(await aTiempo({ type }), null, type)
+  }
+
+  // Y los siete que sí atiende siguen contestando: la lista va por nombre, y
+  // una errata dejaría uno mudo sin que ninguna otra prueba lo notara (el
+  // CANCEL_PLAN de `loadWorker` ni mira la respuesta).
+  const pestana = { tab: { id: 1 } }
+  for (const [msg, sender] of [
+    [{ type: MSG.START_PLAN }, pestana],
+    [{ type: MSG.NAVIGATE_DIRECT }, pestana],
+    [{ type: MSG.REQUEST_HOST_PERMISSION }, pestana],
+    [{ type: MSG.CANCEL_PLAN, tabId: 99 }],
+    [{ type: MSG.CONTENT_STATUS }],
+    [{ type: MSG.CONTENT_READY, url: '' }, { tab: {} }],
+    [{ type: MSG.URL_CHANGED, url: '' }, { tab: {} }],
+  ]) {
+    const res = await aTiempo(msg, sender)
+    assert(res && typeof res === 'object', `${msg.type} contesta: ${JSON.stringify(res)}`)
+  }
+})
+
+test('H27: START_PLAN desde una pestaña se rechaza', async () => {
+  // Lanzar un recorrido, navegar y asegurar el content script son cosas del
+  // panel, que no es una pestaña: un mensaje con `sender.tab` (un content
+  // script, o cualquier página de la extensión abierta en una pestaña) no
+  // puede mandar al worker a navegar ni a inyectar.
+  const rig = makeChrome()
+  await loadWorker(rig)
+  const partida = rig.state.tabs[1].url
+  const desdeUnaPestana = { tab: { id: 1, url: partida } }
+  for (const msg of [
+    { type: MSG.START_PLAN, tabId: 1, plan: PLAN },
+    { type: MSG.NAVIGATE_DIRECT, tabId: 1, plan: { ...PLAN, steps: [] } },
+    { type: MSG.REQUEST_HOST_PERMISSION, origin: CONF_ORIGEN, tabId: 1 },
+  ]) {
+    eq(await rig.send(msg, desdeUnaPestana), { ok: false, error: 'sólo desde el panel' }, msg.type)
+  }
+  eq(rig.state.sentWithTab, [], 'nada sale hacia la pestaña')
+  eq([rig.state.tabs[1].url, rig.state.inyecciones, rig.state.registros], [partida, [], []], 'ni navega, ni inyecta, ni registra')
+  eq(rig.state.session['faro:plans']?.['1'], undefined, 'ni guarda un recorrido')
+
+  // El mismo mensaje desde el panel, sin `sender.tab`, sigue valiendo (con
+  // ramas que se despliegan, para no esperar la pausa de después de un clic).
+  rig.state.contentReply = (msg) => (msg.type === MSG.STEP ? { status: 'expanded' } : { ok: true })
+  eq((await rig.send({ type: MSG.START_PLAN, tabId: 1, plan: PLAN })).ok, true)
+})
+
+test('H27: dos mensajes al despertar esperan a la MISMA lectura del recorrido guardado', async () => {
+  // El worker se duerme y, al despertar, rehidrata `faro:plans` de
+  // `storage.session`. Hasta H27 un booleano daba la hidratación por hecha
+  // ANTES de leer: un segundo mensaje que llegaba mientras tanto guardaba sobre
+  // el mapa vacío y se llevaba por delante el recorrido guardado. Hace falta un
+  // worker recién despertado, así que se importa otra instancia y sus oyentes
+  // se quitan al acabar (las demás pruebas siguen con la primera).
+  const rig = makeChrome()
+  await loadWorker(rig)
+  const listas = [LISTENERS, CAMBIOS, ACTUALIZADAS, INSTALADO, PERMISOS_DADOS, PERMISOS_QUITADOS]
+  const cuantos = listas.map((l) => l.length)
+  rig.state.session['faro:plans'] = { 7: { plan: PLAN, index: 1, phase: 'steps' } }
+  const lee = globalThis.chrome.storage.session.get
+  globalThis.chrome.storage.session.get = async (k) => {
+    await esperar(10) // la lectura tarda: es la ventana en la que entra el segundo
+    return lee(k)
+  }
+  try {
+    await import('../../src/background/service-worker.js?probe=despierto')
+    const despierto = LISTENERS[LISTENERS.length - 1]
+    const manda = (msg) => new Promise((r) => despierto(msg, {}, r))
+    const directo = { ...PLAN, mode: 'direct', steps: [] }
+    await Promise.all([manda({ type: MSG.CANCEL_PLAN, tabId: 9 }), manda({ type: MSG.NAVIGATE_DIRECT, tabId: 1, plan: directo })])
+    eq(Object.keys(rig.state.session['faro:plans']).sort(), ['1', '7'], 'el recorrido que ya estaba guardado Y el nuevo')
+  } finally {
+    listas.forEach((l, i) => (l.length = cuantos[i]))
+  }
 })

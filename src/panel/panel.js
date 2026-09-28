@@ -543,6 +543,16 @@ const state = {
   // pregunta por su cuenta). `{host, kind, id, question, at}` o null; la
   // consume `refreshTab` y caduca sola a los `TODAY_LIMITS.intentMs`.
   pendingIntent: null,
+  // Por qué el content script de la pestaña no sirve (H27, PLAN3 §3.1):
+  // `{host, tabId, error}` o null. Con el permiso dado, un script que está y no
+  // arranca (G1: un import denegado) se confundía con «no hay script» y el panel
+  // pedía un permiso que ya tenía. Lo apunta `noteContentProblem` cuando el
+  // service worker dice que el script está vivo y roto, o que tras inyectarlo
+  // nadie contesta; lo vacía `ensureContentAccess` en cuanto la pestaña contesta
+  // bien o lo que falta es el permiso, así que dice lo último que se vio. Va con
+  // su pestaña y su host: `showPermissionNotice` sólo lo cambia por el aviso de
+  // recargar cuando es de la que hay delante. Sólo memoria.
+  contentProblem: null,
 }
 
 // -------------------------------------------------------------------- init
@@ -2210,6 +2220,17 @@ async function hasHostPermission(origin) {
  * El manifest sólo declara `*.atlassian.net`. En un Confluence propio el
  * content script no existe, y sin él la navegación asistida y el resaltado no
  * tienen a quién hablarle: se quedaban sin hacer nada, en silencio.
+ *
+ * Desde H27 (PLAN3 §3.1) distingue un caso que antes se confundía con «no hay
+ * script»: el script que está y no arranca. Visto el 2026-09-28 al cargar Faro
+ * en Chrome (G1, G2): el arranque roto contestaba `{ok:false}` al PING, esto
+ * pedía REQUEST_HOST_PERMISSION con el permiso ya dado, el service worker
+ * reinyectaba en el mismo mundo sin volver a preguntar y decía «ok», y se
+ * apuntaba «Content script inyectado» con la acción fallando detrás. Ahora el
+ * SW dice `alive` y `error` y, tras inyectar, `kind`; con el script vivo y roto
+ * ni se pide permiso ni se reinyecta: se apunta el motivo (`noteContentProblem`)
+ * y se dice (`showContentProblem`). Sigue devolviendo un booleano: más de
+ * veinte llamadas sólo quieren saber si pueden hablar con la pestaña.
  */
 async function ensureContentAccess({ announce = true } = {}) {
   if (!state.site || !state.tabId) return false
@@ -2218,7 +2239,19 @@ async function ensureContentAccess({ announce = true } = {}) {
     .sendMessage({ type: MSG.CONTENT_STATUS, tabId: state.tabId, origin: state.site.origin })
     .catch(() => null)
 
-  if (status?.ready) return true
+  if (status?.ready) {
+    state.contentProblem = null
+    return true
+  }
+
+  // Vivo y roto: contesta, pero no arranca. El permiso estaba (el script llegó
+  // a la pestaña) y reinyectar no cambia nada en el mismo mundo, donde
+  // `__faroBooted` ya está puesto.
+  if (status?.alive && status?.error) {
+    noteContentProblem(status.error)
+    if (announce) showContentProblem()
+    return false
+  }
 
   if (status?.granted) {
     // Permiso hay, pero la pestaña se cargó antes de que el script existiera.
@@ -2226,17 +2259,39 @@ async function ensureContentAccess({ announce = true } = {}) {
       .sendMessage({ type: MSG.REQUEST_HOST_PERMISSION, origin: state.site.origin, tabId: state.tabId })
       .catch(() => null)
     if (r?.ok) {
+      state.contentProblem = null
       log.ok('Content script inyectado', state.site.host)
       return true
     }
+    // El SW ya no dice «ok» sin un PING bueno detrás (H27): «roto» es un script
+    // que estaba y no arranca; «huerfano», que tras inyectarlo nadie contesta.
+    // Ninguno de los dos se arregla con permiso: se dice el motivo.
+    if (r && r.ok === false && (r.kind === 'roto' || r.kind === 'huerfano')) {
+      noteContentProblem(r.error)
+      if (announce) showContentProblem()
+      return false
+    }
   }
 
+  // Lo que falta es el permiso (o nadie contesta en el service worker). Lo
+  // apuntado de antes deja de valer: si no, `showPermissionNotice` cambiaría la
+  // tarjeta por un aviso viejo.
+  state.contentProblem = null
   if (announce) showPermissionNotice()
   return false
 }
 
 /** Aviso accionable: el permiso se pide desde aquí, que es donde hay gesto. */
 function showPermissionNotice() {
+  // H27 (PLAN3 §3.1): quien llama tras un `ensureContentAccess` en falso
+  // (offerNotes, runPlan, togglePick, con `announce: false`) no sabe si faltaba
+  // el permiso o el script está roto: el booleano no lo dice. Con el script de
+  // ESTA pestaña roto, la tarjeta pediría un permiso que ya está dado, y es lo
+  // que se vio el 2026-09-28; se dice el motivo en su lugar.
+  if (state.contentProblem?.tabId === state.tabId && state.contentProblem?.host === state.site?.host) {
+    showContentProblem()
+    return
+  }
   clearEmpty()
   if (el.chat.querySelector('.perm-card')) return
 
@@ -2289,12 +2344,44 @@ function showPermissionNotice() {
 }
 
 /**
+ * Apunta por qué el content script de esta pestaña no sirve (H27, PLAN3 §3.1).
+ *
+ * El motivo llega del service worker, que lo tiene del propio script (su
+ * `bootErrorText`, sin el id de la extensión) o lo pone él («no contesta»). Se
+ * registra UNA vez por pestaña y motivo: `ensureContentAccess` corre en casi
+ * cada acción, y un registro que repite lo mismo en cada clic esconde lo demás.
+ */
+function noteContentProblem(error) {
+  const texto = String(error || 'el content script no arranca')
+  if (state.contentProblem?.tabId !== state.tabId || state.contentProblem?.error !== texto) {
+    log.error('Content script roto', state.site.host + ' · ' + texto)
+  }
+  state.contentProblem = { host: state.site.host, tabId: state.tabId, error: texto }
+}
+
+/**
+ * Lo que ve la persona cuando el content script no arranca (H27): el motivo y
+ * qué hacer. No es la tarjeta de «Falta un permiso», porque el permiso está;
+ * y «recarga» va primero por la pestaña, que da un script nuevo, y luego por
+ * la extensión, que es lo que queda si el fallo es suyo.
+ */
+function showContentProblem() {
+  showNotice('Faro no ha podido arrancar en esta pestaña: ' + (state.contentProblem?.error || 'motivo desconocido') + '. Recarga la pestaña y, si sigue igual, la extensión.', true)
+}
+
+/**
  * Pide el permiso sobre el dominio del sitio e inyecta el content script.
  *
  * Se pide desde el panel y detrás de un clic: `permissions.request` exige un
- * gesto del usuario, y el gesto no viaja hasta el service worker por
- * sendMessage. Lo usan la tarjeta del chat y la pantalla de páginas base, que
- * tapa al chat y necesita su propio botón.
+ * gesto del usuario, y el diálogo se abre aquí, sin ningún `await` delante.
+ * El gesto SÍ viaja al service worker con el mensaje, pero sólo mientras dura
+ * la activación (unos 5 s) y sólo en la parte síncrona de su oyente; y al SW
+ * le llegan muchas peticiones sin clic detrás (al abrir el panel, al acabar un
+ * turno), donde `request` falla aunque el permiso ya esté dado, porque
+ * Chromium mira el gesto antes. Por eso desde H27 (PLAN3 §3.1, G3: leído en
+ * Chromium, se mide en H30) el SW ya no llama a `request`, sólo a `contains`,
+ * y registra e inyecta. Lo usan la tarjeta del chat y la pantalla de páginas
+ * base, que tapa al chat y necesita su propio botón.
  *
  * Por defecto, sobre el sitio de la pestaña, inyectando el content script en
  * ella. Con `target`, sobre otro dominio —el Confluence enlazado a este Jira,
@@ -6628,9 +6715,21 @@ async function togglePick() {
     return
   }
 
+  // H27 (PLAN3 §3.1, B4): un solo aviso con «Recárgala» valía para todo y no
+  // explicaba nada. `null` es que nadie contestó (la pestaña se fue, o el script
+  // es un huérfano de antes de recargar la extensión) y recargar sí ayuda;
+  // `ok: false` es un script que contesta y dice por qué no arranca, y lo que
+  // hay que enseñar es ese motivo.
   const r = await chrome.tabs.sendMessage(state.tabId, { type: MSG.PICK_START }).catch(() => null)
-  if (!r?.ok) {
-    showNotice('No he podido activar la selección en esta pestaña. Recárgala y vuelve a intentarlo.', true)
+  if (r == null) {
+    log.warn('Señalar sin activar', 'la pestaña no contesta')
+    showNotice('No he podido hablar con esta pestaña. Recárgala y vuelve a intentarlo.', true)
+    return
+  }
+  if (!r.ok) {
+    const motivo = r.error || 'motivo desconocido'
+    log.warn('Señalar sin activar', motivo)
+    showNotice('No he podido activar la selección: ' + motivo + '.', true)
     return
   }
   setPicking(true)

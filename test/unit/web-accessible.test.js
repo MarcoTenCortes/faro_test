@@ -12,10 +12,20 @@
  * relativa): falla en Chrome, en silencio, cuando el panel manda el primer
  * mensaje. En la auditoría de 2026-09-13 (docs/PLAN.md S7) se decidió exponer
  * además `src/atlassian/*.js` y `src/nav/*.js` (los módulos REST de H7 los
- * importarán desde el content script) y, por seguridad, `use_dynamic_url`
- * (pinado en test/manifest.js, que corre como paso 3 de `npm run check`; aquí
- * se comprueba que esa barrera muerde). Esta prueba vigila que lo alcanzable
- * siga bajo rutas expuestas, hoy y cuando H7 añada módulos.
+ * importan desde el content script). Esta prueba vigila que lo alcanzable
+ * siga bajo rutas expuestas.
+ *
+ * S7 puso además `use_dynamic_url` y H27 lo quitó (docs/PLAN3.md §3.1, medido
+ * el 2026-09-28 en el Chrome 153 de Marco): Chrome sirve la URL con GUID
+ * redirigiendo a la del id fijo, la base del módulo pasa a ser esa URL de
+ * respuesta y los imports RELATIVOS (runner.js, dom-utils.js, config.js…) se
+ * piden por el id fijo y se deniegan. Cargaban las hojas y fallaba todo lo que
+ * importa algo, con un aviso de consola que dice que el recurso no está en
+ * web_accessible_resources cuando sí lo está. test/manifest.js (paso 3 de
+ * `npm run check`) rechaza la clave sin mirar el código, porque corre antes
+ * que las unitarias; aquí se fija la REGLA contra el cierre real: mientras un
+ * módulo que carga el content script tenga un import relativo, el manifest no
+ * puede llevarla.
  *
  * El glob es el simple: `*` casa UN segmento sin `/` (Chrome es más laxo; si
  * casa aquí, casa allí). Por eso `src/content/*.js` no cubre `overlay/`.
@@ -108,6 +118,31 @@ function alcanzables(entradas, leer) {
     for (const hijo of importsDe(texto, ruta)) cola.push({ ruta: hijo, desde: ruta })
   }
   return { ficheros: [...vistos].sort(), faltan }
+}
+
+/**
+ * Los módulos de `ficheros` con algún import relativo: con `use_dynamic_url`
+ * son los que se rompen, porque su base pasa a ser la URL del id fijo y lo que
+ * importan se deniega (H27). Una hoja carga igual con la clave y sin ella, y
+ * una hoja es lo único que importa la prueba de Chromium
+ * `ContentScriptsCanImportDynamicUrlResources`: por eso allí no se vio.
+ */
+function conImportsRelativos(ficheros, leer) {
+  return ficheros.filter((ruta) => importsDe(leer(ruta) || '', ruta).length > 0)
+}
+
+/** Los índices de las entradas de `web_accessible_resources` que llevan la clave, valga lo que valga. */
+function entradasConUrlDinamica(war) {
+  return (Array.isArray(war) ? war : []).flatMap((w, i) => (w && typeof w === 'object' && 'use_dynamic_url' in w ? [i] : []))
+}
+
+/**
+ * La regla de H27: las entradas que llevan la clave si algún módulo del cierre
+ * tiene un import relativo, y [] si todo el cierre son hojas (entonces la
+ * clave no rompería nada; hoy no es el caso).
+ */
+function urlDinamicaQueRompe(war, ficheros, leer) {
+  return conImportsRelativos(ficheros, leer).length > 0 ? entradasConUrlDinamica(war) : []
 }
 
 // ---------------------------------------------------------------------------
@@ -284,9 +319,12 @@ test('alcanzables sigue los imports transitivos, no repite, y apunta lo que no e
   eq(alcanzables([], leer), { ficheros: [], faltan: [] })
 })
 
-test('SEGURIDAD: checkManifest rechaza una entrada de web_accessible_resources sin use_dynamic_url y acepta la que lo lleva', () => {
+test('EL CAMBIO (H27): checkManifest rechaza una entrada de web_accessible_resources CON use_dynamic_url y acepta la que no lo lleva', () => {
   // Un manifest mínimo con la key REAL (para que el id derivado sea el de config.js)
-  // en un directorio temporal: lo único que varía es use_dynamic_url.
+  // en un directorio temporal sin src/: lo único que varía es use_dynamic_url.
+  // Hasta H27 era al revés (SEGURIDAD, S7: la clave era obligatoria) y el
+  // content script no cargaba en Chrome: la regla con el cierre, en la prueba
+  // de abajo; ésta, sin código que mirar, es la que corre en el paso 3.
   const minimo = (war) => ({
     manifest_version: 3,
     name: 'x',
@@ -303,20 +341,20 @@ test('SEGURIDAD: checkManifest rechaza una entrada de web_accessible_resources s
       writeFileSync(join(dir, 'manifest.json'), JSON.stringify(minimo(war)))
       return checkManifest(dir).errors
     }
-    const sin = errores([{ resources: ['src/content/*.js'], matches: ['https://*/*'] }])
-    eq(sin.length, 1)
-    assert(/SEGURIDAD.*use_dynamic_url/.test(sin[0]), sin[0])
-    const falso = errores([{ resources: ['src/content/*.js'], matches: ['https://*/*'], use_dynamic_url: false }])
-    eq(falso.length, 1)
+    eq(errores([{ resources: ['src/content/*.js'], matches: ['https://*/*'], use_dynamic_url: true }]), [
+      'EL CAMBIO (H27): web_accessible_resources[0] no puede llevar "use_dynamic_url": true: Chrome sirve la URL con GUID redirigiendo al id fijo y los imports relativos de los módulos del content script se deniegan (medido el 2026-09-28 en Chrome 153)',
+    ])
+    eq(errores([{ resources: ['src/content/*.js'], matches: ['https://*/*'] }]), [])
+    // `false` es lo que Chrome hace sin la clave: ni esconde ni rompe nada.
+    eq(errores([{ resources: ['src/content/*.js'], matches: ['https://*/*'], use_dynamic_url: false }]), [])
     const segunda = errores([
-      { resources: ['src/content/*.js'], matches: ['https://*/*'], use_dynamic_url: true },
-      { resources: ['src/shared/*.js'], matches: ['https://*/*'] },
+      { resources: ['src/content/*.js'], matches: ['https://*/*'] },
+      { resources: ['src/shared/*.js'], matches: ['https://*/*'], use_dynamic_url: true },
     ])
     eq(segunda.length, 1)
     assert(/\[1\]/.test(segunda[0]), 'señala la entrada que falla')
-    eq(errores([{ resources: ['src/content/*.js'], matches: ['https://*/*'], use_dynamic_url: true }]), [])
     eq(errores([]), ['falta web_accessible_resources: el content script carga sus módulos por import()'])
-    const vacia = errores([{ resources: [], matches: ['https://*/*'], use_dynamic_url: true }])
+    const vacia = errores([{ resources: [], matches: ['https://*/*'] }])
     eq(vacia.length, 1)
     assert(/resources.*matches/.test(vacia[0]), vacia[0])
   } finally {
@@ -324,7 +362,43 @@ test('SEGURIDAD: checkManifest rechaza una entrada de web_accessible_resources s
   }
 })
 
-test('el manifest real pasa checkManifest y lleva use_dynamic_url en todas sus entradas', () => {
+test('el manifest real pasa checkManifest y ninguna entrada lleva use_dynamic_url', () => {
   eq(checkManifest(ROOT).errors, [])
-  assert(manifest.web_accessible_resources.every((w) => w.use_dynamic_url === true))
+  // Ni siquiera en false: la clave no pinta nada en este manifest (H27).
+  assert(manifest.web_accessible_resources.every((w) => !('use_dynamic_url' in w)), 'una entrada de web_accessible_resources lleva use_dynamic_url')
+})
+
+test('mientras algún módulo del cierre del content script tenga un import relativo, el manifest no puede llevar use_dynamic_url', () => {
+  // La regla, con ficheros inventados: un cierre de hojas podría llevar la
+  // clave sin romperse; en cuanto un módulo importa otro por ruta relativa, no.
+  // Lo que no es relativo (node:, un comentario) no cuenta.
+  const disco = new Map([
+    ['src/content/hoja.js', 'export const x = 1'],
+    ['src/shared/otra.js', "import { readFileSync } from 'node:fs'\n// import { a } from './a.js'"],
+    ['src/content/rama.js', "import { x } from './hoja.js'"],
+    ['src/shared/reexporta.js', "export { x } from '../content/hoja.js'"],
+  ])
+  const leer = (ruta) => (disco.has(ruta) ? disco.get(ruta) : null)
+  const hojas = alcanzables(['src/content/hoja.js', 'src/shared/otra.js'], leer).ficheros
+  const ramas = alcanzables(['src/content/rama.js', 'src/shared/reexporta.js'], leer).ficheros
+  eq(conImportsRelativos(hojas, leer), [], 'sólo hojas: nada se rompe')
+  eq(conImportsRelativos(ramas, leer), ['src/content/rama.js', 'src/shared/reexporta.js'])
+  eq(entradasConUrlDinamica([{ resources: ['a'] }, { resources: ['b'], use_dynamic_url: false }, { use_dynamic_url: true }]), [1, 2])
+  eq(entradasConUrlDinamica(undefined), [])
+  eq(urlDinamicaQueRompe([{ use_dynamic_url: true }], hojas, leer), [], 'con sólo hojas la clave no rompería nada')
+  eq(urlDinamicaQueRompe([{ resources: ['a'] }, { use_dynamic_url: true }], ramas, leer), [1])
+  eq(urlDinamicaQueRompe([{ resources: ['a'] }], ramas, leer), [])
+
+  // El repo real: runner.js importa overlay/overlay.js, dom-utils.js importa
+  // tree-dom.js y config.js reexporta permissions.js, todos por ruta relativa
+  // y todos en el cierre de bootstrap.js. Con uno solo, la clave no puede estar.
+  const rompen = conImportsRelativos(alcance.ficheros, leerDelRepo)
+  for (const f of ['src/content/runner.js', 'src/content/dom-utils.js', 'src/shared/config.js']) {
+    assert(rompen.includes(f), `${f} tiene imports relativos y está en el cierre del content script`)
+  }
+  // SEGURIDAD DEL TEST: con el cierre de verdad, la entrada real con la clave
+  // puesta se señala (la regla muerde, no sólo el manifest de hoy la cumple).
+  const war = manifest.web_accessible_resources
+  eq(urlDinamicaQueRompe([{ ...war[0], use_dynamic_url: true }], alcance.ficheros, leerDelRepo), [0])
+  eq(urlDinamicaQueRompe(war, alcance.ficheros, leerDelRepo), [], `con ${rompen.length} módulos del cierre con imports relativos, ninguna entrada de web_accessible_resources puede llevar use_dynamic_url`)
 })

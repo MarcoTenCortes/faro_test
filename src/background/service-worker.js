@@ -8,6 +8,12 @@
  *
  * En MV3 este worker se duerme, así que el estado también se guarda en
  * `storage.session` y se rehidrata al despertar.
+ *
+ * Y desde H27 (docs/PLAN3.md §3.1) es quien mantiene el content script en los
+ * hosts propios: lo registra al instalarse o al darse un permiso, lo quita al
+ * quitarse, y distingue una pestaña sin script de una con el script ROTO. Lo
+ * que no hace nunca es pedir un permiso: eso exige el gesto del usuario, que
+ * sólo tiene el panel.
  */
 
 import { MSG, sendToTab } from '../shared/messages.js'
@@ -21,14 +27,27 @@ const PLANS_KEY = 'faro:plans'
 
 /** tabId -> {plan, index, phase} */
 let plans = new Map()
-let hydrated = false
+/**
+ * La hidratación en curso (o ya hecha), como PROMESA y no como booleano (H27,
+ * C5-10). Con el booleano, el primero lo ponía a `true` antes de leer y un
+ * segundo mensaje que llegaba mientras tanto seguía con el mapa vacío: lo que
+ * guardaba ahí lo pisaba después la lectura del primero. Ahora todos esperan a
+ * la misma lectura; si falla, la siguiente llamada lo vuelve a intentar.
+ */
+let hydrating = null
 
 async function hydrate() {
-  if (hydrated) return
-  hydrated = true
-  const got = await chrome.storage.session.get(PLANS_KEY)
-  const raw = got[PLANS_KEY]
-  if (raw) plans = new Map(Object.entries(raw).map(([k, v]) => [Number(k), v]))
+  if (!hydrating) {
+    hydrating = (async () => {
+      const got = await chrome.storage.session.get(PLANS_KEY)
+      const raw = got[PLANS_KEY]
+      if (raw) plans = new Map(Object.entries(raw).map(([k, v]) => [Number(k), v]))
+    })().catch((err) => {
+      hydrating = null
+      throw err
+    })
+  }
+  return hydrating
 }
 
 async function persist() {
@@ -51,8 +70,40 @@ async function getPlan(tabId) {
 
 // ------------------------------------------------------------- ciclo de vida
 
+/**
+ * Al instalarse o actualizarse (y recargar una extensión sin empaquetar es una
+ * actualización), además del icono que abre el panel, se vuelven a registrar
+ * los content scripts de los hosts propios (H27). Una actualización puede
+ * llevarse los registros (SUPUESTO leído en Chromium, a verificar en H30), y
+ * sin ellos el subrayado y «Paso a paso» de un Confluence propio pedirían «Dar
+ * permiso» con el permiso ya dado. Sin `onStartup`: `persistAcrossSessions`
+ * ya aguanta el reinicio del navegador.
+ */
 chrome.runtime.onInstalled.addListener(() => {
   chrome.sidePanel?.setPanelBehavior?.({ openPanelOnActionClick: true }).catch(() => {})
+  reconcileContentScripts().catch((err) => console.warn('[faro] service worker', err))
+})
+
+/**
+ * Un permiso de host dado desde el panel («Dar permiso») o desde Chrome
+ * registra ahí el content script; uno quitado lo desregistra (H27).
+ *
+ * Al darse, el REQUEST_HOST_PERMISSION del panel registra lo mismo a la vez:
+ * de los dos, el segundo se lleva un «Duplicate script ID» que cuenta como
+ * éxito (`registrarScript`). Al quitarse, un id por llamada: Chrome tumba la
+ * llamada ENTERA si un solo id no existe (`RemoveScripts` en
+ * scripting_utils.cc), y un aviso puede traer un origen que nunca se registró
+ * (el del manifest que la persona retiene, o uno que no es un sitio suyo).
+ * Nunca sin `ids`: así los quitaría TODOS.
+ */
+chrome.permissions.onAdded.addListener(() => {
+  reconcileContentScripts().catch((err) => console.warn('[faro] service worker', err))
+})
+
+chrome.permissions.onRemoved.addListener((removed) => {
+  for (const origin of removed?.origins || []) {
+    chrome.scripting.unregisterContentScripts({ ids: [scriptIdFor(origin)] }).catch(() => null)
+  }
 })
 
 chrome.action?.onClicked.addListener(async (tab) => {
@@ -130,10 +181,15 @@ async function recordVisitFor(url, { title = '', pageId = '' } = {}) {
  * Sólo a la pestaña activa, que es la única que el usuario está mirando, y sin
  * esperar respuesta: `sendToTab` ya tolera que ahí no haya content script. Las
  * demás los reciben cuando el panel vuelve a ellas: `contentStatus` los empuja
- * detrás de cada PING que contesta, y `ensureContentScript` tras inyectar; una
- * carga SIN recorrido no los recibe a propósito: arrancaría el content script
- * entero (18 módulos, ~256 KB y un sondeo cada 700 ms) en cada página, justo lo
- * que la revisión de H11 quitó del aviso.
+ * detrás de cada PING que contesta bien, y `ensureContentScript` detrás del
+ * PING bueno de después de inyectar. Una carga SIN recorrido no los recibe, a
+ * propósito. Hasta H27 el motivo era que el primer mensaje arrancaba el content
+ * script entero (18 módulos, ~256 KB y un sondeo cada 700 ms); desde H27 PING y
+ * SETTINGS ya no lo arrancan (la página guarda los ajustes hasta el primer
+ * mensaje de verdad), y lo que queda es peso y sentido: empujarlos a cada
+ * pestaña, o en cada carga, sería una lectura del almacén y un mensaje por
+ * página para nada, porque el panel comprueba la pestaña antes de marcar o de
+ * señalar y ahí llegan.
  */
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local' || !changes || !(STORAGE_KEYS.settings in changes)) return
@@ -145,17 +201,39 @@ chrome.storage.onChanged.addListener((changes, area) => {
 
 // ------------------------------------------------------------------ mensajes
 
+/**
+ * Los tipos que este worker atiende, que son los `case` de abajo (H27, C5-10).
+ *
+ * Para cualquier otro, `onMessage` no devuelve `true`: devolverlo promete una
+ * respuesta, y con un tipo que no es para el worker (lo que el content script
+ * manda al panel, como PICK_RESULT) el canal se quedaba abierto hasta que
+ * Chrome lo cerraba con un error.
+ *
+ * Por NOMBRE y no con una lista de `MSG.X`: tools/check-docs.mjs cuenta un
+ * «, MSG.X» como quien MANDA ese mensaje, y una lista así escondería el día en
+ * que el panel dejara de mandar uno. Una errata aquí deja el tipo sin atender,
+ * y eso lo caza service-worker.test.js.
+ */
+const ATENDIDOS = new Set(
+  ['START_PLAN', 'NAVIGATE_DIRECT', 'CANCEL_PLAN', 'REQUEST_HOST_PERMISSION', 'CONTENT_STATUS', 'CONTENT_READY', 'URL_CHANGED'].map(
+    (nombre) => MSG[nombre]
+  )
+)
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || typeof msg.type !== 'string') return undefined
+  if (!ATENDIDOS.has(msg.type)) return undefined
 
   ;(async () => {
     try {
       switch (msg.type) {
         case MSG.START_PLAN:
+          if (desdeUnaPestana(sender, sendResponse)) return
           sendResponse(await startPlan(msg.tabId, msg.plan))
           return
 
         case MSG.NAVIGATE_DIRECT:
+          if (desdeUnaPestana(sender, sendResponse)) return
           sendResponse(await navigateDirect(msg.tabId, msg.plan))
           return
 
@@ -166,6 +244,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           return
 
         case MSG.REQUEST_HOST_PERMISSION:
+          if (desdeUnaPestana(sender, sendResponse)) return
           sendResponse(await requestHostPermission(msg.origin, msg.tabId))
           return
 
@@ -207,6 +286,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   return true
 })
 
+/**
+ * ¿Viene de una pestaña? Entonces se contesta que no y el `case` sale (H27,
+ * C5-9). Lanzar un recorrido, navegar y asegurar el content script son cosas
+ * del panel, que no es una pestaña: con esto una página (un content script, o
+ * una página de la extensión abierta en una pestaña) no puede mandar al worker
+ * a navegar ni a inyectar.
+ */
+function desdeUnaPestana(sender, sendResponse) {
+  if (!sender?.tab) return false
+  sendResponse({ ok: false, error: 'sólo desde el panel' })
+  return true
+}
+
 // -------------------------------------------------------------- información
 
 function originOf(url) {
@@ -218,15 +310,132 @@ function originOf(url) {
 }
 
 /**
- * Pide permiso para un host que no está en el manifest (Server/Data Center) y,
- * si lo concede, registra ahí el content script.
+ * El id del script registrado de un origen: uno por origen y siempre el mismo,
+ * lo registre el «Dar permiso», la reconciliación o lo quite un permiso
+ * retirado (H27). Vale con un origen o con un patrón (`https://host/*`).
+ */
+function scriptIdFor(origin) {
+  return 'faro-' + originOf(origin).replace(/[^a-z0-9]/gi, '-')
+}
+
+/** El patrón de un origen, para `permissions` y para `matches`: `https://host/*`. */
+function patternFor(origin) {
+  return origin.replace(/\/+$/, '') + '/*'
+}
+
+/**
+ * Pura. Los orígenes en los que el worker registra el content script a mano
+ * (H27): los hosts de `faro:sites` y sus enlazados (`jiraHost`,
+ * `confluenceHost`), cada uno sólo si su `https://host/*` está entre los
+ * permisos concedidos y NO entre los del manifest (esos ya los cubre
+ * `content_scripts`). Sin repetidos y en orden alfabético.
+ *
+ * La concesión del permiso es el consentimiento: un registro con
+ * `configured: false` (tras «Quitar las claves», H19) o sin `configured` (las
+ * claves saltadas) sigue siendo un sitio de la persona, y sin su script el
+ * subrayado y «Paso a paso» pedirían «Dar permiso» tras cada recarga de la
+ * extensión (decisión del orquestador, que relaja docs/PLAN3.md §3.1).
+ *
+ * @param {{sites?: object, granted?: string[], manifestOrigins?: string[]}} entrada
+ * @returns {string[]} orígenes `https://host`
+ */
+export function originsToRegister({ sites, granted, manifestOrigins } = {}) {
+  const concedidos = new Set(Array.isArray(granted) ? granted : [])
+  const delManifest = new Set(Array.isArray(manifestOrigins) ? manifestOrigins : [])
+  const hosts = new Set()
+  for (const [host, registro] of Object.entries(sites && typeof sites === 'object' ? sites : {})) {
+    hosts.add(host.toLowerCase())
+    for (const enlazado of [registro?.jiraHost, registro?.confluenceHost]) {
+      if (typeof enlazado === 'string' && enlazado) hosts.add(enlazado.toLowerCase())
+    }
+  }
+  const out = []
+  for (const host of hosts) {
+    const patron = 'https://' + host + '/*'
+    if (concedidos.has(patron) && !delManifest.has(patron)) out.push('https://' + host)
+  }
+  return out.sort()
+}
+
+/**
+ * Vuelve a registrar el content script en cada origen de `originsToRegister`
+ * (H27). Un origen que falla se apunta en la consola y los demás siguen: uno
+ * roto no puede dejar sin script a los otros.
+ */
+async function reconcileContentScripts() {
+  const [sites, todos] = await Promise.all([getSites(), chrome.permissions.getAll()])
+  const origenes = originsToRegister({
+    sites,
+    granted: todos?.origins || [],
+    manifestOrigins: chrome.runtime.getManifest()?.host_permissions || [],
+  })
+  for (const origen of origenes) {
+    await registrarScript(origen).catch((err) => console.warn('[faro] service worker', err))
+  }
+}
+
+/**
+ * Registra el content script para las próximas cargas de un origen si no lo
+ * está ya, con el id de `scriptIdFor`. Lanza si Chrome no lo deja registrar.
+ *
+ * Un «Duplicate script ID» es un éxito: al dar un permiso corren a la vez la
+ * reconciliación de `permissions.onAdded` y el REQUEST_HOST_PERMISSION del
+ * panel, los dos pueden ver el id libre, y el segundo en registrar se lo lleva
+ * con el script ya puesto, que es lo que se quería.
+ */
+async function registrarScript(origin) {
+  const id = scriptIdFor(origin)
+  const existentes = await chrome.scripting.getRegisteredContentScripts({ ids: [id] }).catch(() => [])
+  if (existentes?.length) return
+  try {
+    await chrome.scripting.registerContentScripts([
+      {
+        id,
+        matches: [patternFor(origin)],
+        js: ['src/content/bootstrap.js'],
+        runAt: 'document_idle',
+        persistAcrossSessions: true,
+      },
+    ])
+  } catch (err) {
+    if (String(err?.message || err).includes('Duplicate script ID')) return
+    throw err
+  }
+}
+
+/**
+ * Asegura el content script de un host que no está en el manifest
+ * (Server/Data Center): lo que el panel llama «Dar permiso», con el permiso YA
+ * dado por el panel (H27).
+ *
+ * Nunca `chrome.permissions.request`, ni siquiera detrás de un `contains`, por
+ * dos hechos SUPUESTOS (leídos en Chromium, a verificar en H30): el gesto del
+ * clic viaja con el mensaje sólo mientras dura la parte síncrona del oyente, y
+ * cualquier `await` delante lo pierde; y `request` exige el gesto aunque el
+ * permiso ya esté concedido. Hasta H27 el worker lo pedía él y contestaba
+ * «permiso denegado» con el permiso dado. El diálogo lo abre el panel, con el
+ * clic (`requestHostPermission` de panel.js), y aquí sólo se COMPRUEBA.
+ *
+ * @returns {Promise<{ok:true}|{ok:false, needsPermission:true, error:string}|{ok:false, kind:string, error:string}>}
  */
 async function requestHostPermission(origin, tabId) {
-  const pattern = origin.replace(/\/+$/, '') + '/*'
-  const granted = await chrome.permissions.request({ origins: [pattern] }).catch(() => false)
-  if (!granted) return { ok: false, error: 'permiso denegado' }
+  const granted = await chrome.permissions.contains({ origins: [patternFor(origin)] }).catch(() => false)
+  if (!granted) return { ok: false, needsPermission: true, error: 'permiso no concedido' }
   return ensureContentScript(origin, tabId)
 }
+
+/**
+ * Lo que se está asegurando ahora, por origen: `{ tabId, promesa }` (H27).
+ *
+ * Sin gesto ni `request`, el panel asegura el script desde varios sitios a la
+ * vez al abrirse (el arranque, los chips, los campos de la incidencia, «hoy»,
+ * el índice), y cada uno registraba e inyectaba el suyo: la pestaña acababa con
+ * dos content scripts compitiendo. Dos llamadas a la vez para la misma pestaña
+ * comparten la promesa; una para OTRA pestaña del mismo origen (otro panel, en
+ * otra ventana) espera su turno y asegura la suya, porque compartir le diría
+ * «ok» sin haberle puesto nada.
+ */
+const asegurando = new Map()
 
 /**
  * Deja el content script funcionando en un host que no está en el manifest.
@@ -234,43 +443,69 @@ async function requestHostPermission(origin, tabId) {
  * Hacen falta las dos cosas: registrarlo para las próximas cargas, e
  * inyectarlo en la pestaña que ya está abierta. Sin lo segundo habría que
  * recargar a mano, y sin lo primero se pierde al navegar.
+ *
+ * Y desde H27 dice la verdad de la pestaña (docs/PLAN3.md §3.1): hasta H27
+ * devolvía `{ ok: true }` sin mirar, y un content script que no arrancaba (el
+ * del GUID de `use_dynamic_url`) hacía decir al panel «Listo. Ya puedo
+ * resaltar…» sin resaltar nada. Devuelve `{ ok: true }` o `{ ok: false, kind,
+ * error }` con `kind`: `'registro'` (Chrome no deja registrarlo), `'inyeccion'`
+ * (no deja inyectarlo), `'roto'` (contesta al PING, pero su arranque falló:
+ * `error` es su motivo) o `'huerfano'` (nadie contesta ni después de inyectar).
  */
-async function ensureContentScript(origin, tabId) {
-  const pattern = origin.replace(/\/+$/, '') + '/*'
-  const id = 'faro-' + originOf(origin).replace(/[^a-z0-9]/gi, '-')
+function ensureContentScript(origin, tabId) {
+  const clave = originOf(origin) || String(origin)
+  const pestana = tabId ?? null
+  const enCurso = asegurando.get(clave)
+  if (enCurso && enCurso.tabId === pestana) return enCurso.promesa
+  const turno = enCurso ? enCurso.promesa.catch(() => null) : Promise.resolve()
+  const promesa = turno.then(() => asegurarAhora(origin, tabId))
+  asegurando.set(clave, { tabId: pestana, promesa })
+  promesa
+    .catch(() => null)
+    .finally(() => {
+      if (asegurando.get(clave)?.promesa === promesa) asegurando.delete(clave)
+    })
+  return promesa
+}
 
+/** El cuerpo de `ensureContentScript`, ya con el turno de su origen. */
+async function asegurarAhora(origin, tabId) {
   try {
-    const existing = await chrome.scripting.getRegisteredContentScripts({ ids: [id] }).catch(() => [])
-    if (!existing.length) {
-      await chrome.scripting.registerContentScripts([
-        {
-          id,
-          matches: [pattern],
-          js: ['src/content/bootstrap.js'],
-          runAt: 'document_idle',
-          persistAcrossSessions: true,
-        },
-      ])
-    }
+    await registrarScript(origin)
   } catch (err) {
-    return { ok: false, error: 'no se pudo registrar el script: ' + (err?.message || err) }
+    return { ok: false, kind: 'registro', error: 'no se pudo registrar el script: ' + (err?.message || err) }
   }
+  if (tabId == null) return { ok: true }
 
-  // La pestaña abierta no lo tiene todavía: se inyecta ahora mismo.
-  if (tabId != null) {
-    const alive = await sendToTab(tabId, { type: MSG.PING })
-    if (!alive?.ok) {
-      try {
-        await chrome.scripting.executeScript({ target: { tabId }, files: ['src/content/bootstrap.js'] })
-      } catch (err) {
-        return { ok: false, error: 'no se pudo inyectar: ' + (err?.message || err) }
-      }
-    }
-    // El panel marca justo después de «Dar permiso», sin otra comprobación: la
-    // tinta y el estilo tienen que estar ya en la página (ver `contentStatus`).
-    await pushSettings(tabId).catch(() => null)
+  // ¿Ya hay alguien? Uno que contesta bien sólo necesita los ajustes; uno que
+  // contesta roto NO se reinyecta: Chrome guarda en su mapa de módulos el import
+  // que falló (whatwg/html#6768), y una segunda instancia en el mismo mundo
+  // sólo añadiría otro oyente compitiendo con el viejo.
+  const antes = await sendToTab(tabId, { type: MSG.PING })
+  if (antes != null) return trasElPing(tabId, antes)
+
+  // Nadie: la pestaña abierta no lo tiene todavía y se inyecta ahora mismo.
+  try {
+    await chrome.scripting.executeScript({ target: { tabId }, files: ['src/content/bootstrap.js'] })
+  } catch (err) {
+    return { ok: false, kind: 'inyeccion', error: 'no se pudo inyectar: ' + (err?.message || err) }
   }
+  // Y se comprueba que el recién puesto contesta: sin este segundo PING, una
+  // inyección «buena» que no arranca nada era un «Listo» falso.
+  const despues = await sendToTab(tabId, { type: MSG.PING })
+  if (despues != null) return trasElPing(tabId, despues)
+  return { ok: false, kind: 'huerfano', error: 'el content script no contesta' }
+}
 
+/**
+ * Lo que dice un PING que contestó: listo, con los ajustes de la página detrás,
+ * o roto, con el motivo que da el propio content script.
+ */
+async function trasElPing(tabId, ping) {
+  if (!ping.ok) return { ok: false, kind: 'roto', error: String(ping.error || 'el content script no arranca') }
+  // El panel marca justo después de «Dar permiso», sin otra comprobación: la
+  // tinta y el estilo tienen que estar ya en la página (ver `contentStatus`).
+  await pushSettings(tabId).catch(() => null)
   return { ok: true }
 }
 
@@ -301,18 +536,29 @@ function watchStalledStep(tabId, index, ms = NAV_TIMING.stepStallMs) {
  * tinta elegida no llegaba a una pestaña sin recorrido —`onContentReady` sale
  * antes de `pushSettings` si no hay uno, y el `onChanged` sólo empuja a la
  * activa—, así que un «Analizar» pintaba en azul aunque se hubiera elegido
- * ámbar. Aquí el PING ya arrancó el content script, así que empujar no añade
- * ningún arranque; con el `await`, SETTINGS llega antes que el ANNOTATE que
- * viene detrás; y con el `.catch`, un almacén roto no hace creer al panel que
- * la pestaña no está lista.
+ * ámbar. Empujar no arranca nada: desde H27 ni PING ni SETTINGS arrancan el
+ * content script, que guarda los ajustes y los aplica cuando llega el primer
+ * mensaje de verdad (hasta H27 era el PING el que lo arrancaba entero, y el
+ * SETTINGS iba detrás sin coste). Con el `await`, SETTINGS llega antes que el
+ * ANNOTATE que viene detrás; y con el `.catch`, un almacén roto no hace creer
+ * al panel que la pestaña no está lista.
+ *
+ * Devuelve `{ granted, ready, alive, error }`, siempre las cuatro (H27): hasta
+ * H27 sólo `{ granted, ready }`, y un content script que no arrancaba (contesta
+ * `{ ok: false }` a todo, PING incluido) era «no listo» igual que una pestaña
+ * sin script, así que el panel pedía un permiso que ya tenía. `alive` es que
+ * alguien contesta; `error`, si contesta roto, su motivo (`''` si no).
  */
 async function contentStatus(tabId, origin) {
   const granted = origin
-    ? await chrome.permissions.contains({ origins: [origin.replace(/\/+$/, '') + '/*'] }).catch(() => false)
+    ? await chrome.permissions.contains({ origins: [patternFor(origin)] }).catch(() => false)
     : false
   const ping = tabId != null ? await sendToTab(tabId, { type: MSG.PING }) : null
+  const alive = ping != null
+  const ready = !!ping?.ok
+  const error = ping && ping.ok === false ? String(ping.error || 'el content script no arranca') : ''
   if (ping?.ok) await pushSettings(tabId).catch(() => null)
-  return { granted, ready: !!ping?.ok }
+  return { granted, ready, alive, error }
 }
 
 // --------------------------------------------------------------- navegación
