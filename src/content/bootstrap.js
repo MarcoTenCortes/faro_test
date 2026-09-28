@@ -394,11 +394,18 @@
           }
 
           case MSG.PICK_START: {
-            // Se contesta ya: elegir puede llevarle al usuario todo el tiempo
-            // que quiera, y dejar el mensaje abierto lo tumbaria por tiempo.
+            // Se contesta en cuanto el selector está ABIERTO, no cuando se
+            // elige: elegir puede llevarle al usuario todo el tiempo que
+            // quiera, y dejar el mensaje abierto lo tumbaría por tiempo. Pero
+            // después de abrirlo (H28, PLAN3 §3.2): `start()` es síncrona hasta
+            // su promesa, y si lanza, el error cae en el `catch` de abajo y es
+            // lo que contesta. Hasta H28 el `ok` salía antes y ese fallo se
+            // perdía (Chrome se queda con la primera respuesta): el panel
+            // seguía en «Señalar» esperando un resultado que no iba a llegar.
             const p = await getPicker()
+            const promesa = p.start()
             sendResponse({ ok: true })
-            const pick = await p.start()
+            const pick = await promesa
             // Si mientras se elegía la extensión se fue (el huérfano cancela
             // su selector al apagarse), el resultado ya no tiene a quién ir y
             // mandarlo reventaría.

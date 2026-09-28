@@ -13,6 +13,11 @@
  * el panel decide con una regla vive en un módulo puro con su prueba (§9), como
  * `screens.js`, `chat-scroll.js` o `links.js`.
  *
+ * Desde H28 (PLAN3 §3.2) también decide con qué palabras se dice que una lectura
+ * de la pestaña falló (`failReason`) y si el acceso que falta es el permiso o un
+ * content script que no arranca (`sinAccesoMotivo`): las dos son reglas, y aquí
+ * se ejecutan en su prueba.
+ *
  * Puro: no toca DOM ni chrome; el conjunto de lo ya avisado entra por parámetro.
  */
 
@@ -100,4 +105,53 @@ export function linksFailText(r, host) {
     return `Jira no acepta la consulta de relaciones: ${delServidor.replace(/\.+$/, '') || 'la ha rechazado sin decir por qué'}.`
   }
   return `No he podido leer las relaciones de Jira (${r.detail || reason || 'sin motivo'}).`
+}
+
+/**
+ * Cuánto de un `error` ajeno se registra o se enseña: es el mensaje de una
+ * excepción del content script (su `bootErrorText` llega hasta 300) y cabe en
+ * una línea del Registro y en un aviso sin tapar lo demás.
+ */
+const NOTICE_LIMITS = Object.freeze({ errorChars: 200 })
+
+/**
+ * El motivo de una lectura que falló, para el Registro y para el aviso (H28,
+ * PLAN3 §3.2).
+ *
+ * Las respuestas legítimas del content script traen su `reason` (un código de
+ * `jira-rest.js`, la prosa de `confluence-rest.js`, «editando»…); uno que no
+ * arranca contesta `{ok:false, error}` desde H27, y null quiere decir que nadie
+ * contestó. Hasta H28 el panel sólo miraba `reason`, así que un script roto se
+ * registraba como «la pestaña no contestó» cuando SÍ había contestado, y con el
+ * porqué: lo que se vio el 2026-09-28 al cargar Faro en Chrome (PLAN3 §2, G4).
+ *
+ * @param {object|null|undefined} r lo que contestó la pestaña (o la API)
+ * @param {string} porDefecto lo que se dice si no dijo nada
+ * @returns {string} el `reason`; si no, el `error` recortado; si no, `porDefecto`
+ */
+export function failReason(r, porDefecto) {
+  if (r?.reason) return r.reason
+  if (r?.error) return String(r.error).slice(0, NOTICE_LIMITS.errorChars)
+  return porDefecto
+}
+
+/**
+ * Por qué no hay acceso a la pestaña cuando NO es el permiso (revisión
+ * adversaria de H27, D2): `''` si lo que falta es el permiso, o la frase del
+ * content script roto si el problema que apuntó `noteContentProblem` es de esa
+ * misma pestaña y ese mismo host.
+ *
+ * `ensureContentAccess` devuelve un booleano, y nueve sitios que lo reciben en
+ * falso decían «sin permiso sobre X» con el permiso dado y el script sin
+ * arrancar: el mismo engaño que H27 quitó de la tarjeta de «Dar permiso». Se
+ * compara con la pestaña y el host que usó quien pregunta, no con los de
+ * ahora: un problema de otra pestaña no explica ésta.
+ *
+ * @param {{tabId:number, host:string, error:string}|null} problema `state.contentProblem`
+ * @param {{tabId?:number|null, host?:string}} donde la pestaña y el host de quien llama
+ * @returns {string}
+ */
+export function sinAccesoMotivo(problema, { tabId, host } = {}) {
+  if (!problema || problema.tabId !== tabId || problema.host !== host) return ''
+  return 'el content script no arranca: ' + problema.error
 }

@@ -16,7 +16,7 @@
  * que dead-exports.test.js aprendió a distinguir importar de mencionar).
  */
 
-import { rowFor, toggleFor, isRowExpanded, visible, isMenuTrigger } from './tree-dom.js'
+import { rowFor, toggleFor, isRowExpanded, visible, isMenuTrigger, treeContainer, rowLink, rowTitle } from './tree-dom.js'
 
 /** Palabras que jamás se pulsan automáticamente. Navegar no es actuar. */
 export const FORBIDDEN_ACTIONS = [
@@ -61,10 +61,20 @@ export function hrefDescriptors(step) {
   // La ruta del índice lleva el slug del título, así que identifica la página
   // aunque el id que guardamos no sea el que usa este Confluence. Va primero
   // porque es la pista más concreta que tenemos.
+  //
+  // H28 (PLAN3 §3.2, C3-6), dos cosas. Una ruta SIN slug no identifica nada:
+  // `/pages/viewpage.action?pageId=12345` queda en `/pages/viewpage.action`
+  // al quitarle la consulta, que es el prefijo de TODAS las páginas de un Data
+  // Center, y ganaba la de href más corto (la 7). Ahí manda el id, detrás.
+  // Y la ruta ya no se busca por «contiene»: `/display/SIMPL/Architecture`
+  // está dentro de `/display/SIMPL/Architecture+Overview`, y el enlace del
+  // cuerpo le ganaba al del árbol, que lleva `?src=…` y es más largo. Se casa
+  // por final exacto y por la ruta ENTERA (`href-path`: sin consulta ni ancla).
   const path = pathOnly(step?.path)
-  if (path && path.length > 8) {
+  const sinSlug = /\.action$/i.test(path) || /[?&]pageId=/i.test(String(step?.path ?? ''))
+  if (path && path.length > 8 && !sinSlug) {
     out.push({ by: 'href-end', value: path })
-    out.push({ by: 'href', value: path })
+    out.push({ by: 'href-path', value: path })
   }
 
   if (!id) return out
@@ -218,6 +228,15 @@ function baseUrl(origin) {
   return 'https://faro.invalid/'
 }
 
+/** La ruta de un href, sin consulta, ancla ni barra final; '' si no se entiende. */
+function rutaDe(href, base) {
+  try {
+    return new URL(href, base).pathname.replace(/\/+$/, '')
+  } catch {
+    return ''
+  }
+}
+
 /** Resuelve una sola estrategia. Devuelve el primer elemento visible. */
 export function resolveDescriptor(descriptor, scope = document) {
   switch (descriptor.by) {
@@ -226,6 +245,23 @@ export function resolveDescriptor(descriptor, scope = document) {
 
     case 'href-end':
       return shortestVisible(scope.querySelectorAll(`a[href$="${cssEscape(descriptor.value)}"]`))
+
+    case 'href-path': {
+      // La ruta ENTERA, con la consulta y el ancla fuera: el enlace del árbol
+      // de un DC lleva `?src=contextnavpagetreemode` y `href$=` no lo ve, y
+      // por «contiene» casaba también con `…/Architecture+Overview` (H28, C3-6).
+      // Las dos rutas pasan por `URL`, para compararlas escritas igual (una
+      // tilde en el slug llega cruda del índice y codificada en el href).
+      const base = baseUrl()
+      const quiero = rutaDe(descriptor.value, base)
+      if (!quiero) return null
+      const hits = []
+      for (const a of scope.querySelectorAll('a[href]')) {
+        const href = a.getAttribute('href') || ''
+        if (href && rutaDe(href, base) === quiero) hits.push(a)
+      }
+      return shortestVisible(hits)
+    }
 
     case 'href-param': {
       const wanted = String(descriptor.value).toLowerCase()
@@ -277,11 +313,20 @@ export function locateStep(step, scope = document) {
  * nada que actúe: guardar, publicar, comentar, transicionar, eliminar.
  * Esta función es la que impide que una instrucción escondida en una página
  * de Confluence acabe cambiando el estado de un ticket.
+ *
+ * `container` es el del árbol; sin él se busca (`treeContainer()`), y fuera
+ * del navegador no hay ninguno. Con él, al chevron y al enlace propio de una
+ * fila del árbol se les quita del nombre el título de esa fila antes de mirar
+ * `FORBIDDEN_ACTIONS` (`sinTituloDeLaFila`, H28).
  */
-export function isSafeToClick(el, origin) {
+export function isSafeToClick(el, origin, { container = null } = {}) {
   if (!el || !el.isConnected) return { ok: false, reason: 'el elemento ya no está en la página' }
 
-  const name = foldLabel(accessibleName(el)).slice(0, 120)
+  // Se sigue casando por SUBCADENA (por palabra entera dejarían de bloquearse
+  // «unpublish», «reassign», «undelete», «autosave»…), y el título de la fila
+  // se quita ANTES de recortar a 120: si no, un título largo se cortaba a
+  // medias y ya no se reconocía (H28, PLAN3 §3.2).
+  const name = sinTituloDeLaFila(el, foldLabel(accessibleName(el)), container).slice(0, 120)
   for (const word of FORBIDDEN_ACTIONS) {
     if (name.includes(word)) {
       return { ok: false, reason: `«${name}» parece una acción, no una navegación` }
@@ -328,6 +373,58 @@ export function isSafeToClick(el, origin) {
   if (role === 'treeitem' || role === 'menuitem' || role === 'tab') return { ok: true, kind: role }
 
   return { ok: false, reason: 'no es un control de navegación reconocible' }
+}
+
+/**
+ * Lleva a VER una página: `/pages/<id>` o `viewpage.action?pageId=<id>`.
+ * `PAGE_HREF` de tree-dom.js casa también con `removepage.action?pageId=…`,
+ * `editpage.action?pageId=…`: ésos no son el enlace propio de nadie.
+ */
+const VER_PAGINA = /\/pages\/\d+(?:[/?#]|$)|\/viewpage\.action\?(?:[^#]*&)?pageId=\d+/i
+
+/**
+ * El nombre plegado de `el` sin el título de su fila, si `el` es el chevron o
+ * el enlace propio de una fila del árbol. Si no, el nombre tal cual.
+ *
+ * Por qué (H28, PLAN3 §0 y §3.2, C3-8): el título de una página es CONTENIDO,
+ * no una acción (§8.12), y el pagetree de un Data Center lo mete en la
+ * etiqueta de su chevron. En el Confluence 9.2 del usuario, «Ampliar elemento
+ * 8700 - Contract + Billing» casaba con «billing» y Faro no desplegaba esa
+ * rama; igual que «Onboarding of new participants» con «new».
+ *
+ * Qué NO se relaja, y por qué cada guarda:
+ *  - Sólo dentro del contenedor del árbol (`cont.contains(fila)`): `rowFor`
+ *    casa con cualquier `li` de la página, también los de una cabecera.
+ *  - Sólo el chevron (un `<a>` sin dirección o un control con
+ *    `aria-expanded`, forma de F9) o el enlace propio (`rowLink`) y, éste,
+ *    sólo si lleva a VER la página (`VER_PAGINA`): un «Eliminar» con
+ *    `removepage.action?pageId=` en un `li` sería si no «el enlace propio» de
+ *    esa fila y su texto, «el título».
+ *  - El título se quita como palabra ENTERA (ni letra ni cifra a los lados):
+ *    una página llamada «e» borraría si no las «e» de «delete page».
+ *  - Lo que quede se sigue casando por subcadena, y `isMenuTrigger` va detrás:
+ *    un «Delete page» o un «Mover» dentro de la fila siguen bloqueados.
+ */
+function sinTituloDeLaFila(el, nombre, container) {
+  if (!nombre) return nombre
+  const cont = container ?? (typeof document === 'undefined' ? null : treeContainer())
+  if (!cont?.contains) return nombre
+  const fila = rowFor(el, cont)
+  if (!fila || !cont.contains(fila)) return nombre
+
+  const chevron = (el.tagName === 'A' && !el.getAttribute('href')) || !!el.matches?.('[aria-expanded]')
+  const propio = el === rowLink(fila) && VER_PAGINA.test(el.getAttribute('href') || '')
+  if (!chevron && !propio) return nombre
+
+  const titulo = foldLabel(rowTitle(fila))
+  if (!titulo) return nombre
+  const palabra = new RegExp('(?<![\\p{L}\\p{N}])' + literal(titulo) + '(?![\\p{L}\\p{N}])', 'gu')
+  return nombre.replace(palabra, ' ')
+}
+
+/** Un texto como literal de una expresión regular (modo `u`). */
+function literal(s) {
+  return s.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')
 }
 
 /** Sube hasta el enlace o el control pulsable que envuelve al elemento. */

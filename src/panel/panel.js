@@ -157,7 +157,7 @@ import {
 } from './sources.js'
 import { SUGGESTION_COUNT, suggestionsFor } from './suggestions.js'
 import { searchChips } from './search-chips.js'
-import { restFailureDue, jqlFailText, linksFailText } from './rest-notice.js'
+import { restFailureDue, jqlFailText, linksFailText, failReason, sinAccesoMotivo } from './rest-notice.js'
 import { issueFamily, normalizeIssueFields } from './issue-profile.js'
 import {
   clearSourceHistory,
@@ -553,6 +553,15 @@ const state = {
   // su pestaña y su host: `showPermissionNotice` sólo lo cambia por el aviso de
   // recargar cuando es de la que hay delante. Sólo memoria.
   contentProblem: null,
+  // Por qué no se pudo leer el camino de una página (H28, PLAN3 §3.2):
+  // `{host, id, motivo}` o null. `learnAncestry` lo apunta cuando falla —sin
+  // acceso a la pestaña o con la API sin contestar— y lo vacía cuando lee el
+  // camino o ya lo tenía. Sin él, la tarjeta que se queda en «Llévame» porque
+  // el camino no llegó era idéntica a la de una página que cuelga de la portada
+  // (cero ramas, que es diseño), y el porqué sólo estaba en el Registro.
+  // `offerNavigation` lo cuelga de la tarjeta si es del mismo destino y host.
+  // Sólo memoria.
+  ancestryNote: null,
 }
 
 // -------------------------------------------------------------------- init
@@ -1449,7 +1458,7 @@ async function countProfile(sitio, scope, { tabId = state.tabId, signal = null }
   const r = await chrome.tabs
     .sendMessage(tabId, { type: MSG.JQL_SEARCH, jql, limit: JIRA_REST_LIMITS.maxResults, fields: SAMPLE_FIELDS, cloud: sitio.cloud })
     .catch(() => null)
-  if (!r?.ok) return { ok: false, reason: r?.reason || 'sin respuesta', detail: jqlFailText(r, sitio.host) }
+  if (!r?.ok) return { ok: false, reason: failReason(r, 'sin respuesta'), detail: jqlFailText(r, sitio.host) }
   // «Un indexado cancelado no escribe nada» (§4.6) vale también para el perfil:
   // el Cancelar del velo no corta la petición —tarda lo que tarde—, pero lo que
   // vuelva después ya no se guarda ni se registra (revisión adversaria de H9).
@@ -2231,13 +2240,23 @@ async function hasHostPermission(origin) {
  * ni se pide permiso ni se reinyecta: se apunta el motivo (`noteContentProblem`)
  * y se dice (`showContentProblem`). Sigue devolviendo un booleano: diecinueve
  * llamadas sólo quieren saber si pueden hablar con la pestaña.
+ *
+ * Desde H28 (revisión adversaria de H27, D2) la pestaña y el sitio se capturan
+ * ANTES del primer await (§8.22): el problema se apuntaba con los de DESPUÉS, y
+ * cambiar de pestaña mientras el service worker contestaba dejaba el motivo de
+ * una pestaña apuntado a nombre de otra. Si al volver la pestaña ya no es la
+ * misma, se devuelve false sin apuntar ni avisar nada: lo que se sabe es de
+ * una pestaña que ya no está delante.
  */
 async function ensureContentAccess({ announce = true } = {}) {
   if (!state.site || !state.tabId) return false
+  const tabId = state.tabId
+  const site = state.site
 
   const status = await chrome.runtime
-    .sendMessage({ type: MSG.CONTENT_STATUS, tabId: state.tabId, origin: state.site.origin })
+    .sendMessage({ type: MSG.CONTENT_STATUS, tabId, origin: site.origin })
     .catch(() => null)
+  if (state.tabId !== tabId) return false
 
   if (status?.ready) {
     state.contentProblem = null
@@ -2248,7 +2267,7 @@ async function ensureContentAccess({ announce = true } = {}) {
   // a la pestaña) y reinyectar no cambia nada en el mismo mundo, donde
   // `__faroBooted` ya está puesto.
   if (status?.alive && status?.error) {
-    noteContentProblem(status.error)
+    noteContentProblem(status.error, { tabId, host: site.host })
     if (announce) showContentProblem()
     return false
   }
@@ -2256,18 +2275,19 @@ async function ensureContentAccess({ announce = true } = {}) {
   if (status?.granted) {
     // Permiso hay, pero la pestaña se cargó antes de que el script existiera.
     const r = await chrome.runtime
-      .sendMessage({ type: MSG.REQUEST_HOST_PERMISSION, origin: state.site.origin, tabId: state.tabId })
+      .sendMessage({ type: MSG.REQUEST_HOST_PERMISSION, origin: site.origin, tabId })
       .catch(() => null)
+    if (state.tabId !== tabId) return false
     if (r?.ok) {
       state.contentProblem = null
-      log.ok('Content script inyectado', state.site.host)
+      log.ok('Content script inyectado', site.host)
       return true
     }
     // El SW ya no dice «ok» sin un PING bueno detrás (H27): «roto» es un script
     // que estaba y no arranca; «huerfano», que tras inyectarlo nadie contesta.
     // Ninguno de los dos se arregla con permiso: se dice el motivo.
     if (r && r.ok === false && (r.kind === 'roto' || r.kind === 'huerfano')) {
-      noteContentProblem(r.error)
+      noteContentProblem(r.error, { tabId, host: site.host })
       if (announce) showContentProblem()
       return false
     }
@@ -2293,7 +2313,13 @@ function showPermissionNotice() {
     return
   }
   clearEmpty()
-  if (el.chat.querySelector('.perm-card')) return
+  // Una tarjeta por chat, pero no un silencio (H28, PLAN3 §3.2): la segunda
+  // acción que choca con el mismo permiso volvía por aquí sin decir nada, y la
+  // tarjeta de antes podía estar muy arriba, fuera de la vista.
+  if (el.chat.querySelector('.perm-card')) {
+    showNotice('Sigue faltando el permiso sobre ' + state.site.host + ': pulsa «Dar permiso» en la tarjeta.', true)
+    return
+  }
 
   const card = document.createElement('div')
   card.className = 'nav-card perm-card'
@@ -2350,13 +2376,17 @@ function showPermissionNotice() {
  * `bootErrorText`, sin el id de la extensión) o lo pone él («no contesta»). Se
  * registra UNA vez por pestaña y motivo: `ensureContentAccess` corre en casi
  * cada acción, y un registro que repite lo mismo en cada clic esconde lo demás.
+ *
+ * La pestaña y el host son los que `ensureContentAccess` capturó al preguntar
+ * (H28, revisión adversaria de H27, D2), no los de ahora: el motivo es de la
+ * pestaña que lo dijo.
  */
-function noteContentProblem(error) {
+function noteContentProblem(error, { tabId, host }) {
   const texto = String(error || 'el content script no arranca')
-  if (state.contentProblem?.tabId !== state.tabId || state.contentProblem?.error !== texto) {
-    log.error('Content script roto', state.site.host + ' · ' + texto)
+  if (state.contentProblem?.tabId !== tabId || state.contentProblem?.error !== texto) {
+    log.error('Content script roto', host + ' · ' + texto)
   }
-  state.contentProblem = { host: state.site.host, tabId: state.tabId, error: texto }
+  state.contentProblem = { host, tabId, error: texto }
 }
 
 /**
@@ -3044,7 +3074,7 @@ async function loadSearchChipSources(box) {
     } else if (r && !r.ok) {
       // Sin aviso en el chat: los chips son un extra y quedarse sin los filtros
       // sólo quita chips. Queda en el Registro, con el motivo del servidor.
-      log.info('Filtros favoritos', `no se pudieron leer · ${r.reason || 'sin motivo'}`)
+      log.info('Filtros favoritos', `no se pudieron leer · ${failReason(r, 'sin motivo')}`)
     }
   }
   if (state.site?.host !== host) return
@@ -3357,6 +3387,10 @@ async function send() {
   // que haya en la pestaña al acabar: `state.site` se queda en null en cuanto
   // se mira el correo, y desde H6 el índice va detrás de `offerNotes` (§8.22).
   const sitioAlPedir = state.site
+  // Y la pestaña (H28, PLAN3 §3.2): las marcas son de la página que se analizó,
+  // y `offerNotes` salía MUDA si al terminar el panel miraba otra pestaña o
+  // ninguna; ahora lo compara con ésta y lo dice.
+  const tabIdAlPedir = state.tabId
 
   // Ocupado desde ya: leer la página en bloques tarda, y en ese hueco un
   // segundo clic abría otro turno y otra sesión. Con testigo, para que el
@@ -3766,6 +3800,10 @@ async function send() {
       parts: turn.parts,
       // Una respuesta a «Dibujar el flujo» no es un análisis que marcar (H24).
       esDiagrama: diagramaAlPedir,
+      // La pestaña y el sitio con los que se pidió (H28): marcar otra sería
+      // marcar cualquier cosa, y callarlo, el fallo de §8.14.
+      tabIdAlPedir,
+      sitioAlPedir,
       // Si la numeración se adapta o se pone a posteriori, la burbuja se
       // repinta con la prosa nueva (y la memoria del turno la sigue).
       repaint: (prose) => {
@@ -3933,14 +3971,27 @@ function keepToolsFolded(turn, toolsBox) {
  * Sin permiso sobre el dominio, o en el editor, no hay bloques: el análisis se
  * hace igual —el modelo lee la página con el MCP— y es `offerNotes` quien dice
  * después por qué no se marca nada. Nunca lanza.
+ *
+ * Las tres salidas sin bloques quedan en el Registro con su motivo (H28, PLAN3
+ * §3.2): la de sin pestaña y la de sin acceso se iban calladas, y la del acceso
+ * decía «permiso» también con el content script roto; y un script roto contesta
+ * `{ok:false, error}`, que se registraba como «no se pudo leer».
  */
 async function readPageDigest() {
-  if (!state.site || state.tabId == null) return { digest: null, reason: 'sin pestaña' }
-  if (!(await ensureContentAccess({ announce: false }))) return { digest: null, reason: 'permiso' }
+  if (!state.site || state.tabId == null) {
+    log.info('Página sin bloques', 'sin pestaña')
+    return { digest: null, reason: 'sin pestaña' }
+  }
+  const tabId = state.tabId
+  const host = state.site.host
+  if (!(await ensureContentAccess({ announce: false }))) {
+    log.info('Página sin bloques', sinAccesoMotivo(state.contentProblem, { tabId, host }) || 'falta permiso')
+    return { digest: null, reason: 'permiso' }
+  }
 
   const r = await chrome.tabs.sendMessage(state.tabId, { type: MSG.PAGE_DIGEST }).catch(() => null)
   if (!r?.ok || !r.text) {
-    const reason = r?.reason || 'no se pudo leer'
+    const reason = failReason(r, 'no se pudo leer')
     log.info('Página sin bloques', reason === 'editando' ? 'estás en el editor' : reason)
     return { digest: null, reason }
   }
@@ -5140,7 +5191,22 @@ async function offerNavigation(answer, bubble, skillId = state.skill, parts = []
   if (source === 'respuesta') {
     log.ok('Destino leído de la respuesta', `${plan.destination.title} · sin preguntar al modelo`)
   }
-  attachToBubble(bubble, navCard(plan))
+  const card = navCard(plan)
+  // Una página con un solo paso lleva sólo «Llévame» (H28, PLAN3 §3.2). Si es
+  // porque el camino no se pudo leer, se dice en la tarjeta y con su motivo: se
+  // veía igual que la de una página que cuelga de la portada, que no tiene
+  // ramas y es así a propósito. Sólo con la nota de ESTE destino y este sitio.
+  // Antes de colgarla, para que el aviso entre en lo que se anuncia.
+  const nota = state.ancestryNote
+  if (
+    plan.destination.kind === 'confluence-page' &&
+    (plan.steps?.length || 0) <= 1 &&
+    nota?.id === plan.destination.id &&
+    nota?.host === (state.site?.host ?? state.lastHost)
+  ) {
+    card.appendChild(noticeNode('No he podido leer el camino (' + nota.motivo + '): sólo puedo llevarte de golpe.', true))
+  }
+  attachToBubble(bubble, card)
 }
 
 /**
@@ -5158,16 +5224,27 @@ async function offerNavigation(answer, bubble, skillId = state.skill, parts = []
  * consulta se funde encima—, se vuelve a leer: la caché no manda sobre el
  * índice. Si no se puede —sin content script, sin sesión, API caída— se
  * devuelve null y el planificador lleva de golpe, sin inventar nada.
+ *
+ * Y desde H28 (PLAN3 §3.2) el porqué de ese «de golpe» no se queda sólo en el
+ * Registro: cada fallo apunta `state.ancestryNote` con el destino y el motivo,
+ * y `offerNavigation` lo cuelga de la tarjeta. Los null que no son un fallo
+ * (sin pestaña, un id que no es de página, la tregua) no lo tocan; leer el
+ * camino, o tenerlo ya, lo vacía.
  */
 async function learnAncestry(destination) {
   if (!state.site || !state.tabId) return null
   const id = String(destination?.id || '')
   if (!/^\d+$/.test(id)) return null
 
-  const clave = `${state.site.host}:${id}`
+  const host = state.site.host
+  const tabId = state.tabId
+  const clave = `${host}:${id}`
   const conocido = ancestryOf(state.index, id, 50).length
   const previo = state.ancestryFetched.get(clave)
-  if (previo?.largo === conocido) return null
+  if (previo?.largo === conocido) {
+    state.ancestryNote = null
+    return null
+  }
   // Una API que no contesta no se vuelve a esperar en cada respuesta: un
   // minuto de tregua, y luego se reintenta.
   if (previo?.fallo && Date.now() - previo.fallo < 60000) return null
@@ -5175,7 +5252,9 @@ async function learnAncestry(destination) {
   // Sin content script no hay quien lea el árbol, y tampoco quien lo recorra:
   // el camino no hace falta, porque no se va a poder ofrecer.
   if (!(await ensureContentAccess({ announce: false }))) {
-    log.warn('Sin camino', 'no puedo leer el árbol sin acceso a la pestaña; te llevaré de golpe')
+    const motivo = sinAccesoMotivo(state.contentProblem, { tabId, host }) || 'sin acceso a la pestaña'
+    state.ancestryNote = { host, id, motivo }
+    log.warn('Sin camino', `no puedo leer el árbol (${motivo}); te llevaré de golpe`)
     return null
   }
 
@@ -5193,11 +5272,14 @@ async function learnAncestry(destination) {
 
   if (!r?.ok || !Array.isArray(r.pages) || !r.pages.length) {
     state.ancestryFetched.set(clave, { fallo: Date.now() })
-    log.warn('Sin camino', `${r?.reason || 'la pestaña no contestó'} · te llevaré de golpe`)
+    const motivo = failReason(r, 'la pestaña no contestó')
+    state.ancestryNote = { host, id, motivo }
+    log.warn('Sin camino', `${motivo} · te llevaré de golpe`)
     return null
   }
 
   state.ancestryFetched.set(clave, { largo: r.pages.length })
+  state.ancestryNote = null
   log.ok('Camino leído de Confluence', `${r.pages.length - 1} rama(s) · API ${r.via} · ${r.ms ?? Date.now() - t0} ms`)
   return r.pages
 }
@@ -5265,8 +5347,11 @@ async function attachJqlResults(card, busqueda, { site = state.site, sessionID =
   }
   // Quien hace la petición es el content script, porque vive en el origen del
   // sitio; sin él no hay lista, igual que no hay camino ni marcas.
+  // Con el permiso dado y el script sin arrancar, «sin permiso» era mentira
+  // (H28, revisión adversaria de H27, D2): se dice lo que pasa y qué hacer.
   if (tabId == null || !(await ensureContentAccess({ announce: false }))) {
-    fallo('permiso', `No puedo leer la lista sin permiso sobre ${site.host}.`)
+    const roto = sinAccesoMotivo(state.contentProblem, { tabId, host: site.host })
+    fallo('permiso', roto ? `No puedo leer la lista (${roto}): recarga la pestaña.` : `No puedo leer la lista sin permiso sobre ${site.host}.`)
     return null
   }
 
@@ -5291,7 +5376,7 @@ async function attachJqlResults(card, busqueda, { site = state.site, sessionID =
   }
 
   if (!r?.ok) {
-    fallo(r?.reason || 'sin respuesta', jqlFailText(r, site.host))
+    fallo(failReason(r, 'sin respuesta'), jqlFailText(r, site.host))
     return null
   }
 
@@ -5714,7 +5799,7 @@ async function contrastarConJira(diagrama, figura, boton) {
   const t0 = performance.now()
   const avisar = (fallo) => {
     const texto = linksFailText(fallo, host)
-    log.warn('Relaciones de Jira', `${fallo?.reason || 'sin respuesta'} · ${texto}`)
+    log.warn('Relaciones de Jira', `${failReason(fallo, 'sin respuesta')} · ${texto}`)
     avisoEnLaFigura(figura, texto, true)
   }
   if (!sitio || sitio.product !== 'jira' || sitio.cloud || !state.settings.restTools) {
@@ -5814,6 +5899,8 @@ async function offerNotes(
     parts = [],
     repaint = null,
     esDiagrama = false,
+    tabIdAlPedir = null,
+    sitioAlPedir = null,
   } = {}
 ) {
   // De qué se habla en los avisos y en la tarjeta: en Jira lo abierto es una
@@ -5829,7 +5916,16 @@ async function offerNotes(
     log.info('Diagrama', 'sin marcas: la pregunta era dibujar el flujo')
     return
   }
-  if (!state.site || !state.tabId || !state.client) return
+  // Las marcas son de la pestaña y el sitio con los que se pidió (H28, PLAN3
+  // §3.2, §8.22). Esta salida era MUDA: un análisis de ocho observaciones que no
+  // subraya nada porque el usuario se fue a otra pestaña mientras contestaba el
+  // modelo, sin una palabra en el chat. Ahora se registra y se dice. Sin sitio en
+  // la pestaña (se fue de Atlassian en la misma) también es haberse ido.
+  if (!state.site || state.tabId !== tabIdAlPedir || state.site.host !== sitioAlPedir?.host || !state.client) {
+    log.info('Sin marcas', 'has cambiado de pestaña o de sitio: no marco nada')
+    attachToBubble(bubble, noticeNode('Has cambiado de pestaña o de sitio: no he marcado nada. Vuelve a la página y pide el análisis otra vez.', true))
+    return
+  }
   if (signal?.aborted) return
 
   // Peldaño 1, gratis: el modelo numeró «a su manera» —una lista «1.»,
@@ -5941,8 +6037,12 @@ async function offerNotes(
   // permiso hay que PEDIRLO, no apuntarlo en el registro y callarse: un análisis
   // que promete ocho observaciones y no subraya ninguna, sin decir por qué, es
   // el peor de los resultados.
+  // Con el content script roto no falta ningún permiso (revisión adversaria de
+  // H27, D2): el Registro dice el motivo, y el aviso lo cambia ya
+  // `showPermissionNotice`. Con la pestaña y el sitio que ya se comprobaron
+  // arriba, que son los que miró `ensureContentAccess` al empezar.
   if (!(await ensureContentAccess({ announce: false }))) {
-    log.warn('Sin marcas', 'falta permiso en ' + state.site.host)
+    log.warn('Sin marcas', sinAccesoMotivo(state.contentProblem, { tabId: tabIdAlPedir, host: sitioAlPedir.host }) || 'falta permiso en ' + sitioAlPedir.host)
     showPermissionNotice()
     return
   }
@@ -6040,9 +6140,21 @@ async function offerNotes(
     .sendMessage(state.tabId, { type: MSG.ANNOTATE, notes: anclables })
     .catch(() => null)
 
-  if (res?.reason === 'editando') {
-    log.warn('Sin marcas', 'estás en el editor')
-    attachToBubble(bubble, noticeNode('Estás en el editor: no marco nada para no interferir.'))
+  // Una respuesta que no es un «sí» (H28, PLAN3 §3.2): la del editor es a
+  // propósito y se dice como siempre; cualquier otra —nadie contestó, o un
+  // content script roto con su `error`— pintaba una tarjeta con TODAS las
+  // observaciones «no la he encontrado en la página» y registraba «Análisis
+  // marcado · 0 de 8», como si las anclas fueran malas. Ahora se dice que la
+  // página no contestó, con el motivo, y no se pinta tarjeta ni se registra nada.
+  if (!res || res.ok === false) {
+    if (res?.reason === 'editando') {
+      log.warn('Sin marcas', 'estás en el editor')
+      attachToBubble(bubble, noticeNode('Estás en el editor: no marco nada para no interferir.'))
+      return
+    }
+    const motivo = failReason(res, 'la pestaña no contestó')
+    log.warn('Sin marcas', 'la página no contestó al marcar: ' + motivo)
+    attachToBubble(bubble, noticeNode('No he podido marcar la página (' + motivo + '). Recarga la pestaña y vuelve a pedirlo.', true))
     return
   }
 
@@ -6459,6 +6571,14 @@ async function remarkFromAnchors({ prose, anchors, bubble, card, url = '', conBa
   const res = await chrome.tabs
     .sendMessage(state.tabId, { type: MSG.ANNOTATE, notes: anclables })
     .catch(() => null)
+  // Como al marcar la primera vez (H28): una página que no contesta, o que
+  // contesta con su error, no es «esas marcas eran de otra página».
+  if ((!res || res.ok === false) && res?.reason !== 'editando') {
+    const motivo = failReason(res, 'la pestaña no contestó')
+    log.warn('Sin marcas', 'la página no contestó al marcar de nuevo: ' + motivo)
+    showNotice('No he podido marcar la página (' + motivo + '). Recarga la pestaña y vuelve a intentarlo.', true)
+    return
+  }
   const placed = res?.placed || []
   if (!placed.length) {
     showNotice(
@@ -6493,7 +6613,8 @@ async function focusNote(n) {
   if (!state.tabId) return
   const res = await chrome.tabs.sendMessage(state.tabId, { type: MSG.FOCUS_NOTE, n }).catch(() => null)
   if (!res?.ok) {
-    showNotice(res?.reason || 'Esa marca ya no está en la página.', true)
+    // Con el motivo de un content script roto también (H28), no sólo el suyo.
+    showNotice(failReason(res, 'Esa marca ya no está en la página.'), true)
     return
   }
   markNoteRow(n)
@@ -6630,13 +6751,19 @@ function navCard(plan) {
 async function runPlan(plan, mode, card) {
   const type = mode === 'assisted' && plan.steps?.length > 1 ? MSG.START_PLAN : MSG.NAVIGATE_DIRECT
 
+  // La pestaña del viaje, capturada ANTES de preguntar por el content script
+  // (H28, §8.22): es la que se comprobó, la que lleva el recorrido y la que
+  // explica el motivo si no se puede.
+  const tabId = state.tabId
+
   // La asistida y el resaltado necesitan el content script; el salto directo
-  // no. Por eso el permiso se pide justo aquí, y sólo cuando hace falta.
+  // no. Por eso el permiso se pide justo aquí, y sólo cuando hace falta. Con
+  // el script roto no es el permiso lo que falta (D2): el Registro lo dice.
   const puede = await ensureContentAccess({ announce: false })
   if (!puede) {
     showPermissionNotice()
     if (mode === 'assisted') {
-      log.warn('Asistida bloqueada', 'falta permiso en ' + state.site.host)
+      log.warn('Asistida bloqueada', sinAccesoMotivo(state.contentProblem, { tabId, host: state.site.host }) || 'falta permiso en ' + state.site.host)
       return
     }
   }
@@ -6646,7 +6773,6 @@ async function runPlan(plan, mode, card) {
   // Un recorrido paso a paso dura varios segundos por rama y se puede parar
   // desde aquí: el service worker atendía CANCEL_PLAN y nadie lo mandaba. El
   // botón vive mientras dura el recorrido y se va con PLAN_FINISHED.
-  const tabId = state.tabId
   if (type === MSG.START_PLAN) {
     const stop = document.createElement('button')
     stop.className = 'ghost small'
@@ -6708,6 +6834,10 @@ function finishNavRun({ cancelled = false } = {}) {
 async function togglePick() {
   if (state.picking) return stopPick()
   if (!state.site || !state.tabId) return
+  // La pestaña en la que se pulsó (H28, revisión adversaria de H27, D2): la que
+  // `ensureContentAccess` comprueba es la que recibe el PICK_START, y no la que
+  // haya delante cuando la comprobación vuelva (§8.22).
+  const tabId = state.tabId
 
   const puede = await ensureContentAccess({ announce: false })
   if (!puede) {
@@ -6722,7 +6852,7 @@ async function togglePick() {
   // reinyectó antes de llegar aquí (revisión adversaria de H27, D10).
   // `ok: false` es un script que contesta y dice por qué no arranca, y lo que
   // hay que enseñar es ese motivo.
-  const r = await chrome.tabs.sendMessage(state.tabId, { type: MSG.PICK_START }).catch(() => null)
+  const r = await chrome.tabs.sendMessage(tabId, { type: MSG.PICK_START }).catch(() => null)
   if (r == null) {
     log.warn('Señalar sin activar', 'la pestaña no contesta')
     showNotice('No he podido hablar con esta pestaña. Recárgala y vuelve a intentarlo.', true)
@@ -6873,7 +7003,22 @@ async function showSourcesScreen() {
   // Sin permiso sobre el dominio no hay content script, y sin él no se puede
   // preguntar a Confluence: queda el índice, y se ofrece el permiso AQUÍ,
   // porque la tarjeta del chat queda tapada por esta pantalla.
+  const tabId = state.tabId
+  const host = state.site.host
   const puede = await ensureContentAccess({ announce: false })
+  // Con el permiso dado y el script sin arrancar (H28, revisión adversaria de
+  // H27, D2), el botón pediría un permiso que ya está: no se enseña, y se dice
+  // el motivo, qué hacer y lo que queda, que es el índice.
+  const roto = puede ? '' : sinAccesoMotivo(state.contentProblem, { tabId, host })
+  if (roto) {
+    const n = Object.keys(state.index?.pages || {}).length
+    setSourcesStatus(
+      n
+        ? `No puedo preguntarle a Confluence (${roto}). Recarga la pestaña; mientras, sólo busco en lo que ya tengo indexado (${n} páginas).`
+        : `No puedo preguntarle a Confluence (${roto}). Recarga la pestaña; mientras, pega la URL o el id de la página.`
+    )
+    return
+  }
   if (!puede) {
     $('sources-perm').classList.remove('hidden')
     $('sources-perm-text').textContent = `Sin permiso sobre ${state.site.host} sólo busco en lo que ya tengo indexado.`
@@ -7113,7 +7258,7 @@ async function paintSuggestedSources() {
   if (token !== state.sourcesSuggest.token || state.site?.host !== host) return
 
   if (!r?.ok) {
-    log.warn('Enlaces de la página', r?.reason || 'la pestaña no contestó')
+    log.warn('Enlaces de la página', failReason(r, 'la pestaña no contestó'))
     paintSuggestedList(computeSuggested().list, { estado: 'sin-enlaces' })
     return
   }
@@ -7157,6 +7302,10 @@ function suggestedHint(estado) {
   const enJira = state.site?.product === 'jira'
   const cosa = enJira ? 'esta incidencia' : 'esta página'
   if (estado === 'sin-pestana') {
+    // Con el content script de esta pestaña roto no es el permiso (H28,
+    // revisión adversaria de H27, D2): se dice el motivo y qué hacer.
+    const roto = sinAccesoMotivo(state.contentProblem, { tabId: state.tabId, host: state.site?.host })
+    if (roto) return `No leo los enlaces de ${cosa} (${roto}): recarga la pestaña. Mientras, sugiero con el contexto del sitio y lo que usaste antes.`
     return `Sin permiso sobre ${state.site?.host || 'este dominio'} no leo los enlaces de ${cosa}: sugiero con el contexto del sitio y lo que usaste antes.`
   }
   if (estado === 'sin-enlaces') {
@@ -7397,7 +7546,7 @@ async function searchSourcesRemote(q, local, exclude) {
 
   const donde = target.via === 'linked' ? target.site.host : ''
   if (!r?.ok) {
-    log.warn('Búsqueda de páginas', `${donde ? donde + ' · ' : ''}${r?.reason || 'la pestaña no contestó'}`)
+    log.warn('Búsqueda de páginas', `${donde ? donde + ' · ' : ''}${failReason(r, 'la pestaña no contestó')}`)
     setSourcesStatus(searchFailText(r, donde) + (local.length ? ' Mientras, sólo busco en lo indexado.' : ''))
     return
   }
@@ -7422,7 +7571,7 @@ function searchFailText(r, host = '') {
       ? `Tu sesión de ${host} no vale para su API: ábrelo en otra pestaña, entra, y vuelve a intentarlo.`
       : 'Tu sesión de Confluence no vale para su API: recarga la pestaña y vuelve a entrar.'
   }
-  return `No he podido preguntarle a ${host || 'Confluence'}: ` + (r?.reason || 'la pestaña no contestó') + '.'
+  return `No he podido preguntarle a ${host || 'Confluence'}: ` + failReason(r, 'la pestaña no contestó') + '.'
 }
 
 /** La lista de sugerencias bajo el campo, como un listbox con teclado. */
@@ -7590,9 +7739,12 @@ async function addSourceById(id, path = '', { suggested = false, reason = '' } =
     return
   }
   if (r.needsPermission) $('sources-perm').classList.remove('hidden')
-  log.warn('Página base sin título', `${id} · ${r.reason}`)
+  // `fetchPageChain` devuelve la respuesta de la pestaña tal cual, y la de un
+  // content script roto trae `error` y no `reason`: salía «(undefined)» (H28).
+  const motivo = failReason(r, 'sin motivo')
+  log.warn('Página base sin título', `${id} · ${motivo}`)
   await addSource({ id, title: '', path }, desde('id'))
-  setSourcesStatus(`Añadida por su id ${id}: no he podido leer su título (${r.reason}).`)
+  setSourcesStatus(`Añadida por su id ${id}: no he podido leer su título (${motivo}).`)
 }
 
 /**
@@ -7733,8 +7885,21 @@ function closeSourcesScreen() {
   el.input.focus()
 }
 
-function onRuntimeMessage(msg) {
+/**
+ * Lo que llega de la página y del service worker.
+ *
+ * Un mensaje de runtime llega a TODAS las páginas de la extensión, y con dos
+ * ventanas hay dos paneles (H28, PLAN3 §3.2): el segundo pintaba «Navegación
+ * detenida» por un recorrido que no era suyo y se quedaba lo señalado en otra
+ * pestaña. Lo de la página (NOTE_CLICKED, PICK_RESULT) sólo se atiende si viene
+ * de la pestaña de este panel (`sender.tab`; sin pestaña, como hasta ahora); lo
+ * del recorrido (PLAN_PROGRESS, PLAN_FINISHED), si su `tabId` es la de este
+ * panel o la del recorrido que lanzó (`state.navRun`), que sigue siendo suyo
+ * aunque se haya cambiado de pestaña.
+ */
+function onRuntimeMessage(msg, sender) {
   if (msg?.type === MSG.NOTE_CLICKED) {
+    if (sender?.tab?.id != null && sender.tab.id !== state.tabId) return
     // Han pulsado el número en la página: se marca la fila del chat y se sube
     // hasta ella. Los dos sentidos, con el mismo número.
     markNoteRow(msg.n)
@@ -7747,6 +7912,7 @@ function onRuntimeMessage(msg) {
   }
 
   if (msg?.type === MSG.PICK_RESULT) {
+    if (sender?.tab?.id != null && sender.tab.id !== state.tabId) return
     setPicking(false)
     if (!msg.pick) {
       log.info('Selección cancelada')
@@ -7759,9 +7925,12 @@ function onRuntimeMessage(msg) {
     return
   }
 
+  const deOtroRecorrido = msg?.tabId != null && msg.tabId !== state.tabId && msg.tabId !== state.navRun?.tabId
   if (msg?.type === MSG.PLAN_PROGRESS) {
+    if (deOtroRecorrido) return
     setStatus('busy', `paso ${msg.index + 1}/${msg.total}`)
   } else if (msg?.type === MSG.PLAN_FINISHED) {
+    if (deOtroRecorrido) return
     setStatus('ok', 'conectado')
     // La tarjeta del recorrido vuelve en sí (si se paró desde ella, ya lo hizo
     // el botón y esto no repite el registro).
@@ -8272,9 +8441,15 @@ async function paintState() {
 async function treeDebug() {
   const status = $('settings-status')
 
+  const tabId = state.tabId
+  const host = state.site?.host
   const puede = await ensureContentAccess({ announce: false })
   if (!puede) {
-    status.textContent = 'Necesito permiso sobre este dominio para leer su barra lateral.'
+    // Con el script roto no es el permiso (H28, revisión adversaria de H27, D2).
+    const roto = sinAccesoMotivo(state.contentProblem, { tabId, host })
+    status.textContent = roto
+      ? `No puedo leer la barra lateral (${roto}). Recarga la pestaña.`
+      : 'Necesito permiso sobre este dominio para leer su barra lateral.'
     return
   }
 
@@ -10650,8 +10825,10 @@ async function restIndexFor(scope, { sitio, report = () => {}, tabId = state.tab
     if (scope?.kind !== 'space' || !scope.key) {
       return falla('ámbito', 'Por la API sólo puedo leer el árbol de UN espacio, y aquí el ámbito es todo Confluence.')
     }
+    // Con el script roto no es el permiso (H28, revisión adversaria de H27, D2).
     if (tabId == null || !(await ensureContentAccess({ announce: false }))) {
-      return falla('permiso', `No puedo leer el árbol sin permiso sobre ${host}.`)
+      const roto = sinAccesoMotivo(state.contentProblem, { tabId, host })
+      return falla('permiso', roto ? `No puedo leer el árbol de ${host} (${roto}): recarga la pestaña.` : `No puedo leer el árbol sin permiso sobre ${host}.`)
     }
     // `scope.label` ya trae su artículo («el espacio ENG», «todo Confluence»): con
     // «de» delante salía «el árbol de el espacio ENG».
@@ -10665,7 +10842,7 @@ async function restIndexFor(scope, { sitio, report = () => {}, tabId = state.tab
     // Cancelado mientras se leía: ni aviso, ni registro, ni índice.
     if (signal?.aborted) return nada
     if (!r?.ok) {
-      return falla(r?.reason || 'sin respuesta', `No he podido leer el árbol de ${host} por su API: ${r?.reason || 'la pestaña no contestó'}.`)
+      return falla(failReason(r, 'sin respuesta'), `No he podido leer el árbol de ${host} por su API: ${failReason(r, 'la pestaña no contestó')}.`)
     }
     const index = indexFromSpacePages(r.pages, { site: sitio, scope, homeId: r.homeId })
     if (!index) return falla('vacío', `La API de ${host} no devuelve ninguna página en ${scope.label}.`)
@@ -10693,7 +10870,8 @@ async function restIndexFor(scope, { sitio, report = () => {}, tabId = state.tab
       return falla('ámbito', 'Por la API sólo puedo contar la muestra de UN proyecto, y aquí el ámbito es todo Jira.')
     }
     if (tabId == null || !(await ensureContentAccess({ announce: false }))) {
-      return falla('permiso', `No puedo contar la muestra sin permiso sobre ${host}.`)
+      const roto = sinAccesoMotivo(state.contentProblem, { tabId, host })
+      return falla('permiso', roto ? `No puedo contar la muestra de ${host} (${roto}): recarga la pestaña.` : `No puedo contar la muestra sin permiso sobre ${host}.`)
     }
     report(`Contando ${scope.label} en la API de Jira: una muestra de sus tickets…`)
     if (signal?.aborted) return nada
@@ -11482,7 +11660,8 @@ async function fetchTodayTarget(target, { sitio, ids = [], tabId = state.tabId }
         product: target.product,
         host: target.host,
         kind,
-        reason: r?.reason || 'sin respuesta',
+        // Con el motivo de un content script roto también (H28), no «sin respuesta».
+        reason: failReason(r, 'sin respuesta'),
         detail: r?.detail || '',
         // Los del SERVIDOR, tal cual los leyó `errorBody`: se enseñan, no se
         // interpretan (§6).
@@ -11535,8 +11714,11 @@ async function readToday(target, kind, { sitio, ids = [], tabId = state.tabId } 
     }))
   }
 
+  // Con el script roto no es el permiso (H28, revisión adversaria de H27, D2):
+  // el motivo va en `detail`, que es lo que enseña `todayFailText`.
   if (tabId == null || !(await ensureContentAccess({ announce: false }))) {
-    return { ok: false, reason: 'permiso', detail: `sin permiso sobre ${target.host}` }
+    const roto = sinAccesoMotivo(state.contentProblem, { tabId, host: target.host })
+    return { ok: false, reason: 'permiso', detail: roto || `sin permiso sobre ${target.host}` }
   }
   const msg =
     target.product === 'jira'
@@ -11576,7 +11758,9 @@ async function readToday(target, kind, { sitio, ids = [], tabId = state.tabId } 
  */
 function todayFailText(e) {
   if (e?.product === 'jira') return jqlFailText(e, e.host)
-  if (e?.reason === 'permiso') return `No puedo leer lo último de ${e.host} sin permiso sobre ese dominio.`
+  // El `detail` dice qué falta: el permiso, o un content script que no arranca
+  // (H28, D2), que con «sin permiso sobre ese dominio» se hacía pasar por lo otro.
+  if (e?.reason === 'permiso') return `No puedo leer lo último de ${e.host}: ${e.detail || 'sin permiso sobre ese dominio'}.`
   return `No he podido leer lo último de Confluence en ${e?.host}: ${e?.detail || e?.reason || 'sin motivo'}.`
 }
 

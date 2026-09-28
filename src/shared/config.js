@@ -83,6 +83,13 @@ export const NAV_TIMING = {
   settleQuietMs: 220, // la página se da por quieta tras este silencio de mutaciones…
   settleMaxMs: 6000, // …o, como mucho, tras este tiempo
   stepStallMs: 9000, // el service worker abandona un paso cuya pestaña no avisa en este tiempo
+  // El service worker abandona, con motivo, un salto por URL cuya página de
+  // destino no avisa de que cargó en este tiempo (H28, docs/PLAN3.md §3.2):
+  // hasta H28 se quedaba esperando para siempre, sin decir nada, y el primer
+  // aviso de cualquier página de esa pestaña anclaba ahí el recorrido viejo.
+  // Más que `stepStallMs` (9 s) porque es una carga ENTERA de página, y un Data
+  // Center lento tarda más en eso que un paso en desplegar una rama del árbol.
+  anchorStallMs: 12000,
 }
 
 /**

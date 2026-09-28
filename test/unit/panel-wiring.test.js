@@ -24,9 +24,11 @@ import { keysUnverified } from '../../src/panel/setup.js'
 import { readFlowchart } from '../../src/panel/diagram-parse.js'
 import { TEXTO, CONTROL } from '../contrast-pairs.js'
 // H25: «Contrastar con Jira» se EJECUTA con la comparación, los textos, la
-// tregua y el tope reales; lo único fingido es el DOM, chrome y la vista.
+// tregua y el tope reales; lo único fingido es el DOM, chrome y la vista. Y
+// desde H28, con el motivo de un fallo (`failReason`) y el de un content script
+// roto (`sinAccesoMotivo`) reales también.
 import { jiraDiagram, resumenJira, clavesDelIndice } from '../../src/panel/diagram-links.js'
-import { restFailureDue, linksFailText } from '../../src/panel/rest-notice.js'
+import { restFailureDue, linksFailText, failReason, sinAccesoMotivo } from '../../src/panel/rest-notice.js'
 import { JIRA_REST_LIMITS } from '../../src/shared/jira-rest.js'
 // H23: los colores que el panel ofrece son los que config.js acepta, y lo que
 // dicen sus radios de «Señalar» y de las insignias se comprueba en la hoja.
@@ -2075,7 +2077,9 @@ test('H8: la tarjeta de una búsqueda de Jira trae la lista leída de la API, y 
   // use y no lleve una copia (cuatro mutaciones que borraban el aviso pasaban).
   // EL CAMBIO (H25): la misma línea trae además `linksFailText`, el texto de
   // un fallo al leer las relaciones de Jira (`contrastarConJira`).
-  assert(/import \{ restFailureDue, jqlFailText, linksFailText \} from '\.\/rest-notice\.js'/.test(JS))
+  // EL CAMBIO (H28): y `failReason` y `sinAccesoMotivo`, el motivo de una
+  // lectura fallida y el de un content script roto (PLAN3 §3.2).
+  assert(/import \{ restFailureDue, jqlFailText, linksFailText, failReason, sinAccesoMotivo \} from '\.\/rest-notice\.js'/.test(JS))
   assert(!/function restFailureDue\(/.test(JS) && !/function jqlFailText\(/.test(JS), 'sin copia local de la regla')
   assert(/announce\(aviso\)/.test(lista), 'y el aviso se anuncia: cuelga de la tarjeta, no pasa por attachToBubble (A2)')
   assert(!/card\.remove\(\)/.test(lista), 'la tarjeta de siempre nunca desaparece: la lista es un añadido')
@@ -7995,6 +7999,8 @@ test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibu
   // y así el pin de §8.14 (cada «Sin marcas» con su aviso) sigue siendo verdad.
   const notas = funcion('async function offerNotes(')
   una(notas, '\n    esDiagrama = false,\n', 'la opción nueva, apagada por defecto')
+  // EL CAMBIO (H28, PLAN3 §3.2): la salida de detrás, que era muda con otra
+  // pestaña o sin sitio, ahora compara con lo capturado al pedir y lo dice.
   una(
     notas,
     lineas(
@@ -8003,7 +8009,7 @@ test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibu
       "    log.info('Diagrama', 'sin marcas: la pregunta era dibujar el flujo')",
       '    return',
       '  }',
-      '  if (!state.site || !state.tabId || !state.client) return\n'
+      '  if (!state.site || state.tabId !== tabIdAlPedir || state.site.host !== sitioAlPedir?.host || !state.client) {\n'
     ),
     'la salida va justo detrás de la del modo'
   )
@@ -8165,7 +8171,8 @@ test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibu
   // (12) Los imports: la comparación y el texto de sus fallos.
   una(LIMPIO, "\nimport { jiraDiagram, resumenJira, clavesDelIndice } from './diagram-links.js'\n", 'H25: la comparación con Jira')
   una(LIMPIO, "\nimport { diagramNode, textMeasurer } from './diagram-view.js'\nimport { jiraDiagram, resumenJira, clavesDelIndice } from './diagram-links.js'\n", 'H25: justo detrás de la vista')
-  una(LIMPIO, "\nimport { restFailureDue, jqlFailText, linksFailText } from './rest-notice.js'\n", 'H25: el texto de un fallo, de rest-notice.js')
+  // EL CAMBIO (H28): la línea gana `failReason` y `sinAccesoMotivo` (PLAN3 §3.2).
+  una(LIMPIO, "\nimport { restFailureDue, jqlFailText, linksFailText, failReason, sinAccesoMotivo } from './rest-notice.js'\n", 'H25: el texto de un fallo, de rest-notice.js')
 
   // (13) Las claves: sólo las del índice, sin repetir y con el tope de una
   // consulta, que tiene dueño (JIRA_REST_LIMITS.linkKeys).
@@ -8244,7 +8251,9 @@ test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibu
       '  const t0 = performance.now()',
       '  const avisar = (fallo) => {',
       '    const texto = linksFailText(fallo, host)',
-      "    log.warn('Relaciones de Jira', `${fallo?.reason || 'sin respuesta'} · ${texto}`)",
+      // EL CAMBIO (H28): el motivo del Registro por `failReason`, que dice
+      // también el `error` de un content script roto (PLAN3 §3.2).
+      "    log.warn('Relaciones de Jira', `${failReason(fallo, 'sin respuesta')} · ${texto}`)",
       '    avisoEnLaFigura(figura, texto, true)',
       '  }',
       "  if (!sitio || sitio.product !== 'jira' || sitio.cloud || !state.settings.restTools) {",
@@ -8430,7 +8439,7 @@ test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibu
   const hacer25 = new Function(
     'state', 'performance', 'linksFailText', 'log', 'restFailureDue', 'noticeNode', 'announce', 'ensureContentAccess', 'chrome', 'MSG',
     'jiraDiagram', 'resumenJira', 'layoutDiagram', 'medirTextoDelPanel', 'diagramNode', 'abrirNodoDelDiagrama', 'copiarMermaid', 'toMermaid',
-    'KIND_LABELS', 'document', 'JIRA_REST_LIMITS', 'clavesDelIndice',
+    'KIND_LABELS', 'document', 'JIRA_REST_LIMITS', 'clavesDelIndice', 'failReason',
     'let contadorDiagramas = 0\n' +
       [funcion('function avisoEnLaFigura('), funcion('function clavesParaContrastar('), funcion('function linksButton('), filasDelPanel, contraste].join('\n') +
       '\nreturn { clavesParaContrastar, linksButton, filasDeLaComparacion, contrastarConJira }'
@@ -8492,7 +8501,7 @@ test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibu
     env.api = hacer25(
       env.state, { now: () => 0 }, linksFailText, { ok: apunta('ok'), info: apunta('info'), warn: apunta('warn') }, restFailureDue, noticeNode25,
       (t) => env.anuncios.push(t), async () => acceso, chrome, { ISSUE_LINKS: 'faro:issue-links' },
-      jiraDiagram, resumenJira, () => ({}), () => null, vista, ABRIR, COPIAR, () => 'flowchart LR', KIND, documento, JIRA_REST_LIMITS, clavesDelIndice
+      jiraDiagram, resumenJira, () => ({}), () => null, vista, ABRIR, COPIAR, () => 'flowchart LR', KIND, documento, JIRA_REST_LIMITS, clavesDelIndice, failReason
     )
     env.contrastar = () => env.api.contrastarConJira(DIAGRAMA, env.figura, env.boton)
     return env
@@ -8966,35 +8975,44 @@ test('H27: un content script roto se registra como “Content script roto” y n
   // nuevo es la rama del script vivo y roto, ANTES de la del permiso, y lo que
   // el SW contesta tras inyectar («roto», «huerfano»), que ya no es un `ok` sin
   // mirar.
+  // EL CAMBIO (H28, revisión adversaria de H27, D2): la pestaña y el sitio se
+  // capturan ANTES del primer await, el problema se apunta con ellos y, si al
+  // volver de cualquiera de los dos await la pestaña es otra, se devuelve false
+  // sin apuntar ni avisar: cambiar de pestaña mientras contestaba el service
+  // worker apuntaba el motivo de una pestaña a nombre de otra.
   const acceso = h27Funcion('async function ensureContentAccess(')
   eq(
     acceso,
     h27Lineas(
       'async function ensureContentAccess({ announce = true } = {}) {',
       '  if (!state.site || !state.tabId) return false',
+      '  const tabId = state.tabId',
+      '  const site = state.site',
       '  const status = await chrome.runtime',
-      '    .sendMessage({ type: MSG.CONTENT_STATUS, tabId: state.tabId, origin: state.site.origin })',
+      '    .sendMessage({ type: MSG.CONTENT_STATUS, tabId, origin: site.origin })',
       '    .catch(() => null)',
+      '  if (state.tabId !== tabId) return false',
       '  if (status?.ready) {',
       '    state.contentProblem = null',
       '    return true',
       '  }',
       '  if (status?.alive && status?.error) {',
-      '    noteContentProblem(status.error)',
+      '    noteContentProblem(status.error, { tabId, host: site.host })',
       '    if (announce) showContentProblem()',
       '    return false',
       '  }',
       '  if (status?.granted) {',
       '    const r = await chrome.runtime',
-      '      .sendMessage({ type: MSG.REQUEST_HOST_PERMISSION, origin: state.site.origin, tabId: state.tabId })',
+      '      .sendMessage({ type: MSG.REQUEST_HOST_PERMISSION, origin: site.origin, tabId })',
       '      .catch(() => null)',
+      '    if (state.tabId !== tabId) return false',
       '    if (r?.ok) {',
       '      state.contentProblem = null',
-      "      log.ok('Content script inyectado', state.site.host)",
+      "      log.ok('Content script inyectado', site.host)",
       '      return true',
       '    }',
       "    if (r && r.ok === false && (r.kind === 'roto' || r.kind === 'huerfano')) {",
-      '      noteContentProblem(r.error)',
+      '      noteContentProblem(r.error, { tabId, host: site.host })',
       '      if (announce) showContentProblem()',
       '      return false',
       '    }',
@@ -9004,7 +9022,7 @@ test('H27: un content script roto se registra como “Content script roto” y n
       '  return false',
       '}'
     ),
-    'ensureContentAccess: vivo y roto se apunta y se dice sin pedir permiso ni reinyectar; «roto» y «huerfano» tras inyectar, igual; lo demás, como siempre'
+    'ensureContentAccess: vivo y roto se apunta y se dice sin pedir permiso ni reinyectar; «roto» y «huerfano» tras inyectar, igual; lo demás, como siempre; y todo con la pestaña y el sitio capturados al entrar'
   )
   // Lo que el cuerpo de arriba ya dice, con el porqué a la vista.
   const rota = h27Corte(acceso, 'if (status?.alive && status?.error) {', 'if (status?.granted) {')
@@ -9014,20 +9032,23 @@ test('H27: un content script roto se registra como “Content script roto” y n
   // (2) Las dos funciones nuevas, ENTERAS: el motivo se apunta con la pestaña y
   // el host, y se registra UNA vez por pestaña y motivo (ensureContentAccess
   // corre en casi cada acción); el aviso dice el motivo y qué hacer.
+  // EL CAMBIO (H28, D2): la pestaña y el host llegan de quien preguntó, no del
+  // estado de después.
   const apuntar = h27Funcion('function noteContentProblem(')
   eq(
     apuntar,
     h27Lineas(
-      'function noteContentProblem(error) {',
+      'function noteContentProblem(error, { tabId, host }) {',
       "  const texto = String(error || 'el content script no arranca')",
-      '  if (state.contentProblem?.tabId !== state.tabId || state.contentProblem?.error !== texto) {',
-      "    log.error('Content script roto', state.site.host + ' · ' + texto)",
+      '  if (state.contentProblem?.tabId !== tabId || state.contentProblem?.error !== texto) {',
+      "    log.error('Content script roto', host + ' · ' + texto)",
       '  }',
-      '  state.contentProblem = { host: state.site.host, tabId: state.tabId, error: texto }',
+      '  state.contentProblem = { host, tabId, error: texto }',
       '}'
     ),
-    'noteContentProblem: un registro por pestaña y motivo, y el motivo guardado con su pestaña y su host'
+    'noteContentProblem: un registro por pestaña y motivo, y el motivo guardado con la pestaña y el host de quien preguntó'
   )
+  eq(H27_LIMPIO.split('noteContentProblem(').length - 1, 3, 'la función y sus dos llamadas, las de ensureContentAccess')
   eq(
     h27Funcion('function showContentProblem('),
     h27Lineas(
@@ -9071,7 +9092,8 @@ test('H27: un content script roto se registra como “Content script roto” y n
   // (4) El estado: la última clave, detrás de pendingIntent, y sólo lo escriben
   // ensureContentAccess (a null, en sus tres salidas sin problema) y
   // noteContentProblem.
-  h27Una(H27_LIMPIO, '\n  pendingIntent: null,\n  contentProblem: null,\n}\n', 'state.contentProblem existe, a null, como última clave')
+  // EL CAMBIO (H28): detrás va `ancestryNote`, el porqué de un salto sin camino.
+  h27Una(H27_LIMPIO, '\n  pendingIntent: null,\n  contentProblem: null,\n  ancestryNote: null,\n}\n', 'state.contentProblem existe, a null, detrás de pendingIntent')
   const escrituras = (src) => src.split('state.contentProblem = ').length - 1
   eq([escrituras(H27_LIMPIO), escrituras(acceso), escrituras(apuntar)], [4, 3, 1], 'state.contentProblem sólo se escribe en ensureContentAccess (tres veces a null) y en noteContentProblem')
 
@@ -9161,18 +9183,21 @@ test('H27: “Señalar” dice la causa', () => {
   // `null` (nadie contesta) y `ok: false` (contesta, con su motivo) son dos
   // avisos, los dos en el registro con el mismo título, y `setPicking(true)`
   // sólo con un `ok`.
+  // EL CAMBIO (H28, D2): el PICK_START va a la pestaña capturada al pulsar, la
+  // que comprobó ensureContentAccess, y no a la que haya al volver (§8.22).
   eq(
     h27Funcion('async function togglePick('),
     h27Lineas(
       'async function togglePick() {',
       '  if (state.picking) return stopPick()',
       '  if (!state.site || !state.tabId) return',
+      '  const tabId = state.tabId',
       '  const puede = await ensureContentAccess({ announce: false })',
       '  if (!puede) {',
       '    showPermissionNotice()',
       '    return',
       '  }',
-      '  const r = await chrome.tabs.sendMessage(state.tabId, { type: MSG.PICK_START }).catch(() => null)',
+      '  const r = await chrome.tabs.sendMessage(tabId, { type: MSG.PICK_START }).catch(() => null)',
       '  if (r == null) {',
       "    log.warn('Señalar sin activar', 'la pestaña no contesta')",
       "    showNotice('No he podido hablar con esta pestaña. Recárgala y vuelve a intentarlo.', true)",
@@ -9214,4 +9239,683 @@ test('H27: el comentario del gesto dice la verdad', () => {
   const pedir = cuerpo.indexOf('await chrome.permissions.request(')
   assert(pedir > 0, 'requestHostPermission pide el permiso con await chrome.permissions.request(')
   eq(cuerpo.indexOf('await '), pedir, 'el primer await de requestHostPermission es el de permissions.request: cualquiera delante perdería el gesto')
+})
+
+/**
+ * H28 (PLAN3 §3.2, docs/plan/handoff/h28-contrato.md §1.1): lo que el panel
+ * consume del content script dice la verdad. Con los ayudantes de H27 (el
+ * fuente sin los comentarios que EMPIEZAN una línea y sin líneas vacías) y,
+ * donde la regla cabe en unas líneas, EJECUTADO con dobles: un orden de cadenas
+ * deja pasar una comparación dada la vuelta.
+ */
+const h28Registro = () => {
+  const registros = []
+  const apunta = (nivel) => (titulo, detalle) => registros.push([nivel, titulo, detalle])
+  return { registros, log: { ok: apunta('ok'), info: apunta('info'), warn: apunta('warn'), error: apunta('error'), debug: apunta('debug') } }
+}
+
+test('H28: el análisis dice la verdad cuando la página no contesta al marcar', () => {
+  // Leído en el código tras cargar Faro en Chrome (PLAN3 §2, G4): con el
+  // content script roto, ANNOTATE contesta `{ok:false, error}` (o nada) y
+  // offerNotes lo tomaba por un «sí» sin marcas: la tarjeta con TODAS las
+  // observaciones «no la he encontrado en la página» y «Análisis marcado · 0
+  // de 8» en el Registro, como si las anclas fueran malas.
+  const notas = h27Funcion('async function offerNotes(')
+  const rama = h27Lineas(
+    '  if (!res || res.ok === false) {',
+    "    if (res?.reason === 'editando') {",
+    "      log.warn('Sin marcas', 'estás en el editor')",
+    "      attachToBubble(bubble, noticeNode('Estás en el editor: no marco nada para no interferir.'))",
+    '      return',
+    '    }',
+    "    const motivo = failReason(res, 'la pestaña no contestó')",
+    "    log.warn('Sin marcas', 'la página no contestó al marcar: ' + motivo)",
+    "    attachToBubble(bubble, noticeNode('No he podido marcar la página (' + motivo + '). Recarga la pestaña y vuelve a pedirlo.', true))",
+    '    return',
+    '  }'
+  )
+  h27Una(notas, rama + '\n  const placed = res?.placed || []\n', 'offerNotes: el editor, como siempre; cualquier otro «no» se dice con su motivo, sin tarjeta y sin «Análisis marcado»')
+  // Y antes de todo lo que da el análisis por marcado.
+  let desde = 0
+  for (const m of [
+    '{ type: MSG.ANNOTATE, notes: anclables }',
+    'if (!res || res.ok === false) {',
+    'const missed = res?.missed || anclables.map((x) => x.n)',
+    'state.notesResult = {',
+    'state.notesCard = attachToBubble(',
+    "'Análisis marcado'",
+  ]) {
+    const i = notas.indexOf(m, desde)
+    assert(i >= 0, 'offerNotes: falta, o va antes de lo que debe, «' + m + '»')
+    desde = i + m.length
+  }
+  eq(notas.split('res.ok === false').length - 1, 1, 'una sola guarda de la respuesta en offerNotes')
+
+  // EJECUTADA, con dobles: la rama entera y lo que viene detrás.
+  const probar = (res) => {
+    const { registros, log } = h28Registro()
+    const colgados = []
+    const sigue = new Function('res', 'log', 'attachToBubble', 'noticeNode', 'bubble', 'failReason', rama + "\n  return 'sigue'")(
+      res,
+      log,
+      (b, nodo) => colgados.push(nodo),
+      (texto, bad) => ({ texto, bad: !!bad }),
+      {},
+      failReason
+    )
+    return { sigue, registros, colgados }
+  }
+  const ROTO = 'Failed to fetch dynamically imported module: src/content/runner.js'
+  eq(
+    probar({ ok: false, error: ROTO }),
+    {
+      sigue: undefined,
+      registros: [['warn', 'Sin marcas', 'la página no contestó al marcar: ' + ROTO]],
+      colgados: [{ texto: 'No he podido marcar la página (' + ROTO + '). Recarga la pestaña y vuelve a pedirlo.', bad: true }],
+    },
+    'un content script roto: su motivo, en el Registro y en rojo bajo la respuesta'
+  )
+  eq(
+    probar(null),
+    {
+      sigue: undefined,
+      registros: [['warn', 'Sin marcas', 'la página no contestó al marcar: la pestaña no contestó']],
+      colgados: [{ texto: 'No he podido marcar la página (la pestaña no contestó). Recarga la pestaña y vuelve a pedirlo.', bad: true }],
+    },
+    'nadie contestó: se dice'
+  )
+  eq(
+    probar({ ok: false, placed: [], missed: [1, 2], reason: 'editando', ms: 0 }),
+    { sigue: undefined, registros: [['warn', 'Sin marcas', 'estás en el editor']], colgados: [{ texto: 'Estás en el editor: no marco nada para no interferir.', bad: false }] },
+    'en el editor, como siempre'
+  )
+  eq(probar({ ok: true, placed: [1], missed: [2], detail: [], ms: 3 }), { sigue: 'sigue', registros: [], colgados: [] }, 'un «sí» sigue hasta la tarjeta')
+  eq(probar({ ok: true, placed: [], missed: [1, 2], detail: [], ms: 3 }).sigue, 'sigue', 'y un «sí» sin marcas también: las anclas no casaron, y eso lo dice la tarjeta')
+
+  // remarkFromAnchors, lo mismo, sin confundirlo con «eran de otra página».
+  const remarcar = h27Funcion('async function remarkFromAnchors(')
+  const ramaRemarcar = h27Lineas(
+    "  if ((!res || res.ok === false) && res?.reason !== 'editando') {",
+    "    const motivo = failReason(res, 'la pestaña no contestó')",
+    "    log.warn('Sin marcas', 'la página no contestó al marcar de nuevo: ' + motivo)",
+    "    showNotice('No he podido marcar la página (' + motivo + '). Recarga la pestaña y vuelve a intentarlo.', true)",
+    '    return',
+    '  }'
+  )
+  h27Una(remarcar, ramaRemarcar + '\n  const placed = res?.placed || []\n', 'remarkFromAnchors: la página que no contesta se dice con su motivo')
+  assert(remarcar.indexOf('{ type: MSG.ANNOTATE, notes: anclables }') < remarcar.indexOf(ramaRemarcar), 'detrás de marcar')
+  const remarcarCon = (res) => {
+    const { registros, log } = h28Registro()
+    const avisos = []
+    const sigue = new Function('res', 'log', 'showNotice', 'failReason', ramaRemarcar + "\n  return 'sigue'")(res, log, (t, bad) => avisos.push([t, !!bad]), failReason)
+    return { sigue, registros, avisos }
+  }
+  eq(
+    remarcarCon({ ok: false, error: 'x' }),
+    {
+      sigue: undefined,
+      registros: [['warn', 'Sin marcas', 'la página no contestó al marcar de nuevo: x']],
+      avisos: [['No he podido marcar la página (x). Recarga la pestaña y vuelve a intentarlo.', true]],
+    },
+    'con su motivo'
+  )
+  eq(remarcarCon(null).avisos, [['No he podido marcar la página (la pestaña no contestó). Recarga la pestaña y vuelve a intentarlo.', true]])
+  eq(remarcarCon({ ok: false, reason: 'editando', placed: [], missed: [1] }).sigue, 'sigue', 'el editor sigue a su aviso de siempre, más abajo')
+  eq(remarcarCon({ ok: true, placed: [], missed: [1] }).sigue, 'sigue', 'y un «sí» sin marcas, a «eran de otra página»')
+})
+
+test('H28: cambiar de pestaña a mitad del análisis se dice', () => {
+  // offerNotes salía MUDA con `if (!state.site || !state.tabId || !state.client)
+  // return`: un análisis de ocho observaciones sin subrayar y sin una palabra si
+  // al terminar el panel miraba otra pestaña o ninguna. Desde H28 compara con
+  // lo capturado al pedir (§8.22) y lo dice (§8.14).
+  const envio = h27Funcion('async function send(')
+  h27Una(envio, '\n  const sitioAlPedir = state.site\n  const tabIdAlPedir = state.tabId\n', 'send captura la pestaña junto al sitio')
+  assert(envio.indexOf('const tabIdAlPedir = state.tabId') < envio.indexOf('await '), 'antes del primer await')
+  h27Una(envio, '\n      esDiagrama: diagramaAlPedir,\n      tabIdAlPedir,\n      sitioAlPedir,\n', 'y las dos viajan a offerNotes')
+  eq(envio.split('tabIdAlPedir').length - 1, 2, 'se captura y se pasa, y send no la usa para nada más')
+
+  const notas = h27Funcion('async function offerNotes(')
+  h27Una(notas, '\n    esDiagrama = false,\n    tabIdAlPedir = null,\n    sitioAlPedir = null,\n  } = {}\n', 'dos opciones, a null: sin ellas no hay con qué comparar y no se marca')
+  const guarda = h27Lineas(
+    '  if (!state.site || state.tabId !== tabIdAlPedir || state.site.host !== sitioAlPedir?.host || !state.client) {',
+    "    log.info('Sin marcas', 'has cambiado de pestaña o de sitio: no marco nada')",
+    "    attachToBubble(bubble, noticeNode('Has cambiado de pestaña o de sitio: no he marcado nada. Vuelve a la página y pide el análisis otra vez.', true))",
+    '    return',
+    '  }'
+  )
+  h27Una(notas, guarda + '\n  if (signal?.aborted) return\n', 'la salida habla, y va donde iba la muda')
+  assert(!H27_LIMPIO.includes('if (!state.site || !state.tabId || !state.client) return'), 'la salida muda ya no está')
+  assert(notas.indexOf(guarda) < notas.indexOf('await ensureContentAccess('), 'antes de mirar el content script')
+
+  // EJECUTADA, con dobles.
+  const salir = (state, tabId, sitio) => {
+    const { registros, log } = h28Registro()
+    const colgados = []
+    const sigue = new Function('state', 'tabIdAlPedir', 'sitioAlPedir', 'log', 'attachToBubble', 'noticeNode', 'bubble', guarda + "\n  return 'sigue'")(
+      state,
+      tabId,
+      sitio,
+      log,
+      (b, nodo) => colgados.push(nodo),
+      (texto, bad) => ({ texto, bad: !!bad }),
+      {}
+    )
+    return { sigue, registros, colgados }
+  }
+  const SITIO = { host: 'conf.example', origin: 'https://conf.example' }
+  const HABLA = {
+    sigue: undefined,
+    registros: [['info', 'Sin marcas', 'has cambiado de pestaña o de sitio: no marco nada']],
+    colgados: [{ texto: 'Has cambiado de pestaña o de sitio: no he marcado nada. Vuelve a la página y pide el análisis otra vez.', bad: true }],
+  }
+  eq(salir({ site: SITIO, tabId: 3, client: {} }, 3, SITIO), { sigue: 'sigue', registros: [], colgados: [] }, 'la misma pestaña y el mismo sitio: se sigue')
+  eq(salir({ site: { ...SITIO }, tabId: 3, client: {} }, 3, SITIO).sigue, 'sigue', 'el sitio se compara por host, no por identidad')
+  eq(salir({ site: SITIO, tabId: 4, client: {} }, 3, SITIO), HABLA, 'otra pestaña del mismo sitio')
+  eq(salir({ site: { host: 'jira.example' }, tabId: 3, client: {} }, 3, SITIO), HABLA, 'la misma pestaña en otro sitio')
+  eq(salir({ site: null, lastHost: 'conf.example', tabId: 3, client: {} }, 3, SITIO), HABLA, 'la misma pestaña fuera de Atlassian: no hay página que marcar')
+  eq(salir({ site: SITIO, tabId: 3, client: null }, 3, SITIO), HABLA, 'sin cliente')
+  eq(salir({ site: SITIO, tabId: 3, client: {} }, null, null), HABLA, 'sin lo capturado (quien llama no lo pasó)')
+})
+
+test('H28: los motivos de una lectura fallida llegan al registro', () => {
+  // Un content script que no arranca contesta `{ok:false, error}` (H27), y el
+  // panel sólo miraba `reason`: «la pestaña no contestó», «sin respuesta» o
+  // «(undefined)» cuando la pestaña SÍ había contestado, y con el porqué. Todos
+  // pasan por `failReason` (rest-notice.js, ejecutada en su prueba).
+  const sitios = [
+    ['async function countProfile(', "  if (!r?.ok) return { ok: false, reason: failReason(r, 'sin respuesta'), detail: jqlFailText(r, sitio.host) }"],
+    ['async function loadSearchChipSources(', "      log.info('Filtros favoritos', `no se pudieron leer · ${failReason(r, 'sin motivo')}`)"],
+    ['async function readPageDigest(', "    const reason = failReason(r, 'no se pudo leer')"],
+    [
+      'async function learnAncestry(',
+      h27Lineas(
+        "    const motivo = failReason(r, 'la pestaña no contestó')",
+        '    state.ancestryNote = { host, id, motivo }',
+        "    log.warn('Sin camino', `${motivo} · te llevaré de golpe`)"
+      ),
+    ],
+    ['async function attachJqlResults(', "    fallo(failReason(r, 'sin respuesta'), jqlFailText(r, site.host))"],
+    ['async function contrastarConJira(', "    log.warn('Relaciones de Jira', `${failReason(fallo, 'sin respuesta')} · ${texto}`)"],
+    ['async function offerNotes(', "    const motivo = failReason(res, 'la pestaña no contestó')"],
+    ['async function remarkFromAnchors(', "    const motivo = failReason(res, 'la pestaña no contestó')"],
+    ['async function focusNote(', "    showNotice(failReason(res, 'Esa marca ya no está en la página.'), true)"],
+    ['async function paintSuggestedSources(', "    log.warn('Enlaces de la página', failReason(r, 'la pestaña no contestó'))"],
+    ['async function searchSourcesRemote(', "    log.warn('Búsqueda de páginas', `${donde ? donde + ' · ' : ''}${failReason(r, 'la pestaña no contestó')}`)"],
+    ['function searchFailText(', "  return `No he podido preguntarle a ${host || 'Confluence'}: ` + failReason(r, 'la pestaña no contestó') + '.'"],
+    [
+      'async function addSourceById(',
+      h27Lineas(
+        "  const motivo = failReason(r, 'sin motivo')",
+        "  log.warn('Página base sin título', `${id} · ${motivo}`)",
+        "  await addSource({ id, title: '', path }, desde('id'))",
+        '  setSourcesStatus(`Añadida por su id ${id}: no he podido leer su título (${motivo}).`)'
+      ),
+    ],
+    [
+      'async function restIndexFor(',
+      "      return falla(failReason(r, 'sin respuesta'), `No he podido leer el árbol de ${host} por su API: ${failReason(r, 'la pestaña no contestó')}.`)",
+    ],
+    ['async function fetchTodayTarget(', "        reason: failReason(r, 'sin respuesta'),"],
+  ]
+  for (const [firma, linea] of sitios) h27Una(h27Funcion(firma), '\n' + linea + '\n', firma.replace(/^(async )?function /, ''))
+  eq(H27_LIMPIO.split('failReason(').length - 1, 16, 'los quince sitios (restIndexFor, con dos) y nadie más')
+  // Y lo de antes, en ningún sitio: cada una de estas se tragaba el `error`.
+  for (const viejo of [
+    "r?.reason || 'la pestaña no contestó'",
+    "r?.reason || 'sin respuesta'",
+    "r?.reason || 'no se pudo leer'",
+    "r.reason || 'sin motivo'",
+    "res?.reason || 'Esa marca ya no está en la página.'",
+    "fallo?.reason || 'sin respuesta'",
+    '(${r.reason})',
+    '${id} · ${r.reason}',
+  ]) {
+    assert(!H27_LIMPIO.includes(viejo), 'queda un motivo que no mira el error: «' + viejo + '»')
+  }
+  // Las salidas de readPageDigest sin bloques, las tres en el Registro.
+  eq(h27Funcion('async function readPageDigest(').split("log.info('Página sin bloques', ").length - 1, 3, 'sin pestaña, sin acceso y con la lectura fallida')
+  h27Una(
+    h27Funcion('async function readPageDigest('),
+    h27Lineas(
+      '  if (!state.site || state.tabId == null) {',
+      "    log.info('Página sin bloques', 'sin pestaña')",
+      "    return { digest: null, reason: 'sin pestaña' }",
+      '  }'
+    ),
+    'readPageDigest: sin pestaña también se registra'
+  )
+})
+
+test('H28 (D2): con el content script roto, ningún sitio dice «sin permiso»', async () => {
+  // Revisión adversaria de H27 (D2): `ensureContentAccess` devuelve un booleano,
+  // y nueve sitios que lo recibían en falso decían «sin permiso sobre X» con el
+  // permiso dado y el script sin arrancar: el engaño que H27 quitó de la tarjeta
+  // de «Dar permiso». Cada uno pregunta `sinAccesoMotivo` (rest-notice.js) con
+  // la pestaña y el host que usó, y lo de siempre sólo si no hay motivo.
+  eq(H27_LIMPIO.split('sinAccesoMotivo(state.contentProblem, {').length - 1, 11, 'los nueve sitios (restIndexFor, con dos) y learnAncestry, y nadie más')
+  eq(H27_LIMPIO.split('sinAccesoMotivo(').length - 1, 11, 'y siempre con lo apuntado por noteContentProblem')
+
+  // (1) showSourcesScreen: con motivo, NO sale el botón de permiso (pediría uno
+  // que ya está): el motivo, «Recarga la pestaña» y lo que queda, el índice.
+  const fuentes = h27Funcion('async function showSourcesScreen(')
+  const rotaFuentes = h27Lineas(
+    '  const tabId = state.tabId',
+    '  const host = state.site.host',
+    '  const puede = await ensureContentAccess({ announce: false })',
+    "  const roto = puede ? '' : sinAccesoMotivo(state.contentProblem, { tabId, host })",
+    '  if (roto) {',
+    '    const n = Object.keys(state.index?.pages || {}).length',
+    '    setSourcesStatus(',
+    '      n',
+    '        ? `No puedo preguntarle a Confluence (${roto}). Recarga la pestaña; mientras, sólo busco en lo que ya tengo indexado (${n} páginas).`',
+    '        : `No puedo preguntarle a Confluence (${roto}). Recarga la pestaña; mientras, pega la URL o el id de la página.`',
+    '    )',
+    '    return',
+    '  }',
+    '  if (!puede) {',
+    "    $('sources-perm').classList.remove('hidden')"
+  )
+  h27Una(fuentes, rotaFuentes, 'showSourcesScreen: el script roto no enseña el botón del permiso')
+
+  // (2) Las sugeridas de esa pantalla.
+  h27Una(
+    h27Funcion('function suggestedHint('),
+    h27Lineas(
+      "  if (estado === 'sin-pestana') {",
+      '    const roto = sinAccesoMotivo(state.contentProblem, { tabId: state.tabId, host: state.site?.host })',
+      '    if (roto) return `No leo los enlaces de ${cosa} (${roto}): recarga la pestaña. Mientras, sugiero con el contexto del sitio y lo que usaste antes.`',
+      "    return `Sin permiso sobre ${state.site?.host || 'este dominio'} no leo los enlaces de ${cosa}: sugiero con el contexto del sitio y lo que usaste antes.`",
+      '  }'
+    ),
+    'suggestedHint (lo que pinta paintSuggestedList con «sin-pestana»)'
+  )
+
+  // (3) El diagnóstico del árbol, en Ajustes.
+  h27Una(
+    h27Funcion('async function treeDebug('),
+    h27Lineas(
+      '  const tabId = state.tabId',
+      '  const host = state.site?.host',
+      '  const puede = await ensureContentAccess({ announce: false })',
+      '  if (!puede) {',
+      '    const roto = sinAccesoMotivo(state.contentProblem, { tabId, host })',
+      '    status.textContent = roto',
+      '      ? `No puedo leer la barra lateral (${roto}). Recarga la pestaña.`',
+      "      : 'Necesito permiso sobre este dominio para leer su barra lateral.'",
+      '    return',
+      '  }'
+    ),
+    'treeDebug'
+  )
+
+  // (4) La lista de una búsqueda de Jira (rama «permiso»), con la pestaña capturada.
+  h27Una(
+    h27Funcion('async function attachJqlResults('),
+    h27Lineas(
+      '  if (tabId == null || !(await ensureContentAccess({ announce: false }))) {',
+      '    const roto = sinAccesoMotivo(state.contentProblem, { tabId, host: site.host })',
+      "    fallo('permiso', roto ? `No puedo leer la lista (${roto}): recarga la pestaña.` : `No puedo leer la lista sin permiso sobre ${site.host}.`)",
+      '    return null',
+      '  }'
+    ),
+    'attachJqlResults'
+  )
+
+  // (5) El índice por la API: el árbol de Confluence y la muestra de Jira.
+  const indice = h27Funcion('async function restIndexFor(')
+  h27Una(
+    indice,
+    h27Lineas(
+      '    if (tabId == null || !(await ensureContentAccess({ announce: false }))) {',
+      '      const roto = sinAccesoMotivo(state.contentProblem, { tabId, host })',
+      "      return falla('permiso', roto ? `No puedo leer el árbol de ${host} (${roto}): recarga la pestaña.` : `No puedo leer el árbol sin permiso sobre ${host}.`)",
+      '    }'
+    ),
+    'restIndexFor, el árbol'
+  )
+  h27Una(
+    indice,
+    h27Lineas(
+      '    if (tabId == null || !(await ensureContentAccess({ announce: false }))) {',
+      '      const roto = sinAccesoMotivo(state.contentProblem, { tabId, host })',
+      "      return falla('permiso', roto ? `No puedo contar la muestra de ${host} (${roto}): recarga la pestaña.` : `No puedo contar la muestra sin permiso sobre ${host}.`)",
+      '    }'
+    ),
+    'restIndexFor, la muestra'
+  )
+
+  // (6) «Qué mirar hoy»: el motivo en `detail`, y el texto de Confluence lo enseña.
+  h27Una(
+    h27Funcion('async function readToday('),
+    h27Lineas(
+      '  if (tabId == null || !(await ensureContentAccess({ announce: false }))) {',
+      '    const roto = sinAccesoMotivo(state.contentProblem, { tabId, host: target.host })',
+      "    return { ok: false, reason: 'permiso', detail: roto || `sin permiso sobre ${target.host}` }",
+      '  }'
+    ),
+    'readToday'
+  )
+  const textoHoy = h27Funcion('function todayFailText(')
+  eq(
+    textoHoy,
+    h27Lineas(
+      'function todayFailText(e) {',
+      "  if (e?.product === 'jira') return jqlFailText(e, e.host)",
+      "  if (e?.reason === 'permiso') return `No puedo leer lo último de ${e.host}: ${e.detail || 'sin permiso sobre ese dominio'}.`",
+      "  return `No he podido leer lo último de Confluence en ${e?.host}: ${e?.detail || e?.reason || 'sin motivo'}.`",
+      '}'
+    ),
+    'todayFailText: lo que falta, lo dice el detail'
+  )
+  const hoyTexto = new Function('jqlFailText', textoHoy + '\nreturn todayFailText')(() => 'de Jira')
+  eq(hoyTexto({ product: 'confluence', host: 'conf.example', reason: 'permiso', detail: 'el content script no arranca: x' }), 'No puedo leer lo último de conf.example: el content script no arranca: x.')
+  eq(hoyTexto({ product: 'confluence', host: 'conf.example', reason: 'permiso', detail: 'sin permiso sobre conf.example' }), 'No puedo leer lo último de conf.example: sin permiso sobre conf.example.')
+  eq(hoyTexto({ product: 'confluence', host: 'conf.example', reason: 'permiso' }), 'No puedo leer lo último de conf.example: sin permiso sobre ese dominio.', 'una caché de antes, sin detail')
+
+  // (7) offerNotes y runPlan: el Registro, con la pestaña y el sitio que miraron.
+  h27Una(
+    h27Funcion('async function offerNotes('),
+    h27Lineas(
+      '  if (!(await ensureContentAccess({ announce: false }))) {',
+      "    log.warn('Sin marcas', sinAccesoMotivo(state.contentProblem, { tabId: tabIdAlPedir, host: sitioAlPedir.host }) || 'falta permiso en ' + sitioAlPedir.host)",
+      '    showPermissionNotice()',
+      '    return',
+      '  }'
+    ),
+    'offerNotes'
+  )
+  const correr = h27Funcion('async function runPlan(')
+  h27Una(
+    correr,
+    h27Lineas(
+      '  const tabId = state.tabId',
+      '  const puede = await ensureContentAccess({ announce: false })',
+      '  if (!puede) {',
+      '    showPermissionNotice()',
+      "    if (mode === 'assisted') {",
+      "      log.warn('Asistida bloqueada', sinAccesoMotivo(state.contentProblem, { tabId, host: state.site.host }) || 'falta permiso en ' + state.site.host)",
+      '      return',
+      '    }',
+      '  }'
+    ),
+    'runPlan: la pestaña del viaje, capturada ANTES de preguntar'
+  )
+  eq(correr.split('const tabId = state.tabId').length - 1, 1, 'una sola captura, la de antes')
+
+  // (8) readPageDigest.
+  h27Una(
+    h27Funcion('async function readPageDigest('),
+    h27Lineas(
+      '  const tabId = state.tabId',
+      '  const host = state.site.host',
+      '  if (!(await ensureContentAccess({ announce: false }))) {',
+      "    log.info('Página sin bloques', sinAccesoMotivo(state.contentProblem, { tabId, host }) || 'falta permiso')",
+      "    return { digest: null, reason: 'permiso' }",
+      '  }'
+    ),
+    'readPageDigest'
+  )
+
+  // (9) La tarjeta del permiso ya puesta no es un silencio: se dice otra vez,
+  // en corto, que sigue faltando, porque la de antes puede estar muy arriba.
+  h27Una(
+    h27Funcion('function showPermissionNotice('),
+    h27Lineas(
+      '  clearEmpty()',
+      "  if (el.chat.querySelector('.perm-card')) {",
+      "    showNotice('Sigue faltando el permiso sobre ' + state.site.host + ': pulsa «Dar permiso» en la tarjeta.', true)",
+      '    return',
+      '  }'
+    ),
+    'showPermissionNotice'
+  )
+
+  // (10) EJECUTADA: ensureContentAccess con noteContentProblem y sinAccesoMotivo
+  // de verdad; lo fingido es chrome y el aviso.
+  const armar = (respuestas) => {
+    const { registros, log } = h28Registro()
+    const env = { registros, avisos: [], mensajes: [] }
+    env.state = { site: { host: 'conf.example', origin: 'https://conf.example' }, tabId: 3, contentProblem: null }
+    const chrome = {
+      runtime: {
+        sendMessage: async (m) => {
+          env.mensajes.push(m)
+          const r = respuestas[m.type]
+          return typeof r === 'function' ? r(m, env) : r ?? null
+        },
+      },
+    }
+    env.api = new Function(
+      'state', 'chrome', 'MSG', 'log', 'showContentProblem', 'showPermissionNotice',
+      h27Funcion('function noteContentProblem(') + '\n' + h27Funcion('async function ensureContentAccess(') + '\nreturn { ensureContentAccess }'
+    )(env.state, chrome, { CONTENT_STATUS: 'estado', REQUEST_HOST_PERMISSION: 'asegurar' }, log, () => env.avisos.push('roto'), () => env.avisos.push('permiso'))
+    return env
+  }
+  const ROTO = { granted: true, ready: false, alive: true, error: 'x' }
+  {
+    const env = armar({ estado: ROTO })
+    eq(await env.api.ensureContentAccess(), false)
+    eq(env.state.contentProblem, { host: 'conf.example', tabId: 3, error: 'x' }, 'apuntado con la pestaña y el sitio de la pregunta')
+    eq(env.registros, [['error', 'Content script roto', 'conf.example · x']])
+    eq(env.avisos, ['roto'])
+    eq(env.mensajes, [{ type: 'estado', tabId: 3, origin: 'https://conf.example' }])
+    eq(sinAccesoMotivo(env.state.contentProblem, { tabId: 3, host: 'conf.example' }), 'el content script no arranca: x', 'y los sitios de arriba lo dicen')
+    eq(sinAccesoMotivo(env.state.contentProblem, { tabId: 4, host: 'conf.example' }), '', 'en otra pestaña, no')
+    eq(await env.api.ensureContentAccess({ announce: false }), false)
+    eq(env.registros.length, 1, 'el mismo motivo en la misma pestaña se registra una vez')
+    eq(env.avisos, ['roto'], 'y con announce: false no se avisa')
+  }
+  {
+    // La pestaña cambia mientras el service worker contesta: lo que dijo es de
+    // la de antes y NO se apunta a nombre de la de ahora.
+    const env = armar({ estado: (m, e) => ((e.state.tabId = 4), ROTO) })
+    eq(await env.api.ensureContentAccess(), false)
+    eq([env.state.contentProblem, env.registros, env.avisos], [null, [], []], 'ni apuntado, ni registrado, ni avisado')
+  }
+  {
+    // Lo mismo con la inyección, y los dos mensajes llevan la pestaña de la pregunta.
+    const env = armar({
+      estado: { granted: true, ready: false, alive: false, error: '' },
+      asegurar: (m, e) => ((e.state.tabId = 4), { ok: false, kind: 'roto', error: 'y' }),
+    })
+    eq(await env.api.ensureContentAccess(), false)
+    eq([env.state.contentProblem, env.registros, env.avisos], [null, [], []], 'tras inyectar, tampoco')
+    eq(env.mensajes, [
+      { type: 'estado', tabId: 3, origin: 'https://conf.example' },
+      { type: 'asegurar', origin: 'https://conf.example', tabId: 3 },
+    ])
+  }
+  {
+    // Y con la pestaña quieta, lo del SW tras inyectar se apunta como antes.
+    const env = armar({ estado: { granted: true, ready: false, alive: false, error: '' }, asegurar: { ok: false, kind: 'huerfano', error: 'el content script no contesta' } })
+    eq(await env.api.ensureContentAccess(), false)
+    eq(env.state.contentProblem, { host: 'conf.example', tabId: 3, error: 'el content script no contesta' })
+    eq(env.avisos, ['roto'])
+  }
+  {
+    // Un «listo» de otra pestaña tampoco vale: la de ahora no se ha comprobado.
+    const env = armar({ estado: (m, e) => ((e.state.tabId = 4), { granted: true, ready: true, alive: true, error: '' }) })
+    eq(await env.api.ensureContentAccess(), false, 'false aunque la de antes estuviera lista')
+  }
+})
+
+test('H28: la tarjeta de un salto único dice por qué no hay camino', async () => {
+  // Una página con un solo paso lleva sólo «Llévame». Si es porque el camino no
+  // se pudo leer, la tarjeta era idéntica a la de una página que cuelga de la
+  // portada (cero ramas, que es diseño) y el porqué sólo estaba en el Registro.
+  // `learnAncestry` apunta el motivo y `offerNavigation` lo cuelga de la tarjeta.
+  eq(H27_LIMPIO.split('state.ancestryNote = ').length - 1, 4, 'sólo lo escribe learnAncestry: dos motivos y dos vaciados')
+  eq(h27Funcion('async function learnAncestry(').split('state.ancestryNote = ').length - 1, 4)
+
+  // (1) learnAncestry, EJECUTADA con dobles.
+  const aprender = (opciones = {}) => {
+    const { registros, log } = h28Registro()
+    const env = { registros, pedidos: [] }
+    env.state = {
+      site: { host: 'conf.example', origin: 'https://conf.example', cloud: false },
+      tabId: 3,
+      index: {},
+      ancestryFetched: new Map(opciones.fetched || []),
+      ancestryNote: opciones.nota ?? null,
+      contentProblem: opciones.problema ?? null,
+    }
+    const chrome = { tabs: { sendMessage: async (id, m) => (env.pedidos.push([id, m.pageId]), opciones.respuesta ?? null) } }
+    env.learnAncestry = new Function(
+      'state', 'ancestryOf', 'ensureContentAccess', 'chrome', 'MSG', 'wikiPrefixOf', 'log', 'failReason', 'sinAccesoMotivo',
+      h27Funcion('async function learnAncestry(') + '\nreturn learnAncestry'
+    )(env.state, () => new Array(opciones.conocido ?? 0), async () => opciones.acceso ?? true, chrome, { PAGE_ANCESTORS: 'ancestros' }, () => '', log, failReason, sinAccesoMotivo)
+    return env
+  }
+  const VIEJA = { host: 'conf.example', id: '9', motivo: 'de antes' }
+  {
+    const env = aprender({ acceso: false, problema: { host: 'conf.example', tabId: 3, error: 'x' } })
+    eq(await env.learnAncestry({ id: '100' }), null)
+    eq(env.state.ancestryNote, { host: 'conf.example', id: '100', motivo: 'el content script no arranca: x' }, 'sin acceso por un script roto: su motivo')
+    eq(env.registros, [['warn', 'Sin camino', 'no puedo leer el árbol (el content script no arranca: x); te llevaré de golpe']])
+  }
+  {
+    const env = aprender({ acceso: false })
+    await env.learnAncestry({ id: '100' })
+    eq(env.state.ancestryNote, { host: 'conf.example', id: '100', motivo: 'sin acceso a la pestaña' }, 'sin acceso por el permiso')
+  }
+  {
+    const env = aprender({ respuesta: { ok: false, error: 'boom' } })
+    eq(await env.learnAncestry({ id: '100' }), null)
+    eq(env.state.ancestryNote, { host: 'conf.example', id: '100', motivo: 'boom' }, 'la API contestó con su error')
+    eq(env.registros, [['warn', 'Sin camino', 'boom · te llevaré de golpe']])
+    eq(env.pedidos, [[3, '100']])
+  }
+  {
+    const env = aprender({ respuesta: null })
+    await env.learnAncestry({ id: '100' })
+    eq(env.state.ancestryNote.motivo, 'la pestaña no contestó')
+  }
+  {
+    const env = aprender({ nota: VIEJA, respuesta: { ok: true, pages: [{ id: '1' }, { id: '100' }], via: 'v1', ms: 4 } })
+    eq(await env.learnAncestry({ id: '100' }), [{ id: '1' }, { id: '100' }])
+    eq(env.state.ancestryNote, null, 'el camino leído vacía la nota')
+  }
+  {
+    const env = aprender({ nota: VIEJA, fetched: [['conf.example:100', { largo: 2 }]], conocido: 2 })
+    eq(await env.learnAncestry({ id: '100' }), null)
+    eq([env.state.ancestryNote, env.pedidos], [null, []], 'el camino que ya se tenía, también, sin pedir nada')
+  }
+  {
+    const env = aprender({ nota: VIEJA, fetched: [['conf.example:100', { fallo: Date.now() }]] })
+    eq(await env.learnAncestry({ id: '100' }), null)
+    eq([env.state.ancestryNote, env.pedidos], [VIEJA, []], 'en la tregua no se toca: no ha pasado nada nuevo')
+  }
+  {
+    const env = aprender({ nota: VIEJA })
+    eq(await env.learnAncestry({ id: 'no-es-un-id' }), null)
+    eq(env.state.ancestryNote, VIEJA, 'un id que no es de página no es un fallo')
+  }
+
+  // (2) offerNavigation: la nota va en la tarjeta ANTES de colgarla, para que
+  // entre en lo que se anuncia; sólo con un paso, y del mismo destino y sitio.
+  const nav = h27Funcion('async function offerNavigation(')
+  const cola = h27Lineas(
+    '  const card = navCard(plan)',
+    '  const nota = state.ancestryNote',
+    '  if (',
+    "    plan.destination.kind === 'confluence-page' &&",
+    '    (plan.steps?.length || 0) <= 1 &&',
+    '    nota?.id === plan.destination.id &&',
+    '    nota?.host === (state.site?.host ?? state.lastHost)',
+    '  ) {',
+    "    card.appendChild(noticeNode('No he podido leer el camino (' + nota.motivo + '): sólo puedo llevarte de golpe.', true))",
+    '  }',
+    '  attachToBubble(bubble, card)',
+    '}'
+  )
+  assert(nav.endsWith('\n' + cola), 'offerNavigation acaba con la tarjeta, su nota y el colgado:\n' + nav.slice(-700))
+  assert(!nav.includes('attachToBubble(bubble, navCard(plan))'), 'la tarjeta se guarda para poder colgarle la nota')
+  const colgar = new Function('plan', 'state', 'navCard', 'noticeNode', 'attachToBubble', 'bubble', cola.slice(0, -2))
+  const pintar = (plan, state) => {
+    const tarjeta = { hijos: [], appendChild(n) { this.hijos.push(n) } }
+    let alColgar = null
+    colgar(plan, state, () => tarjeta, (texto, bad) => ({ texto, bad: !!bad }), (b, c) => (alColgar = c.hijos.map((h) => h.texto)), {})
+    return alColgar
+  }
+  const PLAN = { destination: { kind: 'confluence-page', id: '100' }, steps: [{}] }
+  const NOTA = { host: 'conf.example', id: '100', motivo: 'boom' }
+  const AQUI = { site: { host: 'conf.example' }, ancestryNote: NOTA }
+  eq(pintar(PLAN, AQUI), ['No he podido leer el camino (boom): sólo puedo llevarte de golpe.'], 'con la nota de este destino, dentro al colgarla')
+  eq(pintar({ ...PLAN, steps: undefined }, AQUI).length, 1, 'sin pasos, igual')
+  eq(pintar({ ...PLAN, steps: [{}, {}] }, AQUI), [], 'con camino, nada')
+  eq(pintar({ ...PLAN, destination: { kind: 'confluence-page', id: '200' } }, AQUI), [], 'la nota de otro destino, nada')
+  eq(pintar({ ...PLAN, destination: { kind: 'jira-issue', id: '100' } }, AQUI), [], 'en Jira no hay camino que leer (§8.16)')
+  eq(pintar(PLAN, { site: { host: 'otro.example' }, ancestryNote: NOTA }), [], 'la nota de otro sitio, nada')
+  eq(pintar(PLAN, { site: null, lastHost: 'conf.example', ancestryNote: NOTA }).length, 1, 'mirando el correo, el sitio del panel')
+  eq(pintar(PLAN, { site: { host: 'conf.example' }, ancestryNote: null }), [], 'sin nota, la tarjeta de siempre')
+})
+
+test('H28: el panel sólo atiende lo de su pestaña', () => {
+  // Un mensaje de runtime llega a TODAS las páginas de la extensión: con dos
+  // ventanas, el segundo panel pintaba «Navegación detenida» por un recorrido
+  // que no era suyo y se quedaba con lo señalado en otra pestaña (PLAN3 §3.2).
+  const cuerpo = h27Funcion('function onRuntimeMessage(')
+  assert(cuerpo.startsWith('function onRuntimeMessage(msg, sender) {'), 'recibe al remitente')
+  h27Una(H27_LIMPIO, '\n  chrome.runtime.onMessage.addListener(onRuntimeMessage)\n', 'el registro no cambia')
+  for (const tipo of ['NOTE_CLICKED', 'PICK_RESULT', 'PLAN_PROGRESS', 'PLAN_FINISHED']) {
+    eq(cuerpo.split('msg?.type === MSG.' + tipo).length - 1, 1, 'una comparación por tipo: ' + tipo)
+  }
+  // Nunca una lista `[MSG.X, MSG.Y]`: tools/check-docs.mjs la contaría como
+  // quien MANDA esos mensajes.
+  assert(!/\[\s*MSG\./.test(cuerpo) && !/\(\s*MSG\./.test(cuerpo), 'ninguna lista de tipos en onRuntimeMessage')
+  eq(cuerpo.split('if (sender?.tab?.id != null && sender.tab.id !== state.tabId) return').length - 1, 2, 'NOTE_CLICKED y PICK_RESULT, de esta pestaña')
+  h27Una(cuerpo, 'const deOtroRecorrido = msg?.tabId != null && msg.tabId !== state.tabId && msg.tabId !== state.navRun?.tabId', 'el recorrido, de esta pestaña o del que se lanzó')
+  eq(cuerpo.split('if (deOtroRecorrido) return').length - 1, 2, 'PLAN_PROGRESS y PLAN_FINISHED')
+
+  // EJECUTADA, con dobles.
+  const M = { NOTE_CLICKED: 'nota', PICK_RESULT: 'señalado', PLAN_PROGRESS: 'paso', PLAN_FINISHED: 'fin' }
+  const armar = (state) => {
+    const { registros, log } = h28Registro()
+    const env = { registros, hechos: [] }
+    const hecho = (nombre) => (...a) => env.hechos.push([nombre, ...a])
+    env.state = { tabId: 3, navRun: null, noteRows: new Map(), settings: { reduceMotion: true }, pendingPick: null, ...state }
+    env.oir = new Function(
+      'state', 'MSG', 'markNoteRow', 'setPicking', 'paintPickChip', 'log', 'pickLabel', 'el', 'setStatus', 'finishNavRun', 'showPermissionNotice', 'showNotice',
+      cuerpo + '\nreturn onRuntimeMessage'
+    )(env.state, M, hecho('fila'), hecho('señalar'), hecho('chip'), log, () => 'texto', { input: { focus: hecho('foco') } }, hecho('estado'), hecho('fin'), hecho('permiso'), hecho('aviso'))
+    return env
+  }
+  const DE = (id) => ({ tab: { id } })
+  {
+    const env = armar()
+    env.oir({ type: 'nota', n: 2 }, DE(5))
+    env.oir({ type: 'señalado', pick: { kind: 'text', text: 'ajeno' } }, DE(5))
+    eq([env.hechos, env.state.pendingPick], [[], null], 'lo de otra pestaña no se toca')
+    env.oir({ type: 'nota', n: 2 }, DE(3))
+    env.oir({ type: 'señalado', pick: { kind: 'text', text: 'mío' } }, DE(3))
+    eq(env.hechos.map((h) => h[0]), ['fila', 'señalar', 'chip', 'foco'], 'lo de ésta, como siempre')
+    eq(env.state.pendingPick, { kind: 'text', text: 'mío' })
+    env.oir({ type: 'nota', n: 1 }, {})
+    env.oir({ type: 'nota', n: 1 })
+    eq(env.hechos.filter((h) => h[0] === 'fila').length, 3, 'sin pestaña en el remitente, como hasta ahora')
+  }
+  {
+    const env = armar()
+    env.oir({ type: 'paso', tabId: 5, index: 0, total: 3 })
+    env.oir({ type: 'fin', tabId: 5, result: { error: 'de otro panel' } })
+    eq([env.hechos, env.registros], [[], []], 'el recorrido de otra pestaña no pinta aquí ni se registra')
+    env.oir({ type: 'paso', tabId: 3, index: 0, total: 3 })
+    env.oir({ type: 'paso', index: 1, total: 3 })
+    env.oir({ type: 'fin', tabId: 3, result: { error: 'mío' } })
+    eq(env.hechos.map((h) => h[0]), ['estado', 'estado', 'estado', 'fin', 'aviso'], 'el de esta pestaña, y sin tabId, como siempre')
+    eq(env.registros, [['error', 'Navegación detenida', 'mío']])
+  }
+  {
+    // El recorrido que lanzó ESTE panel sigue siendo suyo aunque ya mire otra pestaña.
+    const env = armar({ tabId: 8, navRun: { tabId: 5 } })
+    env.oir({ type: 'paso', tabId: 5, index: 0, total: 2 })
+    env.oir({ type: 'fin', tabId: 5, result: { cancelled: true } })
+    eq(env.hechos.map((h) => h[0]), ['estado', 'estado', 'fin'], 'el del recorrido lanzado, sí')
+    eq(env.registros, [['info', 'Navegación cancelada', 'desde la tarjeta']])
+    env.oir({ type: 'paso', index: 1, total: 2 })
+    eq(env.hechos.length, 4, 'y uno sin tabId, como hasta ahora, aunque haya recorrido en marcha')
+    env.oir({ type: 'paso', tabId: 6, index: 1, total: 2 })
+    eq(env.hechos.length, 4, 'pero no el de una tercera pestaña')
+  }
 })

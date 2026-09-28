@@ -70,6 +70,17 @@ test('el service worker abandona un paso atascado a los NAV_TIMING.stepStallMs, 
   assert(!/\b9000\b/.test(sw), 'el 9000 ya no va suelto')
 })
 
+test('H28: el service worker abandona un salto sin aviso a los NAV_TIMING.anchorStallMs, no a un número suelto', () => {
+  // Hasta H28 un salto por URL cuya página no avisaba de que cargó se quedaba
+  // esperando para siempre (docs/PLAN3.md §3.2). Su margen vive donde los
+  // demás, y el service worker lo lee AL LLAMAR: es lo que deja a
+  // service-worker.test.js acortarlo sin temporizadores de 12 s vivos.
+  const sw = read('src/background/service-worker.js')
+  assert(/function watchStalledAnchor\(tabId, ms = NAV_TIMING\.anchorStallMs\)/.test(sw), 'el vigilante del salto lee NAV_TIMING.anchorStallMs')
+  assert(!/\b12000\b/.test(sw), 'el 12000 vive en config.js')
+  assert(NAV_TIMING.anchorStallMs > NAV_TIMING.stepStallMs, 'una carga entera de página se espera más que un paso en el árbol')
+})
+
 test('cada clave de NAV_TIMING la lee algún fuente de src/ además de config.js', () => {
   const fuentes = listJsFiles(join(ROOT, 'src'))
     .filter((f) => relative(ROOT, f).replace(/\\/g, '/') !== 'src/shared/config.js')

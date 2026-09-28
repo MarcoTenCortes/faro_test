@@ -1422,11 +1422,13 @@ segunda, con la variable, dio **18/18**.
 
 `npm run harness` levanta en <http://127.0.0.1:5175> una Confluence y un Jira de
 mentira con las piezas reales encima. El botón **Autocomprobación completa**
-recorre hoy **66 tramos numerados (149 comprobaciones)**; hay que correrla con el panel del navegador a
+recorre hoy **67 tramos numerados (153 comprobaciones)**; hay que correrla con el panel del navegador a
 la vista y a 1258×597, porque con la ventana oculta Chrome estrangula los
 temporizadores y no ejecuta los fotogramas. Así, con frames de verdad (sin
 sustituir `requestAnimationFrame`), dio **149/149 en 100 s** al cerrar el
-segundo plan (H26, 2026-09-27); con el viewport emulado a 1280×900 el panel se
+segundo plan (H26, 2026-09-27); con H28 (el tramo 67, el título de una fila del
+árbol) se corrió con el panel oculto y los fotogramas sustituidos por un
+temporizador de 16 ms, y dio **153/153 en unos 102 s**; con el viewport emulado a 1280×900 el panel se
 queda sin fotogramas y la 41 no termina, y al ancho natural del panel (1041 px)
 cae el quinto `ok(` del 64, cuya cita de segunda línea se eligió a 1258 px y a
 1041 envuelve distinto.
@@ -1696,7 +1698,13 @@ corto y un detalle. Todos los títulos, por dónde salen:
   inyectarlo nadie responde. Sale una vez por pestaña y motivo, y con él el
   aviso «Faro no ha podido arrancar en esta pestaña…» en lugar de la tarjeta
   de «Falta un permiso»: el permiso ya está. Recarga la pestaña y, si sigue
-  igual, la extensión.
+  igual, la extensión. Desde H28 se apunta con la pestaña y el host de CUANDO
+  se preguntó: si cambias de pestaña mientras Faro lo comprueba, no se apunta
+  ni se avisa nada (lo dicho sería de la pestaña de antes). Y ese mismo motivo
+  es el que dicen, desde H28, los sitios que antes decían «sin permiso» con el
+  permiso dado: la lista de una búsqueda de Jira, «Qué mirar hoy», las páginas
+  base, el índice por la API, el diagnóstico del árbol, el análisis y el paso
+  a paso («el content script no arranca: <motivo>»).
 - «Señalar sin activar» — (H27, en amarillo) pulsaste el rotulador y la selección no se
   encendió: «la pestaña no contesta» (navegó o se recargó entre la comprobación
   y el clic; recargarla suele bastar) o el motivo que da el content script al
@@ -1795,7 +1803,11 @@ corto y un detalle. Todos los títulos, por dónde salen:
   milisegundos costó leerla, medidos en la propia página (sin contar lo que
   tardó en pintarse).
 - «Página sin bloques» — no se pudo leer en bloques: estás en el editor, o la
-  pestaña no contesta (recárgala).
+  pestaña no contesta (recárgala). Desde H28 también «sin pestaña» (el panel no
+  mira ninguna pestaña de Atlassian), «falta permiso» o, con el permiso dado y
+  el content script roto, «el content script no arranca: <motivo>» (antes esas
+  tres se iban calladas), y con un script roto el `error` que dé él en vez de
+  «no se pudo leer».
 - «Anclas en la respuesta» — el bloque JSON de anclas señala un bloque válido
   para N de las M observaciones.
 - «Sin bloque de anclas» — la respuesta numera pero no trae el bloque JSON (o
@@ -1814,14 +1826,22 @@ corto y un detalle. Todos los títulos, por dónde salen:
 - «Marcas conservadas» — la respuesta es un seguimiento (cita observaciones
   sueltas, o no numera nada): las marcas que hay se quedan.
 - «Marcas sobrantes» — el bloque JSON trae números que la respuesta no tiene.
-- «Sin marcas» — no se marcó nada, con la razón (las ocho que emite el panel):
+- «Sin marcas» — no se marcó nada, con la razón (las once que emite el panel):
   la respuesta es corta y no numera nada, o una consulta falló y la respuesta
   no numera nada (y se ofrece «Pedirlo numerado»); la respuesta cita
   observaciones sueltas y no hay un análisis del que vengan; falta permiso en
-  ese host; estás en el editor (antes de leer la página, o al ir a marcar); no
-  se pudo leer la página en bloques; ninguna observación apunta a un bloque
-  del texto; la respuesta no numera nada y no se supo trocearla; la pestaña
-  cambió de página mientras se preparaban.
+  ese host (desde H28, «el content script no arranca: <motivo>» si el permiso
+  está y es eso lo que pasa); estás en el editor (antes de leer la página, o al
+  ir a marcar); no se pudo leer la página en bloques; ninguna observación
+  apunta a un bloque del texto; la respuesta no numera nada y no se supo
+  trocearla; la pestaña cambió de página mientras se preparaban; y, desde H28,
+  «has cambiado de pestaña o de sitio: no marco nada» (el análisis acabó
+  mirando otra pestaña, otro sitio o ninguno: antes salía sin decir nada),
+  «la página no contestó al marcar: <motivo>» (la página no contestó, o su
+  content script contestó roto: antes se pintaba la tarjeta con todas las
+  observaciones «no encontradas» y «Análisis marcado · 0 de N») y «la página no
+  contestó al marcar de nuevo: <motivo>» (lo mismo al pulsar «Volver a marcar
+  en esta página»).
 - «Sin anclar» — las observaciones que no se pudieron situar en la página.
 - «Análisis marcado» — de cada número, cómo se resolvió: `block+quote`,
   `block+whole`, `block-moved`, `global`, y «N ms en la página»: lo que costó
@@ -1949,14 +1969,33 @@ corto y un detalle. Todos los títulos, por dónde salen:
 - «Camino leído de Confluence» — la cadena de padres del destino se leyó de
   la API REST del sitio (ramas, versión de la API, milisegundos).
 - «Sin camino» — no se pudo leer (sin acceso a la pestaña, 401/403, login,
-  404): te lleva de golpe.
+  404): te lleva de golpe. Desde H28 con el motivo que dio la pestaña: «no
+  puedo leer el árbol (<motivo>); te llevaré de golpe» sin acceso —«sin acceso
+  a la pestaña», o «el content script no arranca: …»— y «<motivo> · te llevaré
+  de golpe» cuando la lectura falla; y la tarjeta de ese destino, con un solo
+  paso, lo dice también: «No he podido leer el camino (<motivo>): sólo puedo
+  llevarte de golpe.».
 - «Asistida bloqueada» — pulsaste «Paso a paso» sin permiso sobre el dominio
-  («falta permiso»); sale la tarjeta **Dar permiso**.
+  («falta permiso en <host>»); sale la tarjeta **Dar permiso**. Desde H28, con
+  el permiso dado y el content script roto, «el content script no arranca:
+  <motivo>» (y el aviso de recargar, no la tarjeta).
 - «Navegación lanzada» — el plan salió al service worker: modo, destino y
   URL.
 - «Navegación fallida» — el service worker no aceptó el plan, o no contestó.
 - «Navegación detenida» — el recorrido acabó mal: «sin permiso de host», o el
-  error del paso.
+  error del paso. Desde H28 dice además cuál: «La página no ha podido ejecutar
+  el paso N: <motivo>. Recárgala y vuelve a intentarlo.» (la pestaña contestó
+  sin poder hacer el paso, casi siempre un content script roto: antes se
+  saltaban todos los pasos y se anclaba en la página de partida), «El script de
+  Faro en la página no arranca: <motivo>. Recarga la pestaña y vuelve a
+  intentarlo.» (al vencer el margen de un paso, la pestaña contesta pero rota;
+  antes decía «La página no responde») y «La página de destino no ha avisado de
+  que cargó. Recárgala y vuelve a intentarlo.» (un salto por URL cuya página no
+  avisa en 12 s: antes se esperaba para siempre, y el primer aviso de
+  cualquier página de esa pestaña, horas después, anclaba ahí el recorrido
+  viejo). Si llega pero no contesta al anclar, el resultado es «la página no ha
+  contestado al anclar». Con dos ventanas, cada panel sólo pinta lo de su
+  pestaña o lo del recorrido que lanzó él.
 - «Navegación cancelada» — cancelaste el recorrido: «desde la tarjeta» (el
   botón **Parar** que la tarjeta enseña mientras dura un recorrido paso a
   paso) o «desde la página» (Escape con el foco puesto).
@@ -2621,8 +2660,15 @@ duración. Si en su lugar ves «Sin camino», el motivo va al lado:
 - *la respuesta no es JSON*: el sitio ha devuelto una página de login o un
   proxy se ha puesto en medio.
 - *la API respondió 404*: la página del índice ya no existe con ese id.
+- *el content script no arranca: <motivo>* (desde H28): el permiso está, pero
+  el script de Faro en esa pestaña no arrancó. Recarga la pestaña.
 
-En cualquiera de esos casos Faro no inventa nada: te lleva de golpe. Y cada
+En cualquiera de esos casos Faro no inventa nada: te lleva de golpe, y desde
+H28 la tarjeta lo dice («No he podido leer el camino (<motivo>): sólo puedo
+llevarte de golpe.»). Sin ese aviso, un solo «Llévame» es por diseño: en Jira
+no hay árbol (§8.16), y una página que cuelga directamente de la portada del
+espacio no tiene ramas que desplegar («Camino leído de Confluence · 0
+rama(s)»). Y cada
 respuesta aprovecha, además, para leer del DOM la parte del árbol que esté
 desplegada.
 
@@ -2630,8 +2676,11 @@ desplegada.
 Faro necesita permiso sobre el dominio para poder actuar dentro de la página.
 En `*.atlassian.net` lo tiene de fábrica; en un Confluence propio hay que
 concederlo. Aparece una tarjeta pidiéndolo la primera vez que hace falta. Si la
-cerraste, vuelve a pedir navegación y saldrá otra vez. En el **registro** se ve
-como «Asistida bloqueada · falta permiso».
+cerraste, vuelve a pedir navegación y saldrá otra vez; si sigue en el chat,
+desde H28 un aviso corto te recuerda que falta y que la tarjeta está arriba.
+En el **registro** se ve como «Asistida bloqueada · falta permiso en <host>», o
+«Asistida bloqueada · el content script no arranca: <motivo>» si el permiso
+está y lo que falla es el script (recarga la pestaña).
 
 **Quiero que vaya más despacio (o más rápido)**
 **Ajustes → Pausa entre pasos**, de 0,4 s a 4 s. Por defecto son 1,6 s. Ese
@@ -2667,6 +2716,17 @@ interfaz: mira el **Diagnóstico del árbol** y revisa `src/content/tree-dom.js`
 los localizadores de paso están en `src/content/locators.js`, y la estrategia por
 `href` es la que hay que mirar primero.
 
+Si la rama que se salta es una cuyo título lleva una palabra de las que Faro
+nunca pulsa («8700 - Contract + Billing», «Onboarding of new participants»),
+era eso: el chevron del árbol de un Data Center lleva el título en su etiqueta
+(«Ampliar elemento 8700 - Contract + Billing») y «billing» o «new» lo
+bloqueaban. Desde H28 al chevron y al enlace de una fila del árbol se les
+quita el título de esa fila antes de mirar la lista; lo demás de la fila y lo
+de fuera del árbol se vigila igual. Y desde H28 la ruta de un paso se busca
+entera o por su final exacto (nunca «contiene»), una ruta sin nombre de página
+(`viewpage.action?pageId=…`) no cuenta como pista y un paso de desplegar se
+busca dentro del árbol.
+
 **El análisis no me subraya nada**
 Faro te dirá por qué, debajo de la respuesta. Los motivos, por frecuencia:
 
@@ -2681,7 +2741,11 @@ Faro te dirá por qué, debajo de la respuesta. Los motivos, por frecuencia:
    igual, la extensión.», con «Content script roto» en el registro (H27). Pasó
    de verdad al cargar Faro por primera vez en Chrome (2026-09-28): el content
    script no cargaba y el panel pedía un permiso que ya estaba dado, o decía
-   «Listo» sin poder marcar nada.
+   «Listo» sin poder marcar nada. Y si el script cae justo al marcar, desde
+   H28 sale «No he podido marcar la página (<motivo>). Recarga la pestaña y
+   vuelve a pedirlo.» en vez de la tarjeta con todas las observaciones «no
+   encontradas» (al pulsar «Volver a marcar en esta página», «… y vuelve a
+   intentarlo.»).
 2. **El modelo no ha numerado como se le pide.** Ya no es motivo para no
    marcar: si numeró a su manera —una lista «1.», «**1.**», «Observación 1:»,
    encabezados «### 1.», o la respuesta entera dentro de un bloque de código—
@@ -2706,6 +2770,11 @@ Faro te dirá por qué, debajo de la respuesta. Los motivos, por frecuencia:
    segunda pasada («Sin bloque de anclas» en el registro); si tampoco así,
    cambia de modelo.
 5. **La Skill no es Análisis.** En General no se marca nada.
+6. **Has cambiado de pestaña mientras contestaba** (desde H28 se dice: «Has
+   cambiado de pestaña o de sitio: no he marcado nada. Vuelve a la página y
+   pide el análisis otra vez.»). Faro marca la pestaña desde la que
+   preguntaste; si al terminar el panel mira otra, otro sitio o ninguno, no
+   marca nada. Antes se callaba.
 
 En el **registro** queda lo mismo, con más detalle: «Sin marcas» con la razón, o
 «Sin anclar» con los números que no se pudieron situar; «Numeración adaptada»,
@@ -2806,7 +2875,10 @@ registro un rastro distinto:
   Recárgala y vuelve a intentarlo.», y «Señalar sin activar · la pestaña no
   contesta» (la pestaña navegó o se recargó en ese momento);
 - y si contesta pero se niega, «No he podido activar la selección:
-  <motivo>.», y «Señalar sin activar» con ese motivo.
+  <motivo>.», y «Señalar sin activar» con ese motivo. Desde H28 también si el
+  selector no llega a abrirse: la pestaña contesta cuando ya está ABIERTO, y
+  si falla al abrirlo contesta ese fallo (antes contestaba «sí» antes de
+  abrirlo y el panel se quedaba esperando una selección que no iba a llegar).
 
 **Al señalar, el cursor es el de texto y no el subrayador azul**
 El subrayador es una imagen `data:` metida en la hoja que Faro cuelga de la

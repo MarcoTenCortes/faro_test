@@ -122,6 +122,23 @@ test('el localizador busca TAMBIEN por la ruta, no solo por el id', () => {
   assert(d.some((x) => x.value === '/pages/98830281/'), 'y sigue probando por id despues')
 })
 
+// H28 (PLAN3 §3.2, C3-6): con el id del índice equivocado la ruta es la única
+// pista buena, y el enlace del pagetree de un DC lleva `?src=…` detrás, así que
+// `href$=` no lo ve. Antes lo encontraba el «contiene», que con
+// `/display/SIMPL/Architecture` casaba también con `…/Architecture+Overview`
+// del cuerpo; ahora lo encuentra la ruta ENTERA (locators.test.js lo prueba
+// contra un documento de mentira).
+test('EL FALLO sigue resuelto (H28): con el id equivocado, la ruta casa por final exacto y por ruta entera, no por «contiene»', () => {
+  const P = '/spaces/SIMPL/pages/83206087/ACV+Static+-+Identity+Provider+Service'
+  const d = hrefDescriptors({ kind: 'confluence-page', id: '98830281', path: P + '?src=contextnavpagetreemode' })
+  eq(d.slice(0, 2), [
+    { by: 'href-end', value: P },
+    { by: 'href-path', value: P },
+  ])
+  assert(!d.some((x) => x.by === 'href' && x.value === P), 'nunca por contenido')
+  assert(d.some((x) => x.value === '/pages/98830281/'), 'y el id sigue detrás')
+})
+
 test('la ruta se limpia de query y de ancla antes de comparar', () => {
   const d = hrefDescriptors({ kind: 'confluence-page', id: '5', path: '/spaces/X/pages/5/T?src=nav#seccion' })
   eq(d[0].value, '/spaces/X/pages/5/T')

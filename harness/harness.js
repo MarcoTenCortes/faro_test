@@ -4922,6 +4922,87 @@ const actions = {
     renderPage('page:200')
     await wait(320)
 
+    // 67. El título de una fila del árbol es contenido (H28, PLAN3 §0 y §3.2,
+    //     C3-8). En el Confluence 9.2 del usuario el chevron del pagetree lleva
+    //     el título en su etiqueta, y «Ampliar elemento 8700 - Contract +
+    //     Billing» casaba con «billing» de `FORBIDDEN_ACTIONS`: Faro no
+    //     desplegaba esa rama. Con la barra pagetree de los tramos 60-62 se
+    //     monta esa fila con el marcado de F9 (`pagetreeRow`, el título cambiado
+    //     y el enlace con la forma de `pagetreeHref`) y un «Delete page» dentro;
+    //     `isSafeToClick` con DOS argumentos, como la llaman el ejecutor y el
+    //     banco, busca solo el contenedor. La fila se quita al acabar, pase lo
+    //     que pase: nada de lo de después puede verla. Va DETRÁS de la vuelta a
+    //     la barra clásica que cerraba el 66, y la repite al acabar: la prueba
+    //     del 66 en panel-wiring.test.js lo corta hasta esa vuelta.
+    setSidebar('pagetree')
+    renderPage('page:400')
+    await wait(320)
+
+    const titulo67 = '8700 - Contract + Billing'
+    const lista67 = document.querySelector('.plugin_pagetree ul')
+    const fila67 = pagetreeRow({ id: '1080', kids: [{ id: '1081' }] })
+    const chevron67 = fila67.querySelector('.plugin_pagetree_childtoggle')
+    const enlace67 = fila67.querySelector('.plugin_pagetree_children_span a')
+    chevron67.setAttribute('aria-label', 'Ampliar elemento ' + titulo67)
+    chevron67.setAttribute('data-page-id', '8700')
+    enlace67.setAttribute('href', '/spaces/ENG/pages/8700/Contract+Billing?src=contextnavpagetreemode')
+    // Sin `data-nav`: es la marca con la que el banco reconoce la fila de la
+    // 1080 de verdad, y ésta no lo es.
+    delete enlace67.dataset.nav
+    enlace67.textContent = titulo67
+    const borrar67 = document.createElement('a')
+    borrar67.setAttribute('href', '/x')
+    borrar67.setAttribute('aria-label', 'Delete page')
+    borrar67.textContent = '×'
+    fila67.querySelector('.plugin_pagetree_children_content').appendChild(borrar67)
+    lista67.appendChild(fila67)
+    try {
+      const cont67 = treeContainer()
+      const chevronPasa67 = isSafeToClick(chevron67, ORIGIN)
+      // Y pasa POR estar en el árbol: con un contenedor que no la tiene, el
+      // título no se quita y «billing» la sigue bloqueando.
+      const sinArbol67 = isSafeToClick(chevron67, ORIGIN, { container: document.createElement('div') })
+      ok(
+        'el chevron de «8700 - Contract + Billing» se puede pulsar: el título es contenido, no una acción',
+        !!cont67 &&
+          cont67.classList.contains('plugin_pagetree') &&
+          cont67.contains(fila67) &&
+          chevronPasa67.ok === true &&
+          chevronPasa67.kind === 'ancla' &&
+          sinArbol67.ok === false,
+        `${JSON.stringify(chevronPasa67)} · sin árbol: ${sinArbol67.reason || JSON.stringify(sinArbol67)}`
+      )
+
+      const enlacePasa67 = isSafeToClick(enlace67, ORIGIN)
+      ok(
+        'y el enlace propio de esa fila también: lleva a ver la página',
+        enlacePasa67.ok === true && enlacePasa67.kind === 'enlace',
+        JSON.stringify(enlacePasa67)
+      )
+
+      const borrarPasa67 = isSafeToClick(borrar67, ORIGIN)
+      ok(
+        'un «Delete page» DENTRO de esa misma fila sigue sin pulsarse',
+        borrarPasa67.ok === false && /delete/.test(borrarPasa67.reason || ''),
+        borrarPasa67.reason || JSON.stringify(borrarPasa67)
+      )
+
+      const eliminar67 = [...document.querySelectorAll('.tb-btn')].find((b) => /elimin/i.test(b.textContent))
+      const eliminarPasa67 = isSafeToClick(eliminar67, ORIGIN)
+      ok(
+        'y el «Eliminar» de la cabecera, tampoco',
+        !!eliminar67 && eliminarPasa67.ok === false,
+        eliminarPasa67.reason || JSON.stringify(eliminarPasa67)
+      )
+    } finally {
+      fila67.remove()
+    }
+
+    //     Y se deja la página como la dejaba el 66: la barra clásica y el ADR-014.
+    setSidebar('clasica')
+    renderPage('page:200')
+    await wait(320)
+
     runner.clear()
     const passed = results.filter((x) => x.pass).length
     say(`—— ${passed}/${results.length} comprobaciones ——`, passed === results.length ? 'ok' : 'bad')

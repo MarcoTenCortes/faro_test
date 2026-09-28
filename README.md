@@ -412,6 +412,19 @@ Veintiuna decisiones que sostienen el diseño:
    Confluence real no lleva `role="tree"`, así que el barrido de ramas no
    encontraba ninguna.
 
+   Desde H28 la ruta se compara por el final exacto o ENTERA, nunca por
+   «contiene»: `/display/SIMPL/Architecture` ya no casa con el enlace del cuerpo
+   a `…/Architecture+Overview`. Una ruta sin nombre de página
+   (`/pages/viewpage.action?pageId=…`, la de todas las páginas de un Data
+   Center) no se usa como pista: ahí manda el id. Un paso de desplegar se busca
+   dentro del árbol, no en la página entera. Y el título de una fila es
+   contenido, no una orden: en el Confluence 9.2 de Marco el chevron de
+   «8700 - Contract + Billing» no se desplegaba porque «billing» está en la
+   lista de lo que Faro nunca pulsa. Ahora, al chevron y al enlace de una fila
+   del árbol se les quita el título de esa fila antes de mirar esa lista; lo
+   demás de la fila («Delete page», «Mover», el «···») y todo lo de fuera del
+   árbol se vigila igual que siempre.
+
 9. **El foco guía; el subrayado señala.** El oscurecido sirve mientras te lleva
    por el árbol, donde hay que ver adónde va el siguiente clic. Una vez has
    llegado, tapa justo lo que has venido a leer: ahí el fragmento se subraya y
@@ -797,7 +810,7 @@ cuáles no), que desde H16 son tuyos y no de un sitio.
 ## Comprobaciones
 
 ```bash
-npm run check              # sintaxis + orden + manifest + 1679 pruebas unitarias + docs
+npm run check              # sintaxis + orden + manifest + 1707 pruebas unitarias + docs
 npm run check:docs         # sólo el paso docs: número de pruebas, títulos del registro, mensajes y ficheros del mapa
 npm run test:integration   # contra un opencode real que arranca la propia prueba
 npm run harness            # banco de pruebas visual en http://127.0.0.1:5175
@@ -883,11 +896,11 @@ Con el banco levantado hay dos páginas:
 
 - **`npm run harness`** levanta una Confluence de mentira —con cabecera
   pegajosa, árbol lateral y navegación por pushState— y ejecuta encima las
-  piezas reales. El botón **Autocomprobación completa** recorre —hoy en 66
-  tramos (149 comprobaciones), que se corren con frames de verdad en un Browser
+  piezas reales. El botón **Autocomprobación completa** recorre —hoy en 67
+  tramos (153 comprobaciones), que se corren con frames de verdad en un Browser
   pane visible a 1258×597 (así dio 149/149 al cerrar el segundo plan; con la
   ventana oculta, o emulada a 1280×900, el navegador deja de pintar y caen las
-  que esperan un fotograma)— los casos que sólo se pueden verificar con DOM: anclaje exacto, aproximado y por encabezado,
+  que esperan un fotograma, salvo que se sustituyan: así dio 153/153 en H28)— los casos que sólo se pueden verificar con DOM: anclaje exacto, aproximado y por encabezado,
   que el contenido no se muta, el desplazamiento por debajo de la cabecera, el
   recorrido asistido de tres pasos, la lista blanca de clics, el aislamiento del
   overlay, y los casos que más cuestan en un Confluence real: **un árbol de seis
@@ -1310,7 +1323,14 @@ tarjeta pidiendo permiso. Al concederlo:
 Si el permiso falta, el aviso lo dice. Antes esto fallaba en silencio: pulsabas
 «Paso a paso» y no ocurría nada. Y desde H27, si el permiso está pero el
 content script no arranca, el aviso dice por qué en vez de volver a pedir el
-permiso. El registro se rehace solo al instalar o actualizar Faro y cada vez
+permiso; desde H28 lo dice también cada cosa que lee la página (el camino de
+«Paso a paso», la lista de una búsqueda de Jira, «Qué mirar hoy», las páginas
+base, el análisis), que antes decía «sin permiso» o «la pestaña no contestó».
+Un análisis que no ha podido marcar la página, o que acaba cuando ya estás en
+otra pestaña, lo dice bajo la respuesta en vez de pintar las observaciones como
+«no encontradas»; un salto a una página que no avisa de que cargó se abandona
+a los 12 s con su motivo, y «Llévame» entre dos páginas `viewpage.action` de un
+Data Center ya no se queda quieto. El registro se rehace solo al instalar o actualizar Faro y cada vez
 que das o quitas un permiso, así que recargar la extensión no debería volver a
 pedírtelo (probado en Node; en Chrome se comprueba en H30).
 
@@ -1472,7 +1492,7 @@ src/
     source-history.js       qué páginas base usaste para analizar qué: el historial local que permite volver a proponerlas (puro + su almacén)
     references.js           las páginas que el contexto del sitio nombra como guía, plantilla o decisión, con su papel (puro)
     source-suggest.js       qué páginas base proponer y por qué, sin preguntarle al modelo (puro)
-    rest-notice.js          cuándo se te avisa de que una lectura de la API no salió (una vez por sitio, sesión y motivo) y con qué palabras, también las de «Contrastar con Jira», que salen cada vez que lo pulsas (puro)
+    rest-notice.js          cuándo se te avisa de que una lectura de la API no salió (una vez por sitio, sesión y motivo) y con qué palabras, también las de «Contrastar con Jira», que salen cada vez que lo pulsas; desde H28, el motivo de cualquier lectura de la pestaña que falla y si lo que falta es el permiso o un script que no arranca (puro)
     search-chips.js         las búsquedas al instante: qué consultas se ofrecen y cuáles ejecuta Faro (puro)
     notes.js                observaciones numeradas: el bloque JSON de anclas, su validación, la segunda pasada (puro)
     diagram-parse.js        el diagrama Mermaid que escribe el modelo, leído con claves blancas; y copiarlo como Mermaid (puro, H24)
@@ -1492,8 +1512,8 @@ src/
     page-id.js              el id de la página de Confluence, leído de una etiqueta de la cabecera; sin un solo import, porque lo pide el aviso de cada carga de página
     overlay/rects.js        funde por línea y recorta a su caja (puro)
     overlay/cursor.js       el cursor de «Señalar»: un subrayador azul, en una imagen data: y no en un fichero de la extensión (puro)
-    tree-dom.js             qué es el árbol, una fila y su control · diagnóstico
-    locators.js             cascada href → rol → texto + lista blanca de clics
+    tree-dom.js             qué es el árbol, una fila, su control y su título · diagnóstico
+    locators.js             cascada href → rol → texto + lista blanca de clics (el título de una fila del árbol no cuenta como acción)
     picker.js               modo de selección: subrayar texto, elegir imágenes
     pick-payload.js         lo que viaja de esa selección (puro)
     runner.js               ejecutor de un paso

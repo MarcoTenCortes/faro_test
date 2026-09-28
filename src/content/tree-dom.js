@@ -166,6 +166,45 @@ function structuralRow(el, container) {
 }
 
 /**
+ * El enlace PROPIO de una fila: el que lleva a su página.
+ *
+ * `row.querySelector('a[href]')` no sirve: en el pagetree de un Data Center el
+ * chevron es también un `<a>` (con `href=""`) y va ANTES del enlace dentro del
+ * `<li>` (F9, harness.js `pagetreeRow`). Gana el primer `a[href]` con dirección
+ * que tenga forma de página (`PAGE_HREF`) y, si ninguno la tiene (el
+ * `/display/ESPACIO/Título` de un DC viejo), el primero con dirección. Un
+ * `href="#…"` no es dirección: es un control (el «···» de AUI). Las hijas
+ * desplegadas cuelgan DETRÁS del enlace propio, así que el orden de documento
+ * las deja fuera. Pura sobre el elemento. H28 (PLAN3 §3.2, C3-8).
+ */
+export function rowLink(row) {
+  if (!row?.querySelectorAll) return null
+  let primero = null
+  for (const a of row.querySelectorAll('a[href]')) {
+    const href = String(a.getAttribute('href') || '').trim()
+    if (!href || href.startsWith('#')) continue
+    if (PAGE_HREF.test(href)) return a
+    if (!primero) primero = a
+  }
+  return primero
+}
+
+/**
+ * El título de una fila: el texto de su enlace propio, recortado y SIN plegar
+ * (pliega quien compara). `''` si la fila no tiene enlace.
+ *
+ * Existe para que `isSafeToClick` (locators.js) pueda quitar el título del
+ * nombre accesible del chevron y del enlace de la fila antes de buscar
+ * acciones prohibidas: el título es contenido, no una acción (§8.12). En el
+ * Confluence 9.2 del usuario, «Ampliar elemento 8700 - Contract + Billing»
+ * casaba con «billing» y Faro no desplegaba esa rama (PLAN3 §0, H28).
+ */
+export function rowTitle(row) {
+  const a = rowLink(row)
+  return a ? String(a.textContent || '').trim() : ''
+}
+
+/**
  * El control de desplegar que pertenece a ESTA fila y no a una hija.
  *
  * Se distingue por el envoltorio: el chevron de una fila hija cuelga de algo

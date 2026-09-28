@@ -7,7 +7,7 @@
  * contraparte visible de §8.14. Aquí se ejecuta de verdad.
  */
 import { test, eq, assert } from '../harness.js'
-import { REST_REASON_ALWAYS, restFailureDue, jqlFailText, linksFailText } from '../../src/panel/rest-notice.js'
+import { REST_REASON_ALWAYS, restFailureDue, jqlFailText, linksFailText, failReason, sinAccesoMotivo } from '../../src/panel/rest-notice.js'
 
 const HOST = 'jira.simplprogramme.eu'
 
@@ -94,4 +94,50 @@ test('H25: linksFailText — por qué no se contrastó el diagrama con Jira, por
   eq(linksFailText({ ok: false, reason: 'consulta no permitida' }, HOST), 'No he podido leer las relaciones de Jira (consulta no permitida).')
   eq(linksFailText({ ok: false, reason: 'forma', detail: 'la respuesta de la API no tiene la forma esperada' }, HOST), 'No he podido leer las relaciones de Jira (la respuesta de la API no tiene la forma esperada).')
   eq(linksFailText({ ok: false }, HOST), 'No he podido leer las relaciones de Jira (sin motivo).')
+})
+
+test('H28: failReason — el motivo que dio la pestaña, también cuando es un content script que no arranca', () => {
+  // Visto el 2026-09-28 (PLAN3 §2, G4): con el arranque roto el content script
+  // contesta `{ok:false, error}` (H27) y el panel, que sólo miraba `reason`,
+  // registraba «la pestaña no contestó» cuando sí había contestado, y con el porqué.
+  const ERROR = 'Failed to fetch dynamically imported module: src/content/runner.js'
+  // Nadie contestó (el `.catch(() => null)` de todo sendMessage): lo de siempre.
+  eq(failReason(null, 'la pestaña no contestó'), 'la pestaña no contestó')
+  eq(failReason(undefined, 'sin respuesta'), 'sin respuesta')
+  // Una respuesta legítima trae su código o su prosa, y manda.
+  eq(failReason({ ok: false, reason: 'sesion', status: 401 }, 'x'), 'sesion')
+  eq(failReason({ ok: false, reason: 'editando', placed: [], missed: [1] }, 'x'), 'editando')
+  // Un script roto trae `error`: se dice ése, no el de por defecto.
+  eq(failReason({ ok: false, error: ERROR }, 'la pestaña no contestó'), ERROR)
+  // Con los dos, el `reason` (es el que el content script eligió decir).
+  eq(failReason({ ok: false, reason: 'consulta no permitida', error: ERROR }, 'x'), 'consulta no permitida')
+  // Sin ninguno de los dos, o vacíos, el de por defecto.
+  eq(failReason({ ok: false }, 'sin motivo'), 'sin motivo')
+  eq(failReason({ ok: false, reason: '', error: '' }, 'sin motivo'), 'sin motivo')
+  // El `error` es un mensaje ajeno: recortado a 200, y siempre cadena.
+  eq(failReason({ ok: false, error: 'a'.repeat(500) }, 'x'), 'a'.repeat(200))
+  eq(failReason({ ok: false, error: new Error('rota') }, 'x'), 'Error: rota')
+})
+
+test('H28 (D2): sinAccesoMotivo — un script roto de ESTA pestaña no se hace pasar por falta de permiso', () => {
+  // Revisión adversaria de H27 (D2): nueve sitios del panel reciben el `false`
+  // de `ensureContentAccess` y decían «sin permiso sobre X» con el permiso dado
+  // y el content script sin arrancar. El problema lo apunta `noteContentProblem`
+  // con su pestaña y su host, y sólo explica la pestaña y el host de quien llama.
+  const problema = { host: HOST, tabId: 7, error: 'Failed to fetch dynamically imported module: src/content/runner.js' }
+  eq(
+    sinAccesoMotivo(problema, { tabId: 7, host: HOST }),
+    'el content script no arranca: Failed to fetch dynamically imported module: src/content/runner.js',
+    'la misma pestaña y el mismo host: el motivo'
+  )
+  // Sin nada apuntado, lo que falta es el permiso: '' y quien llama dice lo de siempre.
+  eq(sinAccesoMotivo(null, { tabId: 7, host: HOST }), '')
+  eq(sinAccesoMotivo(undefined, { tabId: 7, host: HOST }), '')
+  // Y sin pestaña ni host de quien llama, tampoco: `undefined === undefined` no es un motivo.
+  eq(sinAccesoMotivo(null), '')
+  eq(sinAccesoMotivo(null, {}), '')
+  // Otra pestaña u otro host: el problema es de allí y no explica esto.
+  eq(sinAccesoMotivo(problema, { tabId: 8, host: HOST }), '', 'otra pestaña')
+  eq(sinAccesoMotivo(problema, { tabId: 7, host: 'confluence.simplprogramme.eu' }), '', 'otro host')
+  eq(sinAccesoMotivo(problema, { tabId: null, host: HOST }), '', 'quien llama sin pestaña')
 })

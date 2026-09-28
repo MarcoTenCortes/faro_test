@@ -478,11 +478,24 @@ test('H27: el huérfano se apaga solo', () => {
     '}',
   ])
   // Un «Señalar» a medias cuando la extensión se va: `apagar` cancela el
-  // selector y su resultado ya no tiene a quién ir.
-  const pick = entre('case MSG.PICK_START: {', 'case MSG.PICK_CANCEL: {')
-  const elegido = pick.indexOf('const pick = await p.start()')
-  const guarda = pick.indexOf('if (!contextoVivo()) return')
-  assert(elegido >= 0 && guarda > elegido && pick.indexOf('type: MSG.PICK_RESULT') > guarda, 'no se manda el resultado desde un huérfano')
+  // selector y su resultado ya no tiene a quién ir. EL CAMBIO (H28, docs/PLAN3.md
+  // §3.2): el `ok` sale con el selector ya ABIERTO —`start()` antes de
+  // contestar, y lo elegido se espera después—; hasta H28 salía antes, y un
+  // `start()` que lanzaba dejaba al panel en «Señalar» esperando un resultado
+  // que no iba a llegar.
+  eq(lineas(entre('case MSG.PICK_START: {', 'case MSG.PICK_CANCEL: {')), [
+    'case MSG.PICK_START: {',
+    'const p = await getPicker()',
+    'const promesa = p.start()',
+    'sendResponse({ ok: true })',
+    'const pick = await promesa',
+    'if (!contextoVivo()) return',
+    'chrome.runtime',
+    '.sendMessage({ type: MSG.PICK_RESULT, pick: pick || null, url: location.href })',
+    '.catch(() => {})',
+    'return',
+    '}',
+  ])
 })
 
 test('H27: limpiarRestos corre antes de new NavRunner', () => {
@@ -876,6 +889,27 @@ test('H27: el oyente de bootstrap.js ejecutado: PING dice la verdad, dos intento
   runner.overlay.onNote(4)
   eq(registro.length, 4, 'apagarse es una vez')
   eq(c.enviados.filter((m) => m.type === MSG.URL_CHANGED || m.n === 4), [], 'y un huérfano no avisa de nada')
+})
+
+test('H28: PICK_START contesta con el selector ya abierto, y un start() que lanza se contesta con su error', async () => {
+  // `Picker.start()` es síncrona hasta su `return new Promise`: monta el
+  // overlay, pinta la barra y pone los oyentes. Hasta H28 el `ok` salía ANTES
+  // de llamarla, así que si lanzaba (el overlay no se monta en esa página) el
+  // `catch` del oyente contestaba tarde —Chrome se queda con la primera
+  // respuesta— y el panel se quedaba en «Señalar» esperando un resultado que no
+  // iba a llegar (docs/PLAN3.md §3.2). ¿Qué ve el panel? El primer `sendResponse`.
+  class PickerRoto {
+    start() {
+      throw new Error('el overlay no se monta')
+    }
+    cancel() {}
+  }
+  const { modulos } = modulosSanos([])
+  const c = cargar({ modulos: { ...modulos, 'src/content/picker.js': { Picker: PickerRoto } } })
+  eq(await c.manda({ type: MSG.PICK_START }), { ok: false, error: 'el overlay no se monta' }, 'el fallo, no un ok')
+  eq(c.errores('[faro] fallo en el content script'), 1, 'y en la consola')
+  await unaVuelta()
+  eq(c.enviados.filter((m) => m.type === MSG.PICK_RESULT), [], 'sin selector no hay resultado que mandar')
 })
 
 test('H27 SEGURIDAD: la guarda de la segunda instancia no se engaña con un elemento de la página', async () => {

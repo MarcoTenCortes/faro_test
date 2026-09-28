@@ -150,7 +150,7 @@ test('el plan completo marca las acciones', () => {
 // prueba con elementos de mentira: `visible()` necesita `getComputedStyle`,
 // que se instala DENTRO de cada prueba y se restaura al salir.
 
-import { isMenuTrigger, expandersIn, toggleFor, treeContainer } from '../../src/content/tree-dom.js'
+import { isMenuTrigger, expandersIn, toggleFor, treeContainer, rowLink, rowTitle } from '../../src/content/tree-dom.js'
 
 /** Un control de mentira: lo justo para `visible()`, `matches` y `closest`. */
 function control(attrs = {}, { fila = null } = {}) {
@@ -284,6 +284,35 @@ test('un [role="complementary"] que no parece un arbol no le gana al que si', ()
   // que `describeTree` ensena para poder ajustar los selectores con datos.
   eq(treeContainer(raiz({ '[role="complementary"]': [ajeno] })), ajeno)
   eq(treeContainer(raiz({})), null)
+})
+
+// --- el titulo de una fila (H28, PLAN3 §3.2, C3-8) --------------------------
+// `isSafeToClick` quita el titulo de la fila del nombre de su chevron antes de
+// buscar acciones prohibidas. En el pagetree de un DC el chevron es un
+// `<a href="">` que va ANTES del enlace en el `li`, asi que el primer
+// `a[href]` de la fila es el chevron y no dice ningun titulo.
+
+/** Un enlace de mentira: su href y su texto. */
+const enlaceDe = (href, texto = '') => ({ getAttribute: (n) => (n === 'href' ? href : null), textContent: texto })
+/** Una fila que da sus `a[href]` en orden de documento. */
+const filaCon = (...enlaces) => ({ querySelectorAll: (sel) => (sel === 'a[href]' ? enlaces : []) })
+
+test('H28: el titulo de una fila es el texto de su enlace PROPIO, no el del chevron que va antes (F9)', () => {
+  const chevron = enlaceDe('', '')
+  const propio = enlaceDe('/spaces/SIMPL/pages/8700/Contract+Billing?src=contextnavpagetreemode', '  8700 - Contract + Billing ')
+  const hija = enlaceDe('/spaces/SIMPL/pages/8701/Hija', 'Hija')
+  const fila = filaCon(chevron, propio, hija)
+  assert(rowLink(fila) === propio, 'el enlace propio, no el chevron ni la hija de detras')
+  eq(rowTitle(fila), '8700 - Contract + Billing', 'recortado y sin plegar: pliega quien compara')
+
+  // Con forma de pagina gana aunque vaya detras de otro enlace con direccion.
+  assert(rowLink(filaCon(enlaceDe('/display/SIMPL/Icono'), propio)) === propio)
+  // Sin ninguno con forma de pagina (el /display/ de un DC viejo), el primero
+  // con direccion; un href="#" es un control, no una direccion.
+  eq(rowTitle(filaCon(enlaceDe('#', '···'), enlaceDe('/display/SIMPL/Contract+Billing', 'Contract + Billing'))), 'Contract + Billing')
+  eq(rowTitle(filaCon(chevron)), '', 'sin enlace, sin titulo')
+  eq(rowTitle(null), '')
+  eq(rowLink({}), null)
 })
 
 test('toggleFor no toma el «···» de la fila por su control de desplegar', () => {

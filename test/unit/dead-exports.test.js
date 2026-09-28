@@ -103,7 +103,8 @@ const EXPORTADAS_SIN_IMPORTAR = {
   'src/content/digest.js': ['isBlock', 'tagLabel'],
   'src/content/dom-utils.js': ['stickyOffset'],
   'src/content/jira-issue.js': ['ISSUE_CHROME'],
-  'src/content/locators.js': ['visibleText', 'resolveDescriptor'],
+  // `resolveDescriptor` salió en H28: la importa locators.test.js (C3-6).
+  'src/content/locators.js': ['visibleText'],
   'src/content/picker.js': ['mediaBajo', 'affixes', 'nearestHeading', 'captureImage'],
   // Sólo la «importaba» la reexportación de paso de locators.js, ya borrada.
   'src/content/tree-scan.js': ['pageIdFromHref'],

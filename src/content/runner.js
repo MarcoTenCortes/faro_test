@@ -140,7 +140,12 @@ export class NavRunner {
 
     const desplegando = step.action === 'expand'
     const timeout = this.timing.locateTimeoutMs ?? NAV_TIMING.locateTimeoutMs
-    const found = await waitFor(() => locateStep(step, document), { timeout })
+    // Un paso de DESPLEGAR se busca DENTRO del árbol: es una rama, y en el
+    // documento entero la primera pista que casaba podía ser un enlace del
+    // cuerpo o de la cabecera a esa misma página, que no tiene rama que abrir
+    // (H28, PLAN3 §3.2, C3-6). El contenedor se mira en cada sondeo, porque el
+    // árbol puede llegar después que la página; sin árbol, el documento.
+    const found = await waitFor(() => locateStep(step, step.action === 'expand' ? (treeContainer() || document) : document), { timeout })
     // Cancelado mientras se buscaba el enlace (Escape, «Parar» del panel o el
     // huérfano que se apaga): al volver no se presenta nada. Cancelar sólo
     // resuelve la espera de la tarjeta, y sin esto el paso encendía el foco,
@@ -162,7 +167,10 @@ export class NavRunner {
       // los 12 s de la tarjeta navegaba solo.
       if (this.cancelled) return { status: STEP_RESULT.CANCELLED, reason: this.cancelReason || 'user' }
       if (expanded) {
-        const retry = await waitFor(() => locateStep(step, document), { timeout: 1200 })
+        // El mismo sitio que la primera búsqueda (H28): hoy un paso de
+        // desplegar no llega aquí —sin encontrarse, se salta arriba—, y si un
+        // día llega, que no busque la rama fuera del árbol.
+        const retry = await waitFor(() => locateStep(step, step.action === 'expand' ? (treeContainer() || document) : document), { timeout: 1200 })
         if (this.cancelled) return { status: STEP_RESULT.CANCELLED, reason: this.cancelReason || 'user' }
         if (retry) return this._presentAndClick(retry, { step, index, total, isLast })
       }
@@ -288,6 +296,11 @@ export class NavRunner {
     }
 
     // Último recurso: pulsar la propia fila. Nunca tras cancelar: suele navegar.
+    // DEUDA para la revisión de H28 (PLAN3 §3.2): este clic NO pasa por
+    // `isSafeToClick`, a diferencia del chevron de arriba. Es la fila que
+    // `treeToggleFor` dio por control de desplegar (`aria-expanded` en la propia
+    // fila, `isRow`), no un elemento que se busque por nombre; pero si una fila
+    // así fuera además una acción, nada lo pararía aquí.
     if (toggle.isRow) {
       if (this.cancelled) return false
       control.click()
