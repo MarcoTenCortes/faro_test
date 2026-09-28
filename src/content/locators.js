@@ -48,8 +48,14 @@ export function foldLabel(s) {
  *
  * Cuidado con `contains`: `/spaces/ENG/` también aparece dentro de
  * `/spaces/ENG/pages/100/Arquitectura`, y `/browse/ENG-7` dentro de
- * `/browse/ENG-70`. Por eso lo primero de cada lista es siempre una
- * coincidencia por final de cadena o por parámetro, que no admite prefijos.
+ * `/browse/ENG-70`. Por eso lo primero de cada lista es una coincidencia con
+ * frontera: por final de RUTA, por la ruta entera o por parámetro. Las tres
+ * miran la URL resuelta del enlace (`resolveDescriptor`), no sólo el href
+ * crudo, donde `href$=` admitía cualquier cosa delante: un
+ * `/logout.action?x=/spaces/SIMPL/pages/5/Title` sembrado en el cuerpo «acababa
+ * en» la ruta del paso (revisión adversaria de H28, D3). Y ninguna es una
+ * barrera: ordenan qué enlace se prefiere. Que el clic lleve de verdad al paso
+ * lo decide `llevaAlPaso`, justo antes de pulsar.
  *
  * @param {{kind:string, id:string}} step
  * @returns {Array<{by:string, value?:string, name?:string}>}
@@ -243,8 +249,22 @@ export function resolveDescriptor(descriptor, scope = document) {
     case 'href':
       return shortestVisible(scope.querySelectorAll(`a[href*="${cssEscape(descriptor.value)}"]`))
 
-    case 'href-end':
-      return shortestVisible(scope.querySelectorAll(`a[href$="${cssEscape(descriptor.value)}"]`))
+    case 'href-end': {
+      // Que acabe en la ruta el href Y su RUTA resuelta: `href$=` a secas
+      // casaba con un `/logout.action?x=/spaces/SIMPL/pages/5/Title` sembrado
+      // en el cuerpo, que «acaba en» la ruta del paso por la consulta y le
+      // ganaba al enlace del árbol de un DC, que lleva `?src=…` detrás y lo
+      // encuentra `href-path` (revisión adversaria de H28, D3, reproducido en
+      // Chromium). El valor empieza por «/»: acabar en él ya es frontera.
+      const base = baseUrl()
+      const quiero = rutaDe(descriptor.value, base)
+      if (!quiero) return null
+      const hits = []
+      for (const a of scope.querySelectorAll(`a[href$="${cssEscape(descriptor.value)}"]`)) {
+        if (rutaDe(a.getAttribute('href') || '', base).endsWith(quiero)) hits.push(a)
+      }
+      return shortestVisible(hits)
+    }
 
     case 'href-path': {
       // La ruta ENTERA, con la consulta y el ancla fuera: el enlace del árbol
@@ -269,12 +289,18 @@ export function resolveDescriptor(descriptor, scope = document) {
       for (const a of scope.querySelectorAll(`a[href*="${cssEscape(descriptor.name)}="]`)) {
         if (!visible(a)) continue
         const href = a.getAttribute('href') || ''
-        let params
+        let url
         try {
-          params = new URL(href, baseUrl()).searchParams
+          url = new URL(href, baseUrl())
         } catch {
           continue
         }
+        // El `pageId` sólo cuenta en la ruta de VER una página: con cualquier
+        // ruta, un `/logout.action?pageId=5` sembrado le ganaba al
+        // `viewpage.action` real por ser más corto (revisión adversaria de H28,
+        // D3, reproducido en Chromium).
+        if (descriptor.name === 'pageId' && !/\/viewpage\.action$/i.test(url.pathname)) continue
+        const params = url.searchParams
         if ((params.get(descriptor.name) || '').toLowerCase() === wanted) hits.push(a)
       }
       return shortestVisible(hits)
@@ -376,11 +402,89 @@ export function isSafeToClick(el, origin, { container = null } = {}) {
 }
 
 /**
- * Lleva a VER una página: `/pages/<id>` o `viewpage.action?pageId=<id>`.
- * `PAGE_HREF` de tree-dom.js casa también con `removepage.action?pageId=…`,
- * `editpage.action?pageId=…`: ésos no son el enlace propio de nadie.
+ * La RUTA de ver una página: acaba en `/pages/<id>`, con o sin slug detrás. La
+ * otra forma, `viewpage.action?pageId=<id>`, la mira `llevaAVerPagina` en su
+ * parámetro.
  */
-const VER_PAGINA = /\/pages\/\d+(?:[/?#]|$)|\/viewpage\.action\?(?:[^#]*&)?pageId=\d+/i
+const VER_PAGINA = /\/pages\/\d+(?:\/[^/]*)?$/i
+
+/**
+ * ¿Lleva este href a VER una página? Se juzga sobre la URL RESUELTA —su ruta y
+ * su `pageId`— y nunca sobre el href crudo: con una subcadena sin anclar, una
+ * ruta de ver metida en la CONSULTA de una acción
+ * (`removepage.action?pageId=5&returnTo=/spaces/X/pages/5/`,
+ * `logout.action?os_destination=/spaces/X/pages/5/T`) la volvía «el enlace
+ * propio» de su fila y su texto «el título», y se le quitaba entero
+ * (revisión adversaria de H28, D3). `PAGE_HREF` de tree-dom.js casa también con
+ * `removepage.action?pageId=…`, `editpage.action?pageId=…`: ésos no son el
+ * enlace propio de nadie.
+ */
+function llevaAVerPagina(href) {
+  let url
+  try {
+    url = new URL(String(href || ''), baseUrl())
+  } catch {
+    return false
+  }
+  const ruta = url.pathname.replace(/\/+$/, '')
+  return VER_PAGINA.test(ruta) || (/\/viewpage\.action$/i.test(ruta) && /^\d+$/.test(url.searchParams.get('pageId') || ''))
+}
+
+/**
+ * ¿La URL RESUELTA de este enlace es la del paso? Pura.
+ *
+ * Existe porque la página decidía adónde llevaba el clic automático: las pistas
+ * de `locatorPlan` ordenan qué enlace se prefiere, y las que van por nombre
+ * (`role-name`, `text-link`) ni miran la dirección, así que un enlace sembrado
+ * en el cuerpo de una página —que cualquiera que la edite puede poner— acababa
+ * pulsado si decía el título del paso o llevaba su ruta en la consulta
+ * (revisión adversaria de H28, D3, reproducido en Chromium). El ejecutor la
+ * mira justo antes de pulsar un enlace (`_presentAndClick`): si no lleva al
+ * paso, no se pulsa y el service worker navega por la URL del índice (§8.3).
+ *
+ * Mira la ruta y los parámetros, nunca el href crudo. Vale:
+ *  - la ruta del paso, cuando identifica la página (con slug: la misma regla
+ *    que da las pistas por ruta en `hrefDescriptors`; `viewpage.action` a secas
+ *    es la ruta de TODAS las páginas de un Data Center);
+ *  - y, por tipo, el id del paso en su sitio de la ruta, con frontera:
+ *    `/pages/<id>` (con o sin slug) o `/viewpage.action` con ese `pageId`;
+ *    `/spaces|display/<clave>` (con `/overview` o `/home`); `/browse/<clave>`;
+ *    `/projects/<clave>` y lo que cuelgue de él.
+ * Mismo origen y http(s), como en `isSafeToClick`.
+ */
+export function llevaAlPaso(step, href, origin) {
+  let url
+  try {
+    url = new URL(String(href ?? ''), baseUrl(origin))
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') return false
+    if (origin && url.origin !== new URL(origin).origin) return false
+  } catch {
+    return false
+  }
+  const ruta = url.pathname.replace(/\/+$/, '')
+
+  const porRuta = hrefDescriptors(step).find((d) => d.by === 'href-path')
+  if (porRuta && rutaDe(porRuta.value, url.href) === ruta) return true
+
+  const id = String(step?.id ?? '')
+  if (!id) return false
+  const ID = literal(id)
+  switch (step?.kind) {
+    case 'confluence-page':
+      return (
+        new RegExp('/pages/' + ID + '(?:/[^/]*)?$').test(ruta) ||
+        (/\/viewpage\.action$/i.test(ruta) && url.searchParams.get('pageId') === id)
+      )
+    case 'confluence-space':
+      return new RegExp('/(?:spaces|display)/' + ID + '(?:/(?:overview|home))?$', 'i').test(ruta)
+    case 'jira-issue':
+      return new RegExp('/browse/' + ID + '$', 'i').test(ruta)
+    case 'jira-project':
+      return new RegExp('/projects/' + ID + '(?:/.*)?$', 'i').test(ruta)
+    default:
+      return false
+  }
+}
 
 /**
  * El nombre plegado de `el` sin el título de su fila, si `el` es el chevron o
@@ -397,9 +501,9 @@ const VER_PAGINA = /\/pages\/\d+(?:[/?#]|$)|\/viewpage\.action\?(?:[^#]*&)?pageI
  *    casa con cualquier `li` de la página, también los de una cabecera.
  *  - Sólo el chevron (un `<a>` sin dirección o un control con
  *    `aria-expanded`, forma de F9) o el enlace propio (`rowLink`) y, éste,
- *    sólo si lleva a VER la página (`VER_PAGINA`): un «Eliminar» con
- *    `removepage.action?pageId=` en un `li` sería si no «el enlace propio» de
- *    esa fila y su texto, «el título».
+ *    sólo si lleva a VER la página (`llevaAVerPagina`, sobre la URL resuelta):
+ *    un «Eliminar» con `removepage.action?pageId=` en un `li` sería si no «el
+ *    enlace propio» de esa fila y su texto, «el título».
  *  - El título se quita como palabra ENTERA (ni letra ni cifra a los lados):
  *    una página llamada «e» borraría si no las «e» de «delete page».
  *  - Lo que quede se sigue casando por subcadena, y `isMenuTrigger` va detrás:
@@ -413,7 +517,7 @@ function sinTituloDeLaFila(el, nombre, container) {
   if (!fila || !cont.contains(fila)) return nombre
 
   const chevron = (el.tagName === 'A' && !el.getAttribute('href')) || !!el.matches?.('[aria-expanded]')
-  const propio = el === rowLink(fila) && VER_PAGINA.test(el.getAttribute('href') || '')
+  const propio = el === rowLink(fila) && llevaAVerPagina(el.getAttribute('href'))
   if (!chevron && !propio) return nombre
 
   const titulo = foldLabel(rowTitle(fila))

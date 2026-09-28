@@ -11,8 +11,9 @@
 import { Overlay } from './overlay/overlay.js'
 import { resolveAnchor, rangeRect, imagesWithin } from './anchor.js'
 import { pageDigest, resolveBlockQuote, digestScope, resolveScopedQuote } from './digest.js'
-import { locateStep, isSafeToClick, clickableAncestor, treeToggleFor, isExpanded } from './locators.js'
+import { locateStep, isSafeToClick, llevaAlPaso, clickableAncestor, treeToggleFor, isExpanded } from './locators.js'
 import { treeContainer, expandersIn, rowFor } from './tree-dom.js'
+import { pageIdFromDom } from './page-id.js'
 import { NAV_TIMING } from '../shared/config.js'
 import {
   waitFor,
@@ -135,7 +136,7 @@ export class NavRunner {
     // vale para los pasos que NAVEGAN. En uno de desplegar, estar en esa
     // página no significa que su rama del árbol esté abierta.
     if (step.action !== 'expand' && isAlreadyHere(step)) {
-      return { status: STEP_RESULT.CLICKED, note: 'ya estábamos aquí' }
+      return { status: STEP_RESULT.CLICKED, note: 'ya estábamos aquí', pageId: pageIdFromDom() }
     }
 
     const desplegando = step.action === 'expand'
@@ -159,7 +160,20 @@ export class NavRunner {
       // plegaba de golpe y el recorrido se quedaba sin base justo a la mitad.
       // El barrido a ciegas y el respaldo se guardan para el destino, que es el
       // único paso que de verdad tiene que llegar.
-      if (desplegando) return { status: STEP_RESULT.SKIPPED, reason: 'esa rama no está en el árbol' }
+      //
+      // Antes de saltarla, UNA mirada al documento entero: `treeContainer()` se
+      // queda con el primer candidato que «parece árbol», y un `[role="tree"]`
+      // de destacados delante del de páginas dejaba la rama fuera (revisión
+      // adversaria de H28, D10, reproducido en Chromium). Lo que salga de ahí
+      // sólo vale si su fila tiene control de desplegar: el enlace del cuerpo o
+      // de la cabecera a esa misma página, que es lo que motivó buscar dentro
+      // del árbol, no tiene rama que abrir. La cancelación ya se miró arriba, y
+      // esto no espera nada.
+      if (desplegando) {
+        const enDoc = locateStep(step, document)
+        if (enDoc && treeToggleFor(enDoc.element)) return this._expandStep(enDoc, { step, index, total, isLast })
+        return { status: STEP_RESULT.SKIPPED, reason: 'esa rama no está en el árbol' }
+      }
 
       const expanded = await this._tryExpandTowards(step)
       // Escape a mitad del barrido: el paso acaba cancelado. Sin esto se
@@ -296,12 +310,15 @@ export class NavRunner {
     }
 
     // Último recurso: pulsar la propia fila. Nunca tras cancelar: suele navegar.
-    // DEUDA para la revisión de H28 (PLAN3 §3.2): este clic NO pasa por
-    // `isSafeToClick`, a diferencia del chevron de arriba. Es la fila que
-    // `treeToggleFor` dio por control de desplegar (`aria-expanded` en la propia
-    // fila, `isRow`), no un elemento que se busque por nombre; pero si una fila
-    // así fuera además una acción, nada lo pararía aquí.
+    // Y nunca sin la barrera, como el chevron de arriba: es la fila que
+    // `treeToggleFor` dio por control (`aria-expanded` en la propia fila,
+    // `isRow`), y una fila «Delete this page» con aria-expanded se pulsaba
+    // (revisión adversaria de H28, D10, reproducido en Chromium). El título de
+    // la fila ya no la bloquea (`isSafeToClick` lo quita, H28); lo que quede
+    // dentro con cara de acción, un «Create» de hover, sí, y se prefiere así:
+    // el teclado ya se probó antes.
     if (toggle.isRow) {
+      if (!isSafeToClick(control, this.origin).ok) return false
       if (this.cancelled) return false
       control.click()
       if (await this._esperaDespliegue(control)) return true
@@ -418,7 +435,10 @@ export class NavRunner {
         // adversaria de H2, 2026-09-14).
         if (this.cancelled) return false
         if (clicks >= maxClicks || Date.now() - t0 > budgetMs) break
-        if (!isSafeToClick(btn, this.origin).ok) continue
+        // Con el contenedor que ya se tiene: sin él la barrera lo vuelve a
+        // buscar por cada candidato, y con el DOM cambiando a mitad del barrido
+        // podía dar con otro (revisión adversaria de H28, D10).
+        if (!isSafeToClick(btn, this.origin, { container }).ok) continue
 
         tried.add(btn)
 
@@ -497,6 +517,16 @@ export class NavRunner {
       this.overlay.hideSpot()
       return { status: STEP_RESULT.NAVIGATE, reason: safe.reason }
     }
+    // Un enlace sólo se pulsa si su URL RESUELTA es la del paso: la página no
+    // decide adónde lleva el clic (§8.3, §8.12). Las pistas que lo encontraron
+    // ordenan, no autorizan: una por nombre ni mira la dirección, y un enlace
+    // sembrado en el cuerpo ganaba (revisión adversaria de H28, D3,
+    // reproducido en Chromium). Si no lleva al paso, el service worker navega
+    // por la URL del índice.
+    if (safe.kind === 'enlace' && !llevaAlPaso(step, target.getAttribute('href'), this.origin)) {
+      this.overlay.hideSpot()
+      return { status: STEP_RESULT.NAVIGATE, reason: 'el enlace de la página no lleva a ese destino' }
+    }
 
     target.click()
     this.overlay.hideCard()
@@ -507,7 +537,13 @@ export class NavRunner {
       maxMs: this.timing.settleMaxMs ?? NAV_TIMING.settleMaxMs,
     })
 
-    return { status: STEP_RESULT.CLICKED, url: location.href }
+    // Contesta la página que PULSÓ: en un Data Center el clic en el árbol es
+    // una carga entera, y la vieja se da por quieta antes de morir, con su URL.
+    // En un DC `/display/…` la URL no lleva el id, así que va también el de la
+    // página que contesta: con los dos, el service worker sabe si ya está en el
+    // destino o tiene que esperar el aviso del destino (revisión adversaria de
+    // H28, D1, reproducido en Chromium).
+    return { status: STEP_RESULT.CLICKED, url: location.href, pageId: pageIdFromDom() }
   }
 
   _presentCard({ step, index, total, rect, isLast, pause, strategy, accion }) {

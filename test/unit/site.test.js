@@ -190,6 +190,34 @@ test('samePage: lo que no es una URL no casa con nada', () => {
   eq(samePage('no-es-una-url', 'no-es-una-url'), true, 'idénticas sí, sin mirar más')
 })
 
+// --- ¿es la misma búsqueda de Jira? ---------------------------------------
+// Revisión adversaria de H28 (D4): una búsqueda de Jira no tiene id ni clave, y
+// `samePage` cae ahí en origen y ruta, que es la de TODAS las búsquedas
+// (`/issues/`). «Llévame» a otra búsqueda daba «ya estoy» y no se movía, y la
+// vista de detalle de la misma (`/browse/K-1?jql=…`, que un Data Center pone al
+// abrir la primera) no «llegaba» nunca. Lo que identifica una búsqueda es su
+// consulta.
+
+import { sameSearch } from '../../src/atlassian/site.js'
+
+const JIRA_DC = 'https://jira.simplprogramme.eu'
+const conJql = (ruta, jql, resto = '') => JIRA_DC + ruta + '?jql=' + encodeURIComponent(jql) + resto
+
+test('H28 rev: sameSearch compara el origen y la jql, en cualquier ruta', () => {
+  const misma = conJql('/issues/', 'project = SIMPL')
+  eq(sameSearch(misma, conJql('/issues/', 'project = SIMPL')), true)
+  eq(sameSearch(misma, conJql('/issues/', 'project   =\n SIMPL ')), true, 'con los espacios plegados')
+  eq(sameSearch(misma, JIRA_DC + '/issues/?jql=project+%3D+SIMPL'), true, 'con «+» por espacio, como la reescribe Jira')
+  eq(sameSearch(misma, conJql('/browse/SIMPL-31748', 'project = SIMPL')), true, 'la vista de detalle de la misma búsqueda')
+  eq(sameSearch(misma, conJql('/issues/', 'project = SIMPL', '&selectedIssue=SIMPL-9')), true, 'con la incidencia elegida detrás')
+  eq(sameSearch(misma, conJql('/issues/', 'project = OPS')), false, 'otra consulta es otra búsqueda')
+  eq(sameSearch(misma, 'https://otro.example' + '/issues/?jql=' + encodeURIComponent('project = SIMPL')), false, 'la misma consulta en otro sitio, no')
+  eq(sameSearch(JIRA_DC + '/issues/', JIRA_DC + '/issues/'), false, 'sin jql no hay búsqueda que comparar, aunque la ruta sea la misma')
+  eq(sameSearch(misma, JIRA_DC + '/issues/'), false, 'ni con una sola')
+  eq(sameSearch(JIRA_DC + '/issues/?jql=%20', JIRA_DC + '/issues/?jql=+'), false, 'una jql en blanco no es una búsqueda')
+  eq([sameSearch('', misma), sameSearch(null, null), sameSearch('no-es-una-url', 'no-es-una-url')], [false, false, false], 'lo que no es una URL no casa con nada')
+})
+
 // --- SEGURIDAD: las claves entran en el prompt como palabras de Faro -------
 
 test('SEGURIDAD: una clave o un proyecto con cualquier cosa dentro no se acepta', () => {

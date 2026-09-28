@@ -425,6 +425,15 @@ Veintiuna decisiones que sostienen el diseño:
    demás de la fila («Delete page», «Mover», el «···») y todo lo de fuera del
    árbol se vigila igual que siempre.
 
+   Y desde la revisión de H28 un enlace sólo se pulsa si lleva de verdad al
+   paso: se mira adónde va una vez resuelto (su ruta, o el id de la página en
+   su sitio de la ruta), no el texto del enlace. Un enlace metido en el cuerpo
+   de una página, que cualquiera que la edite puede poner, ya no le gana al del
+   árbol por «acabar en» la ruta del paso dentro de su consulta
+   (`/logout.action?x=/spaces/…/pages/5/…`) ni por llevar el mismo número de
+   página en otra ruta; si el que se encontró no lleva al paso, no se pulsa y
+   Faro va por la URL del índice.
+
 9. **El foco guía; el subrayado señala.** El oscurecido sirve mientras te lleva
    por el árbol, donde hay que ver adónde va el siguiente clic. Una vez has
    llegado, tapa justo lo que has venido a leer: ahí el fragmento se subraya y
@@ -810,7 +819,7 @@ cuáles no), que desde H16 son tuyos y no de un sitio.
 ## Comprobaciones
 
 ```bash
-npm run check              # sintaxis + orden + manifest + 1707 pruebas unitarias + docs
+npm run check              # sintaxis + orden + manifest + 1730 pruebas unitarias + docs
 npm run check:docs         # sólo el paso docs: número de pruebas, títulos del registro, mensajes y ficheros del mapa
 npm run test:integration   # contra un opencode real que arranca la propia prueba
 npm run harness            # banco de pruebas visual en http://127.0.0.1:5175
@@ -1330,7 +1339,14 @@ Un análisis que no ha podido marcar la página, o que acaba cuando ya estás en
 otra pestaña, lo dice bajo la respuesta en vez de pintar las observaciones como
 «no encontradas»; un salto a una página que no avisa de que cargó se abandona
 a los 12 s con su motivo, y «Llévame» entre dos páginas `viewpage.action` de un
-Data Center ya no se queda quieto. El registro se rehace solo al instalar o actualizar Faro y cada vez
+Data Center ya no se queda quieto. Desde su revisión, el último clic de un «Paso
+a paso» en un Data Center, que recarga la página, ya no subraya en la página de
+la que salías: espera a que avise la de destino; «Llévame» sin permiso sobre el
+dominio te lleva y dice, en ámbar, que no puede resaltar (antes acababa a los
+12 s en «Navegación detenida» con la pestaña ya en su sitio), y si la pestaña
+acaba en otra página, un login por ejemplo, lo dice sin mandarte a recargar;
+«Llévame» a un proyecto de Jira (`/browse/CLAVE`) llega aunque Jira lo abra en
+su resumen, y de una búsqueda a otra navega. El registro se rehace solo al instalar o actualizar Faro y cada vez
 que das o quitas un permiso, así que recargar la extensión no debería volver a
 pedírtelo (probado en Node; en Chrome se comprueba en H30).
 
@@ -1513,7 +1529,7 @@ src/
     overlay/rects.js        funde por línea y recorta a su caja (puro)
     overlay/cursor.js       el cursor de «Señalar»: un subrayador azul, en una imagen data: y no en un fichero de la extensión (puro)
     tree-dom.js             qué es el árbol, una fila, su control y su título · diagnóstico
-    locators.js             cascada href → rol → texto + lista blanca de clics (el título de una fila del árbol no cuenta como acción)
+    locators.js             cascada href → rol → texto + lista blanca de clics (el título de una fila del árbol no cuenta como acción; un enlace sólo se pulsa si lleva al paso)
     picker.js               modo de selección: subrayar texto, elegir imágenes
     pick-payload.js         lo que viaja de esa selección (puro)
     runner.js               ejecutor de un paso

@@ -81,6 +81,17 @@ test('H28: el service worker abandona un salto sin aviso a los NAV_TIMING.anchor
   assert(NAV_TIMING.anchorStallMs > NAV_TIMING.stepStallMs, 'una carga entera de página se espera más que un paso en el árbol')
 })
 
+test('H28 rev: la pausa tras un clic es NAV_TIMING.afterClickMs, no un 420 suelto', () => {
+  // Revisión adversaria de H28 (D1): el service worker esperaba 420 ms fijos
+  // tras cada clic antes de seguir, y ningún pin lo vigilaba. Ese margen sólo
+  // cubre a una SPA que cambia de vista sin recargar; la recarga de verdad del
+  // último clic (un Data Center) la termina el aviso de la página de destino.
+  const sw = read('src/background/service-worker.js')
+  assert(/await new Promise\(\(r\) => setTimeout\(r, NAV_TIMING\.afterClickMs\)\)/.test(sw), 'advanceAfterNavigation lee NAV_TIMING.afterClickMs al llamar')
+  assert(!/\b420\b/.test(sw), 'el 420 vive en config.js')
+  assert(NAV_TIMING.afterClickMs < NAV_TIMING.stepStallMs, 'el respiro de después de un clic es mucho menos que abandonar un paso')
+})
+
 test('cada clave de NAV_TIMING la lee algún fuente de src/ además de config.js', () => {
   const fuentes = listJsFiles(join(ROOT, 'src'))
     .filter((f) => relative(ROOT, f).replace(/\\/g, '/') !== 'src/shared/config.js')

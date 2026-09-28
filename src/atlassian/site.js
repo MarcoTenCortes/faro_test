@@ -463,6 +463,33 @@ export function samePage(a, b) {
   }
 }
 
+/**
+ * ¿Estas dos direcciones son la misma búsqueda de Jira? Pura.
+ *
+ * Una búsqueda no tiene id ni clave, y `samePage` cae ahí en origen y ruta,
+ * que es la de TODAS las búsquedas (`/issues/`): con la pestaña en una,
+ * «Llévame» a otra daba «ya estoy» y no se movía (revisión adversaria de H28,
+ * D4; venía de `sameDoc`). Y al revés, un Data Center reescribe la búsqueda a
+ * la vista de detalle (`/browse/K-1?jql=…`) y Cloud le añade
+ * `&selectedIssue=`: con una clave de un lado y ninguna del otro, `samePage` no
+ * las casaba. Lo que identifica una búsqueda es su consulta: el mismo origen y
+ * la misma `jql`, con los espacios plegados, en cualquier ruta. Sin `jql` (o en
+ * blanco) no hay búsqueda que comparar: false.
+ */
+export function sameSearch(a, b) {
+  const consulta = (url) => {
+    try {
+      const u = new URL(url)
+      return { origin: u.origin, jql: String(u.searchParams.get('jql') || '').replace(/\s+/g, ' ').trim() }
+    } catch {
+      return null
+    }
+  }
+  const A = consulta(a)
+  const B = consulta(b)
+  return !!(A && B && A.jql && A.origin === B.origin && A.jql === B.jql)
+}
+
 /** Ámbito por defecto del indexador para la ubicación actual. */
 export function defaultScope(site) {
   if (!site) return null

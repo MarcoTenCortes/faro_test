@@ -8271,7 +8271,11 @@ test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibu
       '  const acceso = tabId != null && (await ensureContentAccess({ announce: false }))',
       '  const r = acceso',
       '    ? await chrome.tabs.sendMessage(tabId, { type: MSG.ISSUE_LINKS, keys: claves, cloud: sitio.cloud }).catch(() => null)',
-      "    : { ok: false, reason: 'permiso' }",
+      // EL CAMBIO (revisión adversaria de H28, D5): sin acceso porque la pestaña
+      // cambió mientras se comprobaba el script, el Registro decía «permiso».
+      '    : state.tabId !== tabId',
+      "      ? { ok: false, reason: 'pestaña', detail: 'has cambiado de pestaña' }",
+      "      : { ok: false, reason: 'permiso' }",
       '  delete boton.dataset.leyendo',
       '  boton.disabled = false',
       '  if (!figura.isConnected || (state.site?.host ?? state.lastHost) !== host || state.sessionID !== sessionID) {',
@@ -8351,7 +8355,12 @@ test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibu
   for (const captura of ['const sitio = state.site', 'const sessionID = state.sessionID', 'const tabId = state.tabId', 'const indice = state.index']) {
     assert(contraste.indexOf(captura) >= 0 && contraste.indexOf(captura) < primerAwait, 'H25 (§8.22): se captura antes del primer await: ' + captura)
   }
-  assert(!contraste.slice(primerAwait).includes('state.index') && !contraste.slice(primerAwait).includes('state.tabId'), 'H25: detrás del primer await no se vuelve a leer el índice ni la pestaña de ahora')
+  // EL CAMBIO (revisión adversaria de H28, D5): la pestaña de ahora sólo se
+  // COMPARA con la capturada, una vez, para no llamar «permiso» a un cambio de
+  // pestaña; nunca se usa para pedir.
+  const trasElAwait = contraste.slice(primerAwait)
+  eq(trasElAwait.split('state.tabId !== tabId').length - 1, 1, 'H25: la única lectura de la pestaña de ahora es la comparación con la capturada')
+  assert(!trasElAwait.includes('state.index') && !trasElAwait.split('state.tabId !== tabId').join('').includes('state.tabId'), 'H25: detrás del primer await no se vuelve a leer el índice ni la pestaña de ahora')
   orden(
     contraste,
     ['await ensureContentAccess(', 'await chrome.tabs.sendMessage(', '!figura.isConnected', 'state.sessionID !== sessionID', 'if (!r?.ok) {', 'jiraDiagram(diagrama, r)', 'figura.after(figuraJira)'],
@@ -8500,7 +8509,7 @@ test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibu
     }
     env.api = hacer25(
       env.state, { now: () => 0 }, linksFailText, { ok: apunta('ok'), info: apunta('info'), warn: apunta('warn') }, restFailureDue, noticeNode25,
-      (t) => env.anuncios.push(t), async () => acceso, chrome, { ISSUE_LINKS: 'faro:issue-links' },
+      (t) => env.anuncios.push(t), async () => (typeof acceso === 'function' ? acceso(env) : acceso), chrome, { ISSUE_LINKS: 'faro:issue-links' },
       jiraDiagram, resumenJira, () => ({}), () => null, vista, ABRIR, COPIAR, () => 'flowchart LR', KIND, documento, JIRA_REST_LIMITS, clavesDelIndice, failReason
     )
     env.contrastar = () => env.api.contrastarConJira(DIAGRAMA, env.figura, env.boton)
@@ -8623,6 +8632,10 @@ test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibu
     for (const [caso, opciones, texto] of [
       ['sin pestaña', { tabId: null }, 'Sin acceso a la pestaña de Jira.'],
       ['sin content script', { acceso: false }, 'Sin acceso a la pestaña de Jira.'],
+      // Revisión adversaria de H28, D5: la pestaña que cambia mientras se
+      // comprueba el script no es «permiso» (el panel se queda en el sitio: el
+      // correo deja `lastHost`).
+      ['la pestaña cambió mientras se comprobaba', { acceso: (e) => ((e.state.tabId = 8), false) }, 'No he podido leer las relaciones de Jira (has cambiado de pestaña).'],
       ['las lecturas apagadas después', { restTools: false }, 'No he podido leer las relaciones de Jira (las lecturas por la API están apagadas en Ajustes).'],
       ['la pestaña en Jira Cloud', { site: { host: 'x.atlassian.net', product: 'jira', cloud: true } }, 'En Jira Cloud no leo relaciones por la API (todo va por el MCP).'],
       ['la pestaña en Confluence', { site: { host: 'wiki.example.com', product: 'confluence', cloud: false } }, 'No he podido leer las relaciones de Jira (la pestaña no es de un Jira Data Center).'],
@@ -8631,6 +8644,15 @@ test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibu
       await e.contrastar()
       eq(e.enviados.length, 0, caso + ': no sale ninguna petición')
       eq(avisos(e), ['notice bad dg-aviso: ' + texto], caso + ': y se dice')
+    }
+    {
+      // Y en el Registro, con su código y no con el del permiso (D5).
+      const e = montar({ acceso: (x) => ((x.state.tabId = 8), false) })
+      await e.contrastar()
+      eq(e.registros.map(([, , d]) => d.split(' · ')[0]), ['pestaña'], 'la pestaña cambiada, con su código')
+      const p = montar({ acceso: false })
+      await p.contrastar()
+      eq(p.registros.map(([, , d]) => d.split(' · ')[0]), ['permiso'], 'y el permiso, con el suyo')
     }
     const pocas = montar({ respuesta: { ...RESPUESTA, nodes: RESPUESTA.nodes.slice(0, 1) } })
     await pocas.contrastar()
@@ -9074,11 +9096,14 @@ test('H27: un content script roto se registra como “Content script roto” y n
   // el script de ESTA pestaña roto, la tarjeta pediría un permiso que ya está
   // dado. showPermissionNotice lo cambia por el aviso de recargar antes de
   // pintar nada; la tarjeta en sí no cambia (el espejo la copia).
+  // EL CAMBIO (revisión adversaria de H28, D5): sin sitio no hay tarjeta, y va
+  // lo primero: con la pestaña fuera de Atlassian, `state.site.host` lanzaba.
   const permiso = h27Funcion('function showPermissionNotice(')
   h27Una(
     permiso,
     h27Lineas(
       'function showPermissionNotice() {',
+      '  if (!state.site) return',
       '  if (state.contentProblem?.tabId === state.tabId && state.contentProblem?.host === state.site?.host) {',
       '    showContentProblem()',
       '    return',
@@ -9152,9 +9177,16 @@ test('H27: un content script roto se registra como “Content script roto” y n
   // que sólo desvía al motivo si el problema apuntado es de ESTA pestaña:
   // showContentProblem a secas, con el permiso de verdad sin dar, diría
   // «motivo desconocido» en lugar de ofrecer «Dar permiso».
+  // EL CAMBIO (revisión adversaria de H28, D5): antes, la pestaña cambiada
+  // mientras se comprobaba, que no es un permiso que falte.
   h27Una(
     h27Funcion('async function runPlan('),
-    h27Lineas('  const puede = await ensureContentAccess({ announce: false })', '  if (!puede) {', '    showPermissionNotice()'),
+    h27Lineas('  const puede = await ensureContentAccess({ announce: false })', '  if (!puede && state.tabId !== tabId) {'),
+    'runPlan mira primero si la pestaña cambió'
+  )
+  h27Una(
+    h27Funcion('async function runPlan('),
+    h27Lineas('  } else if (!puede) {', '    showPermissionNotice()'),
     'runPlan pide el permiso por showPermissionNotice'
   )
   h27Una(
@@ -9175,7 +9207,7 @@ test('H27: un content script roto se registra como “Content script roto” y n
   )
 })
 
-test('H27: “Señalar” dice la causa', () => {
+test('H27: “Señalar” dice la causa', async () => {
   // Visto el 2026-09-28 (PLAN3 §2, B4): «No he podido activar la selección en
   // esta pestaña. Recárgala y vuelve a intentarlo.» salía igual si la pestaña
   // no contestaba que si el content script contestaba diciendo por qué no
@@ -9185,6 +9217,9 @@ test('H27: “Señalar” dice la causa', () => {
   // sólo con un `ok`.
   // EL CAMBIO (H28, D2): el PICK_START va a la pestaña capturada al pulsar, la
   // que comprobó ensureContentAccess, y no a la que haya al volver (§8.22).
+  // EL CAMBIO (revisión adversaria de H28, D5): con la pestaña cambiada
+  // mientras se comprobaba, se dice y no sale la tarjeta del permiso (era la de
+  // la pestaña nueva, o un TypeError fuera de Atlassian).
   eq(
     h27Funcion('async function togglePick('),
     h27Lineas(
@@ -9193,6 +9228,11 @@ test('H27: “Señalar” dice la causa', () => {
       '  if (!state.site || !state.tabId) return',
       '  const tabId = state.tabId',
       '  const puede = await ensureContentAccess({ announce: false })',
+      '  if (!puede && state.tabId !== tabId) {',
+      "    log.info('Señalar sin activar', 'has cambiado de pestaña')",
+      "    showNotice('Has cambiado de pestaña: vuelve a ella y pulsa otra vez.', true)",
+      '    return',
+      '  }',
       '  if (!puede) {',
       '    showPermissionNotice()',
       '    return',
@@ -9216,6 +9256,33 @@ test('H27: “Señalar” dice la causa', () => {
   )
   assert(!JS.includes('No he podido activar la selección en esta pestaña.'), 'el aviso de antes, que valía para todo, ya no está')
   eq(H27_LIMPIO.split('setPicking(true)').length - 1, 1, '«Señalar» sólo se enciende en togglePick')
+
+  // EJECUTADA (revisión adversaria de H28, D5): la pestaña cambia a una que no
+  // es de Atlassian mientras el service worker contesta.
+  const pulsar = async (acceso) => {
+    const { registros, log } = h28Registro()
+    const env = { registros, avisos: [], permiso: 0, pedidos: [] }
+    env.state = { picking: false, site: { host: 'conf.example' }, tabId: 3 }
+    const toggle = new Function(
+      'state', 'stopPick', 'ensureContentAccess', 'showPermissionNotice', 'showNotice', 'log', 'chrome', 'MSG', 'setPicking',
+      h27Funcion('async function togglePick(') + '\nreturn togglePick'
+    )(
+      env.state, () => env.pedidos.push('parado'), async () => acceso(env.state), () => env.permiso++, (t, bad) => env.avisos.push([t, !!bad]), log,
+      { tabs: { sendMessage: async (id, m) => (env.pedidos.push([id, m.type]), { ok: true }) } }, { PICK_START: 'señalar' }, () => env.pedidos.push('encendido')
+    )
+    await toggle()
+    return env
+  }
+  const fuera = await pulsar((s) => ((s.tabId = 4), (s.site = null), false))
+  eq(
+    [fuera.registros, fuera.avisos, fuera.permiso, fuera.pedidos],
+    [[['info', 'Señalar sin activar', 'has cambiado de pestaña']], [['Has cambiado de pestaña: vuelve a ella y pulsa otra vez.', true]], 0, []],
+    'se dice, sin tarjeta del permiso y sin pedirle nada a ninguna pestaña'
+  )
+  const sinPermiso = await pulsar(() => false)
+  eq([sinPermiso.permiso, sinPermiso.avisos, sinPermiso.pedidos], [1, [], []], 'en la misma pestaña, la tarjeta del permiso como siempre')
+  const bien = await pulsar(() => true)
+  eq(bien.pedidos, [[3, 'señalar'], 'encendido'], 'y con acceso, a la pestaña de la pulsación')
 })
 
 test('H27: el comentario del gesto dice la verdad', () => {
@@ -9377,10 +9444,25 @@ test('H28: cambiar de pestaña a mitad del análisis se dice', () => {
 
   const notas = h27Funcion('async function offerNotes(')
   h27Una(notas, '\n    esDiagrama = false,\n    tabIdAlPedir = null,\n    sitioAlPedir = null,\n  } = {}\n', 'dos opciones, a null: sin ellas no hay con qué comparar y no se marca')
+  // EL CAMBIO (revisión adversaria de H28, D5): lo que se dice vive en UNA
+  // función, porque offerNotes también llega ahí cuando la pestaña cambia
+  // mientras se comprueba el script (lo pina «H28 (D2)», (11)).
+  const aviso = h27Funcion('function avisarCambioDePestana(')
+  eq(
+    aviso,
+    h27Lineas(
+      'function avisarCambioDePestana(bubble) {',
+      "  log.info('Sin marcas', 'has cambiado de pestaña o de sitio: no marco nada')",
+      "  attachToBubble(bubble, noticeNode('Has cambiado de pestaña o de sitio: no he marcado nada. Vuelve a la página y pide el análisis otra vez.', true))",
+      '}'
+    ),
+    'avisarCambioDePestana: el «Sin marcas» y su aviso, juntos'
+  )
+  eq(H27_LIMPIO.split('avisarCambioDePestana(').length - 1, 3, 'la función y sus dos llamadas, las dos de offerNotes')
+  assert(JS.indexOf('function avisarCambioDePestana(') < JS.indexOf('async function offerNotes('), 'delante de offerNotes: fuera del trozo offerNotes→notesCard')
   const guarda = h27Lineas(
     '  if (!state.site || state.tabId !== tabIdAlPedir || state.site.host !== sitioAlPedir?.host || !state.client) {',
-    "    log.info('Sin marcas', 'has cambiado de pestaña o de sitio: no marco nada')",
-    "    attachToBubble(bubble, noticeNode('Has cambiado de pestaña o de sitio: no he marcado nada. Vuelve a la página y pide el análisis otra vez.', true))",
+    '    avisarCambioDePestana(bubble)',
     '    return',
     '  }'
   )
@@ -9392,7 +9474,7 @@ test('H28: cambiar de pestaña a mitad del análisis se dice', () => {
   const salir = (state, tabId, sitio) => {
     const { registros, log } = h28Registro()
     const colgados = []
-    const sigue = new Function('state', 'tabIdAlPedir', 'sitioAlPedir', 'log', 'attachToBubble', 'noticeNode', 'bubble', guarda + "\n  return 'sigue'")(
+    const sigue = new Function('state', 'tabIdAlPedir', 'sitioAlPedir', 'log', 'attachToBubble', 'noticeNode', 'bubble', aviso + '\n' + guarda + "\n  return 'sigue'")(
       state,
       tabId,
       sitio,
@@ -9457,9 +9539,12 @@ test('H28: los motivos de una lectura fallida llegan al registro', () => {
       "      return falla(failReason(r, 'sin respuesta'), `No he podido leer el árbol de ${host} por su API: ${failReason(r, 'la pestaña no contestó')}.`)",
     ],
     ['async function fetchTodayTarget(', "        reason: failReason(r, 'sin respuesta'),"],
+    // Revisión adversaria de H28 (D7): el paso que la página no pudo ejecutar y
+    // el service worker sigue por URL; su motivo no llegaba ni al Registro.
+    ['function onRuntimeMessage(', "    if (msg.reason) log.warn('Asistida bloqueada', 'paso ' + (msg.index + 1) + ': ' + failReason({ error: msg.reason }, 'sin motivo') + ' · sigo por URL')"],
   ]
   for (const [firma, linea] of sitios) h27Una(h27Funcion(firma), '\n' + linea + '\n', firma.replace(/^(async )?function /, ''))
-  eq(H27_LIMPIO.split('failReason(').length - 1, 16, 'los quince sitios (restIndexFor, con dos) y nadie más')
+  eq(H27_LIMPIO.split('failReason(').length - 1, 17, 'los dieciséis sitios (restIndexFor, con dos) y nadie más')
   // Y lo de antes, en ningún sitio: cada una de estas se tragaba el `error`.
   for (const viejo of [
     "r?.reason || 'la pestaña no contestó'",
@@ -9498,11 +9583,18 @@ test('H28 (D2): con el content script roto, ningún sitio dice «sin permiso»',
 
   // (1) showSourcesScreen: con motivo, NO sale el botón de permiso (pediría uno
   // que ya está): el motivo, «Recarga la pestaña» y lo que queda, el índice.
+  // EL CAMBIO (revisión adversaria de H28, D5): antes del motivo, la pestaña
+  // cambiada mientras se comprobaba, que ni es permiso ni es script roto; y el
+  // texto del permiso con el host capturado (el de después lanzaba sin sitio).
   const fuentes = h27Funcion('async function showSourcesScreen(')
   const rotaFuentes = h27Lineas(
     '  const tabId = state.tabId',
     '  const host = state.site.host',
     '  const puede = await ensureContentAccess({ announce: false })',
+    '  if (!puede && state.tabId !== tabId) {',
+    "    setSourcesStatus('Has cambiado de pestaña: vuelve a ella y abre otra vez esta pantalla para buscar en Confluence.')",
+    '    return',
+    '  }',
     "  const roto = puede ? '' : sinAccesoMotivo(state.contentProblem, { tabId, host })",
     '  if (roto) {',
     '    const n = Object.keys(state.index?.pages || {}).length',
@@ -9514,9 +9606,11 @@ test('H28 (D2): con el content script roto, ningún sitio dice «sin permiso»',
     '    return',
     '  }',
     '  if (!puede) {',
-    "    $('sources-perm').classList.remove('hidden')"
+    "    $('sources-perm').classList.remove('hidden')",
+    "    $('sources-perm-text').textContent = `Sin permiso sobre ${host} sólo busco en lo que ya tengo indexado.`"
   )
   h27Una(fuentes, rotaFuentes, 'showSourcesScreen: el script roto no enseña el botón del permiso')
+  assert(!fuentes.includes('state.site.host', fuentes.indexOf('await ensureContentAccess(')), 'showSourcesScreen: nada lee state.site.host después de comprobar el script')
 
   // (2) Las sugeridas de esa pantalla.
   h27Una(
@@ -9532,6 +9626,7 @@ test('H28 (D2): con el content script roto, ningún sitio dice «sin permiso»',
   )
 
   // (3) El diagnóstico del árbol, en Ajustes.
+  // EL CAMBIO (revisión adversaria de H28, D5): la pestaña cambiada, antes.
   h27Una(
     h27Funcion('async function treeDebug('),
     h27Lineas(
@@ -9539,6 +9634,10 @@ test('H28 (D2): con el content script roto, ningún sitio dice «sin permiso»',
       '  const host = state.site?.host',
       '  const puede = await ensureContentAccess({ announce: false })',
       '  if (!puede) {',
+      '    if (state.tabId !== tabId) {',
+      "      status.textContent = 'Has cambiado de pestaña: vuelve a ella y pulsa otra vez.'",
+      '      return',
+      '    }',
       '    const roto = sinAccesoMotivo(state.contentProblem, { tabId, host })',
       '    status.textContent = roto',
       '      ? `No puedo leer la barra lateral (${roto}). Recarga la pestaña.`',
@@ -9550,10 +9649,16 @@ test('H28 (D2): con el content script roto, ningún sitio dice «sin permiso»',
   )
 
   // (4) La lista de una búsqueda de Jira (rama «permiso»), con la pestaña capturada.
+  // EL CAMBIO (revisión adversaria de H28, D5): la pestaña cambiada mientras se
+  // comprobaba decía «sin permiso» en la tarjeta; ahora dice lo que pasó.
   h27Una(
     h27Funcion('async function attachJqlResults('),
     h27Lineas(
       '  if (tabId == null || !(await ensureContentAccess({ announce: false }))) {',
+      '    if (tabId != null && state.tabId !== tabId) {',
+      "      fallo('pestaña', 'No he leído la lista: has cambiado de pestaña.')",
+      '      return null',
+      '    }',
       '    const roto = sinAccesoMotivo(state.contentProblem, { tabId, host: site.host })',
       "    fallo('permiso', roto ? `No puedo leer la lista (${roto}): recarga la pestaña.` : `No puedo leer la lista sin permiso sobre ${site.host}.`)",
       '    return null',
@@ -9563,11 +9668,13 @@ test('H28 (D2): con el content script roto, ningún sitio dice «sin permiso»',
   )
 
   // (5) El índice por la API: el árbol de Confluence y la muestra de Jira.
+  // EL CAMBIO (revisión adversaria de H28, D5): con la pestaña cambiada, se dice.
   const indice = h27Funcion('async function restIndexFor(')
   h27Una(
     indice,
     h27Lineas(
       '    if (tabId == null || !(await ensureContentAccess({ announce: false }))) {',
+      "      if (tabId != null && state.tabId !== tabId) return falla('pestaña', `No he leído el árbol de ${host}: has cambiado de pestaña.`)",
       '      const roto = sinAccesoMotivo(state.contentProblem, { tabId, host })',
       "      return falla('permiso', roto ? `No puedo leer el árbol de ${host} (${roto}): recarga la pestaña.` : `No puedo leer el árbol sin permiso sobre ${host}.`)",
       '    }'
@@ -9578,6 +9685,7 @@ test('H28 (D2): con el content script roto, ningún sitio dice «sin permiso»',
     indice,
     h27Lineas(
       '    if (tabId == null || !(await ensureContentAccess({ announce: false }))) {',
+      "      if (tabId != null && state.tabId !== tabId) return falla('pestaña', `No he contado la muestra de ${host}: has cambiado de pestaña.`)",
       '      const roto = sinAccesoMotivo(state.contentProblem, { tabId, host })',
       "      return falla('permiso', roto ? `No puedo contar la muestra de ${host} (${roto}): recarga la pestaña.` : `No puedo contar la muestra sin permiso sobre ${host}.`)",
       '    }'
@@ -9586,10 +9694,12 @@ test('H28 (D2): con el content script roto, ningún sitio dice «sin permiso»',
   )
 
   // (6) «Qué mirar hoy»: el motivo en `detail`, y el texto de Confluence lo enseña.
+  // EL CAMBIO (revisión adversaria de H28, D5): la pestaña cambiada no es permiso.
   h27Una(
     h27Funcion('async function readToday('),
     h27Lineas(
       '  if (tabId == null || !(await ensureContentAccess({ announce: false }))) {',
+      "    if (tabId != null && state.tabId !== tabId) return { ok: false, reason: 'pestaña', detail: 'has cambiado de pestaña' }",
       '    const roto = sinAccesoMotivo(state.contentProblem, { tabId, host: target.host })',
       "    return { ok: false, reason: 'permiso', detail: roto || `sin permiso sobre ${target.host}` }",
       '  }'
@@ -9612,12 +9722,25 @@ test('H28 (D2): con el content script roto, ningún sitio dice «sin permiso»',
   eq(hoyTexto({ product: 'confluence', host: 'conf.example', reason: 'permiso', detail: 'el content script no arranca: x' }), 'No puedo leer lo último de conf.example: el content script no arranca: x.')
   eq(hoyTexto({ product: 'confluence', host: 'conf.example', reason: 'permiso', detail: 'sin permiso sobre conf.example' }), 'No puedo leer lo último de conf.example: sin permiso sobre conf.example.')
   eq(hoyTexto({ product: 'confluence', host: 'conf.example', reason: 'permiso' }), 'No puedo leer lo último de conf.example: sin permiso sobre ese dominio.', 'una caché de antes, sin detail')
+  eq(
+    hoyTexto({ product: 'confluence', host: 'conf.example', reason: 'pestaña', detail: 'has cambiado de pestaña' }),
+    'No he podido leer lo último de Confluence en conf.example: has cambiado de pestaña.',
+    'la pestaña cambiada, sin hablar de permisos (D5)'
+  )
 
   // (7) offerNotes y runPlan: el Registro, con la pestaña y el sitio que miraron.
+  // EL CAMBIO (revisión adversaria de H28, D5): antes de culpar al permiso, la
+  // pestaña o el sitio cambiados mientras el service worker contestaba; en
+  // runPlan, con el host capturado junto a la pestaña (el de después del await
+  // podía ser null y el registro lanzaba).
   h27Una(
     h27Funcion('async function offerNotes('),
     h27Lineas(
       '  if (!(await ensureContentAccess({ announce: false }))) {',
+      '    if (state.tabId !== tabIdAlPedir || state.site?.host !== sitioAlPedir?.host) {',
+      '      avisarCambioDePestana(bubble)',
+      '      return',
+      '    }',
       "    log.warn('Sin marcas', sinAccesoMotivo(state.contentProblem, { tabId: tabIdAlPedir, host: sitioAlPedir.host }) || 'falta permiso en ' + sitioAlPedir.host)",
       '    showPermissionNotice()',
       '    return',
@@ -9630,31 +9753,54 @@ test('H28 (D2): con el content script roto, ningún sitio dice «sin permiso»',
     correr,
     h27Lineas(
       '  const tabId = state.tabId',
+      '  const host = state.site?.host',
       '  const puede = await ensureContentAccess({ announce: false })',
-      '  if (!puede) {',
+      '  if (!puede && state.tabId !== tabId) {',
+      "    if (mode === 'assisted') {",
+      "      const aviso = 'Has cambiado de pestaña: vuelve a ella y pulsa otra vez.'",
+      '      card.appendChild(noticeNode(aviso, true))',
+      '      announce(aviso)',
+      "      log.warn('Asistida bloqueada', 'has cambiado de pestaña')",
+      '      return',
+      '    }',
+      '  } else if (!puede) {',
       '    showPermissionNotice()',
       "    if (mode === 'assisted') {",
-      "      log.warn('Asistida bloqueada', sinAccesoMotivo(state.contentProblem, { tabId, host: state.site.host }) || 'falta permiso en ' + state.site.host)",
+      "      log.warn('Asistida bloqueada', sinAccesoMotivo(state.contentProblem, { tabId, host }) || 'falta permiso en ' + host)",
       '      return',
       '    }',
       '  }'
     ),
-    'runPlan: la pestaña del viaje, capturada ANTES de preguntar'
+    'runPlan: la pestaña del viaje y su host, capturados ANTES de preguntar'
   )
   eq(correr.split('const tabId = state.tabId').length - 1, 1, 'una sola captura, la de antes')
+  assert(!correr.includes('state.site.host'), 'runPlan no lee el host del estado de después')
 
   // (8) readPageDigest.
+  // EL CAMBIO (revisión adversaria de H28, D5): la pestaña cambiada, en el Registro.
   h27Una(
     h27Funcion('async function readPageDigest('),
     h27Lineas(
       '  const tabId = state.tabId',
       '  const host = state.site.host',
       '  if (!(await ensureContentAccess({ announce: false }))) {',
-      "    log.info('Página sin bloques', sinAccesoMotivo(state.contentProblem, { tabId, host }) || 'falta permiso')",
+      "    log.info('Página sin bloques', state.tabId !== tabId ? 'has cambiado de pestaña' : sinAccesoMotivo(state.contentProblem, { tabId, host }) || 'falta permiso')",
       "    return { digest: null, reason: 'permiso' }",
       '  }'
     ),
     'readPageDigest'
+  )
+  // Y la cadena de una página base por la pestaña (revisión adversaria de H28,
+  // D5): el motivo que enseña «Página base sin título», con la pestaña capturada.
+  h27Una(
+    h27Funcion('async function fetchPageChain('),
+    h27Lineas(
+      '  const tabId = state.tabId',
+      '  if (!(await ensureContentAccess({ announce: false }))) {',
+      "    return { ok: false, reason: state.tabId !== tabId ? 'has cambiado de pestaña' : 'sin acceso a la pestaña' }",
+      '  }'
+    ),
+    'fetchPageChain'
   )
 
   // (9) La tarjeta del permiso ya puesta no es un silencio: se dice otra vez,
@@ -9738,6 +9884,131 @@ test('H28 (D2): con el content script roto, ningún sitio dice «sin permiso»',
     const env = armar({ estado: (m, e) => ((e.state.tabId = 4), { granted: true, ready: true, alive: true, error: '' }) })
     eq(await env.api.ensureContentAccess(), false, 'false aunque la de antes estuviera lista')
   }
+
+  // (11) EJECUTADA (revisión adversaria de H28, D5): ese false no dice por qué,
+  // y quien llama con `announce: false` lo leía como «falta permiso». Con la
+  // pestaña nueva fuera de Atlassian (`refreshTab` deja `state.site` a null),
+  // `showPermissionNotice` lanzaba un TypeError que `send()` enseñaba como
+  // «Fallo enviando: …», saltándose el resto del turno; con otra pestaña del
+  // mismo sitio, pintaba la tarjeta del permiso con el permiso dado. Aquí van
+  // de verdad ensureContentAccess, noteContentProblem, showPermissionNotice,
+  // avisarCambioDePestana y la rama del permiso de offerNotes; lo fingido es
+  // chrome, el DOM y los avisos.
+  const ramaPermiso = h27Corte(h27Funcion('async function offerNotes('), '  if (!(await ensureContentAccess({ announce: false }))) {', '\n  if (!digest?.blocks?.length) {')
+  const SITIO = { host: 'conf.example', origin: 'https://conf.example' }
+  const LISTA = { granted: true, ready: true, alive: true, error: '' }
+  const armarNotas = (alContestar) => {
+    const { registros, log } = h28Registro()
+    const env = { registros, colgados: [], chat: [], avisos: [] }
+    env.state = { site: SITIO, tabId: 3, contentProblem: null }
+    const nodo = (tag) => ({
+      tag, className: '', textContent: '', hijos: [],
+      appendChild(n) { this.hijos.push(n); return n },
+      append(...ns) { this.hijos.push(...ns) },
+      addEventListener() {},
+    })
+    const el = {
+      chat: {
+        appendChild: (n) => env.chat.push(n),
+        querySelector: (sel) => (sel === '.perm-card' ? env.chat.find((n) => n.className === 'nav-card perm-card') || null : null),
+      },
+    }
+    const chrome = { runtime: { sendMessage: async (m) => (m.type === 'estado' ? alContestar(env.state) : null) } }
+    env.api = new Function(
+      'state', 'chrome', 'MSG', 'log', 'showContentProblem', 'clearEmpty', 'el', 'showNotice', 'document', 'requestHostPermission',
+      'noticeNode', 'manualPermissionText', 'announce', 'scrollChat', 'attachToBubble', 'sinAccesoMotivo',
+      [
+        h27Funcion('function noteContentProblem('),
+        h27Funcion('async function ensureContentAccess('),
+        h27Funcion('function showPermissionNotice('),
+        h27Funcion('function avisarCambioDePestana('),
+      ].join('\n') +
+        '\nconst rama = async (tabIdAlPedir, sitioAlPedir, bubble) => {\n' + ramaPermiso + "\n  return 'sigue'\n}" +
+        '\nreturn { ensureContentAccess, showPermissionNotice, rama }'
+    )(
+      env.state, chrome, { CONTENT_STATUS: 'estado', REQUEST_HOST_PERMISSION: 'asegurar' }, log, () => env.avisos.push('roto'), () => {}, el,
+      (t, bad) => env.avisos.push([t, !!bad]), { createElement: nodo }, async () => ({ ok: true }), (texto, bad) => ({ texto, bad: !!bad }),
+      () => '', () => {}, () => {}, (b, n) => env.colgados.push(n), sinAccesoMotivo
+    )
+    return env
+  }
+  const tarjetas = (env) => env.chat.filter((n) => n.className === 'nav-card perm-card').length
+  const CAMBIO = {
+    colgados: [{ texto: 'Has cambiado de pestaña o de sitio: no he marcado nada. Vuelve a la página y pide el análisis otra vez.', bad: true }],
+    registros: [['info', 'Sin marcas', 'has cambiado de pestaña o de sitio: no marco nada']],
+    tarjetas: 0,
+  }
+  {
+    // La pestaña nueva, fuera de Atlassian: ni lanza, ni «falta permiso», ni tarjeta.
+    const env = armarNotas((s) => ((s.tabId = 4), (s.site = null), LISTA))
+    eq(await env.api.rama(3, SITIO, {}), undefined, 'offerNotes sale ahí, sin lanzar')
+    eq({ colgados: env.colgados, registros: env.registros, tarjetas: tarjetas(env) }, CAMBIO, 'se dice que se cambió de pestaña, y nada del permiso')
+  }
+  {
+    // Otra pestaña del MISMO sitio: tampoco es la tarjeta del permiso.
+    const env = armarNotas((s) => ((s.tabId = 4), LISTA))
+    await env.api.rama(3, SITIO, {})
+    eq({ colgados: env.colgados, registros: env.registros, tarjetas: tarjetas(env) }, CAMBIO, 'otra pestaña del mismo sitio, igual')
+  }
+  {
+    // La MISMA pestaña, ya en otro sitio sin permiso: la tarjeta sería la de ése.
+    const env = armarNotas((s) => ((s.site = { host: 'otro.example', origin: 'https://otro.example' }), { granted: false, ready: false, alive: false, error: '' }))
+    await env.api.rama(3, SITIO, {})
+    eq({ colgados: env.colgados, registros: env.registros, tarjetas: tarjetas(env) }, CAMBIO, 'la misma pestaña en otro sitio, igual')
+  }
+  {
+    // Control: la misma pestaña, sin permiso de verdad, sigue pidiéndolo.
+    const env = armarNotas(() => ({ granted: false, ready: false, alive: false, error: '' }))
+    await env.api.rama(3, SITIO, {})
+    eq([env.registros, tarjetas(env), env.colgados], [[['warn', 'Sin marcas', 'falta permiso en conf.example']], 1, []], 'sin permiso, la tarjeta de siempre')
+    await env.api.rama(3, SITIO, {})
+    eq(
+      [tarjetas(env), env.avisos],
+      [1, [['Sigue faltando el permiso sobre conf.example: pulsa «Dar permiso» en la tarjeta.', true]]],
+      'una tarjeta por chat, y la segunda vez se dice en corto'
+    )
+  }
+  {
+    // Y showPermissionNotice sin sitio, llamada por quien sea: nada, sin lanzar.
+    const env = armarNotas(() => LISTA)
+    env.state.site = null
+    env.api.showPermissionNotice()
+    eq([env.chat, env.avisos], [[], []], 'sin sitio no hay dominio al que pedirle nada')
+  }
+
+  // showSourcesScreen, desde donde mira el permiso hasta el final: con la
+  // pestaña cambiada ni lanza ni enseña el botón del permiso, y el texto del
+  // permiso lleva el host capturado.
+  const colaFuentes = h27Corte(fuentes, '  const tabId = state.tabId', '\n}')
+  const abrirFuentes = async (acceso) => {
+    const env = { estados: [], dom: {} }
+    env.state = { site: SITIO, tabId: 3, contentProblem: null, index: { pages: { 1: {}, 2: {} } } }
+    const $ = (id) =>
+      (env.dom[id] ||= {
+        textContent: '',
+        oculto: true,
+        classList: { remove: (c) => c === 'hidden' && (env.dom[id].oculto = false), add: (c) => c === 'hidden' && (env.dom[id].oculto = true) },
+      })
+    await new Function('state', 'ensureContentAccess', 'setSourcesStatus', '$', 'sinAccesoMotivo', 'return (async () => {\n' + colaFuentes + '\n})()')(
+      env.state, async () => acceso(env.state), (t) => env.estados.push(t), $, sinAccesoMotivo
+    )
+    return env
+  }
+  {
+    const env = await abrirFuentes((s) => ((s.tabId = 4), (s.site = null), false))
+    eq(
+      [env.estados, env.dom['sources-perm']?.oculto ?? true],
+      [['Has cambiado de pestaña: vuelve a ella y abre otra vez esta pantalla para buscar en Confluence.'], true],
+      'showSourcesScreen: la pestaña cambiada se dice y el botón del permiso no sale'
+    )
+    // La misma pestaña, que se fue de Atlassian: el permiso, con el host de antes.
+    const fuera = await abrirFuentes((s) => ((s.site = null), false))
+    eq(
+      [fuera.dom['sources-perm'].oculto, fuera.dom['sources-perm-text'].textContent, fuera.estados],
+      [false, 'Sin permiso sobre conf.example sólo busco en lo que ya tengo indexado.', ['Sin permiso sobre conf.example sólo busco en lo que ya tengo indexado (2 páginas).']],
+      'showSourcesScreen: sin permiso, con el host capturado'
+    )
+  }
 })
 
 test('H28: la tarjeta de un salto único dice por qué no hay camino', async () => {
@@ -9745,10 +10016,31 @@ test('H28: la tarjeta de un salto único dice por qué no hay camino', async () 
   // se pudo leer, la tarjeta era idéntica a la de una página que cuelga de la
   // portada (cero ramas, que es diseño) y el porqué sólo estaba en el Registro.
   // `learnAncestry` apunta el motivo y `offerNavigation` lo cuelga de la tarjeta.
-  eq(H27_LIMPIO.split('state.ancestryNote = ').length - 1, 4, 'sólo lo escribe learnAncestry: dos motivos y dos vaciados')
-  eq(h27Funcion('async function learnAncestry(').split('state.ancestryNote = ').length - 1, 4)
+  // EL CAMBIO (revisión adversaria de H28, D9): la nota es de ESTA planificación
+  // (offerNavigation la vacía al empezar: en Rápida no se lee el camino y una
+  // nota vieja culpaba al script roto de un salto por diseño), y la tregua la
+  // repone con el motivo que guardó el fallo (sin eso, el vaciado dejaba mudo
+  // el segundo intento sobre la misma página).
+  eq(H27_LIMPIO.split('state.ancestryNote = ').length - 1, 6, 'learnAncestry (dos motivos, dos vaciados y la tregua) y el inicio de la planificación')
+  eq(h27Funcion('async function learnAncestry(').split('state.ancestryNote = ').length - 1, 5)
+  h27Una(
+    h27Funcion('async function offerNavigation('),
+    '\n  state.ancestryNote = null\n  const { plan, reason, source } = await planNavigation(state.client, {\n',
+    'offerNavigation vacía la nota justo antes de planificar'
+  )
+  h27Una(
+    h27Funcion('async function learnAncestry('),
+    h27Lineas(
+      '  if (previo?.fallo && Date.now() - previo.fallo < 60000) {',
+      "    state.ancestryNote = { host, id, motivo: previo.motivo || 'la API no contestó hace un momento' }",
+      '    return null',
+      '  }'
+    ),
+    'la tregua repone la nota con su motivo'
+  )
 
-  // (1) learnAncestry, EJECUTADA con dobles.
+  // (1) learnAncestry, EJECUTADA con dobles. `alAcceder` hace lo que el panel
+  // haría mientras el service worker contesta (cambiar de pestaña).
   const aprender = (opciones = {}) => {
     const { registros, log } = h28Registro()
     const env = { registros, pedidos: [] }
@@ -9761,10 +10053,14 @@ test('H28: la tarjeta de un salto único dice por qué no hay camino', async () 
       contentProblem: opciones.problema ?? null,
     }
     const chrome = { tabs: { sendMessage: async (id, m) => (env.pedidos.push([id, m.pageId]), opciones.respuesta ?? null) } }
+    const acceder = async () => {
+      opciones.alAcceder?.(env.state)
+      return opciones.acceso ?? true
+    }
     env.learnAncestry = new Function(
       'state', 'ancestryOf', 'ensureContentAccess', 'chrome', 'MSG', 'wikiPrefixOf', 'log', 'failReason', 'sinAccesoMotivo',
       h27Funcion('async function learnAncestry(') + '\nreturn learnAncestry'
-    )(env.state, () => new Array(opciones.conocido ?? 0), async () => opciones.acceso ?? true, chrome, { PAGE_ANCESTORS: 'ancestros' }, () => '', log, failReason, sinAccesoMotivo)
+    )(env.state, () => new Array(opciones.conocido ?? 0), acceder, chrome, { PAGE_ANCESTORS: 'ancestros' }, () => '', log, failReason, sinAccesoMotivo)
     return env
   }
   const VIEJA = { host: 'conf.example', id: '9', motivo: 'de antes' }
@@ -9773,11 +10069,26 @@ test('H28: la tarjeta de un salto único dice por qué no hay camino', async () 
     eq(await env.learnAncestry({ id: '100' }), null)
     eq(env.state.ancestryNote, { host: 'conf.example', id: '100', motivo: 'el content script no arranca: x' }, 'sin acceso por un script roto: su motivo')
     eq(env.registros, [['warn', 'Sin camino', 'no puedo leer el árbol (el content script no arranca: x); te llevaré de golpe']])
+    eq(env.state.ancestryFetched.size, 0, 'sin tregua: recargar la pestaña tiene que valer al momento')
   }
   {
     const env = aprender({ acceso: false })
     await env.learnAncestry({ id: '100' })
     eq(env.state.ancestryNote, { host: 'conf.example', id: '100', motivo: 'sin acceso a la pestaña' }, 'sin acceso por el permiso')
+    eq(env.state.ancestryFetched.size, 0)
+  }
+  {
+    // La pestaña se va de Atlassian mientras el service worker contesta (D5):
+    // el host de la nota es el de la pregunta, y no se culpa al script de antes.
+    const env = aprender({
+      acceso: false,
+      problema: { host: 'conf.example', tabId: 3, error: 'x' },
+      alAcceder: (s) => ((s.site = null), (s.tabId = 4)),
+    })
+    eq(await env.learnAncestry({ id: '100' }), null, 'no lanza')
+    eq(env.state.ancestryNote, { host: 'conf.example', id: '100', motivo: 'has cambiado de pestaña' }, 'la pestaña cambiada, con el host capturado')
+    eq(env.registros, [['warn', 'Sin camino', 'no puedo leer el árbol (has cambiado de pestaña); te llevaré de golpe']])
+    eq([env.state.ancestryFetched.size, env.pedidos], [0, []], 'ni tregua ni petición')
   }
   {
     const env = aprender({ respuesta: { ok: false, error: 'boom' } })
@@ -9785,6 +10096,7 @@ test('H28: la tarjeta de un salto único dice por qué no hay camino', async () 
     eq(env.state.ancestryNote, { host: 'conf.example', id: '100', motivo: 'boom' }, 'la API contestó con su error')
     eq(env.registros, [['warn', 'Sin camino', 'boom · te llevaré de golpe']])
     eq(env.pedidos, [[3, '100']])
+    eq(env.state.ancestryFetched.get('conf.example:100').motivo, 'boom', 'y la tregua guarda el motivo')
   }
   {
     const env = aprender({ respuesta: null })
@@ -9802,9 +10114,17 @@ test('H28: la tarjeta de un salto único dice por qué no hay camino', async () 
     eq([env.state.ancestryNote, env.pedidos], [null, []], 'el camino que ya se tenía, también, sin pedir nada')
   }
   {
-    const env = aprender({ nota: VIEJA, fetched: [['conf.example:100', { fallo: Date.now() }]] })
+    // La tregua: sin pedir nada, la nota vuelve con el motivo del fallo (D9),
+    // también si la planificación la había vaciado o si otro destino la pisó.
+    const env = aprender({ nota: null, fetched: [['conf.example:100', { fallo: Date.now(), motivo: 'boom' }]] })
     eq(await env.learnAncestry({ id: '100' }), null)
-    eq([env.state.ancestryNote, env.pedidos], [VIEJA, []], 'en la tregua no se toca: no ha pasado nada nuevo')
+    eq([env.state.ancestryNote, env.pedidos], [{ host: 'conf.example', id: '100', motivo: 'boom' }, []], 'en la tregua, la nota con su motivo y sin pedir nada')
+    const otra = aprender({ nota: VIEJA, fetched: [['conf.example:100', { fallo: Date.now() }]] })
+    await otra.learnAncestry({ id: '100' })
+    eq(otra.state.ancestryNote, { host: 'conf.example', id: '100', motivo: 'la API no contestó hace un momento' }, 'una tregua de antes, sin motivo guardado')
+    const pasada = aprender({ fetched: [['conf.example:100', { fallo: Date.now() - 61000, motivo: 'boom' }]], respuesta: { ok: true, pages: [{ id: '100' }], via: 'v1' } })
+    await pasada.learnAncestry({ id: '100' })
+    eq([pasada.state.ancestryNote, pasada.pedidos], [null, [[3, '100']]], 'pasado el minuto se vuelve a pedir')
   }
   {
     const env = aprender({ nota: VIEJA })
@@ -9865,8 +10185,24 @@ test('H28: el panel sólo atiende lo de su pestaña', () => {
   // quien MANDA esos mensajes.
   assert(!/\[\s*MSG\./.test(cuerpo) && !/\(\s*MSG\./.test(cuerpo), 'ninguna lista de tipos en onRuntimeMessage')
   eq(cuerpo.split('if (sender?.tab?.id != null && sender.tab.id !== state.tabId) return').length - 1, 2, 'NOTE_CLICKED y PICK_RESULT, de esta pestaña')
-  h27Una(cuerpo, 'const deOtroRecorrido = msg?.tabId != null && msg.tabId !== state.tabId && msg.tabId !== state.navRun?.tabId', 'el recorrido, de esta pestaña o del que se lanzó')
+  // EL CAMBIO (revisión adversaria de H28, D7): también el salto directo que
+  // lanzó este panel (`state.saltoTabId`, un campo aparte de `navRun` para no
+  // pisar un recorrido en marcha), que se olvida con su PLAN_FINISHED; el
+  // `reason` de PLAN_PROGRESS al Registro; y un final con error o sin permiso
+  // devuelve los botones de la tarjeta (`reabrir`).
+  h27Una(
+    cuerpo,
+    '\n  const deOtroRecorrido = msg?.tabId != null && msg.tabId !== state.tabId && msg.tabId !== state.navRun?.tabId && msg.tabId !== state.saltoTabId\n',
+    'el recorrido, de esta pestaña, del paso a paso o del salto que se lanzó'
+  )
   eq(cuerpo.split('if (deOtroRecorrido) return').length - 1, 2, 'PLAN_PROGRESS y PLAN_FINISHED')
+  h27Una(
+    cuerpo,
+    h27Lineas('    if (deOtroRecorrido) return', '    if (msg.tabId === state.saltoTabId) state.saltoTabId = null', "    setStatus('ok', 'conectado')"),
+    'el salto se olvida con su final'
+  )
+  h27Una(cuerpo, '\n    finishNavRun({ reabrir: !!(msg.result?.error || msg.result?.needsPermission) })\n', 'un final con error o sin permiso reabre la tarjeta')
+  eq(H27_LIMPIO.split('state.saltoTabId = ').length - 1, 2, 'lo escriben runPlan (al saltar) y onRuntimeMessage (al acabar), nadie más')
 
   // EJECUTADA, con dobles.
   const M = { NOTE_CLICKED: 'nota', PICK_RESULT: 'señalado', PLAN_PROGRESS: 'paso', PLAN_FINISHED: 'fin' }
@@ -9874,11 +10210,11 @@ test('H28: el panel sólo atiende lo de su pestaña', () => {
     const { registros, log } = h28Registro()
     const env = { registros, hechos: [] }
     const hecho = (nombre) => (...a) => env.hechos.push([nombre, ...a])
-    env.state = { tabId: 3, navRun: null, noteRows: new Map(), settings: { reduceMotion: true }, pendingPick: null, ...state }
+    env.state = { tabId: 3, navRun: null, saltoTabId: null, noteRows: new Map(), settings: { reduceMotion: true }, pendingPick: null, ...state }
     env.oir = new Function(
-      'state', 'MSG', 'markNoteRow', 'setPicking', 'paintPickChip', 'log', 'pickLabel', 'el', 'setStatus', 'finishNavRun', 'showPermissionNotice', 'showNotice',
+      'state', 'MSG', 'markNoteRow', 'setPicking', 'paintPickChip', 'log', 'pickLabel', 'el', 'setStatus', 'finishNavRun', 'showPermissionNotice', 'showNotice', 'failReason',
       cuerpo + '\nreturn onRuntimeMessage'
-    )(env.state, M, hecho('fila'), hecho('señalar'), hecho('chip'), log, () => 'texto', { input: { focus: hecho('foco') } }, hecho('estado'), hecho('fin'), hecho('permiso'), hecho('aviso'))
+    )(env.state, M, hecho('fila'), hecho('señalar'), hecho('chip'), log, () => 'texto', { input: { focus: hecho('foco') } }, hecho('estado'), hecho('fin'), hecho('permiso'), hecho('aviso'), failReason)
     return env
   }
   const DE = (id) => ({ tab: { id } })
@@ -9917,5 +10253,235 @@ test('H28: el panel sólo atiende lo de su pestaña', () => {
     eq(env.hechos.length, 4, 'y uno sin tabId, como hasta ahora, aunque haya recorrido en marcha')
     env.oir({ type: 'paso', tabId: 6, index: 1, total: 2 })
     eq(env.hechos.length, 4, 'pero no el de una tercera pestaña')
+  }
+  {
+    // D7 (a): el «Llévame» lanzado desde la pestaña 5 acaba con el panel en la 8.
+    const env = armar({ tabId: 8, saltoTabId: 5 })
+    env.oir({ type: 'fin', tabId: 5, result: { anchored: false, message: 'No he encontrado el fragmento' } })
+    eq(env.registros, [['warn', 'Sin resaltar', 'No he encontrado el fragmento']], 'el final del salto, aunque ya se mire otra pestaña')
+    eq(env.hechos.map((h) => h[0]), ['estado', 'fin', 'aviso'], 'con su aviso')
+    eq(env.state.saltoTabId, null, 'y el salto se olvida con su final')
+    env.oir({ type: 'fin', tabId: 5, result: { error: 'otro, de otro panel' } })
+    eq(env.registros.length, 1, 'lo que llegue después de esa pestaña ya no es suyo')
+    const otro = armar({ tabId: 8, saltoTabId: 6 })
+    otro.oir({ type: 'fin', tabId: 5, result: { error: 'de otro panel' } })
+    eq([otro.registros, otro.state.saltoTabId], [[], 6], 'el de una pestaña que no saltó, no; y el salto pendiente sigue')
+  }
+  {
+    // D7 (b): el paso que la página no pudo ejecutar y el service worker sigue
+    // por URL dice su motivo, recortado como cualquier `error` de la página.
+    const env = armar()
+    env.oir({ type: 'paso', tabId: 3, index: 2, total: 3, reason: 'el chevron lanzó: TypeError' })
+    eq(env.registros, [['warn', 'Asistida bloqueada', 'paso 3: el chevron lanzó: TypeError · sigo por URL']])
+    env.oir({ type: 'paso', tabId: 3, index: 0, total: 3 })
+    eq(env.registros.length, 1, 'sin motivo, sólo el estado, como siempre')
+    env.oir({ type: 'paso', tabId: 3, index: 0, total: 3, reason: 'x'.repeat(300) })
+    eq(env.registros[1][2], 'paso 1: ' + 'x'.repeat(200) + ' · sigo por URL', 'por failReason: 200 caracteres')
+    env.oir({ type: 'paso', tabId: 5, index: 0, total: 3, reason: 'de otro panel' })
+    eq(env.registros.length, 2, 'el de otra pestaña, tampoco')
+  }
+  {
+    // D7 (c): un final con error o sin permiso reabre la tarjeta; bien o parado, no.
+    const env = armar()
+    for (const result of [{ error: 'x' }, { needsPermission: true }, { anchored: true, strategy: 's' }, { cancelled: true }, { anchored: false, message: 'm' }]) {
+      env.oir({ type: 'fin', tabId: 3, result })
+    }
+    eq(
+      env.hechos.filter((h) => h[0] === 'fin').map((h) => h[1]),
+      [{ reabrir: true }, { reabrir: true }, { reabrir: false }, { reabrir: false }, { reabrir: false }],
+      'finishNavRun con reabrir sólo tras un error o sin permiso'
+    )
+  }
+})
+
+/**
+ * runPlan, finishNavRun y onRuntimeMessage de verdad, juntos (revisión
+ * adversaria de H28, D5 y D7): el orden de llegada de la respuesta y del
+ * PLAN_FINISHED no se ve mirando cada función por separado. Lo fingido es
+ * chrome, la tarjeta (sus botones y lo que se le cuelga) y los avisos; el
+ * Registro, `failReason` y `sinAccesoMotivo` son los de verdad.
+ */
+const h28Recorrido = ({ state = {}, acceso = () => true, responder = null } = {}) => {
+  const { registros, log } = h28Registro()
+  const env = { registros, enviados: [], avisos: [], anuncios: [], permiso: 0 }
+  const nodo = (tag, texto = '') => ({
+    tag,
+    textContent: texto,
+    disabled: false,
+    hijos: [],
+    padre: null,
+    appendChild(n) {
+      this.hijos.push(n)
+      n.padre = this
+      return n
+    },
+    addEventListener(tipo, f) {
+      this['al_' + tipo] = f
+    },
+    remove() {
+      if (this.padre) this.padre.hijos = this.padre.hijos.filter((h) => h !== this)
+      this.padre = null
+    },
+  })
+  const acciones = nodo('div')
+  acciones.appendChild(nodo('button', 'Llévame'))
+  acciones.appendChild(nodo('button', 'Paso a paso'))
+  const card = nodo('div')
+  card.appendChild(acciones)
+  card.querySelectorAll = (sel) => (sel === 'button' ? acciones.hijos.filter((h) => h.tag === 'button') : [])
+  card.querySelector = (sel) => (sel === '.nav-actions' ? acciones : null)
+  env.card = card
+  env.botones = () => acciones.hijos.map((b) => [b.textContent, b.disabled])
+  env.colgados = () => card.hijos.filter((h) => h.tag === 'aviso').map((h) => h.texto)
+  env.state = {
+    site: { host: 'conf.example', origin: 'https://conf.example' },
+    tabId: 3,
+    navRun: null,
+    saltoTabId: null,
+    contentProblem: null,
+    client: { connected: true },
+    ...state,
+  }
+  const MSG = { START_PLAN: 'empezar', NAVIGATE_DIRECT: 'saltar', CANCEL_PLAN: 'parar', NOTE_CLICKED: 'nota', PICK_RESULT: 'señalado', PLAN_PROGRESS: 'paso', PLAN_FINISHED: 'fin' }
+  const chrome = {
+    runtime: {
+      sendMessage: async (m) => {
+        env.enviados.push({ type: m.type, tabId: m.tabId })
+        return responder ? responder(m, env) : { ok: true }
+      },
+    },
+  }
+  env.api = new Function(
+    'state', 'MSG', 'chrome', 'document', 'ensureContentAccess', 'showPermissionNotice', 'noticeNode', 'announce', 'log', 'sinAccesoMotivo',
+    'setStatus', 'showNotice', 'failReason', 'markNoteRow', 'setPicking', 'paintPickChip', 'pickLabel', 'el',
+    [h27Funcion('async function runPlan('), h27Funcion('function finishNavRun('), h27Funcion('function onRuntimeMessage(')].join('\n') +
+      '\nreturn { runPlan, finishNavRun, onRuntimeMessage }'
+  )(
+    env.state, MSG, chrome, { createElement: (tag) => nodo(tag) }, async () => acceso(env.state), () => env.permiso++,
+    (texto, bad) => ({ tag: 'aviso', texto, bad: !!bad }), (t) => env.anuncios.push(t), log, sinAccesoMotivo,
+    () => {}, (t, bad) => env.avisos.push([t, !!bad]), failReason, () => {}, () => {}, () => {}, () => '', { input: { focus() {} } }
+  )
+  return env
+}
+const H28_PASOS = { destination: { title: 'Arquitectura', url: 'https://conf.example/pages/100' }, steps: [{}, {}] }
+const H28_SALTO = { destination: { title: 'Arquitectura', url: 'https://conf.example/pages/100' }, steps: [{}] }
+
+test('H28 (revisión, D7): un recorrido que acaba mal se dice una vez y la tarjeta vuelve a ofrecer el viaje', async () => {
+  // Con un paso que la página no puede ejecutar, el service worker manda
+  // PLAN_FINISHED con el motivo Y contesta `{ok:false, error}`: el panel
+  // registraba «Navegación detenida» y «Navegación fallida», pintaba y anunciaba
+  // dos veces, y la tarjeta se quedaba sin «Llévame» ni «Paso a paso» aunque el
+  // aviso dijera «vuelve a intentarlo». Desde la revisión de H28 el SW dice
+  // `avisado: true` cuando ya avisó, y `finishNavRun({ reabrir })` devuelve los
+  // botones. En los DOS órdenes de llegada.
+  const MOTIVO = 'La página no ha podido ejecutar el paso 1: x. Recárgala y vuelve a intentarlo.'
+  const FIN = { type: 'fin', tabId: 3, result: { error: MOTIVO } }
+  const UNA_VEZ = {
+    registros: [['error', 'Navegación detenida', MOTIVO]],
+    avisos: [[MOTIVO, true]],
+    anuncios: [],
+    colgados: [],
+    botones: [['Llévame', false], ['Paso a paso', false]],
+    navRun: null,
+  }
+  const foto = (env) => ({ registros: env.registros, avisos: env.avisos, anuncios: env.anuncios, colgados: env.colgados(), botones: env.botones(), navRun: env.state.navRun })
+  {
+    // El PLAN_FINISHED llega antes que la respuesta.
+    const env = h28Recorrido({
+      responder: (m, e) => {
+        if (m.type !== 'empezar') return { ok: true }
+        e.api.onRuntimeMessage(FIN)
+        return { ok: false, error: 'x', avisado: true }
+      },
+    })
+    await env.api.runPlan(H28_PASOS, 'assisted', env.card)
+    eq(foto(env), UNA_VEZ, 'PLAN_FINISHED primero: un registro, un aviso, y los botones de vuelta')
+  }
+  {
+    // La respuesta llega antes.
+    const env = h28Recorrido({ responder: () => ({ ok: false, error: 'x', avisado: true }) })
+    await env.api.runPlan(H28_PASOS, 'assisted', env.card)
+    eq(env.registros, [], 'con avisado, runPlan no dice nada: lo dirá el PLAN_FINISHED')
+    env.api.onRuntimeMessage(FIN)
+    eq(foto(env), UNA_VEZ, 'la respuesta primero: igual')
+  }
+  {
+    // Sin permiso a mitad del recorrido, lo mismo: la tarjeta del permiso y los botones.
+    const env = h28Recorrido({ responder: () => ({ ok: false, error: 'sin permiso', needsPermission: true, avisado: true }) })
+    await env.api.runPlan(H28_PASOS, 'assisted', env.card)
+    env.api.onRuntimeMessage({ type: 'fin', tabId: 3, result: { needsPermission: true } })
+    eq([env.registros, env.permiso, env.botones()], [[['error', 'Navegación detenida', 'sin permiso de host']], 1, [['Llévame', false], ['Paso a paso', false]]])
+  }
+  {
+    // Sin `avisado` (el SW no aceptó el plan, o no contestó): como siempre.
+    const env = h28Recorrido({ responder: () => ({ ok: false, error: 'x' }) })
+    await env.api.runPlan(H28_PASOS, 'assisted', env.card)
+    eq(
+      [env.registros, env.colgados(), env.anuncios],
+      [[['error', 'Navegación fallida', 'x']], ['No he podido navegar: x'], ['No he podido navegar: x']],
+      '«Navegación fallida», en la tarjeta y anunciado'
+    )
+  }
+  {
+    // Un recorrido que acaba bien no reabre nada: ya estás allí.
+    const env = h28Recorrido()
+    await env.api.runPlan(H28_PASOS, 'assisted', env.card)
+    eq(env.botones(), [['Llévame', true], ['Paso a paso', true], ['Parar', false]], 'en marcha, con su «Parar»')
+    env.api.onRuntimeMessage({ type: 'fin', tabId: 3, result: { anchored: true, strategy: 'bloque' } })
+    eq([env.botones(), env.state.navRun], [[['Llévame', true], ['Paso a paso', true]], null], 'acabado bien, sin «Parar» y como estaba')
+  }
+  {
+    // D7 (a), de punta a punta: «Llévame» desde la 3, el panel pasa a la 8 y el
+    // final llega de la 3.
+    const env = h28Recorrido()
+    await env.api.runPlan(H28_SALTO, 'direct', env.card)
+    eq([env.enviados, env.state.saltoTabId], [[{ type: 'saltar', tabId: 3 }], 3], 'el salto recuerda su pestaña')
+    env.state.tabId = 8
+    env.api.onRuntimeMessage({ type: 'fin', tabId: 3, result: { error: 'La página de destino no ha avisado de que cargó. Recárgala y vuelve a intentarlo.' } })
+    eq(env.registros.map((r) => r[1]), ['Navegación lanzada', 'Navegación detenida'], 'y su final se dice aunque ya se mire otra pestaña')
+    eq(env.state.saltoTabId, null)
+  }
+})
+
+test('H28 (revisión, D5): cambiar de pestaña mientras se comprueba el script no es un permiso que falte (runPlan)', async () => {
+  // `ensureContentAccess` devuelve false si la pestaña cambió durante el viaje
+  // de CONTENT_STATUS, sin decir por qué. runPlan lo leía como «falta permiso»,
+  // pintaba la tarjeta del permiso de la pestaña NUEVA y leía `state.site.host`
+  // después del await: con la pestaña fuera de Atlassian, un TypeError en un
+  // clic, sin capturar. Ahora captura el host con la pestaña y lo dice.
+  const fuera = (s) => ((s.tabId = 4), (s.site = null), false)
+  {
+    const env = h28Recorrido({ acceso: fuera })
+    await env.api.runPlan(H28_PASOS, 'assisted', env.card)
+    eq(
+      [env.colgados(), env.anuncios, env.registros, env.permiso, env.enviados, env.botones()],
+      [
+        ['Has cambiado de pestaña: vuelve a ella y pulsa otra vez.'],
+        ['Has cambiado de pestaña: vuelve a ella y pulsa otra vez.'],
+        [['warn', 'Asistida bloqueada', 'has cambiado de pestaña']],
+        0,
+        [],
+        [['Llévame', false], ['Paso a paso', false]],
+      ],
+      'paso a paso: se dice en la tarjeta, sin tarjeta del permiso, sin lanzar nada y con los botones como estaban'
+    )
+  }
+  {
+    // El salto directo no necesita el script: sigue, a la pestaña capturada.
+    const env = h28Recorrido({ acceso: fuera })
+    await env.api.runPlan(H28_SALTO, 'direct', env.card)
+    eq([env.permiso, env.enviados, env.state.saltoTabId], [0, [{ type: 'saltar', tabId: 3 }], 3], '«Llévame»: a la pestaña de la pulsación, sin tarjeta del permiso')
+  }
+  {
+    // La MISMA pestaña, que se fue de Atlassian: el permiso, con el host de antes y sin lanzar.
+    const env = h28Recorrido({ acceso: (s) => ((s.site = null), false) })
+    await env.api.runPlan(H28_PASOS, 'assisted', env.card)
+    eq([env.permiso, env.registros], [1, [['warn', 'Asistida bloqueada', 'falta permiso en conf.example']]], 'el host capturado')
+  }
+  {
+    // Y con el script de esta pestaña roto, su motivo, como en H28.
+    const env = h28Recorrido({ acceso: () => false, state: { contentProblem: { host: 'conf.example', tabId: 3, error: 'x' } } })
+    await env.api.runPlan(H28_PASOS, 'assisted', env.card)
+    eq(env.registros, [['warn', 'Asistida bloqueada', 'el content script no arranca: x']])
   }
 })

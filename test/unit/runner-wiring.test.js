@@ -181,6 +181,85 @@ test('H27 revisión: un paso cancelado mientras busca o se desplaza no enciende 
   eq(rama[ultimo - 1], 'if (this.cancelled) return false', 'y antes del último recurso')
 })
 
+// --- Revisión adversaria de H28 ----------------------------------------------
+
+test('H28 revisión (D1, D3): el clic del paso sólo va a la URL del paso, y la respuesta dice en qué página se contestó', () => {
+  const lineasDe = (nombre) =>
+    metodo(nombre)
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean)
+
+  // D3 (reproducido en Chromium): la página decidía adónde llevaba el clic. Un
+  // enlace sólo se pulsa si su URL RESUELTA es la del paso; si no, que navegue
+  // el service worker por la URL del índice.
+  assert(
+    /^import \{[^}]*\bllevaAlPaso\b[^}]*\} from '\.\/locators\.js'$/m.test(JS),
+    'llevaAlPaso viene de locators.js, donde vive la barrera'
+  )
+  const clic = lineasDe('_presentAndClick')
+  const seguro = clic.indexOf('const safe = isSafeToClick(target, this.origin)')
+  const lleva = clic.indexOf("if (safe.kind === 'enlace' && !llevaAlPaso(step, target.getAttribute('href'), this.origin)) {")
+  const pulsa = clic.indexOf('target.click()')
+  assert(seguro >= 0 && lleva > seguro, 'detrás de la barrera de siempre')
+  assert(pulsa > lleva, 'y antes de pulsar')
+  eq(clic[lleva + 2], "return { status: STEP_RESULT.NAVIGATE, reason: 'el enlace de la página no lleva a ese destino' }", 'se va por URL, con su motivo')
+  eq(cuenta(JS, 'target.click()'), 1, 'un solo clic de paso en el ejecutor')
+
+  // D1 (reproducido en Chromium): en un DC el último clic navega entero y
+  // contesta la página VIEJA; en `/display/` la URL no lleva el id, así que la
+  // respuesta lleva el de la página que contesta, para que el service worker
+  // sepa si ya está en el destino.
+  assert(/^import \{ pageIdFromDom \} from '\.\/page-id\.js'$/m.test(JS), 'page-id.js, la hoja sin imports')
+  assert(
+    clic.indexOf('return { status: STEP_RESULT.CLICKED, url: location.href, pageId: pageIdFromDom() }') > pulsa,
+    'la respuesta del clic lleva el id de la página que contesta'
+  )
+  assert(
+    metodo('executeStep').includes("return { status: STEP_RESULT.CLICKED, note: 'ya estábamos aquí', pageId: pageIdFromDom() }"),
+    'y la de «ya estábamos aquí»'
+  )
+  eq(cuenta(JS, 'status: STEP_RESULT.CLICKED'), 2, 'no hay un tercer «clicked» sin pageId')
+})
+
+test('H28 revisión (D10): el último recurso de _abrirRama pasa la barrera, el barrido la pasa con su contenedor, y un paso de desplegar cae al documento sólo con rama', () => {
+  const lineasDe = (nombre) =>
+    metodo(nombre)
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean)
+
+  // La fila que `treeToggleFor` dio por control (`isRow`) se pulsaba sin
+  // `isSafeToClick`: una fila «Delete this page» con aria-expanded se pulsaba
+  // (reproducido en Chromium). La guarda va en SU línea, delante de la de
+  // cancelar, que sigue justo antes del clic (el pin de H27, arriba).
+  const rama = lineasDe('_abrirRama')
+  const ultimo = rama.lastIndexOf('control.click()')
+  eq(rama[ultimo - 1], 'if (this.cancelled) return false')
+  eq(rama[ultimo - 2], 'if (!isSafeToClick(control, this.origin).ok) return false', 'la barrera, también en el último recurso')
+  eq(cuenta(metodo('_abrirRama'), 'isSafeToClick(control, this.origin)'), 2, 'el chevron y la fila')
+
+  // El barrido ya tiene el contenedor: se lo pasa a la barrera, que si no lo
+  // vuelve a buscar por cada candidato.
+  const barrido = metodo('_tryExpandTowards')
+  assert(barrido.includes('if (!isSafeToClick(btn, this.origin, { container }).ok) continue'), 'con { container }')
+  assert(!barrido.includes('isSafeToClick(btn, this.origin).ok'), 'y no a dos argumentos')
+
+  // Un paso de desplegar se busca dentro del árbol; si al vencer la espera no
+  // está ahí (otro `[role="tree"]` delante, reproducido en Chromium), se prueba
+  // UNA vez en el documento y sólo vale si su fila tiene control de desplegar.
+  const paso = lineasDe('executeStep')
+  const sinEncontrar = paso.indexOf('if (!found) {')
+  const cae = paso.indexOf('const enDoc = locateStep(step, document)')
+  const conRama = paso.indexOf('if (enDoc && treeToggleFor(enDoc.element)) return this._expandStep(enDoc, { step, index, total, isLast })')
+  const salta = paso.indexOf("return { status: STEP_RESULT.SKIPPED, reason: 'esa rama no está en el árbol' }")
+  assert(sinEncontrar >= 0 && cae > sinEncontrar, 'sólo cuando no se encontró en el árbol')
+  eq(paso[cae - 1], 'if (desplegando) {', 'y sólo para un paso de desplegar')
+  eq(conRama, cae + 1, 'aceptado sólo con rama')
+  eq(salta, conRama + 1, 'si no, se salta como antes')
+  assert(salta < paso.indexOf('const expanded = await this._tryExpandTowards(step)'), 'antes del barrido, que es del destino')
+})
+
 test('M8: applyNotes y focusNote comparten la guardia de caja visible', () => {
   eq(cuenta(JS, 'export function visibleResolution('), 1)
   const guardia = JS.slice(JS.indexOf('export function visibleResolution('))

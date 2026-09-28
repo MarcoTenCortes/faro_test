@@ -313,6 +313,35 @@ test('H28: el titulo de una fila es el texto de su enlace PROPIO, no el del chev
   eq(rowTitle(filaCon(chevron)), '', 'sin enlace, sin titulo')
   eq(rowTitle(null), '')
   eq(rowLink({}), null)
+
+  // Revision de H28 (D6): un href VACIO tampoco es direccion (el chevron del DC
+  // va delante con `href=""`), y sin forma de pagina gana el PRIMERO con
+  // direccion, no el ultimo.
+  eq(rowTitle(filaCon(chevron, enlaceDe('/display/SIMPL/Contract+Billing', 'Contract + Billing'))), 'Contract + Billing', 'el chevron vacio no da titulo')
+  eq(rowTitle(filaCon(enlaceDe('/display/SIMPL/Padre', 'Padre'), enlaceDe('/display/SIMPL/Hija', 'Hija'))), 'Padre', 'el primero con direccion')
+})
+
+// Revision adversaria de H28 (D10), reproducido en Chromium: en un DC el enlace
+// propio puede ser `/display/ESPACIO/Titulo` y sus hijas `viewpage.action?
+// pageId=`, y el DC deja las hijas en el DOM al plegar. `rowLink` preferia el
+// primer enlace con forma de pagina de TODA la fila, hijas incluidas: el titulo
+// salia el de una hija y el chevron de «Contract + Billing» seguia bloqueado.
+test('revision de H28 (D10): el enlace propio de una fila no es el de una hija plegada que sigue en el DOM', () => {
+  const filaHija = { nombre: 'li de la hija' }
+  const chevron = enlaceDe('', '')
+  const propio = enlaceDe('/display/SIMPL/Contract+Billing', 'Contract + Billing')
+  propio.parentElement = { closest: () => null } // su li es la propia fila: la de mentira no sube
+  const hija = enlaceDe('/pages/viewpage.action?pageId=77', 'Q&A?')
+  hija.parentElement = { closest: () => filaHija }
+  const fila = { ...filaCon(chevron, propio, hija), contains: (x) => x === filaHija }
+  assert(rowLink(fila) === propio, 'el propio, aunque la hija tenga forma de pagina')
+  eq(rowTitle(fila), 'Contract + Billing')
+
+  // Un enlace cuyo li mas cercano es la PROPIA fila sigue siendo suyo.
+  const suyoConForma = enlaceDe('/spaces/SIMPL/pages/8700/Contract+Billing', 'Contract + Billing')
+  const filaPropia = { ...filaCon(suyoConForma), contains: () => true }
+  suyoConForma.parentElement = { closest: () => filaPropia }
+  assert(rowLink(filaPropia) === suyoConForma, 'el li que devuelve closest es la fila misma')
 })
 
 test('toggleFor no toma el «···» de la fila por su control de desplegar', () => {

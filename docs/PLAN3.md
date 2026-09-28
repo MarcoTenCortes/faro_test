@@ -665,7 +665,39 @@ Con la extensión recargada y una pestaña de Jira o Confluence recargada:
 14. (D10) «Dar permiso» desde «Qué mirar hoy» (`askTodayPermission`, con un
     `await todayMissingPermission()` delante del diálogo) abre el diálogo de
     Chrome.
-15. NUNCA «Quitar Faro» de `chrome://extensions` para probar: borra
+15. (Revisión adversaria de H28, D1) «Paso a paso» en el Confluence DC de
+    Marco hasta una página a dos niveles o más: tras la recarga del último
+    clic el DESTINO queda subrayado, el registro dice «Fragmento resaltado» y
+    NO sale «Sin resaltar» ni un aviso en la página de partida; lo mismo con
+    la red lenta de DevTools (TTFB > 1 s), que es lo que el respiro de 420 ms
+    no aguantaba.
+16. (D3) En ese mismo recorrido el último paso sigue siendo un CLIC en el
+    enlace del árbol (que lleva `?src=contextnavpagetreemode`), no una carga
+    por URL: si `llevaAlPaso` fuera demasiado estricta con una ruta real, el
+    recorrido llegaría igual pero por URL, y hay que mirarlo en la pestaña de
+    Red (una sola navegación) o en el cartel del paso.
+17. (D2) «Llévame» con un fragmento a un host propio SIN permiso: navega y el
+    panel dice en ámbar «Te he llevado, pero sin permiso en <host> no puedo
+    resaltar el fragmento.»; a los 12 s NO sale «Navegación detenida». Y
+    `permissions.contains` con el acceso retirado a `*.atlassian.net` desde
+    `chrome://extensions` (el script estático tampoco entra): se espera
+    `false` y el mismo aviso ámbar.
+18. (D2) Un «Llévame» cuya página acaba en el login (sesión caducada): «La
+    pestaña ha acabado en otra página (/login.action), no en «<título>».», sin
+    «Recárgala»; y un DC lento que sigue cargando a los 12 s: una prórroga, no
+    el aviso.
+19. (D4) En el Jira de Marco, «Llévame» a un proyecto `/browse/SIMPL` (302 a
+    `/projects/SIMPL/summary` o reescritura a `/projects/SIMPL/issues/…`,
+    medidos el 2026-09-28) ancla sin el aviso de 12 s; una búsqueda que se abre
+    en su vista de detalle llega; y desde una búsqueda, «Llévame» a OTRA
+    búsqueda navega en vez de decir «ya estoy».
+20. (D5, D7) Cambiar de pestaña justo al pulsar «Paso a paso» o «Señalar»
+    (mejor con el service worker frío): «Has cambiado de pestaña: vuelve a ella
+    y pulsa otra vez.», nunca la tarjeta del permiso ni «Fallo enviando»; y con
+    dos ventanas, un «Llévame» lanzado en una y la pestaña cambiada antes de
+    que acabe: el panel sigue diciendo su final (una línea en el registro, no
+    dos).
+21. NUNCA «Quitar Faro» de `chrome://extensions` para probar: borra
    `chrome.storage.local` entero (sitios, contextos, mapas, modelo, diario).
    El control sin código es editar `manifest.json` a mano en la copia de
    trabajo, «Recargar» y luego `git checkout manifest.json`; H27 lo hace ya

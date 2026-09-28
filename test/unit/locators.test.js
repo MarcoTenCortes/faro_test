@@ -5,6 +5,7 @@ import {
   locateStep,
   resolveDescriptor,
   isSafeToClick,
+  llevaAlPaso,
   foldLabel,
   FORBIDDEN_ACTIONS,
   cssEscape,
@@ -242,6 +243,45 @@ test('SEGURIDAD (H28): en una fila del árbol el título es contenido: su chevro
   // recortara primero, el título quedaría a medias y «update» seguiría ahí.
   const largo = filaPagetree('Update of the ' + 'x'.repeat(130) + ' programme', '9001')
   eq(isSafeToClick(largo.chevron, ORIGIN, { container: arbolCon(largo.fila) }), { ok: true, kind: 'ancla' })
+
+  // Revisión de H28 (D6): lo de arriba pasa SIEMPRE un contenedor, y el
+  // ejecutor la llama con DOS argumentos (runner.js: el chevron, el barrido,
+  // el clic del paso): el contenedor lo busca ella con `treeContainer()`. Sin
+  // esto, mirar el `container` en vez de lo que ella encuentra desactivaba la
+  // corrección en la página con todas las unitarias en verde. Un `document` de
+  // mentira cuyo `.plugin_pagetree` es el árbol, DENTRO de la prueba.
+  const real = filaPagetree('8700 - Contract + Billing', '8700')
+  const arbolDoc = {
+    ...arbolCon(real.fila),
+    querySelectorAll: (sel) => (sel === 'a[href]' ? [real.enlace] : []),
+    querySelector: () => null,
+  }
+  const docPrevio = globalThis.document
+  globalThis.document = {
+    querySelectorAll: (sel) => (sel === '.plugin_pagetree' ? [arbolDoc] : []),
+    getElementById: () => null,
+  }
+  try {
+    eq(isSafeToClick(real.chevron, ORIGIN), { ok: true, kind: 'ancla' }, 'dos argumentos, como runner.js: el árbol lo busca ella')
+    eq(isSafeToClick(real.enlace, ORIGIN), { ok: true, kind: 'enlace' }, 'y el enlace propio, también a dos argumentos')
+  } finally {
+    if (docPrevio === undefined) delete globalThis.document
+    else globalThis.document = docPrevio
+  }
+
+  // Un título con lo que una expresión regular entiende como suyo ([, (, +) se
+  // quita como texto y no revienta (D6).
+  const meta = filaPagetree('Plan [v2 (draft) + Billing', '77')
+  eq(isSafeToClick(meta.chevron, ORIGIN, { container: arbolCon(meta.fila) }), { ok: true, kind: 'ancla' }, 'un título con [ ( + no lanza')
+
+  // El chevron es un <a> sin dirección aunque no lleve aria-expanded (D6).
+  const sinExpanded = fake('a', { href: '', 'aria-label': 'Ampliar elemento 8700 - Contract + Billing' })
+  const suEnlace = fake('a', { href: '/spaces/SIMPL/pages/8700/Pagina?src=contextnavpagetreemode' }, '8700 - Contract + Billing')
+  eq(
+    isSafeToClick(sinExpanded, ORIGIN, { container: arbolCon(filaDelArbol([sinExpanded, suEnlace])) }),
+    { ok: true, kind: 'ancla' },
+    'un <a href=""> sin aria-expanded es el chevron'
+  )
 })
 
 test('SEGURIDAD (H28): quitar el título no desbloquea nada que actúe, ni dentro de la fila ni fuera del árbol', () => {
@@ -285,6 +325,32 @@ test('SEGURIDAD (H28): quitar el título no desbloquea nada que actúe, ni dentr
   const chevronE = fake('a', { href: '', 'aria-label': 'Delete page' })
   const enlaceE = fake('a', { href: '/spaces/SIMPL/pages/5/E' }, 'e')
   eq(isSafeToClick(chevronE, ORIGIN, { container: arbolCon(filaDelArbol([chevronE, enlaceE])) }).ok, false, 'un título de una letra')
+
+  // Revisión de H28 (D6): la palabra entera tiene DOS fronteras. Una página
+  // llamada «De» no se come el principio de «Delete»: detrás de «de» viene una
+  // letra, y «delete» sigue ahí.
+  const delDe = fake('a', { href: '', 'aria-label': 'Delete' })
+  const enlDe = fake('a', { href: '/spaces/SIMPL/pages/6/De' }, 'De')
+  eq(isSafeToClick(delDe, ORIGIN, { container: arbolCon(filaDelArbol([delDe, enlDe])) }).ok, false, 'la frontera derecha')
+
+  // Sólo al enlace PROPIO (el que da el título) se le quita el título: otro
+  // enlace de la fila que lleva a VER otra página y dice lo mismo, no (D6).
+  const propio = fake('a', { href: '/spaces/SIMPL/pages/8700/Contract+Billing' }, '8700 - Contract + Billing')
+  const otraPagina = fake('a', { href: '/spaces/SIMPL/pages/9/Otra' }, '8700 - Contract + Billing')
+  eq(
+    isSafeToClick(otraPagina, ORIGIN, { container: arbolCon(filaDelArbol([propio, otraPagina])) }).ok,
+    false,
+    'otro enlace de la fila no es el propio'
+  )
+
+  // Y «lleva a VER la página» se juzga por la URL RESUELTA, no por el href
+  // crudo: una ruta de ver metida en la CONSULTA de una acción no la vuelve
+  // enlace propio de nadie (revisión de H28, D3). Hoy pasaban las dos, como
+  // enlace único de una fila del árbol.
+  const quitarConRuta = fake('a', { href: '/pages/removepage.action?pageId=5&returnTo=/spaces/X/pages/5/' }, 'Eliminar')
+  eq(isSafeToClick(quitarConRuta, ORIGIN, { container: arbolCon(filaDelArbol([quitarConRuta])) }).ok, false, 'removepage con returnTo')
+  const salirConRuta = fake('a', { href: '/logout.action?os_destination=/spaces/X/pages/5/T' }, 'Cerrar sesión')
+  eq(isSafeToClick(salirConRuta, ORIGIN, { container: arbolCon(filaDelArbol([salirConRuta])) }).ok, false, 'logout con os_destination')
 })
 
 // --- H28 (PLAN3 §3.2, C3-6): pistas por ruta con frontera ------------------
@@ -388,5 +454,82 @@ test('C3-6 (H28): /display/SIMPL/Architecture no casa con …/Architecture+Overv
     eq(ruta('/display/SIMPL/Architecture', ['/display/SIMPL/Architecture/#decision']), '/display/SIMPL/Architecture/#decision')
     eq(ruta('/display/SIMPL/Categoría', ['/display/SIMPL/Categor%C3%ADa?src=x']), '/display/SIMPL/Categor%C3%ADa?src=x')
     eq(ruta('/display/SIMPL/Architecture', ['/display/SIMPL/Architecture/Hija']), null, 'una hija no es la página')
+
+    // Revisión de H28 (D6): entre dos de la misma ruta gana el de href más
+    // corto, como en las demás pistas.
+    eq(
+      ruta('/display/SIMPL/Architecture', ['/display/SIMPL/Architecture?src=contextnavpagetreemode', '/display/SIMPL/Architecture#x']),
+      '/display/SIMPL/Architecture#x',
+      'el más corto'
+    )
+    // Y un href relativo se resuelve contra la página en la que se está, no
+    // contra una base fija: `location` DENTRO de la prueba.
+    const locPrevia = globalThis.location
+    globalThis.location = { href: 'https://acme.atlassian.net/display/SIMPL/Otra' }
+    try {
+      eq(ruta('/display/SIMPL/Architecture', ['Architecture?src=x']), 'Architecture?src=x', 'relativo a la página actual')
+    } finally {
+      if (locPrevia === undefined) delete globalThis.location
+      else globalThis.location = locPrevia
+    }
+  })
+})
+
+// --- Revisión adversaria de H28 (D3): la página no decide adónde lleva el clic
+// Reproducido en Chromium: `href-end` casaba el sufijo del href CRUDO, consulta
+// incluida, así que un `/logout.action?x=/spaces/SIMPL/pages/5/Title` sembrado
+// en el cuerpo «acababa en» la ruta del paso y le ganaba al enlace del árbol
+// (que lleva `?src=…`); y `href-param pageId` no miraba la ruta, así que un
+// `/logout.action?pageId=5`, más corto, le ganaba al `viewpage.action` real.
+// El ejecutor sólo pulsa un enlace cuya URL RESUELTA sea la del paso.
+
+test('SEGURIDAD (revisión de H28): un enlace sólo se pulsa si su URL RESUELTA es la del paso', () => {
+  const pasoSinSlug = { kind: 'confluence-page', id: '5', path: '/pages/viewpage.action?pageId=5' }
+  const pasoSlug = { kind: 'confluence-page', id: '5', path: '/spaces/SIMPL/pages/5/Title' }
+
+  // Lo sembrado: una ruta de ver en la CONSULTA, o el id como parámetro de otra ruta.
+  eq(llevaAlPaso(pasoSinSlug, '/logout.action?pageId=5', ORIGIN), false, 'el pageId de otra ruta')
+  eq(llevaAlPaso(pasoSinSlug, '/confluence/logout.action?pageId=5', ORIGIN), false, 'también con ruta de contexto')
+  eq(llevaAlPaso(pasoSinSlug, '/logout.action?x=/pages/5/', ORIGIN), false, '/pages/5/ en la consulta')
+  eq(llevaAlPaso(pasoSlug, '/logout.action?x=/spaces/SIMPL/pages/5/Title', ORIGIN), false, 'la ruta del paso en la consulta')
+  eq(llevaAlPaso(pasoSinSlug, '/pages/removepage.action?pageId=5', ORIGIN), false, 'una acción con el pageId del paso')
+  eq(llevaAlPaso(pasoSinSlug, '/pages/viewpage.action?pageId=7', ORIGIN), false, 'una ruta sin slug no identifica nada: manda el id')
+  eq(llevaAlPaso(pasoSinSlug, '/pages/viewpage.action?pageId=55', ORIGIN), false, 'el id con frontera')
+  eq(llevaAlPaso(pasoSlug, '/spaces/SIMPL/pages/55/Title', ORIGIN), false)
+  eq(llevaAlPaso(pasoSlug, 'https://malicioso.example/spaces/SIMPL/pages/5/Title', ORIGIN), false, 'otro origen')
+  eq(llevaAlPaso(pasoSlug, 'javascript:alert(1)', ORIGIN), false)
+  eq(llevaAlPaso({ kind: 'jira-issue', id: 'ENG-7', path: '/browse/ENG-7' }, '/secure/Logout!default.jspa?x=/browse/ENG-7', ORIGIN), false)
+  eq(llevaAlPaso({ kind: 'jira-issue', id: 'ENG-7' }, '/browse/ENG-70', ORIGIN), false)
+  eq(llevaAlPaso({ kind: 'confluence-space', id: 'ENG' }, '/wiki/spaces/ENG/pages/100/X', ORIGIN), false, 'una página del espacio no es el espacio')
+  eq(llevaAlPaso({ kind: 'jira-project', id: 'ENG' }, '/projects/ENGINE', ORIGIN), false)
+
+  // Lo legítimo: el enlace del árbol de un DC 9.2 (con `?src=`), el de un DC
+  // viejo, el de Cloud y los de Jira.
+  eq(llevaAlPaso(pasoSlug, '/spaces/SIMPL/pages/5/Title?src=contextnavpagetreemode', ORIGIN), true, 'el del árbol del DC 9.2')
+  eq(llevaAlPaso(pasoSlug, '/spaces/SIMPL/pages/5/Otro+Titulo', ORIGIN), true, 'el id manda sobre el slug')
+  eq(llevaAlPaso(pasoSinSlug, '/pages/viewpage.action?pageId=5', ORIGIN), true, 'viewpage.action con su pageId')
+  eq(llevaAlPaso(pasoSinSlug, 'https://acme.atlassian.net/wiki/spaces/ENG/pages/5', ORIGIN), true, 'absoluto y del mismo origen')
+  eq(llevaAlPaso({ kind: 'confluence-page', id: '1', path: '/display/SIMPL/Architecture' }, '/display/SIMPL/Architecture/?src=x#y', ORIGIN), true, 'la ruta con slug del paso')
+  eq(llevaAlPaso({ kind: 'confluence-space', id: 'ENG', path: '/wiki/spaces/ENG' }, '/wiki/spaces/ENG/overview?homepageId=1', ORIGIN), true)
+  eq(llevaAlPaso({ kind: 'confluence-space', id: 'SIMPL' }, '/display/SIMPL', ORIGIN), true)
+  eq(llevaAlPaso({ kind: 'jira-issue', id: 'ENG-7' }, '/browse/ENG-7?focusedCommentId=1', ORIGIN), true)
+  eq(llevaAlPaso({ kind: 'jira-project', id: 'ENG' }, '/projects/ENG/issues/ENG-1', ORIGIN), true)
+
+  // Sin nada con que comparar, no: un paso sin id ni ruta no autoriza ningún clic.
+  eq(llevaAlPaso({ kind: 'confluence-page' }, '/spaces/SIMPL/pages/5/Title', ORIGIN), false)
+  eq(llevaAlPaso(null, '/x', ORIGIN), false)
+})
+
+test('revisión de H28 (D3): un enlace sembrado en el cuerpo no le gana al del árbol', () => {
+  conEstilos(() => {
+    const arbol = '/spaces/SIMPL/pages/5/Title?src=contextnavpagetreemode'
+    const r = locateStep({ kind: 'confluence-page', id: '5', path: '/spaces/SIMPL/pages/5/Title' }, documento(['/logout.action?x=/spaces/SIMPL/pages/5/Title', arbol]))
+    eq(r?.element.getAttribute('href'), arbol, '`href-end` exige también la ruta resuelta: el sembrado acaba en la ruta sólo por su consulta')
+    eq(r?.by, 'href-path', 'y el del árbol lo encuentra la ruta entera')
+
+    const vista = '/pages/viewpage.action?pageId=5'
+    const r2 = locateStep({ kind: 'confluence-page', id: '5', path: vista }, documento(['/logout.action?pageId=5', vista]))
+    eq(r2?.element.getAttribute('href'), vista, '`href-param pageId` sólo en una ruta viewpage.action')
+    eq(r2?.by, 'href-param')
   })
 })

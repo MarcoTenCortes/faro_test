@@ -90,6 +90,13 @@ export const NAV_TIMING = {
   // Más que `stepStallMs` (9 s) porque es una carga ENTERA de página, y un Data
   // Center lento tarda más en eso que un paso en desplegar una rama del árbol.
   anchorStallMs: 12000,
+  // El respiro del service worker tras un clic que no dejó la pestaña en otra
+  // página, antes de mandar el paso siguiente o de anclar: lo que tarda una SPA
+  // (Cloud) en cambiar de vista sin recargar. Una recarga de verdad en el
+  // último clic (un Data Center) no se espera aquí: la termina el aviso de la
+  // página de destino (revisión adversaria de H28, D1). Era un 420 suelto en el
+  // service worker que nada vigilaba.
+  afterClickMs: 420,
 }
 
 /**

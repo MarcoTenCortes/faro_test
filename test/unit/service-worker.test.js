@@ -524,6 +524,9 @@ test('sw: sin permiso de host, la asistida se queja en vez de callarse', async (
   eq(res.ok, false)
   eq(res.needsPermission, true)
   assert(/permiso/i.test(res.error), 'el motivo debe hablar del permiso: ' + res.error)
+  // EL CAMBIO (revisión adversaria de H28, D7): el final ya salió con el
+  // motivo, y el panel no lo repite como «Navegación fallida».
+  eq(res.avisado, true, 'y sabe que ya se le avisó')
 
   const avisos = rig.state.panelMessages.filter((m) => m.type === MSG.PLAN_FINISHED)
   eq(avisos.length, 1, 'el panel tiene que enterarse')
@@ -1726,7 +1729,9 @@ test('H28: un paso que contesta {ok:false} sin status acaba el recorrido con su 
   }
   try {
     const res = await rig.send({ type: MSG.START_PLAN, tabId: 1, plan: PLAN })
-    eq(res, { ok: false, error: ROTO.error }, 'el panel recibe el motivo')
+    // EL CAMBIO (revisión adversaria de H28, D7): con `avisado`, porque el final
+    // ya salió; el panel lo repetía como «Navegación fallida», con dos avisos.
+    eq(res, { ok: false, error: ROTO.error, avisado: true }, 'el panel recibe el motivo y sabe que ya se le avisó')
     eq(rig.state.sentToTab.filter((m) => m.type === MSG.STEP).length, 1, 'un paso, no los tres')
     eq([anclas(rig).length, saltos], [0, 0], 'ni un ancla en la página equivocada ni una navegación')
     eq(finales(rig).map((m) => m.result), [
@@ -1953,5 +1958,541 @@ test('H28: un almacén roto no tumba un recorrido: los ajustes de la página son
     } finally {
       globalThis.chrome.storage.local.get = bueno
     }
+  })
+})
+
+// ------------------------------------------------- revisión adversaria de H28
+//
+// Sobre 6afde42 (docs/plan/handoff/h28-rev-decisiones.md, D1, D2, D4, D7 y D8).
+// Lo que hace llegar un recorrido a su destino, y lo que dice cuando no llega:
+// el último clic de un Data Center (una carga entera, que contesta desde la
+// página VIEJA), el salto sin permiso de host, los destinos de Jira que no
+// tienen una URL fija y el salto que no sale. Sigue sin haber comentarios de
+// bloque aquí (ver la revisión adversaria de H27, arriba).
+
+// Lo que contesta la página al anclar bien.
+const ANCLADO = { anchored: true, strategy: 'cita' }
+// La página de la pestaña 1 del rig, de donde sale cada recorrido.
+const PARTIDA = 'https://acme.atlassian.net/wiki/spaces/ENG/pages/400/Onboarding'
+
+// Un recorrido paso a paso en un Data Center: páginas por `/display/`, que no
+// llevan el id en la URL (lo lleva la meta `ajs-page-id`, y con ella el aviso).
+const PASOS_DC = {
+  ...PLAN,
+  destination: { kind: 'confluence-page', id: '200', title: 'ADR-014', url: DC + '/display/ENG/ADR-014' },
+  steps: [
+    { kind: 'confluence-space', id: 'ENG', title: 'Ingeniería', url: DC + '/display/ENG' },
+    { kind: 'confluence-page', id: '100', title: 'Arquitectura', url: DC + '/display/ENG/Arquitectura' },
+    { kind: 'confluence-page', id: '200', title: 'ADR-014', url: DC + '/display/ENG/ADR-014' },
+  ],
+}
+const PARTIDA_DC = DC + '/display/ENG/Onboarding'
+
+// Una pestaña que despliega los dos primeros pasos y contesta `ultimo` al
+// tercero; a ANCHOR, `ancla` (una función, si tiene que tardar).
+function recorrido(rig, ultimo, ancla = ANCLADO) {
+  let n = 0
+  rig.state.contentReply = (msg) => {
+    if (msg.type === MSG.ANCHOR) return typeof ancla === 'function' ? ancla() : ancla
+    if (msg.type !== MSG.STEP) return { ok: true }
+    n++
+    return n < 3 ? { status: 'expanded' } : ultimo
+  }
+}
+
+// El plan de una búsqueda de Jira, con la forma de `jqlPlan` (planner.js).
+function busqueda(jql) {
+  const url = JIRA + '/issues/?jql=' + encodeURIComponent(jql)
+  const destination = { kind: 'jira-jql', id: jql, title: 'Los 3 resultados de la búsqueda en Jira', path: url.slice(JIRA.length), url }
+  return { navigate: true, mode: 'direct', destination, anchor: null, steps: [{ ...destination, label: destination.title, action: 'open' }], explanation: jql }
+}
+
+// El `chrome.permissions.contains` del rig, que dice que no, mientras corre `fn`.
+async function sinPermiso(fn) {
+  const contiene = globalThis.chrome.permissions.contains
+  const preguntas = []
+  globalThis.chrome.permissions.contains = async (p) => {
+    preguntas.push(p)
+    return false
+  }
+  try {
+    await fn(preguntas)
+  } finally {
+    globalThis.chrome.permissions.contains = contiene
+  }
+}
+
+test('H28 rev: el último clic que recarga (un Data Center) no ancla en la página que pulsó', async () => {
+  // Reproducido en Chromium (revisión adversaria de H28, G1): en un Data Center
+  // pulsar el enlace del árbol es una carga ENTERA; la página vieja se da por
+  // quieta a los ~230 ms con su URL todavía puesta y contesta `clicked` desde
+  // ella. El worker esperaba 420 ms y mandaba ANCHOR a la vieja (o a nadie), y
+  // el aviso del destino ya no encontraba recorrido. Lo decide la respuesta del
+  // clic: la página que contesta con su propia URL no es el destino, y el
+  // recorrido espera su aviso en la fase 'anchor', o su vigilante.
+  const rig = makeChrome()
+  await loadWorker(rig)
+  await conMargenCorto(rig, async () => {
+    rig.state.tabs[1].url = PARTIDA_DC
+    recorrido(rig, { status: 'clicked', url: PARTIDA_DC, pageId: '400' })
+    eq(await rig.send({ type: MSG.START_PLAN, tabId: 1, plan: PASOS_DC }), { ok: true, navigating: true })
+    eq([anclas(rig), finales(rig)], [[], []], 'ni un ANCHOR a la página de partida')
+    const guardado = rig.state.session['faro:plans']?.['1']
+    eq([guardado?.phase, guardado?.index], ['anchor', 3], 'esperando el aviso del destino')
+
+    // Avisa otra página: no es el destino.
+    await rig.send({ type: MSG.CONTENT_READY, url: DC + '/display/ENG/Otra', pageId: '300' }, { tab: { id: 1 } })
+    eq([anclas(rig), finales(rig)], [[], []], 'otra página no ancla')
+    // El destino, con una URL `/display/` sin id: lo dice su `pageId`. Una vez.
+    await rig.send({ type: MSG.CONTENT_READY, url: PASOS_DC.destination.url, pageId: '200' }, { tab: { id: 1 } })
+    eq([anclas(rig).length, finales(rig).map((m) => m.result)], [1, [ANCLADO]], 'el aviso del destino ancla, una vez')
+    eq(rig.state.session['faro:plans']?.['1'], undefined)
+
+    // Y si el destino no avisa (la pestaña llegó y su content script no), el
+    // vigilante del salto lo cierra con su motivo.
+    rig.state.sentToTab.length = 0
+    rig.state.panelMessages.length = 0
+    rig.state.tabs[1].url = PARTIDA_DC
+    recorrido(rig, { status: 'clicked', url: PARTIDA_DC, pageId: '400' })
+    await rig.send({ type: MSG.START_PLAN, tabId: 1, plan: PASOS_DC })
+    rig.state.tabs[1].url = PASOS_DC.destination.url
+    await esperar(MARGEN_MS + 20)
+    eq([anclas(rig), finales(rig).map((m) => m.result)], [[], [{ error: SIN_AVISO }]])
+  })
+})
+
+test('H28 rev: el último clic que ya dejó la pestaña en el destino ancla en el acto, aunque siga cargando', async () => {
+  // Lo que ya anclaba sigue anclando, UNA vez: «ya estábamos aquí» (sin
+  // `url`) y un `clicked` con la URL del destino (una SPA que ya cambió de
+  // vista). Y la guarda contra el arreglo literal del grupo, que miraba
+  // `tabs.status` en la rama final: tras document_idle la pestaña sigue en
+  // 'loading' hasta el onload, y esperar ahí un aviso que ya había pasado
+  // acababa en «no ha avisado» (revisión adversaria de H28, G1: la vieja muere
+  // antes de contestar, el aviso del destino reenvía el paso y éste contesta
+  // «ya estábamos aquí»). Y la rama final dice si la página no contesta al
+  // anclar: hasta aquí el panel recibía un final null y callaba.
+  const rig = makeChrome()
+  await loadWorker(rig)
+  await conMargenCorto(rig, async () => {
+    rig.state.tabs[1].status = 'loading'
+    for (const ultimo of [{ status: 'clicked', note: 'ya estábamos aquí' }, { status: 'clicked', url: PLAN.destination.url, pageId: '200' }]) {
+      rig.state.sentToTab.length = 0
+      rig.state.panelMessages.length = 0
+      recorrido(rig, ultimo)
+      eq((await rig.send({ type: MSG.START_PLAN, tabId: 1, plan: PLAN })).finished, true, JSON.stringify(ultimo))
+      eq([anclas(rig).length, finales(rig).map((m) => m.result)], [1, [ANCLADO]], JSON.stringify(ultimo))
+    }
+
+    rig.state.sentToTab.length = 0
+    rig.state.panelMessages.length = 0
+    let n = 0
+    rig.state.contentReply = (msg) => {
+      if (msg.type === MSG.ANCHOR) return ANCLADO
+      if (msg.type !== MSG.STEP) return { ok: true }
+      n++
+      if (n < 3) return { status: 'expanded' }
+      return n === 3 ? null : { status: 'clicked', note: 'ya estábamos aquí' }
+    }
+    eq((await rig.send({ type: MSG.START_PLAN, tabId: 1, plan: PLAN })).waiting, true, 'la vieja murió antes de contestar')
+    await rig.send({ type: MSG.CONTENT_READY, url: PLAN.destination.url, pageId: '200' }, { tab: { id: 1 } })
+    eq([anclas(rig).length, finales(rig).map((m) => m.result)], [1, [ANCLADO]], 'el paso reenviado contesta «ya estábamos aquí» y ancla')
+    await esperar(MARGEN_MS * 2 + 40)
+    eq(finales(rig).length, 1, 'y ningún «no ha avisado» detrás')
+
+    rig.state.panelMessages.length = 0
+    recorrido(rig, { status: 'clicked', note: 'ya estábamos aquí' }, null)
+    await rig.send({ type: MSG.START_PLAN, tabId: 1, plan: PLAN })
+    eq(finales(rig).map((m) => m.result), [{ ok: false, error: 'la página no ha contestado al anclar' }], 'la página que no contesta al anclar, dicho')
+  })
+})
+
+test('H28 rev: un aviso del destino dentro del margen de después del clic ancla UNA vez', async () => {
+  // El aviso del destino llega mientras el worker espera su margen tras el
+  // último clic, y anclar tarda (la página busca la cita): la rama final no
+  // soltaba el recorrido antes de anclar, el margen lo encontraba vivo al
+  // acabar y anclaba OTRA vez, con dos finales (revisión adversaria de H28, G1,
+  // escenario E). Ahora se suelta antes, como en `onContentReady`.
+  const rig = makeChrome()
+  await loadWorker(rig)
+  await conMargenCorto(rig, async () => {
+    recorrido(rig, { status: 'clicked', note: 'ya estábamos aquí' }, () => esperar(NAV_TIMING.afterClickMs + 150).then(() => ANCLADO))
+    const lanzado = rig.send({ type: MSG.START_PLAN, tabId: 1, plan: PLAN })
+    await esperar(40)
+    await rig.send({ type: MSG.CONTENT_READY, url: PLAN.destination.url, pageId: '200' }, { tab: { id: 1 } })
+    await lanzado
+    eq(anclas(rig).length, 1, 'un ANCHOR, no dos')
+    eq(finales(rig).map((m) => m.result), [ANCLADO], 'y un final')
+  })
+})
+
+test('H28 rev: en una SPA, el último clic cuya URL cambia después de contestar ancla con URL_CHANGED', async () => {
+  // Una SPA (Cloud) cambia de vista sin recargar y sin CONTENT_READY. Si su URL
+  // cambia después de que la página se dé por quieta, el clic contesta con la
+  // de partida y el recorrido espera en 'anchor': el aviso de URL cambiada
+  // cuenta entonces como el de «lista», con la misma regla (sólo el destino).
+  const rig = makeChrome()
+  await loadWorker(rig)
+  await conMargenCorto(rig, async () => {
+    recorrido(rig, { status: 'clicked', url: PARTIDA, pageId: '400' })
+    eq(await rig.send({ type: MSG.START_PLAN, tabId: 1, plan: PLAN }), { ok: true, navigating: true })
+    await rig.send({ type: MSG.URL_CHANGED, url: 'https://acme.atlassian.net/wiki/spaces/ENG/pages/300/Otra', pageId: '400' }, { tab: { id: 1 } })
+    eq([anclas(rig), finales(rig)], [[], []], 'otra URL no es el destino')
+    await rig.send({ type: MSG.URL_CHANGED, url: PLAN.destination.url, pageId: '400' }, { tab: { id: 1 } })
+    eq([anclas(rig).length, finales(rig).map((m) => m.result)], [1, [ANCLADO]], 'el destino sí, aunque la meta del id siga siendo la de antes')
+    eq(rig.state.session['faro:plans']?.['1'], undefined)
+
+    // En la fase 'steps' no hace nada, ni con la URL del destino: un paso a
+    // medias lo retoma el aviso de una recarga, y anclar ahí se saltaría los
+    // que quedan.
+    rig.state.sentToTab.length = 0
+    rig.state.panelMessages.length = 0
+    rig.state.contentReply = (msg) => (msg.type === MSG.STEP ? null : { ok: true })
+    eq((await rig.send({ type: MSG.START_PLAN, tabId: 1, plan: PLAN })).waiting, true)
+    await rig.send({ type: MSG.URL_CHANGED, url: PLAN.destination.url, pageId: '200' }, { tab: { id: 1 } })
+    eq([anclas(rig), finales(rig)], [[], []], 'un paso a medias no se ancla por un cambio de URL')
+    eq(rig.state.session['faro:plans']?.['1']?.phase, 'steps')
+  })
+})
+
+test('H28 rev: un salto directo sin permiso navega y no avisa de nada', async () => {
+  // Sin permiso de host en el destino no hay content script que avise, y el
+  // panel manda el salto igual («Sin permiso sólo puedo llevarte de golpe»).
+  // Desde H28 todo salto armaba su vigilante y, a los 12 s, salía «La página de
+  // destino no ha avisado… Recárgala» en rojo con la pestaña ya en su sitio
+  // (revisión adversaria de H28, G2). Ahora navega sin recorrido ni vigilante;
+  // con un fragmento que resaltar, lo dice en ámbar: un `anchored: false` con
+  // su `message` es lo que el panel pinta como «Sin resaltar».
+  const rig = makeChrome()
+  await loadWorker(rig)
+  await conMargenCorto(rig, async () => {
+    // Un salto anterior de la misma pestaña, todavía esperando su aviso: el
+    // nuevo lo sustituye, y el vigilante de aquél no puede acabar éste.
+    const anterior = { ...SALTO_DC, destination: { ...SALTO_DC.destination, id: '300', url: DC + '/pages/viewpage.action?pageId=300' } }
+    eq((await rig.send({ type: MSG.NAVIGATE_DIRECT, tabId: 1, plan: anterior })).navigating, true)
+    await sinPermiso(async (preguntas) => {
+      rig.state.contentReply = () => null
+      rig.state.tabs[1].url = DC + '/pages/viewpage.action?pageId=100'
+      const res = await rig.send({ type: MSG.NAVIGATE_DIRECT, tabId: 1, plan: { ...SALTO_DC, anchor: null } })
+      eq(res, { ok: true, navigating: true, anchored: false })
+      eq(rig.state.tabs[1].url, SALTO_DC.destination.url, 'lleva igual')
+      eq(preguntas.map((p) => p.origins), [[DC + '/' + '*']], 'por el permiso del origen del destino')
+      eq(rig.state.session['faro:plans']?.['1'], undefined, 'sin recorrido esperando un aviso que no puede llegar, ni el de antes')
+      await esperar(MARGEN_MS + 20)
+      eq([finales(rig), anclas(rig)], [[], []], 'sin fragmento, nada que decir')
+
+      rig.state.tabs[1].url = DC + '/pages/viewpage.action?pageId=100'
+      eq(await rig.send({ type: MSG.NAVIGATE_DIRECT, tabId: 1, plan: SALTO_DC }), { ok: true, navigating: true, anchored: false })
+      await esperar(MARGEN_MS + 20)
+      eq(finales(rig).map((m) => m.result), [
+        { anchored: false, message: 'Te he llevado, pero sin permiso en confluence.simplprogramme.eu no puedo resaltar el fragmento.' },
+      ])
+      eq(anclas(rig), [], 'ni un ANCHOR a una pestaña sin content script')
+    })
+  })
+})
+
+test('H28 rev: «ya estoy» sin permiso no manda ANCHOR ni da error', async () => {
+  // La rama «ya estoy» mandaba ANCHOR a una pestaña sin content script y, desde
+  // H28, avisaba al panel de «la página no ha contestado al anclar»: no es lo
+  // que pasa, lo que falta es el permiso (revisión adversaria de H28, G2).
+  const rig = makeChrome()
+  await loadWorker(rig)
+  await sinPermiso(async () => {
+    rig.state.contentReply = () => null
+    rig.state.tabs[1].url = SALTO_DC.destination.url
+    eq(await rig.send({ type: MSG.NAVIGATE_DIRECT, tabId: 1, plan: SALTO_DC }), { ok: true, navigating: false, anchored: false })
+    eq(anclas(rig), [])
+    eq(finales(rig).map((m) => m.result), [
+      { anchored: false, message: 'Ya estás en la página, pero sin permiso en confluence.simplprogramme.eu no puedo resaltar el fragmento.' },
+    ])
+    rig.state.panelMessages.length = 0
+    eq(await rig.send({ type: MSG.NAVIGATE_DIRECT, tabId: 1, plan: { ...SALTO_DC, anchor: null } }), { ok: true, navigating: false, anchored: false })
+    eq([anclas(rig), finales(rig)], [[], []], 'y sin fragmento, nada')
+    eq(rig.state.tabs[1].url, SALTO_DC.destination.url, 'sin recargar')
+  })
+})
+
+test('H28 rev: una pestaña que sigue cargando al vencer el margen tiene UNA prórroga, y el vigilante vuelve a mirar tras leerla', async () => {
+  // Un Data Center lento no es un salto perdido: si al vencer el margen la
+  // pestaña sigue en 'loading', se espera otro margen igual, y una sola vez
+  // (revisión adversaria de H28, G2). El margen, más largo que el corto: las
+  // comprobaciones van entre el primer vencimiento y el de la prórroga.
+  const rig = makeChrome()
+  await loadWorker(rig)
+  await conMargenCorto(rig, async () => {
+    const margen = MARGEN_MS * 4
+    NAV_TIMING.anchorStallMs = margen
+    rig.state.contentReply = (msg) => (msg.type === MSG.ANCHOR ? ANCLADO : { ok: true })
+    rig.state.tabs[1].status = 'loading'
+    await rig.send({ type: MSG.NAVIGATE_DIRECT, tabId: 1, plan: SALTO_DC })
+    await esperar(margen * 1.5)
+    eq(finales(rig), [], 'cargando todavía: no se abandona')
+    eq(rig.state.session['faro:plans']?.['1']?.phase, 'anchor')
+    await rig.send({ type: MSG.CONTENT_READY, url: SALTO_DC.destination.url, pageId: '200' }, { tab: { id: 1 } })
+    eq([anclas(rig).length, finales(rig).map((m) => m.result)], [1, [ANCLADO]], 'el aviso llega en la prórroga y se ancla')
+    await esperar(margen)
+
+    // La prórroga es UNA: sigue cargando y nadie avisa, y a los dos márgenes, el motivo.
+    rig.state.sentToTab.length = 0
+    rig.state.panelMessages.length = 0
+    rig.state.tabs[1].url = PARTIDA
+    await rig.send({ type: MSG.NAVIGATE_DIRECT, tabId: 1, plan: SALTO_DC })
+    await esperar(margen * 3)
+    eq(finales(rig).map((m) => m.result), [{ error: SIN_AVISO }])
+
+    // Leer la pestaña tarda (en Chrome es una llamada al navegador), y el aviso
+    // del destino puede llegar mientras tanto: el vigilante vuelve a mirar el
+    // recorrido al volver, y no añade un «no ha avisado» a un salto que llegó.
+    rig.state.sentToTab.length = 0
+    rig.state.panelMessages.length = 0
+    rig.state.tabs[1].status = 'complete'
+    rig.state.tabs[1].url = PARTIDA
+    const lee = globalThis.chrome.tabs.get
+    globalThis.chrome.tabs.get = async (id) => {
+      await esperar(margen)
+      return lee(id)
+    }
+    try {
+      await rig.send({ type: MSG.NAVIGATE_DIRECT, tabId: 1, plan: SALTO_DC })
+      await esperar(margen * 1.5)
+      await rig.send({ type: MSG.CONTENT_READY, url: SALTO_DC.destination.url, pageId: '200' }, { tab: { id: 1 } })
+      await esperar(margen)
+      eq(finales(rig).map((m) => m.result), [ANCLADO], 'un final, el bueno')
+    } finally {
+      globalThis.chrome.tabs.get = lee
+    }
+  })
+})
+
+test('H28 rev: el salto que acaba en otra página lo dice, sin «Recárgala»', async () => {
+  // Un login, una incidencia movida (OLD-12 → NEW-34): la pestaña llegó a otra
+  // página, y «no ha avisado de que cargó. Recárgala» aconsejaba lo que no
+  // arregla nada (revisión adversaria de H28, G2). Sólo se afirma con una URL
+  // que lo prueba —un id o una clave que no son los del destino, o una ruta de
+  // login—, y sin su consulta; un `/display/…` de un Data Center no lleva id:
+  // ahí no se sabe, y queda el motivo de siempre.
+  const rig = makeChrome()
+  await loadWorker(rig)
+  await conMargenCorto(rig, async () => {
+    const incidencia = { ...PLAN, mode: 'direct', steps: [], destination: { kind: 'jira-issue', id: 'OLD-12', title: 'OLD-12', url: JIRA + '/browse/OLD-12' } }
+    // Un destino por `/display/` que el Data Center reescribe a
+    // `viewpage.action?pageId=` (un título con caracteres raros) sigue siendo él.
+    const porDisplay = { ...SALTO_DC, destination: { ...SALTO_DC.destination, url: DC + '/display/ENG/ADR-014' } }
+    const casos = [
+      [porDisplay, DC + '/pages/viewpage.action?pageId=200', SIN_AVISO],
+      [SALTO_DC, DC + '/login.action?os_destination=%2Fpages%2Fviewpage.action%3FpageId%3D200', 'La pestaña ha acabado en otra página (/login.action), no en «ADR-014».'],
+      [incidencia, JIRA + '/browse/NEW-34', 'La pestaña ha acabado en otra página (/browse/NEW-34), no en «OLD-12».'],
+      [SALTO_DC, 'https://id.atlassian.com/login?continue=x', 'La pestaña ha acabado en otra página (id.atlassian.com/login), no en «ADR-014».'],
+      [SALTO_DC, DC + '/pages/viewpage.action?pageId=300', 'La pestaña ha acabado en otra página (/pages/viewpage.action), no en «ADR-014».'],
+      [SALTO_DC, DC + '/display/ENG/Otra', SIN_AVISO],
+      [SALTO_DC, DC + '/spaces/ENG/pages/200/ADR-014', SIN_AVISO],
+      [incidencia, JIRA + '/browse/OLD-12?focusedCommentId=5', SIN_AVISO],
+    ]
+    for (const [plan, dondeAcaba, motivo] of casos) {
+      rig.state.panelMessages.length = 0
+      rig.state.tabs[1].url = PARTIDA
+      await rig.send({ type: MSG.NAVIGATE_DIRECT, tabId: 1, plan })
+      rig.state.tabs[1].url = dondeAcaba
+      await esperar(MARGEN_MS + 20)
+      eq(finales(rig).map((m) => m.result), [{ error: motivo }], dondeAcaba)
+    }
+  })
+})
+
+test('H28 rev: un proyecto /browse/CLAVE llega por su clave, y un aviso sin clave u otro proyecto no', async () => {
+  // Medido en el Jira de Marco (revisión adversaria de H28, G4): `/browse/SIMPL`
+  // responde con un 302 a `/projects/SIMPL/summary` o reescribe la URL a
+  // `/projects/SIMPL/issues/…`, y `parseAtlassianUrl` no saca clave de
+  // `/browse/SIMPL` (sólo de `/browse/X-123`): comparando con la clave de la URL
+  // del destino, el salto no llegaba nunca. Cuenta la identidad VALIDADA del
+  // destino (`d.id`) y, en un tablero `RapidBoard.jspa`, el `projectKey` de la
+  // consulta.
+  const rig = makeChrome()
+  await loadWorker(rig)
+  await conMargenCorto(rig, async () => {
+    rig.state.contentReply = (msg) => (msg.type === MSG.ANCHOR ? ANCLADO : { ok: true })
+    const proyecto = (id) => ({ ...PLAN, mode: 'direct', steps: [], anchor: null, destination: { kind: 'jira-project', id, title: id || 'Sin clave', url: JIRA + '/browse/SIMPL' } })
+    const aviso = async (plan, url) => {
+      rig.state.sentToTab.length = 0
+      rig.state.panelMessages.length = 0
+      rig.state.tabs[1].url = PARTIDA
+      eq((await rig.send({ type: MSG.NAVIGATE_DIRECT, tabId: 1, plan })).navigating, true)
+      await rig.send({ type: MSG.CONTENT_READY, url, pageId: '' }, { tab: { id: 1 } })
+      const hecho = [anclas(rig).length, finales(rig).length]
+      await rig.send({ type: MSG.CANCEL_PLAN, tabId: 1 })
+      return hecho
+    }
+    for (const url of [
+      JIRA + '/projects/SIMPL/summary',
+      JIRA + '/projects/SIMPL/issues/SIMPL-31748?filter=allopenissues',
+      JIRA + '/secure/RapidBoard.jspa?rapidView=12&projectKey=SIMPL',
+    ]) {
+      eq(await aviso(proyecto('SIMPL'), url), [1, 1], url)
+    }
+    eq(await aviso(proyecto('simpl'), JIRA + '/projects/SIMPL/summary'), [1, 1], 'la clave del destino, en mayúsculas como las de las URL')
+    for (const url of [
+      JIRA + '/secure/Dashboard.jspa',
+      JIRA + '/projects/OPS/summary',
+      JIRA + '/secure/RapidBoard.jspa?rapidView=12&projectKey=OPS',
+      'https://otro.example/projects/SIMPL/summary',
+    ]) {
+      eq(await aviso(proyecto('SIMPL'), url), [0, 0], url)
+    }
+    eq(await aviso(proyecto(''), JIRA + '/secure/Dashboard.jspa'), [0, 0], 'un destino sin clave no llega con un aviso sin clave')
+  })
+})
+
+test('H28 rev: «Llévame» de una búsqueda a otra navega, y a la misma en su vista de detalle es «ya estoy»', async () => {
+  // Una búsqueda no tiene id ni clave, y `samePage` cae en origen y ruta: con
+  // la pestaña en `/issues/?jql=A`, «Llévame» a `?jql=B` daba «ya estoy» y
+  // anclaba en la vieja sin moverse (heredado de `sameDoc`; revisión adversaria
+  // de H28, G4). Ahora se compara la consulta (`sameSearch`), en cualquier ruta.
+  const rig = makeChrome()
+  await loadWorker(rig)
+  await conMargenCorto(rig, async () => {
+    const plan = busqueda('project = OPS')
+    for (const [aqui, navega] of [
+      [JIRA + '/issues/?jql=' + encodeURIComponent('project = SIMPL'), true],
+      [JIRA + '/browse/OPS-9?jql=' + encodeURIComponent('project = OPS'), false],
+      [JIRA + '/issues/?jql=project+%3D+OPS&selectedIssue=OPS-9', false],
+      [JIRA + '/browse/OPS-9?jql=' + encodeURIComponent('project = SIMPL'), true],
+      [JIRA + '/browse/OPS-9', true],
+    ]) {
+      rig.state.tabs[1].url = aqui
+      eq((await rig.send({ type: MSG.NAVIGATE_DIRECT, tabId: 1, plan })).navigating, navega, aqui)
+      eq(rig.state.tabs[1].url, navega ? plan.destination.url : aqui, 'la pestaña, donde toca')
+      await rig.send({ type: MSG.CANCEL_PLAN, tabId: 1 })
+    }
+  })
+})
+
+test('H28 rev: el aviso de la misma búsqueda en su vista de detalle, o con la incidencia elegida, llega; el de otra no', async () => {
+  // Un Data Center reescribe la búsqueda a `/browse/K?jql=…` al abrir la
+  // primera incidencia, y Cloud le añade `&selectedIssue=`: con `samePage`, una
+  // clave de un lado y ninguna del otro no casaban, y a los 12 s salía «no ha
+  // avisado» con la búsqueda abierta (revisión adversaria de H28, G4).
+  const rig = makeChrome()
+  await loadWorker(rig)
+  await conMargenCorto(rig, async () => {
+    rig.state.contentReply = (msg) => (msg.type === MSG.ANCHOR ? { ok: true } : { ok: true })
+    const plan = busqueda('project = OPS')
+    for (const [url, llega] of [
+      [JIRA + '/browse/OPS-9?jql=' + encodeURIComponent('project = OPS'), true],
+      [JIRA + '/issues/?jql=' + encodeURIComponent('project = OPS') + '&selectedIssue=OPS-9', true],
+      [JIRA + '/browse/SIMPL-9?jql=' + encodeURIComponent('project = SIMPL'), false],
+      [JIRA + '/issues/', false],
+    ]) {
+      rig.state.sentToTab.length = 0
+      rig.state.panelMessages.length = 0
+      rig.state.tabs[1].url = PARTIDA
+      await rig.send({ type: MSG.NAVIGATE_DIRECT, tabId: 1, plan })
+      await rig.send({ type: MSG.CONTENT_READY, url, pageId: '' }, { tab: { id: 1 } })
+      eq([anclas(rig).length, finales(rig).length], llega ? [1, 1] : [0, 0], url)
+      await rig.send({ type: MSG.CANCEL_PLAN, tabId: 1 })
+    }
+  })
+})
+
+test('H28 rev: un salto directo cuyo tabs.update lanza no deja el recorrido esperando', async () => {
+  // Si `tabs.update` lanzaba entre guardar la fase 'anchor' y armar el
+  // vigilante, el recorrido se quedaba en `faro:plans` sin plazo, y el primer
+  // aviso del destino en esa pestaña, a cualquier hora, lo anclaba (revisión
+  // adversaria de H28, G8). «Navigation rejected.» es lo que da Chrome cuando
+  // su capa de contenido rechaza el salto.
+  const rig = makeChrome()
+  await loadWorker(rig)
+  const actualiza = globalThis.chrome.tabs.update
+  const error = console.error
+  const errores = []
+  console.error = (...args) => errores.push(args.map(String).join(' '))
+  globalThis.chrome.tabs.update = async () => {
+    throw new Error('Navigation rejected.')
+  }
+  try {
+    await conMargenCorto(rig, async () => {
+      rig.state.contentReply = (msg) => (msg.type === MSG.ANCHOR ? ANCLADO : { ok: true })
+      const res = await rig.send({ type: MSG.NAVIGATE_DIRECT, tabId: 1, plan: SALTO_DC })
+      eq(res, { ok: false, error: 'Navigation rejected.' }, 'el panel recibe el motivo, sin `avisado`: no se le mandó ningún final')
+      eq(rig.state.session['faro:plans']?.['1'], undefined, 'y el recorrido no se queda esperando')
+      globalThis.chrome.tabs.update = actualiza
+      await rig.send({ type: MSG.CONTENT_READY, url: DC + '/display/ENG/ADR-014', pageId: '200' }, { tab: { id: 1 } })
+      await esperar(MARGEN_MS + 20)
+      eq([anclas(rig), finales(rig)], [[], []], 'un aviso posterior del destino no ancla un salto que no salió')
+      eq(errores.length, 1, 'el fallo, en la consola una vez: ' + JSON.stringify(errores))
+
+      // Y sólo suelta SU recorrido: si mientras su salto fallaba se lanzó otro
+      // en la misma pestaña, el otro sigue esperando su aviso.
+      const otro = { ...SALTO_DC, destination: { ...SALTO_DC.destination, id: '300', url: DC + '/pages/viewpage.action?pageId=300' } }
+      globalThis.chrome.tabs.update = async (id, cambio) => {
+        if (cambio.url !== SALTO_DC.destination.url) return actualiza(id, cambio)
+        await esperar(20)
+        throw new Error('Navigation rejected.')
+      }
+      const lento = rig.send({ type: MSG.NAVIGATE_DIRECT, tabId: 1, plan: SALTO_DC })
+      await esperar(5)
+      eq((await rig.send({ type: MSG.NAVIGATE_DIRECT, tabId: 1, plan: otro })).navigating, true)
+      eq(await lento, { ok: false, error: 'Navigation rejected.' })
+      eq(rig.state.session['faro:plans']?.['1']?.plan?.destination?.id, '300', 'el salto que sí salió')
+      globalThis.chrome.tabs.update = actualiza
+    })
+  } finally {
+    globalThis.chrome.tabs.update = actualiza
+    console.error = error
+  }
+})
+
+test('H28 rev: el último paso por URL que no sale se lo dice al panel, también retomado por CONTENT_READY', async () => {
+  // Retomado por el aviso de la pestaña, el error de `tabs.update` volvía como
+  // respuesta al content script, que la tira: el panel no recibía ningún final
+  // y se quedaba con «paso 3/3» y su «Parar» (revisión adversaria de H28, G8).
+  // Desde el panel, lo mismo y con `avisado`: ya tiene su final, y no lo repite.
+  const rig = makeChrome()
+  await loadWorker(rig)
+  const actualiza = globalThis.chrome.tabs.update
+  globalThis.chrome.tabs.update = async () => {
+    throw new Error('Navigation rejected.')
+  }
+  try {
+    await conMargenCorto(rig, async () => {
+      const motivo = 'No he podido llevarte al destino: Navigation rejected.'
+      recorrido(rig, { status: 'navigate', reason: 'no localizado' })
+      eq(await rig.send({ type: MSG.START_PLAN, tabId: 1, plan: PLAN }), { ok: false, error: motivo, avisado: true })
+      eq(finales(rig).map((m) => m.result), [{ error: motivo }])
+      eq(rig.state.session['faro:plans']?.['1'], undefined)
+
+      rig.state.panelMessages.length = 0
+      let n = 0
+      rig.state.contentReply = (msg) => {
+        if (msg.type !== MSG.STEP) return { ok: true }
+        n++
+        if (n === 1) return null
+        return n < 4 ? { status: 'expanded' } : { status: 'navigate', reason: 'no localizado' }
+      }
+      eq((await rig.send({ type: MSG.START_PLAN, tabId: 1, plan: PLAN })).waiting, true, 'el primer paso cae en plena recarga')
+      eq(await rig.send({ type: MSG.CONTENT_READY, url: PARTIDA, pageId: '400' }, { tab: { id: 1 } }), { ok: true }, 'al content script, lo de siempre')
+      eq(finales(rig).map((m) => m.result), [{ error: motivo }], 'y el panel se entera')
+      eq(rig.state.session['faro:plans']?.['1'], undefined)
+    })
+  } finally {
+    globalThis.chrome.tabs.update = actualiza
+  }
+})
+
+test('H28 rev: el pageId de otro host no ancla el salto, ni el de otra viewpage.action', async () => {
+  // La rama del `pageId` no miraba el host: un aviso de otro sitio con el mismo
+  // número anclaba el salto (revisión adversaria de H28, G8). Y un aviso de OTRA
+  // `viewpage.action` tampoco llega por la ruta, que es la de todas: es lo que
+  // hacía `sameDoc`, y esta prueba lo caza si vuelve delante de `samePage`.
+  const rig = makeChrome()
+  await loadWorker(rig)
+  await conMargenCorto(rig, async () => {
+    rig.state.contentReply = (msg) => (msg.type === MSG.ANCHOR ? ANCLADO : { ok: true })
+    await rig.send({ type: MSG.NAVIGATE_DIRECT, tabId: 1, plan: SALTO_DC })
+    await rig.send({ type: MSG.CONTENT_READY, url: 'https://otro.atlassian.net/wiki/spaces/X/pages/200/Otra', pageId: '200' }, { tab: { id: 1 } })
+    eq([anclas(rig), finales(rig)], [[], []], 'otro host con el mismo pageId')
+    await rig.send({ type: MSG.CONTENT_READY, url: DC + '/pages/viewpage.action?pageId=100', pageId: '100' }, { tab: { id: 1 } })
+    eq([anclas(rig), finales(rig)], [[], []], 'otra viewpage.action del mismo sitio')
+    await rig.send({ type: MSG.CONTENT_READY, url: DC + '/display/ENG/ADR-014', pageId: '200' }, { tab: { id: 1 } })
+    eq([anclas(rig).length, finales(rig).map((m) => m.result)], [1, [ANCLADO]], 'el destino, en su sitio')
   })
 })

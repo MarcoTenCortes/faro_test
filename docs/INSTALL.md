@@ -1710,6 +1710,11 @@ corto y un detalle. Todos los títulos, por dónde salen:
   y el clic; recargarla suele bastar) o el motivo que da el content script al
   negarse. Sin permiso o con el content script roto no sale esta línea: sale
   la tarjeta **Dar permiso** (sin nada en el registro) o «Content script roto».
+  Desde la revisión adversaria de H28 sale también, en gris, «has cambiado de
+  pestaña»: cambiaste de pestaña mientras Faro comprobaba la página, y el panel
+  dice «Has cambiado de pestaña: vuelve a ella y pulsa otra vez.» (antes pintaba
+  la tarjeta del permiso de la pestaña nueva, o fallaba si ésta no era de
+  Atlassian).
 - «Permiso concedido» — concediste el permiso sobre el dominio; el content
   script queda registrado para él.
 - «Permiso de host denegado» — cerraste o rechazaste el diálogo de permiso de
@@ -1807,7 +1812,9 @@ corto y un detalle. Todos los títulos, por dónde salen:
   mira ninguna pestaña de Atlassian), «falta permiso» o, con el permiso dado y
   el content script roto, «el content script no arranca: <motivo>» (antes esas
   tres se iban calladas), y con un script roto el `error` que dé él en vez de
-  «no se pudo leer».
+  «no se pudo leer». Desde la revisión adversaria de H28, «has cambiado de
+  pestaña» si cambiaste mientras Faro comprobaba la página (antes, «falta
+  permiso»).
 - «Anclas en la respuesta» — el bloque JSON de anclas señala un bloque válido
   para N de las M observaciones.
 - «Sin bloque de anclas» — la respuesta numera pero no trae el bloque JSON (o
@@ -1841,7 +1848,10 @@ corto y un detalle. Todos los títulos, por dónde salen:
   content script contestó roto: antes se pintaba la tarjeta con todas las
   observaciones «no encontradas» y «Análisis marcado · 0 de N») y «la página no
   contestó al marcar de nuevo: <motivo>» (lo mismo al pulsar «Volver a marcar
-  en esta página»).
+  en esta página»). Desde la revisión adversaria de H28, el «has cambiado de
+  pestaña o de sitio» sale también si cambias mientras Faro comprueba el
+  content script: antes se registraba «falta permiso» y, con la pestaña nueva
+  fuera de Atlassian, la respuesta acababa en «Fallo enviando».
 - «Sin anclar» — las observaciones que no se pudieron situar en la página.
 - «Análisis marcado» — de cada número, cómo se resolvió: `block+quote`,
   `block+whole`, `block-moved`, `global`, y «N ms en la página»: lo que costó
@@ -1882,7 +1892,10 @@ corto y un detalle. Todos los títulos, por dónde salen:
   · coinciden 2 · sólo el modelo 1 · sólo Jira 1», o «sin relaciones en Jira
   entre N incidencias») y lo que tardó, en ms. **No leídas** (en amarillo):
   «<motivo> · <frase>», el código del fallo (`cloud`, `claves`, `devueltas`,
-  `sesion`, `jql`, `permiso`, `red`, `api`, `forma`, `apagado`…) y la misma
+  `sesion`, `jql`, `permiso`, `pestaña` —desde la revisión adversaria de H28:
+  cambiaste de pestaña mientras Faro comprobaba la página, «No he podido leer
+  las relaciones de Jira (has cambiado de pestaña).»—, `red`, `api`, `forma`,
+  `apagado`…) y la misma
   frase que sale bajo el diagrama («Hacen falta al menos dos incidencias del
   índice para contrastar», «Jira sólo ha devuelto 1 de las 3 incidencias
   pedidas (sin contrastar: ENG-3, ENG-12): una incidencia movida de proyecto
@@ -1974,14 +1987,28 @@ corto y un detalle. Todos los títulos, por dónde salen:
   a la pestaña», o «el content script no arranca: …»— y «<motivo> · te llevaré
   de golpe» cuando la lectura falla; y la tarjeta de ese destino, con un solo
   paso, lo dice también: «No he podido leer el camino (<motivo>): sólo puedo
-  llevarte de golpe.».
+  llevarte de golpe.». Desde la revisión adversaria de H28, «no puedo leer el
+  árbol (has cambiado de pestaña)» si cambiaste mientras Faro comprobaba la
+  página; la nota de la tarjeta es de CADA pregunta (en *Rápida*, que no lee
+  el camino, ya no cuelga la de un fallo anterior), y en el minuto de tregua
+  tras un fallo, que no vuelve a preguntar a la API, la tarjeta repite su
+  motivo en vez de callarlo.
 - «Asistida bloqueada» — pulsaste «Paso a paso» sin permiso sobre el dominio
   («falta permiso en <host>»); sale la tarjeta **Dar permiso**. Desde H28, con
   el permiso dado y el content script roto, «el content script no arranca:
-  <motivo>» (y el aviso de recargar, no la tarjeta).
+  <motivo>» (y el aviso de recargar, no la tarjeta). Desde la revisión
+  adversaria de H28, dos más: «has cambiado de pestaña» (cambiaste mientras
+  Faro comprobaba la página; la tarjeta dice «Has cambiado de pestaña: vuelve
+  a ella y pulsa otra vez.» y no pide ningún permiso), y «paso N: <motivo> ·
+  sigo por URL» (la página no pudo hacer el último paso, casi siempre con el
+  content script roto, y el recorrido llega por la URL del índice: antes el
+  motivo se quedaba en el service worker).
 - «Navegación lanzada» — el plan salió al service worker: modo, destino y
   URL.
 - «Navegación fallida» — el service worker no aceptó el plan, o no contestó.
+  Desde la revisión adversaria de H28, un recorrido que el service worker ya
+  terminó con su motivo no sale además aquí: sale una vez, como «Navegación
+  detenida» (antes salían las dos, con dos avisos).
 - «Navegación detenida» — el recorrido acabó mal: «sin permiso de host», o el
   error del paso. Desde H28 dice además cuál: «La página no ha podido ejecutar
   el paso N: <motivo>. Recárgala y vuelve a intentarlo.» (la pestaña contestó
@@ -1994,8 +2021,19 @@ corto y un detalle. Todos los títulos, por dónde salen:
   avisa en 12 s: antes se esperaba para siempre, y el primer aviso de
   cualquier página de esa pestaña, horas después, anclaba ahí el recorrido
   viejo). Si llega pero no contesta al anclar, el resultado es «la página no ha
-  contestado al anclar». Con dos ventanas, cada panel sólo pinta lo de su
-  pestaña o lo del recorrido que lanzó él.
+  contestado al anclar» (desde la revisión adversaria de H28, también al final
+  de un «Paso a paso»). Desde esa revisión, además: «La pestaña ha acabado en
+  otra página (<ruta>), no en «<título>».» (el salto no avisó y la pestaña está
+  en un login, o en otra página por su id o su clave: no te manda a recargar,
+  que no arregla eso; de la dirección sólo se dice la ruta), «No he podido
+  llevarte al destino: <motivo>» (Chrome no dejó hacer el salto por URL del
+  último paso); si a los 12 s la pestaña sigue cargando, Faro espera otros 12
+  antes de darlo por perdido; tras esta línea la tarjeta de un «Paso a paso»
+  vuelve a ofrecer el viaje (antes se quedaba sin botones); y un «Llévame» sin
+  permiso sobre el dominio del destino ya no acaba aquí (mira «Sin
+  resaltar»). Con dos ventanas, cada panel sólo pinta lo de su pestaña o lo
+  del recorrido que lanzó él (desde la revisión, también el final de un
+  «Llévame» que lanzó antes de cambiar de pestaña).
 - «Navegación cancelada» — cancelaste el recorrido: «desde la tarjeta» (el
   botón **Parar** que la tarjeta enseña mientras dura un recorrido paso a
   paso) o «desde la página» (Escape con el foco puesto).
@@ -2008,7 +2046,13 @@ corto y un detalle. Todos los títulos, por dónde salen:
 - «Fragmento resaltado» — al llegar, el fragmento se subrayó; el detalle es la
   estrategia con la que se encontró.
 - «Sin resaltar» — se llegó al destino pero el fragmento no se encontró, con
-  el motivo.
+  el motivo. Desde la revisión adversaria de H28, también «Te he llevado, pero
+  sin permiso en <host> no puedo resaltar el fragmento.» y, si ya estabas en la
+  página, «Ya estás en la página, pero sin permiso en <host> no puedo resaltar
+  el fragmento.»: un «Llévame» sin permiso sobre el dominio del destino, que te
+  lleva igual y lo dice en ámbar (antes acababa a los 12 s en «Navegación
+  detenida», en rojo, con la pestaña ya en su sitio). Sin fragmento que
+  resaltar no sale nada.
 - «Diagnóstico del árbol» — Ajustes → Diagnóstico del árbol leyó la barra
   lateral; cada línea del informe va debajo como «debug» (fuera del filtro
   «Solo problemas»).
@@ -2030,7 +2074,9 @@ en Confluence no hay nada de esto.
   estás en Jira Cloud, falta el permiso sobre el dominio, tu sesión no vale para
   la API (401/403), Jira rechazó la consulta (y entonces el detalle es **el
   mensaje del servidor**, tal cual), o el panel ya se había ido a otro sitio
-  mientras llegaba. **La tarjeta se queda igual y sigue llevándote a la
+  mientras llegaba; y desde la revisión adversaria de H28, `pestaña`:
+  cambiaste de pestaña mientras Faro comprobaba la página («No he leído la
+  lista: has cambiado de pestaña.»), que antes se decía «sin permiso». **La tarjeta se queda igual y sigue llevándote a la
   búsqueda**: la lista es un añadido. El aviso bajo la tarjeta sale una vez por
   sitio y por sesión, salvo el de una consulta rechazada, que habla de ESA
   consulta y se dice siempre.
@@ -2099,7 +2145,10 @@ en Confluence no hay nada de esto.
 - «Índice por la API no disponible» — no se pudo leer eso de la API, con el
   motivo: estás en Jira Cloud, pediste indexar «todo Confluence» (o «todo
   Jira») en vez de UN espacio o UN proyecto, falta el permiso sobre el dominio,
-  la pestaña no contestó, o la API no devolvió ninguna página. **El indexado
+  la pestaña no contestó, o la API no devolvió ninguna página; y desde la
+  revisión adversaria de H28, `pestaña`: cambiaste de pestaña mientras Faro
+  comprobaba la página («No he leído el árbol de <host>: has cambiado de
+  pestaña.»). **El indexado
   sigue entero por el camino de siempre**, con los turnos del modelo, y el
   motivo se ve también en el velo mientras pasa y al terminar. Con **Ajustes →
   Consultar tu sitio** apagado no sale: apagarlo no es un fallo.
@@ -2662,10 +2711,15 @@ duración. Si en su lugar ves «Sin camino», el motivo va al lado:
 - *la API respondió 404*: la página del índice ya no existe con ese id.
 - *el content script no arranca: <motivo>* (desde H28): el permiso está, pero
   el script de Faro en esa pestaña no arrancó. Recarga la pestaña.
+- *has cambiado de pestaña* (desde la revisión adversaria de H28): cambiaste
+  de pestaña mientras Faro comprobaba la página. Vuelve a ella y pregunta otra
+  vez.
 
 En cualquiera de esos casos Faro no inventa nada: te lleva de golpe, y desde
 H28 la tarjeta lo dice («No he podido leer el camino (<motivo>): sólo puedo
-llevarte de golpe.»). Sin ese aviso, un solo «Llévame» es por diseño: en Jira
+llevarte de golpe.»; desde su revisión adversaria, también en el minuto de
+tregua tras un fallo, y nunca el de una pregunta anterior). Sin ese aviso, un
+solo «Llévame» es por diseño: en Jira
 no hay árbol (§8.16), y una página que cuelga directamente de la portada del
 espacio no tiene ramas que desplegar («Camino leído de Confluence · 0
 rama(s)»). Y cada
@@ -2680,7 +2734,25 @@ cerraste, vuelve a pedir navegación y saldrá otra vez; si sigue en el chat,
 desde H28 un aviso corto te recuerda que falta y que la tarjeta está arriba.
 En el **registro** se ve como «Asistida bloqueada · falta permiso en <host>», o
 «Asistida bloqueada · el content script no arranca: <motivo>» si el permiso
-está y lo que falla es el script (recarga la pestaña).
+está y lo que falla es el script (recarga la pestaña). Y si cambias de pestaña
+mientras Faro comprueba la página, desde la revisión adversaria de H28 la
+tarjeta dice «Has cambiado de pestaña: vuelve a ella y pulsa otra vez.» y el
+registro «Asistida bloqueada · has cambiado de pestaña» (antes pedía un permiso
+que ya estaba o, con la pestaña nueva fuera de Atlassian, fallaba entero).
+
+**Pulso «Llévame» y me lleva, pero no subraya nada**
+Para subrayar, la página de destino tiene que tener el content script de Faro,
+y para eso hace falta el permiso sobre su dominio. Sin él, desde la revisión
+adversaria de H28, «Llévame» te lleva igual y lo dice en ámbar, «Te he llevado,
+pero sin permiso en <host> no puedo resaltar el fragmento.» (en el registro,
+«Sin resaltar»); antes esperaba 12 s y acababa en «Navegación detenida». Con el
+permiso dado, si la página no avisa de que cargó en 12 s (24 si sigue
+cargando) sale «Navegación detenida» con el motivo: «La página de destino no
+ha avisado de que cargó…» (recárgala) o, si la pestaña ha acabado en un login
+o en otra página, «La pestaña ha acabado en otra página (<ruta>), no en
+«<título>».». Y un «Llévame» a un proyecto de Jira (`/browse/CLAVE`) llega
+aunque Jira lo abra en su resumen o en su lista de incidencias, igual que una
+búsqueda que se abre en su vista de detalle.
 
 **Quiero que vaya más despacio (o más rápido)**
 **Ajustes → Pausa entre pasos**, de 0,4 s a 4 s. Por defecto son 1,6 s. Ese
@@ -2878,7 +2950,10 @@ registro un rastro distinto:
   <motivo>.», y «Señalar sin activar» con ese motivo. Desde H28 también si el
   selector no llega a abrirse: la pestaña contesta cuando ya está ABIERTO, y
   si falla al abrirlo contesta ese fallo (antes contestaba «sí» antes de
-  abrirlo y el panel se quedaba esperando una selección que no iba a llegar).
+  abrirlo y el panel se quedaba esperando una selección que no iba a llegar);
+- y, desde la revisión adversaria de H28, si cambias de pestaña mientras Faro
+  comprueba la página, «Has cambiado de pestaña: vuelve a ella y pulsa otra
+  vez.», y «Señalar sin activar · has cambiado de pestaña» en el registro.
 
 **Al señalar, el cursor es el de texto y no el subrayador azul**
 El subrayador es una imagen `data:` metida en la hoja que Faro cuelga de la

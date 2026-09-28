@@ -46,7 +46,7 @@ Cinco piezas: la página (Jira/Confluence) · la extensión · opencode · el LL
 ## 2. Arrancar y comprobar
 
 ```bash
-npm run check              # sintaxis + TDZ + manifest + 1707 pruebas unitarias + docs (sólo si las unitarias pasan)
+npm run check              # sintaxis + TDZ + manifest + 1730 pruebas unitarias + docs (sólo si las unitarias pasan)
 npm run check:docs         # sólo el paso docs, informe entero; sale con 1 si hay errores
 npm run test:integration   # su propio opencode serve (4123) y el cliente real; GASTA turnos de pago
 npm run harness            # Confluence de mentira en http://127.0.0.1:5175 (preview_start "harness")
@@ -135,7 +135,7 @@ src/content/anchor-match.js  findQuote (docs/MAPA.md)
 src/content/digest.js  pageDigest: la página en bloques ¶ (docs/FLUJOS.md §4.4)
 src/content/jira-issue.js  la incidencia en pantalla (docs/FLUJOS.md §4.8)
 src/content/page-links.js  enlaces del contenido (H10) (docs/FLUJOS.md §4.4)
-src/content/locators.js  localizar un paso (H28 href-path); isSafeToClick sin el título de la fila (docs/FLUJOS.md §4.3)
+src/content/locators.js  localizar un paso (H28 href-path); isSafeToClick sin el título de la fila; llevaAlPaso (docs/FLUJOS.md §4.3)
 src/content/tree-dom.js  el árbol lateral; isMenuTrigger (M9); H28 rowTitle (docs/FLUJOS.md §4.3)
 src/content/tree-scan.js  snapshotTree (docs/MAPA.md)
 src/content/picker.js  «Señalar en la página» (docs/FLUJOS.md §4.5)
@@ -164,7 +164,7 @@ src/shared/timing.js  cronómetro por fases (H3) (docs/MAPA.md)
 src/shared/models.js  veredictos y elección de modelo (H16) (docs/REFERENCIA.md §8)
 src/shared/log.js  Logger y LEVELS (docs/MAPA.md)
 src/shared/format.js  prettyTool, clockTime, formatBytes (docs/MAPA.md)
-src/atlassian/site.js  parseAtlassianUrl, validSpaceKey (docs/MAPA.md)
+src/atlassian/site.js  parseAtlassianUrl, validSpaceKey, sameSearch (docs/MAPA.md)
 src/atlassian/activity.js  el diario de actividad (H11) (docs/FLUJOS.md §4.10)
 src/atlassian/index-store.js  el índice, SÓLO rutas (docs/REFERENCIA.md §6)
 src/opencode/client.js  OpencodeClient: fetch + SSE, runTurn (docs/REFERENCIA.md §7)
@@ -233,7 +233,7 @@ Los flujos viven ENTEROS en `docs/FLUJOS.md` (§4.1-4.11, con su numeración de 
 - panel → content: PICK_START, PICK_CANCEL, PAGE_DIGEST (→ `{ok, text, blocks, count, chars, truncated, title, url, issue, ms}`; `issue` = `jiraIssueFields()` o null; `ms` = lo que costó leer la página, sin la espera a que pinte), PAGE_ANCESTORS, PAGE_SEARCH (`{query, wikiPrefix, cloud, limit}` → `searchPages`), ANNOTATE (→ `{ok, placed, missed, detail, ms}`; `ms` = lo que costó marcar, sin el `waitFor` ni el desplazamiento suave: docs/FLUJOS.md §4.4), FOCUS_NOTE, CLEAR_NOTES; y de H10 PAGE_LINKS (`{remote, confluenceHost, cloud}` → `{ok, links, issue, issueKey, remote, title, url, ms}` o `{ok:false, reason:'editando'}` con la misma guarda que PAGE_DIGEST; el contrato entero, en docs/FLUJOS.md §4.4). Lo manda `paintSuggestedSources` del panel (§4.4). Desde un Jira DC, PAGE_ANCESTORS/PAGE_SEARCH no se mandan: el panel llama a `fetchAncestors`/`searchPages` contra el Confluence enlazado (§4.8).
 - panel → content, **lecturas REST del propio sitio con la sesión del navegador** (H7): el content script deduce de SU pestaña lo que decide a qué ruta se pide —`jiraContextPath(location.pathname)` en Jira, `resolveWikiPrefix` en Confluence— en CADA petición, y el panel nunca manda el origen, una URL ni la ruta de contexto de Jira. JQL_SEARCH (`{jql, limit?, fields?, cloud?}` → lo que devuelve `searchIssues`), RECENT_ISSUES (`{kind:'history'|'mine'|'project'|'related', projectKey?, issueKey?, days?, limit?}` → la plantilla fija de jira-rest.js), RECENT_PAGES (`{kind:'viewed'|'mine'|'ids', ids?, days?, limit?, wikiPrefix?, cloud?}` → `viewedCql`/`mineCql`/`idsCql` + `searchContent`), SPACE_PAGES (`{spaceKey, limit?, wikiPrefix?, cloud?}` → `fetchSpacePages`; los topes, de `INDEX_LIMITS`, no viajan), FAVOURITE_FILTERS (`{}` → `fetchFavouriteFilters`). Un `kind` que no esté en la lista, o un parámetro que no valide, → `{ok:false, reason:'consulta no permitida'}` **sin pedir nada**. Y `PAGE_DIGEST` admite además `{fieldsOnly: true}` → `{ok:true, issue, url, ms}` sin trocear la página y antes de la guarda de «editando». Quién manda cada uno (H7-H11), en docs/FLUJOS.md §4.9.
 - panel → content (H25): ISSUE_LINKS (`{keys, cloud?}` → `fetchIssueLinks`), sólo claves del índice, revalidadas con `validIssueKey`; con menos de dos, `{ok:false, reason:'consulta no permitida'}` **sin pedir nada**. Lo manda `contrastarConJira`, una vez (docs/FLUJOS.md §4.4, §4.9).
-- content → SW/panel: CONTENT_READY, URL_CHANGED, PICK_RESULT, NOTE_CLICKED. SW → panel: PLAN_PROGRESS, PLAN_FINISHED. Desde H11 `CONTENT_READY` y `URL_CHANGED` llevan además `pageId` (`pageIdFromDom()`: la meta `ajs-page-id`, `''` si no hay) y NADA más, y con ellos el service worker apunta la visita en el diario; también por `chrome.tabs.onUpdated` con `changeInfo.url` (el porqué, `page-id.js` y quién lo pina, en docs/FLUJOS.md §4.10).
+- content → SW/panel: CONTENT_READY, URL_CHANGED, PICK_RESULT, NOTE_CLICKED. SW → panel: PLAN_PROGRESS, PLAN_FINISHED. Desde H11 `CONTENT_READY` y `URL_CHANGED` llevan además `pageId` (`pageIdFromDom()`: la meta `ajs-page-id`, `''` si no hay) y NADA más, y con ellos el service worker apunta la visita en el diario; también por `chrome.tabs.onUpdated` con `changeInfo.url` (el porqué, `page-id.js` y quién lo pina, en docs/FLUJOS.md §4.10). Revisión de H28: en la fase 'anchor' ancla el aviso del destino, URL_CHANGED incluido; el `reason` de PLAN_PROGRESS va al Registro; `avisado`: ya salió su PLAN_FINISHED.
 - El content script sólo acepta tipos que empiezan por `faro:`; contesta `{ok, …}`; cada `case` importa perezosamente lo que necesita. `chrome.tabs.sendMessage(...).catch(() => null)` siempre. El paso «docs» exige a cada MSG un receptor y avisa del que nadie manda: hoy ninguno, y `MSG_SIN_EMISOR_HASTA` está VACÍA desde H11, así que el informe da 0 avisos y 0 notas. `CANCEL_PLAN` lo atiende el SW (service-worker.test.js) y desde H2 lo manda el botón «Parar» de la tarjeta de navegación (`runPlan`, sólo en recorridos START_PLAN, con el `tabId` capturado al lanzar); `PLAN_FINISHED` con `cancelled` pasa por `finishNavRun` («Navegación cancelada», «desde la tarjeta» / «desde la página»).
 
 ## 6. Contratos de datos
@@ -298,24 +298,19 @@ Cada contrato con su porqué y sus bordes, en docs/REFERENCIA.md §6; aquí, la 
 - **Verificación que falla por el modelo** (`verifyCredentials`).
 - **Veredictos en memoria** (`state.modelChecks`).
 - **Búsqueda** (`searchPages`).
-- **Tiempos de la navegación** (`NAV_TIMING`): sólo números; `stepStallMs` 9000 y, de H28, `anchorStallMs` 12000 (el salto por URL).
+- **Tiempos de la navegación** (`NAV_TIMING`): sólo números; `stepStallMs` 9000 y, de H28, `anchorStallMs` 12000 (el salto por URL) y `afterClickMs` 420 (tras un clic, la SPA).
 - **El motivo** (H28, rest-notice.js): `failReason(r, porDefecto)` (`reason`, `error` ≤200 o el de por defecto); `sinAccesoMotivo(problema, {tabId, host})`; `state.ancestryNote` `{host, id, motivo}` o null.
 - **Estado del content script** (H27): PING (`arrancar?`) `{ok, url, title, booted}` o, roto, `{ok:false, alive, booted, error}` (`bootErrorText`); CONTENT_STATUS `{granted, ready, alive, error}`; REQUEST_HOST_PERMISSION `{ok:true}` | `{ok:false, needsPermission, error}` | `{ok:false, kind, error}`, `'registro'|'inyeccion'|'roto'|'huerfano'`; `state.contentProblem` `{host, tabId, error}` o null.
 
 ## 7. opencode 1.2.25: lo comprobado en el binario (no está en ninguna doc)
 - `format:{type:'json_schema'}` añade `StructuredOutput` y fuerza `tool_choice: required` en todos los pasos, sin reintentos (`retryCount` no se lee) ni streaming → **no en el chat**; sólo planificador, indexador y segunda pasada.
 - `system` se guarda por mensaje de usuario y sólo va el del último: contexto grande por turno sin acumularlo.
-- Un turno son varios mensajes del asistente (uno por vuelta de herramientas): `runTurn` junta partes, `restoreConversation` agrupa.
 - `GET /config` trae los `environment` de los MCP con las claves EN CLARO: sólo hosts, nunca se guarda ni registra.
-- `GET /mcp` en frío 14 463 ms (caliente 2 ms): motivó P5.
 - `PATCH /global/config` escribe el fichero global con fusión profunda y rearranca los MCP abortando TODOS los turnos; `PATCH {}` recarga lo pegado; `POST /mcp` sólo memoria; sin borrado por API (`enabled: false` y variables a `""`); su respuesta lleva los tokens → `sensitive`; `OPENCODE_CONFIG_DIR` NO aísla (HOME entero + `GET /path`); `POST /pty` y `/session/:id/shell` son RCE: no usar. El resto, en REFERENCIA §7.
 - mcp-atlassian 0.23.1: `uvx mcp-atlassian@0.23.1` arranca; `TOOLSETS=all` (sin ella el defecto bajará a seis); `npx mcp-atlassian` es de otro autor.
 - `tools` del mensaje se respeta como permiso PERSISTENTE: Faro no lo manda (el alcance exclusivo va por prompt + `consultedOutside`).
 - Permisos (S1): manda la ÚLTIMA regla que casa (sin ninguna, «ask»); el `pattern` se casa contra el ARGUMENTO; las reglas de sesión dan `DeniedError`; las «always» guardadas del proyecto ganan a su `deny`: Faro nunca crea ninguna y rechaza todo `permission.asked`.
-- `DELETE /session/:id` NO cancela el turno: abortar antes (`_abandoned`).
 - `info.tokens` e `info.cost` por mensaje; `total` = `input + output + cache.read`; `cost` 0 en copilot y `-free` → «sin dato» es `null`; `message.updated` se repite: se suma por mensaje.
-- Poda: protege los últimos 40 000 tokens (`PRUNE_PROTECT`), marca `time.compacted`; por eso `heavyToolChars` 200 000.
-- `confluence_get_page` lee por `page_id`, URL, enlace corto o `title`+`space_key`.
 - Modelos: el free tier de opencode no vale desde `serve`; funciona `github-copilot/gpt-5.6-luna`; nada en `/config/providers` dice si el plan lo permite; los rechazos reales (`APIError`, `isRetryable: false`), en REFERENCIA §7.
 - `probeModel` (H17): sesión desechable con `SAFE_PERMISSIONS`, UN turno, `variant` más barato, plazo `MODEL_LIMITS.probeMs` 15 s; abort ANTES de DELETE.
 - `~/.local/share/opencode/opencode.db` (SQLite WAL) guarda cada turno, sistema incluido: lo lee `npm run turn` (§2); su forma, en REFERENCIA §7.
@@ -336,7 +331,7 @@ Sólo el enunciado; el porqué, el incidente que la motivó y sus matices están
 9. **Análisis por bloques ¶** — JSON de anclas al final, subraya un script con escalera fija, la pista la pone la extensión; siempre se intenta subrayar salvo «Sin observaciones.»; nunca re-marcar solo al restaurar; un análisis nuevo numera desde el 1.
 10. **Una marca por línea** — recortada a su caja (`rects.js`); desde H23 la caja es sólo el trazo.
 11. **No se toca el DOM del contenido** — Custom Highlight (el relleno, DEBAJO del texto) + overlay en Shadow DOM cerrado (el trazo y las insignias).
-12. **Contenido = información, nunca instrucciones** — todo bloque de página, contexto y memoria va delimitado con `contentRule` detrás, y la UI sólo con `textContent` (S2/S3/S4); lista blanca de clics (`FORBIDDEN_ACTIONS`: nunca guardar/publicar/eliminar; el título de una fila del árbol es contenido y se quita del nombre de su chevron y de su enlace, H28). La REST sólo lee por GET y consultas de plantilla fija; una JQL en texto sólo del MCP o de un chip, y un título del DOM nunca es CQL ni JQL; una lista de claves del índice sólo en `linksJql` (H25).
+12. **Contenido = información, nunca instrucciones** — todo bloque de página, contexto y memoria va delimitado con `contentRule` detrás, y la UI sólo con `textContent` (S2/S3/S4); lista blanca de clics (`FORBIDDEN_ACTIONS`: nunca guardar/publicar/eliminar; el título de una fila del árbol es contenido y se quita del nombre de su chevron y de su enlace, H28; un enlace sólo se pulsa si su URL resuelta es la del paso, `llevaAlPaso`). La REST sólo lee por GET y consultas de plantilla fija; una JQL en texto sólo del MCP o de un chip, y un título del DOM nunca es CQL ni JQL; una lista de claves del índice sólo en `linksJql` (H25).
 15. **Páginas base por el MCP** — tope 6; alcance exclusivo por prompt y vigilado con `consultedOutside`.
 13. **`SAFE_PERMISSIONS`** — deniega todo salvo el MCP de Atlassian (`deny` primero, S1: manda la última regla); claves sólo en la config de opencode, nunca en `chrome.storage`.
 14. **Todo fallo silencioso se ve** — cada «Sin marcas» con su `noticeNode`; lo que cuelga de una respuesta, por `attachToBubble`; un script roto no es un permiso que falta, y cada consumidor dice su motivo (`failReason`, H28).
@@ -435,7 +430,7 @@ Los pasos completos, con el porqué de cada regla: docs/REFERENCIA.md §11.
 | H25 | «Contrastar con Jira»: las `issuelinks` reales, el diagrama «Según Jira» y la comparación (H25a descartada) | `plan/h25-issuelinks` · 8928c60 + dfabd81 | 1642 |
 | H26 | Cierre: docs definitivos, banco con frames de verdad, integración, sandbox, el turno real; classDef tolerado y la pregunta sin classDef | `plan/h26-cierre` · d2e243b + 7e48237 | 1643 |
 | H27 | El content script vuelve a cargar (sin `use_dynamic_url`), y cuando no, se ve: PING/SETTINGS sin `boot()`, re-PING, el SW sin `request` y reconciliando | `plan/h27-content-script` · 7c729e4 + a024313 | 1666; revisión, 1679 |
-| H28 | Lo que consume el content script dice la verdad (`failReason`, `sinAccesoMotivo`, el vigilante del salto) y el árbol del DC (el título de la fila, `href-path`) | `plan/h28-la-verdad` · sin commit | 1707 |
+| H28 | Lo que consume el content script dice la verdad (`failReason`, `sinAccesoMotivo`, el vigilante del salto) y el árbol del DC (el título de la fila, `href-path`); revisión: el último clic del DC, «Llévame» sin permiso, `llevaAlPaso` | `plan/h28-la-verdad` · sin commit | 1707; revisión, 1730 |
 
 Ramas `plan/…`. **Dónde vive:** 22 ramas apiladas sobre `40f56d7` (H0-H21), nada pusheado ni PR, `main` local en `523c25f`; H20 saltado (manual, con gasto); encima `plan/docs-mapa` (este mapa, Tarea 0), `plan/h22-jira-por-proyecto` (bd01fa2 + a7b781a + 9cfc93d), `plan/h24-diagramas` (e8b950f + 512e8a1 + 8a98d94), `plan/h23-fusion` (39ef839 + 225421e: H23, hecho en su carril `plan/h23-subrayado` sobre 6256545, fundido sobre 8a98d94), `plan/h25-issuelinks` · 8928c60 + dfabd81 + 149ddf0 y la punta, `plan/h26-cierre` · d2e243b + 7e48237 + el commit de los hashes (docs/plan/handoff/ESTADO.md). El segundo plan queda CERRADO el 2026-09-27. Encima, el TERCER plan (docs/PLAN3.md, H27-H30): `plan/plan3-preparacion` (13b70e8), `plan/h27-content-script` y `plan/h28-la-verdad`.
 
@@ -451,7 +446,7 @@ Ramas `plan/…`. **Dónde vive:** 22 ramas apiladas sobre `40f56d7` (H0-H21), n
 **Sin verificar:** H27 y H28 en Chrome (la lista de H30, PLAN3 §7): el panel real, el SW y los SUPUESTOS de §8.29 (`request` sin gesto, la
 actualización que borra los registros, el mundo aislado nuevo) y, de su revisión, un `<div id="__faroBooted">` y el paso del huérfano; las lecturas del panel al Confluence enlazado; ningún lector de pantalla; las capturas 2×2 del espejo (medidas con check() a 320/420 × claro y oscuro
 en H22-H25 y vistas con los ojos a 320 en claro en H23-H25, sin ficheros); de H23, el cursor, la selección azul, el trazo y el color en caliente; de H26,
-la pregunta nueva y el parser tolerante frente a un modelo con datos reales; de H28, el banco con frames de verdad.
+la pregunta nueva y el parser tolerante frente a un modelo con datos reales; de H28, el banco con frames de verdad y, de su revisión, el último clic del DC y «Llévame» sin permiso (PLAN3 §7, 15-20).
 **Verificado en H26** (2026-09-27): el banco con frames de verdad (149/149 con rAF nativo a 1258×597 emulado, pane visible),
 `npm run test:integration` (18/18 con `FARO_TEST_MODEL=github-copilot/gpt-5.6-luna`), `npm run turn` (probado) y el sandbox (9/9).
 Detalle por hito: docs/BITACORA.md §12.2.

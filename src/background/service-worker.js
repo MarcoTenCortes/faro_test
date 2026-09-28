@@ -19,7 +19,7 @@
 import { MSG, sendToTab } from '../shared/messages.js'
 import { getSettings, getSites } from '../shared/storage.js'
 import { NAV_TIMING, STORAGE_KEYS } from '../shared/config.js'
-import { parseAtlassianUrl, samePage } from '../atlassian/site.js'
+import { parseAtlassianUrl, samePage, sameSearch, validProjectKey } from '../atlassian/site.js'
 import { visitFromUrl } from '../atlassian/activity.js'
 import { recordActivity } from '../shared/activity-store.js'
 
@@ -271,11 +271,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           sendResponse({ ok: true })
           return
 
+        // Y desde la revisión adversaria de H28 (D1), en la fase 'anchor' el de
+        // URL cambiada cuenta como el de «lista»: una SPA cambia de vista sin
+        // recargar, y si su URL cambia después de que el último clic conteste,
+        // no llega ningún CONTENT_READY (ver `onUrlChanged`).
         case MSG.URL_CHANGED:
           await recordVisitFor(msg.url || sender.tab?.url, {
             title: sender.tab?.title,
             pageId: msg.pageId,
           }).catch(() => null)
+          await onUrlChanged(sender.tab?.id, msg)
           sendResponse({ ok: true })
           return
 
@@ -638,16 +643,60 @@ function watchStalledStep(tabId, index, ms = NAV_TIMING.stepStallMs) {
  * viejo que vence cuando ya hay otro en la misma pestaña (dos «Llévame»
  * seguidos) no puede abandonar el nuevo, que todavía está cargando. El mapa ya
  * está hidratado: se arma siempre detrás de un `setPlan`.
+ *
+ * Y al vencer mira la pestaña (revisión adversaria de H28, D2): si sigue
+ * cargando, UNA prórroga del mismo margen (un Data Center lento no es un salto
+ * perdido); si ha acabado en OTRA página, lo dice (`enOtraPagina`) y no manda
+ * recargar, que no arregla un login ni una incidencia movida. Se vuelve a
+ * mirar el recorrido después de leer la pestaña: el aviso del destino puede
+ * haberlo terminado mientras tanto, y serían dos finales.
  */
 function watchStalledAnchor(tabId, ms = NAV_TIMING.anchorStallMs) {
   const armado = plans.get(tabId)
-  setTimeout(async () => {
-    const state = await getPlan(tabId)
-    if (!state || state !== armado || state.phase !== 'anchor') return
-    await setPlan(tabId, null)
-    const error = 'La página de destino no ha avisado de que cargó. Recárgala y vuelve a intentarlo.'
-    notifyPanel({ type: MSG.PLAN_FINISHED, tabId, result: { error } })
-  }, ms)
+  const vence = (prorroga) =>
+    setTimeout(async () => {
+      const state = await getPlan(tabId)
+      if (!state || state !== armado || state.phase !== 'anchor') return
+      const tab = await chrome.tabs.get(tabId).catch(() => null)
+      if (plans.get(tabId) !== armado) return
+      if (prorroga && tab?.status === 'loading') return vence(false)
+      await setPlan(tabId, null)
+      const otra = enOtraPagina(tab?.url, state.plan.destination)
+      const error = 'La página de destino no ha avisado de que cargó. Recárgala y vuelve a intentarlo.'
+      notifyPanel({ type: MSG.PLAN_FINISHED, tabId, result: { error: otra || error } })
+    }, ms)
+  vence(true)
+}
+
+/**
+ * Pura. Si la pestaña de un salto que no avisó ha acabado en OTRA página que
+ * la de destino `d`, el motivo que lo dice; si no se puede afirmar, `''`
+ * (revisión adversaria de H28, D2).
+ *
+ * Sólo con una URL que lo prueba: una ruta de login (`/login.action` de un
+ * Confluence Data Center, `/login.jsp` de un Jira, `id.atlassian.com/login`),
+ * o un id de página o una clave de incidencia que no son los del destino (una
+ * incidencia movida, OLD-12 → NEW-34). Un `/display/ESPACIO/Título` de un Data
+ * Center no lleva el id, y ahí no se sabe. De la URL sólo sale la ruta (y el
+ * host, si es otro): la consulta puede llevar cualquier cosa, un token
+ * incluido, y no va al panel.
+ */
+function enOtraPagina(url, d) {
+  let u
+  try {
+    u = new URL(url)
+  } catch {
+    return ''
+  }
+  const login = /\/login(\.action|\.jsp)?\/?$/i.test(u.pathname)
+  const aqui = parseAtlassianUrl(u.href)
+  // El id de la URL va también como `pageId`: un `/display/…` del destino que
+  // el Data Center reescribe a `viewpage.action?pageId=` sigue siendo él.
+  const otraPorId = !!(aqui?.pageId || aqui?.issueKey) && !llegaAlDestino({ url: u.href, pageId: aqui.pageId || '' }, d)
+  if (!login && !otraPorId) return ''
+  const ruta = (u.origin === originOf(d?.url) ? u.pathname : u.host + u.pathname).slice(0, 120)
+  const titulo = String(d?.title || '').trim().slice(0, 120)
+  return 'La pestaña ha acabado en otra página (' + ruta + '), no en ' + (titulo ? '«' + titulo + '»' : 'la de destino') + '.'
 }
 
 /**
@@ -702,29 +751,57 @@ async function pushSettings(tabId) {
  * Navegación directa: un salto y, al llegar, el resaltado.
  *
  * «Ya estoy» lo decide `samePage` (site.js), que compara el id de la página o
- * la clave de la incidencia (H28, docs/PLAN3.md §3.2). Hasta H28 era `sameDoc`,
- * origen y ruta: en un Confluence Data Center todas las páginas por id son
+ * la clave de la incidencia y, sin ninguno de los dos, origen y ruta (H28,
+ * docs/PLAN3.md §3.2). Hasta H28 era `sameDoc`, origen y ruta siempre: en un
+ * Confluence Data Center todas las páginas por id son
  * `/pages/viewpage.action?pageId=…`, así que dos distintas eran «la misma» y
- * «Llévame» anclaba en la de partida sin moverse. Y esa rama avisa al panel
- * con PLAN_FINISHED, como la de llegar: hasta H28 devolvía el resultado en la
- * respuesta, que el panel no lee.
+ * «Llévame» anclaba en la de partida sin moverse. Una búsqueda de Jira no
+ * lleva id ni clave y su ruta es la de todas (`/issues/`): se compara por su
+ * consulta, `sameSearch` (revisión adversaria de H28, D4). Y esa rama avisa al
+ * panel con PLAN_FINISHED, como la de llegar: hasta H28 devolvía el resultado
+ * en la respuesta, que el panel no lee.
+ *
+ * Sin permiso de host en el destino no hay content script que avise ni que
+ * resalte (revisión adversaria de H28, D2): se lleva igual, sin recorrido ni
+ * vigilante, y si había un fragmento que resaltar se dice en un final sin
+ * error, que el panel pinta en ámbar («Sin resaltar»). Sólo `contains`: con el
+ * acceso retirado a un host del manifest, su script estático tampoco entra.
+ * Hasta aquí el vigilante daba a los 12 s un «no ha avisado… Recárgala» en
+ * rojo con la pestaña ya en su sitio.
  *
  * Los ajustes de la página van con `.catch` (H28): son un extra, y un almacén
- * que no se deja leer no puede impedir el salto.
+ * que no se deja leer no puede impedir el salto. Si el salto no sale
+ * (`saltarAlDestino` lanza), el error llega al panel en la respuesta y el
+ * recorrido ya no queda guardado (revisión adversaria de H28, D8).
  */
 async function navigateDirect(tabId, plan) {
   if (!plan?.destination?.url) return { ok: false, error: 'plan sin destino' }
   await pushSettings(tabId).catch(() => null)
 
   const tab = await chrome.tabs.get(tabId).catch(() => null)
-  const alreadyThere = samePage(tab?.url || '', plan.destination.url)
+  const alreadyThere =
+    plan.destination.kind === 'jira-jql'
+      ? sameSearch(tab?.url || '', plan.destination.url)
+      : samePage(tab?.url || '', plan.destination.url)
+
+  const origen = originOf(plan.destination.url)
+  const avisara = !!origen && (await chrome.permissions.contains({ origins: [patternFor(origen)] }).catch(() => false))
+  if (!avisara) {
+    await setPlan(tabId, null)
+    if (!alreadyThere) await chrome.tabs.update(tabId, { url: plan.destination.url })
+    if (plan.anchor) {
+      const host = origen ? new URL(origen).host : 'este sitio'
+      const message = (alreadyThere ? 'Ya estás en la página' : 'Te he llevado') + ', pero sin permiso en ' + host + ' no puedo resaltar el fragmento.'
+      notifyPanel({ type: MSG.PLAN_FINISHED, tabId, result: { anchored: false, message } })
+    }
+    return { ok: true, navigating: !alreadyThere, anchored: false }
+  }
 
   if (!alreadyThere) {
     await setPlan(tabId, { plan, index: plan.steps?.length || 0, phase: 'anchor' })
-    await chrome.tabs.update(tabId, { url: plan.destination.url })
     // El resto lo hace onContentReady cuando la página nueva avise; y si no
-    // avisa, el vigilante del salto.
-    watchStalledAnchor(tabId)
+    // avisa, el vigilante del salto, que arma `saltarAlDestino`.
+    await saltarAlDestino(tabId, plan.destination.url)
     return { ok: true, navigating: true }
   }
 
@@ -732,6 +809,30 @@ async function navigateDirect(tabId, plan) {
   await setPlan(tabId, null)
   notifyPanel({ type: MSG.PLAN_FINISHED, tabId, result: res ?? { ok: false, error: 'la página no ha contestado al anclar' } })
   return { ok: true, navigating: false, result: res }
+}
+
+/**
+ * El salto por URL de un recorrido que ya está en la fase 'anchor', y su
+ * vigilante detrás (revisión adversaria de H28, D8).
+ *
+ * Si `tabs.update` lanza («Navigation rejected.», o la pestaña ya no existe),
+ * el recorrido se suelta antes de relanzar: hasta aquí se quedaba guardado en
+ * 'anchor' SIN vigilante, porque el vigilante se armaba después del `await`, y
+ * el primer aviso del destino en esa pestaña, a cualquier hora, lo anclaba.
+ * Sólo si sigue siendo el mismo: otro que se haya guardado mientras tanto (otro
+ * «Llévame» en la misma pestaña) es de otro, y sigue esperando su aviso. El
+ * vigilante se arma con el salto ya en marcha: el de uno que no salió no tiene
+ * nada que vigilar.
+ */
+async function saltarAlDestino(tabId, url) {
+  const armado = plans.get(tabId)
+  try {
+    await chrome.tabs.update(tabId, { url })
+  } catch (err) {
+    if (plans.get(tabId) === armado) await setPlan(tabId, null)
+    throw err
+  }
+  watchStalledAnchor(tabId)
 }
 
 /**
@@ -750,11 +851,17 @@ async function runCurrentStep(tabId) {
   if (!state) return { ok: false, error: 'no hay recorrido en marcha' }
 
   const { plan, index } = state
+  // Todos los pasos dados, y la pestaña en el destino: se ancla. El recorrido
+  // se suelta ANTES de anclar, como en `onContentReady` (revisión adversaria de
+  // H28, D1): anclar tarda (la página busca la cita), y un aviso del destino
+  // que llegara mientras tanto, o el margen de `advanceAfterNavigation` al
+  // acabar, lo encontraban vivo y anclaban otra vez: dos ANCHOR y dos finales.
+  // Y una página que no contesta al anclar se dice, como en los otros dos
+  // sitios que anclan: con `null` el panel no pintaba ni registraba nada.
   if (index >= plan.steps.length) {
-    await setPlan(tabId, { ...state, phase: 'anchor' })
-    const res = await sendAnchor(tabId, plan)
     await setPlan(tabId, null)
-    notifyPanel({ type: MSG.PLAN_FINISHED, tabId, result: res })
+    const res = await sendAnchor(tabId, plan)
+    notifyPanel({ type: MSG.PLAN_FINISHED, tabId, result: res ?? { ok: false, error: 'la página no ha contestado al anclar' } })
     return { ok: true, finished: true, result: res }
   }
 
@@ -781,11 +888,13 @@ async function runCurrentStep(tabId) {
     const tab = await chrome.tabs.get(tabId).catch(() => null)
     const { granted } = await contentStatus(tabId, originOf(tab?.url || ''))
 
+    // `avisado`: el panel ya tiene su final con el motivo, y no lo repite como
+    // «Navegación fallida» (revisión adversaria de H28, D7).
     if (!granted) {
       await setPlan(tabId, null)
       const error = 'Faro no tiene permiso para actuar en este dominio.'
       notifyPanel({ type: MSG.PLAN_FINISHED, tabId, result: { error, needsPermission: true } })
-      return { ok: false, error, needsPermission: true }
+      return { ok: false, error, needsPermission: true, avisado: true }
     }
 
     // Permiso hay, así que se le da un margen para que termine de cargar.
@@ -801,6 +910,7 @@ async function runCurrentStep(tabId) {
   // START_PLAN decía `ok`. Ahora se acaba con su motivo; salvo en el destino,
   // que puede llegar por URL como el `navigate` del último paso: llevar a la
   // persona sigue valiendo más que abandonar, y el motivo va en el progreso.
+  // Con `avisado`, como la rama del permiso: el final ya salió (D7).
   if (res.ok === false && !res.status) {
     const motivo = String(res.error || 'sin motivo')
     if (esUltimo && step.url) {
@@ -810,7 +920,7 @@ async function runCurrentStep(tabId) {
     await setPlan(tabId, null)
     const error = 'La página no ha podido ejecutar el paso ' + (index + 1) + ': ' + motivo + '. Recárgala y vuelve a intentarlo.'
     notifyPanel({ type: MSG.PLAN_FINISHED, tabId, result: { error } })
-    return { ok: false, error: motivo }
+    return { ok: false, error: motivo, avisado: true }
   }
 
   switch (res.status) {
@@ -820,6 +930,21 @@ async function runCurrentStep(tabId) {
       return runCurrentStep(tabId)
 
     case 'clicked':
+      // El último clic lo decide la RESPUESTA de la página que pulsó (revisión
+      // adversaria de H28, D1; reproducido en Chromium): en un Data Center
+      // pulsar el enlace del árbol es una carga entera, y la página VIEJA se da
+      // por quieta antes de morir y contesta con su propia URL. Si esa URL no
+      // es el destino, el recorrido espera el aviso del destino en la fase
+      // 'anchor', con su vigilante, como un salto por URL; anclar tras el
+      // margen mandaba el ANCHOR a la página de partida, o a nadie. Sin `url`
+      // («ya estábamos aquí») o con la del destino (una SPA que ya cambió de
+      // vista), se sigue como siempre. `res.pageId` es el de la página que
+      // contesta: en un Data Center `/display/…` la URL no lo lleva.
+      if (esUltimo && res.url && !llegaAlDestino(res, plan.destination)) {
+        await setPlan(tabId, { ...state, index: plan.steps.length, phase: 'anchor' })
+        watchStalledAnchor(tabId)
+        return { ok: true, navigating: true }
+      }
       await setPlan(tabId, { ...state, index: index + 1 })
       return advanceAfterNavigation(tabId)
 
@@ -858,20 +983,36 @@ async function runCurrentStep(tabId) {
  * termina un salto directo (`onContentReady`), con su vigilante por si no avisa
  * (docs/PLAN3.md §3.2). Hasta H28 se quedaba en la fase 'steps' y anclaba con el
  * primer aviso de cualquier página, o esperaba para siempre.
+ *
+ * Si el salto no sale, se dice al panel con su PLAN_FINISHED y `avisado`
+ * (revisión adversaria de H28, D8): retomado por CONTENT_READY, la respuesta
+ * va al content script, que la tira, y el panel se quedaba con «paso 3/3» y su
+ * «Parar» sin saber nada.
  */
 async function navigateToDestination(tabId, state, step) {
   await setPlan(tabId, { ...state, index: state.plan.steps.length, phase: 'anchor' })
-  await chrome.tabs.update(tabId, { url: step.url })
-  watchStalledAnchor(tabId)
+  try {
+    await saltarAlDestino(tabId, step.url)
+  } catch (err) {
+    const error = 'No he podido llevarte al destino: ' + String(err?.message || err)
+    notifyPanel({ type: MSG.PLAN_FINISHED, tabId, result: { error } })
+    return { ok: false, error, avisado: true }
+  }
   return { ok: true, navigating: true }
 }
 
 /**
- * Tras un clic, la SPA puede haber cambiado de vista sin recargar. Se da un
- * respiro y se sigue; si hubo recarga de verdad, onContentReady se adelantará.
+ * Tras un clic que no dejó la pestaña en otra página, se da un respiro
+ * (`NAV_TIMING.afterClickMs`) y se sigue: es lo que tarda una SPA en cambiar
+ * de vista sin recargar. Una recarga de verdad no se espera aquí: la del
+ * último clic la termina el aviso del destino en la fase 'anchor' (ver el
+ * `clicked` de `runCurrentStep`), y la de un paso intermedio la retoma
+ * `onContentReady` con el paso que no llegó a contestar. Hasta la revisión
+ * adversaria de H28 (D1) el comentario decía que una recarga «se adelantaría»
+ * a este respiro, y cualquiera más lenta que él anclaba en la página vieja.
  */
 async function advanceAfterNavigation(tabId) {
-  await new Promise((r) => setTimeout(r, 420))
+  await new Promise((r) => setTimeout(r, NAV_TIMING.afterClickMs))
   const state = await getPlan(tabId)
   if (!state) return { ok: true, cancelled: true }
   return runCurrentStep(tabId)
@@ -896,43 +1037,86 @@ async function onContentReady(tabId, msg) {
   if (!tabId) return
   const state = await getPlan(tabId)
   if (!state) return
-  if (state.phase === 'anchor') {
-    if (!llegaAlDestino(msg, state.plan.destination)) return
-    await setPlan(tabId, null)
-    await pushSettings(tabId).catch(() => null)
-    const res = await sendAnchor(tabId, state.plan)
-    notifyPanel({ type: MSG.PLAN_FINISHED, tabId, result: res ?? { ok: false, error: 'la página no ha contestado al anclar' } })
-    return
-  }
+  if (state.phase === 'anchor') return anclarSiLlega(tabId, state, msg)
   await pushSettings(tabId).catch(() => null)
   await runCurrentStep(tabId)
+}
+
+/**
+ * Una SPA cambia de vista sin recargar (URL_CHANGED): en la fase 'anchor', su
+ * aviso cuenta como el de «lista», con la misma regla (revisión adversaria de
+ * H28, D1). Es el último clic de Cloud cuya URL cambia después de que la
+ * página se dé por quieta: el clic contesta con la de partida y el recorrido
+ * espera al destino, que no manda CONTENT_READY porque no recarga. En la fase
+ * 'steps' no hace nada, como siempre: un paso lo retoma el aviso de una recarga.
+ *
+ * Sólo lo manda un content script que ya ARRANCÓ (el sondeo de la URL vive en
+ * su `boot()`), es decir, el de la página donde corrieron los pasos: el de una
+ * página recién cargada por un salto todavía no arrancó y avisa con
+ * CONTENT_READY.
+ */
+async function onUrlChanged(tabId, msg) {
+  if (!tabId) return
+  const state = await getPlan(tabId)
+  if (state?.phase === 'anchor') await anclarSiLlega(tabId, state, msg)
+}
+
+/**
+ * La fase 'anchor' termina con el aviso de la página de DESTINO: si `msg`
+ * viene de ella, se ancla y se avisa al panel; si no, nada (el vigilante del
+ * salto dirá lo que pase). El recorrido se suelta ANTES de anclar (ver
+ * `onContentReady`).
+ */
+async function anclarSiLlega(tabId, state, msg) {
+  if (!llegaAlDestino(msg, state.plan.destination)) return
+  await setPlan(tabId, null)
+  await pushSettings(tabId).catch(() => null)
+  const res = await sendAnchor(tabId, state.plan)
+  notifyPanel({ type: MSG.PLAN_FINISHED, tabId, result: res ?? { ok: false, error: 'la página no ha contestado al anclar' } })
 }
 
 /**
  * Pura. ¿El aviso de «lista» (`{ url, pageId }`, bootstrap.js) viene de la
  * página de destino `d` del recorrido? (H28, docs/PLAN3.md §3.2)
  *
+ * Siempre en el MISMO origen que el destino, también por `pageId` (revisión
+ * adversaria de H28, D8): un aviso de otro sitio con el mismo número anclaba.
  * Por el `pageId` que el content script lee de la meta `ajs-page-id` —en un
  * Confluence Data Center la URL `/display/ESPACIO/Título` no lo lleva— y, sin
  * él, por `samePage` (site.js), que compara el id o la clave y, a falta de
- * ellos, la ruta. Nunca por origen y ruta a secas (el `sameDoc` de antes): en
- * un Data Center todas las páginas por id son `/pages/viewpage.action`.
+ * ellos, la ruta. Nunca por origen y ruta a secas delante (el `sameDoc` de
+ * antes): en un Data Center todas las páginas por id son `/pages/viewpage.action`.
+ *
+ * Una búsqueda de Jira, por su consulta (`sameSearch`, D4): un Data Center la
+ * reescribe a su vista de detalle (`/browse/K-1?jql=…`) y Cloud le añade
+ * `&selectedIssue=`.
  *
  * Un espacio o un proyecto no tienen una URL fija: `/wiki/spaces/ENG` se abre
  * como `/wiki/spaces/ENG/overview`, `/display/ENG` como `/display/ENG/Home`, y
- * un tablero lleva su número detrás. Ahí cuenta su clave, en el mismo host: con
- * la ruta sola, un salto a un espacio no llegaba nunca.
+ * un tablero lleva su número detrás. Ahí cuenta su clave, y la que se compara
+ * es la identidad VALIDADA del destino (`d.id`), no la de su URL (D4): el
+ * enlace canónico de un proyecto de Data Center, `/browse/SIMPL`, no da clave
+ * (sólo `/browse/X-123` la da) y redirige a `/projects/SIMPL/summary` o
+ * `/projects/SIMPL/issues/…` (medido en el Jira de Marco), así que con la de su
+ * URL no llegaba nunca. Un tablero `RapidBoard.jspa` lleva el proyecto en la
+ * consulta, `?projectKey=`. El origen se compara entero y no por
+ * `parseAtlassianUrl`, que no reconoce un Jira propio cuyo host no dice «jira»
+ * en `/browse/CLAVE`.
  */
 function llegaAlDestino(msg, d) {
   if (!d) return false
-  if (d.kind === 'confluence-page' && msg?.pageId && d.id && String(msg.pageId) === String(d.id)) return true
   if (!msg?.url || !d.url) return false
+  if (d.kind === 'jira-jql') return sameSearch(msg.url, d.url)
+  const aqui = parseAtlassianUrl(msg.url)
+  const mismoHost = !!originOf(msg.url) && originOf(msg.url) === originOf(d.url)
+  if (d.kind === 'confluence-page' && mismoHost && msg.pageId && d.id && String(msg.pageId) === String(d.id)) return true
   if (samePage(msg.url, d.url)) return true
   const clave = d.kind === 'confluence-space' ? 'spaceKey' : d.kind === 'jira-project' ? 'projectKey' : ''
   if (!clave) return false
-  const aqui = parseAtlassianUrl(msg.url)
-  const alli = parseAtlassianUrl(d.url)
-  return !!(aqui && alli && aqui.host === alli.host && aqui[clave] && aqui[clave] === alli[clave])
+  const esperada = clave === 'projectKey' ? String(d.id || '').toUpperCase() : String(d.id || '')
+  let suya = aqui?.[clave] || ''
+  if (clave === 'projectKey' && !suya && mismoHost) suya = validProjectKey(new URL(msg.url).searchParams.get('projectKey'))
+  return !!(mismoHost && esperada && suya === esperada)
 }
 
 async function sendAnchor(tabId, plan) {

@@ -173,9 +173,16 @@ function structuralRow(el, container) {
  * `<li>` (F9, harness.js `pagetreeRow`). Gana el primer `a[href]` con dirección
  * que tenga forma de página (`PAGE_HREF`) y, si ninguno la tiene (el
  * `/display/ESPACIO/Título` de un DC viejo), el primero con dirección. Un
- * `href="#…"` no es dirección: es un control (el «···» de AUI). Las hijas
- * desplegadas cuelgan DETRÁS del enlace propio, así que el orden de documento
- * las deja fuera. Pura sobre el elemento. H28 (PLAN3 §3.2, C3-8).
+ * `href="#…"` no es dirección: es un control (el «···» de AUI). Pura sobre el
+ * elemento. H28 (PLAN3 §3.2, C3-8).
+ *
+ * Los enlaces de las filas HIJAS no cuentan: el DC deja las hijas en el DOM al
+ * plegar la rama, y con un propio `/display/…` una hija `viewpage.action?
+ * pageId=` le ganaba por tener forma de página; el título salía el de la hija y
+ * el chevron seguía bloqueado (revisión adversaria de H28, D10, reproducido en
+ * Chromium). Se mira el `li` o `treeitem` más cercano al enlace y no
+ * `ROW_SELECTORS` entero, cuyo `[class*="tree-item"]` casa también con los
+ * envoltorios de la propia fila.
  */
 export function rowLink(row) {
   if (!row?.querySelectorAll) return null
@@ -183,6 +190,8 @@ export function rowLink(row) {
   for (const a of row.querySelectorAll('a[href]')) {
     const href = String(a.getAttribute('href') || '').trim()
     if (!href || href.startsWith('#')) continue
+    const hija = a.parentElement?.closest?.('[role="treeitem"], li')
+    if (hija && hija !== row && row.contains?.(hija)) continue
     if (PAGE_HREF.test(href)) return a
     if (!primero) primero = a
   }
