@@ -14,21 +14,28 @@
  *    texto de la consulta nunca viene en el mensaje (§8.12, §8.19);
  *  - el origen y la ruta de contexto de Jira salen de LA PESTAÑA (`location`),
  *    nunca del mensaje.
- * No se puede ejecutar en Node (es un script clásico que cuelga de `chrome` y de
- * `location` al cargarse), así que se comprueba el cableado.
+ * Es un script clásico que cuelga de `chrome` y de `location` al cargarse, así
+ * que el cableado se comprueba por regex sobre el fuente.
  *
  * Desde H27 (PLAN3 §3.1) también el ARRANQUE: la extensión se cargó por fin en
  * un Chrome de verdad y el content script no arrancaba, contestaba `{ok:false}`
  * a todo —PING incluido— y para el service worker «hay script roto» y «no hay
- * script» eran lo mismo. Dos trozos sí se ejecutan aquí: `onUrlChange` de
+ * script» eran lo mismo. Tres trozos sí se ejecutan aquí: `onUrlChange` de
  * dom-utils.js, que no toca el DOM al importarse (el sondeo que un huérfano
- * tiene que saber parar), y `bootErrorText`, que se saca del fuente por su
- * línea porque de ella depende que el id de la extensión no viaje al panel.
+ * tiene que saber parar); `bootErrorText`, que se saca del fuente por su
+ * línea porque de ella depende que el id de la extensión no viaje al panel; y,
+ * desde la revisión adversaria de H27, el OYENTE entero: los pines de texto
+ * dejaban vivir mutantes del tope de intentos, del error guardado, de la caché
+ * del selector y de la guarda de la segunda instancia, así que el fuente se
+ * evalúa con `new Function`, con `import(` cambiado por un importador de
+ * mentira y `chrome`, `window`, `document`, `location` y `console` falsos
+ * pasados como PARÁMETROS (nunca globales: nada que restaurar).
  */
 import { test, eq, assert } from '../harness.js'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { MSG } from '../../src/shared/messages.js'
+import { NAV_TIMING } from '../../src/shared/config.js'
 import { onUrlChange } from '../../src/content/dom-utils.js'
 
 const ROOT = join(import.meta.dirname, '..', '..')
@@ -268,7 +275,7 @@ const AJUSTES_AL_EJECUTOR = [
   'if (msg.timing) Object.assign(runner.timing, msg.timing)',
 ]
 
-test('H27: PING y SETTINGS se contestan antes de boot() y no lo arrancan', () => {
+test('H27: PING y SETTINGS se contestan antes de boot() y sólo el PING con arrancar lo arranca', () => {
   // El service worker manda PING y SETTINGS en CADA pestaña en cuanto se abre el
   // panel (`contentStatus` y `pushSettings`): si arrancaran el content script,
   // cada pestaña cargaría runner.js y el overlay sin que nadie fuera a usarlos
@@ -278,7 +285,16 @@ test('H27: PING y SETTINGS se contestan antes de boot() y no lo arrancan', () =>
   const ping = antes.indexOf('case MSG.PING:')
   const ajustes = antes.indexOf('case MSG.SETTINGS: {')
   assert(mensajes >= 0 && ping > mensajes && ajustes > ping, 'MSG se importa solo (es una hoja) y PING y SETTINGS van en el primer switch')
-  assert(!antes.includes('boot('), 'ni PING ni SETTINGS arrancan nada')
+  // EL CAMBIO (revisión adversaria de H27): el PING que el service worker
+  // manda justo DESPUÉS de inyectar pide `arrancar`. Un PING ligero sólo prueba
+  // que hay un oyente, y un script recién puesto cuyo arranque iba a fallar lo
+  // pasaba: el panel decía «Listo» y apuntaba «Content script inyectado». Es el
+  // único `boot(` antes del de siempre, y va dentro del PING; SETTINGS sigue sin
+  // arrancar nada.
+  eq(cuenta(antes, 'boot('), 1, 'sólo el PING con arrancar arranca')
+  const casoPing = entre('case MSG.PING:', 'case MSG.SETTINGS: {')
+  assert(casoPing.includes('if (msg.arrancar && !arrancado && !bootError) await boot().catch(() => null)'), 'y es el PING con arrancar')
+  assert(!entre('case MSG.SETTINGS: {', 'const { runner, getPicker } = await boot()').includes('boot('), 'SETTINGS no arranca nada')
   assert(!antes.includes('getPicker'), 'antes de arrancar no hay selector')
   eq(
     antes.indexOf('runner'),
@@ -289,9 +305,12 @@ test('H27: PING y SETTINGS se contestan antes de boot() y no lo arrancan', () =>
   eq(cuenta(JS, 'case MSG.PING:'), 1)
   eq(cuenta(JS, 'case MSG.SETTINGS:'), 1)
 
-  // Las tres respuestas del PING: roto (vivo, con su error), o sano y si arrancó.
-  eq(lineas(entre('case MSG.PING:', 'case MSG.SETTINGS: {')), [
+  // El PING: si lo piden, arranca (sin gastar el segundo intento en un script
+  // que ya se sabe roto: la guarda `!bootError`), y luego las tres respuestas:
+  // roto (vivo, con su error), o sano y si arrancó.
+  eq(lineas(casoPing), [
     'case MSG.PING:',
+    'if (msg.arrancar && !arrancado && !bootError) await boot().catch(() => null)',
     'if (bootError && !arrancado) {',
     'sendResponse({ ok: false, alive: true, booted: false, error: bootErrorText(bootError) })',
     'return',
@@ -397,18 +416,23 @@ test('H27: el huérfano se apaga solo', () => {
   // Recargar la extensión sin recargar la pestaña deja el content script viejo
   // vivo y sin extensión detrás: su sondeo seguía cada 700 ms, sus marcas
   // pintadas y cada aviso que intentaba mandar reventaba. Se detecta él mismo
-  // (`chrome.runtime.id` desaparece) y se apaga ENTERO: el sondeo, el overlay
-  // con sus marcas y el selector.
+  // (`chrome.runtime.id` desaparece) y se apaga ENTERO: el sondeo, el paso en
+  // vuelo, el overlay con sus marcas y el selector.
   assert(JS.includes('const contextoVivo = () => !!chrome.runtime?.id'), 'vivo = la extensión sigue teniendo id')
   const boot = cuerpoDeBoot()
   for (const decl of ['let picker = null', 'let parar = null', 'let apagado = false']) {
     assert(boot.indexOf(decl) >= 0 && boot.indexOf(decl) < boot.indexOf('const apagar = () => {'), decl)
   }
+  // EL CAMBIO (revisión adversaria de H27, reproducido en Chromium): el paso en
+  // vuelo se cancela ANTES de destruir el overlay. `destroy()` no toca la espera
+  // del ejecutor: un paso en su pausa acababa en 'auto', pulsaba el enlace y
+  // volvía a montar el host que se acababa de quitar.
   eq(lineas(entre('const apagar = () => {', 'const sigueVivo = () => {')), [
     'const apagar = () => {',
     'if (apagado) return',
     'apagado = true',
     'parar?.()',
+    "runner.cancel('huerfano')",
     'runner.overlay.destroy()',
     'if (picker) picker.cancel()',
     '}',
@@ -499,6 +523,7 @@ test('H27: onUrlChange se para cuando sigueVivo dice que no, y sin sigueVivo no 
   let quitados = []
   let sondeo = null
   let parados = 0
+  const intervalos = []
   globalThis.location = { href: 'https://c.example/a' }
   globalThis.history = {} // sin pushState que envolver
   globalThis.window = {
@@ -507,8 +532,9 @@ test('H27: onUrlChange se para cuando sigueVivo dice que no, y sin sigueVivo no 
       if (oyentes.get(tipo) === fn) quitados.push(tipo)
     },
   }
-  globalThis.setInterval = (fn) => {
+  globalThis.setInterval = (fn, ms) => {
     sondeo = fn
+    intervalos.push(ms)
     return 42
   }
   globalThis.clearInterval = (id) => {
@@ -539,6 +565,29 @@ test('H27: onUrlChange se para cuando sigueVivo dice que no, y sin sigueVivo no 
     oyentes.get('popstate')()
     eq(vistos.length, 1, 'un evento que ya estuviera en cola tampoco avisa')
 
+    // Con la URL QUIETA también. Un huérfano suele estar en una página que no
+    // navega, y es ahí donde tiene que darse cuenta: hasta la revisión
+    // adversaria de H27 esta prueba cambiaba la URL antes de cada vuelta, y un
+    // `check` que no preguntara hasta ver otra URL pasaba en verde con el
+    // sondeo de cada 700 ms vivo para siempre.
+    quitados = []
+    parados = 0
+    let quieto = true
+    let preguntasQuieto = 0
+    onUrlChange(() => vistos.push('quieta'), {
+      sigueVivo: () => {
+        preguntasQuieto++
+        return quieto
+      },
+    })
+    sondeo()
+    eq([preguntasQuieto, parados], [1, 0], 'vivo y sin moverse: pregunta y sigue')
+    quieto = false
+    sondeo()
+    eq([preguntasQuieto, parados], [2, 1], 'muerto y sin moverse: el sondeo se para igual')
+    eq(quitados.sort(), ['hashchange', 'popstate'])
+    eq(vistos.length, 1, 'y no avisa de nada')
+
     // Sin `sigueVivo`, como antes de H27: no se para por su cuenta.
     quitados = []
     parados = 0
@@ -551,6 +600,13 @@ test('H27: onUrlChange se para cuando sigueVivo dice que no, y sin sigueVivo no 
     eq(otros, ['https://c.example/d', 'https://c.example/e', 'https://c.example/f'])
     eq(parados, 0)
     eq(quitados, [])
+
+    // Cada 700 ms, en las tres. En un content script el sondeo es la vía
+    // PRINCIPAL (el envoltorio de `pushState` vive en el mundo aislado y la
+    // página nunca lo llama) y es también lo que detecta al huérfano: el número
+    // lo citan los docs y hasta la revisión de H27 el `setInterval` falso lo
+    // tiraba sin mirarlo.
+    eq(intervalos, [700, 700, 700], 'el sondeo va cada 700 ms')
   } finally {
     for (const [k, v] of Object.entries(antes)) {
       if (v === undefined) delete globalThis[k]
@@ -563,4 +619,282 @@ test('H27: onUrlChange se para cuando sigueVivo dice que no, y sin sigueVivo no 
   const fuente = sinComentarios(readFileSync(join(ROOT, 'src/content/dom-utils.js'), 'utf8'))
   assert(!/\bchrome\b/.test(fuente), 'dom-utils.js no nombra la API de la extensión')
   assert(fuente.includes('export function onUrlChange(callback, opciones = {}) {'), 'el segundo parámetro es opcional')
+})
+
+// ------------------------------------------------ H27, revisión adversaria
+// Hasta aquí, del arranque sólo se pinaba el TEXTO. La revisión adversaria de
+// H27 escribió mutantes que lo respetaban y rompían lo que promete: el tope de
+// intentos vuelto a cero en el `catch` (seis arranques y seis errores con seis
+// mensajes), el error del arranque borrado (el PING volvía a decir `ok:true` con
+// el script roto, que es el «Listo» falso de H27), el selector sin caché (un
+// PICK_CANCEL cancelaba otro selector y el primero se quedaba comiéndose los
+// clics), la limpieza que no corría y la guarda de la segunda instancia borrada.
+// Aquí el oyente se EJECUTA: bootstrap.js entero, evaluado con `new Function` y
+// todo lo de fuera pasado como parámetro.
+
+const FUENTE = readFileSync(join(ROOT, 'src/content/bootstrap.js'), 'utf8')
+const ID = 'ickohiffpicdfeameogbihbcanbjibmk'
+const PAGINA = { href: 'https://c.example/a', origin: 'https://c.example', pathname: '/a' }
+const RUNNER = 'src/content/runner.js'
+/** Lo que contesta un arranque sin runner.js: la ruta, sin el id de la extensión. */
+const ROTO = 'Failed to fetch dynamically imported module: src/content/runner.js'
+
+/**
+ * Carga bootstrap.js como lo haría Chrome en una pestaña. `modulos` es lo que el
+ * importador de mentira sirve por ruta (`src/…`); una ruta que no esté se
+ * deniega como la denegaba Chrome, con la URL entera de la extensión en el
+ * mensaje. `restos` es lo que `querySelectorAll('#faro-overlay-host')` encuentra
+ * (lo que dejó un huérfano) y `registro` apunta, en orden, lo que se toca.
+ */
+function cargar({ window = {}, modulos = {}, restos = [], registro = [] } = {}) {
+  const oyentes = []
+  const enviados = []
+  const importados = []
+  const errores = []
+  const chrome = {
+    runtime: {
+      id: ID,
+      getURL: (p) => `chrome-extension://${ID}/${p}`,
+      onMessage: { addListener: (fn) => oyentes.push(fn) },
+      sendMessage: (m) => {
+        enviados.push(m)
+        return Promise.resolve()
+      },
+    },
+  }
+  const document = {
+    readyState: 'loading', // el aviso de carga no se prueba aquí: sin él, nada que esperar
+    title: 'Página',
+    addEventListener: () => {},
+    querySelectorAll: (sel) => (sel === '#faro-overlay-host' ? restos : []),
+    documentElement: { classList: { remove: (...clases) => registro.push(['quita clases', ...clases]) } },
+  }
+  const importar = (u) => {
+    const ruta = String(u).replace(`chrome-extension://${ID}/`, '')
+    importados.push(ruta)
+    if (!(ruta in modulos)) return Promise.reject(new TypeError('Failed to fetch dynamically imported module: ' + u))
+    return Promise.resolve(modulos[ruta])
+  }
+  const consola = { error: (...a) => errores.push(String(a[0])), warn: () => {} }
+  const cuerpo = FUENTE.replace(/\bimport\(/g, '__imp(')
+  new Function('chrome', 'window', 'document', 'location', '__imp', 'console', cuerpo)(
+    chrome,
+    window,
+    document,
+    { ...PAGINA },
+    importar,
+    consola
+  )
+  /** Manda un mensaje al oyente y espera su respuesta, como `chrome.tabs.sendMessage`. */
+  const manda = (msg) =>
+    new Promise((resolve) => {
+      if (oyentes[0](msg, {}, resolve) !== true) resolve(undefined)
+    })
+  return {
+    oyentes,
+    enviados,
+    chrome,
+    manda,
+    veces: (ruta) => importados.filter((r) => r === ruta).length,
+    errores: (inicio) => errores.filter((e) => e.startsWith(inicio)).length,
+  }
+}
+
+/**
+ * Los módulos de un arranque sano, de mentira: apuntan en `registro` lo que les
+ * piden, y en `estado` qué ejecutor, qué selectores y qué sondeo se crearon.
+ */
+function modulosSanos(registro) {
+  const estado = { runners: [], pickers: [], sondeo: null }
+  class NavRunner {
+    constructor({ timing }) {
+      this.timing = timing
+      this.overlay = { destroy: () => registro.push('overlay.destroy'), onNote: null }
+      registro.push('new NavRunner')
+      estado.runners.push(this)
+    }
+    setReducedMotion(v) {
+      registro.push(['setReducedMotion', v])
+    }
+    setHighlightStyle(v) {
+      registro.push(['setHighlightStyle', v])
+    }
+    setHighlightColor(v) {
+      registro.push(['setHighlightColor', v])
+    }
+    cancel(motivo) {
+      registro.push(['runner.cancel', motivo])
+    }
+    clearNotes() {
+      registro.push('clearNotes')
+    }
+  }
+  // Como el de verdad: `start()` promete lo elegido y `cancel()` lo resuelve a null.
+  class Picker {
+    constructor() {
+      this.active = false
+      this._resolve = null
+      estado.pickers.push(this)
+    }
+    start() {
+      this.active = true
+      return new Promise((resolve) => {
+        this._resolve = resolve
+      })
+    }
+    cancel() {
+      registro.push('picker.cancel')
+      if (!this.active) return
+      this.active = false
+      const resolve = this._resolve
+      this._resolve = null
+      resolve(null)
+    }
+  }
+  return {
+    estado,
+    modulos: {
+      'src/shared/messages.js': { MSG },
+      [RUNNER]: { NavRunner },
+      'src/content/dom-utils.js': {
+        onUrlChange: (cb, opciones) => {
+          estado.sondeo = { cb, opciones }
+          return () => registro.push('parar')
+        },
+      },
+      'src/content/page-id.js': { pageIdFromDom: () => '' },
+      'src/shared/config.js': { NAV_TIMING },
+      'src/content/picker.js': { Picker },
+    },
+  }
+}
+
+/** Los mismos, con runner.js denegado: lo que se vio en el Chrome de Marco. */
+function modulosSinRunner() {
+  const { modulos } = modulosSanos([])
+  delete modulos[RUNNER]
+  return modulos
+}
+
+const unaVuelta = () => new Promise((resolve) => setTimeout(resolve, 0))
+
+test('H27: el oyente de bootstrap.js ejecutado: PING dice la verdad, dos intentos como mucho, los ajustes esperan y el selector es uno', async () => {
+  const NO_ARRANCA = '[faro] no se pudo arrancar'
+  const SANO = { ok: true, url: PAGINA.href, title: 'Página', booted: false }
+  const ROTO_VIVO = { ok: false, alive: true, booted: false, error: ROTO }
+
+  // 1. runner.js denegado. Hasta el primer mensaje real nadie sabe que el
+  // arranque fallará; desde el tercero, ya no se intenta.
+  {
+    const c = cargar({ modulos: modulosSinRunner() })
+    eq(c.oyentes.length, 1)
+    eq(await c.manda({ type: MSG.PING }), SANO, 'sin arrancar, el PING ligero no puede saber que fallará')
+    eq(await c.manda({ type: MSG.SETTINGS, reduceMotion: true, highlightColor: 'ambar' }), { ok: true })
+    eq(c.veces(RUNNER), 0, 'ni PING ni SETTINGS arrancan')
+    for (const type of [MSG.STEP, MSG.ANNOTATE, MSG.PICK_START, MSG.CLEAR_NOTES, MSG.TREE_SNAPSHOT, MSG.PAGE_DIGEST]) {
+      eq(await c.manda({ type }), { ok: false, error: ROTO }, `${type} dice qué módulo falló, sin el id`)
+    }
+    eq(c.veces(RUNNER), 2, 'seis mensajes, dos intentos')
+    eq(c.errores(NO_ARRANCA), 2, 'un error por intento, no por mensaje')
+    eq(c.errores('[faro] fallo en el content script'), 6, 'y cada mensaje sin atender se dice')
+    eq(await c.manda({ type: MSG.PING }), ROTO_VIVO, 'vivo y roto, con el motivo: reinyectar no lo arreglaría')
+    eq(await c.manda({ type: MSG.PING, arrancar: true }), ROTO_VIVO, 'pedirle que arranque no cambia nada')
+    eq([c.veces(RUNNER), c.errores(NO_ARRANCA)], [2, 2], 'ni otro intento ni otro error')
+  }
+
+  // 2. El PING con `arrancar`, el que manda el service worker tras inyectar:
+  // con él, un script recién puesto que no arranca lo dice a la primera, y el
+  // panel no dice «Listo».
+  {
+    const c = cargar({ modulos: modulosSinRunner() })
+    eq(await c.manda({ type: MSG.PING, arrancar: true }), ROTO_VIVO, 'recién inyectado y roto: lo dice el primer PING')
+    eq(await c.manda({ type: MSG.PING, arrancar: true }), ROTO_VIVO)
+    eq([c.veces(RUNNER), c.errores(NO_ARRANCA)], [1, 1], 'un script que ya se sabe roto no gasta su segundo intento en un PING')
+  }
+
+  // 3. Arranque sano, con los restos de un huérfano en la página.
+  const registro = []
+  const { modulos, estado } = modulosSanos(registro)
+  const c = cargar({ modulos, restos: [{ remove: () => registro.push('quita el host viejo') }], registro })
+  eq(await c.manda({ type: MSG.PING }), SANO)
+  const ajustes = { type: MSG.SETTINGS, reduceMotion: true, highlightStyle: 'marker', highlightColor: 'ambar', timing: { stepPauseMs: 5 } }
+  eq(await c.manda(ajustes), { ok: true })
+  eq([c.veces(RUNNER), registro], [0, []], 'los ajustes esperan al arranque sin tocar nada')
+  eq(await c.manda({ type: MSG.PING, arrancar: true }), { ...SANO, booted: true }, 'el PING con arrancar arranca')
+  eq(
+    registro,
+    [
+      'quita el host viejo',
+      ['quita clases', 'faro-picking', 'faro-picking-dark'],
+      'new NavRunner',
+      ['setReducedMotion', true],
+      ['setHighlightStyle', 'marker'],
+      ['setHighlightColor', 'ambar'],
+    ],
+    'limpia lo del huérfano ANTES de crear el ejecutor, y aplica los ajustes pendientes'
+  )
+  const [runner] = estado.runners
+  eq(runner.timing.stepPauseMs, 5, 'los tiempos pendientes también')
+  assert(runner.timing !== NAV_TIMING && NAV_TIMING.stepPauseMs !== 5, 'sobre una copia: la constante compartida no cambia')
+
+  registro.length = 0
+  eq(await c.manda({ type: MSG.SETTINGS, reduceMotion: false, highlightColor: 'azul' }), { ok: true })
+  eq(await c.manda({ type: MSG.CLEAR_NOTES }), { ok: true })
+  eq(registro, [['setReducedMotion', false], ['setHighlightColor', 'azul'], 'clearNotes'], 'arrancado, al momento; lo pendiente no se repite')
+  eq(c.veces(RUNNER), 1, 'un solo arranque')
+
+  // El selector: PICK_CANCEL cancela el MISMO que abrió PICK_START.
+  eq(await c.manda({ type: MSG.PICK_START }), { ok: true })
+  eq(await c.manda({ type: MSG.PICK_CANCEL }), { ok: true })
+  eq(estado.pickers.length, 1, 'un selector, no uno por mensaje')
+  eq(estado.pickers[0].active, false, 'y ninguno se queda eligiendo')
+  await unaVuelta()
+  const resultados = () => c.enviados.filter((m) => m.type === MSG.PICK_RESULT)
+  eq(resultados(), [{ type: MSG.PICK_RESULT, pick: null, url: PAGINA.href }], 'cancelar se contesta al panel')
+
+  // La insignia pulsada llega al panel mientras la extensión sigue ahí.
+  runner.overlay.onNote(3)
+  eq(c.enviados.filter((m) => m.type === MSG.NOTE_CLICKED), [{ type: MSG.NOTE_CLICKED, n: 3 }])
+
+  // El huérfano: la extensión se va con «Señalar» abierto.
+  eq(await c.manda({ type: MSG.PICK_START }), { ok: true })
+  eq(estado.pickers.length, 1, 'el mismo selector otra vez')
+  const { cb, opciones } = estado.sondeo
+  eq(opciones.sigueVivo(), true, 'con la extensión detrás, sigue')
+  registro.length = 0
+  delete c.chrome.runtime.id
+  eq(opciones.sigueVivo(), false)
+  eq(
+    registro,
+    ['parar', ['runner.cancel', 'huerfano'], 'overlay.destroy', 'picker.cancel'],
+    'se apaga entero: el sondeo, el paso en vuelo ANTES que el overlay, y el selector abierto'
+  )
+  await unaVuelta()
+  eq(resultados().length, 1, 'lo que elija un huérfano no se manda')
+  eq(opciones.sigueVivo(), false)
+  cb('https://c.example/b')
+  runner.overlay.onNote(4)
+  eq(registro.length, 4, 'apagarse es una vez')
+  eq(c.enviados.filter((m) => m.type === MSG.URL_CHANGED || m.n === 4), [], 'y un huérfano no avisa de nada')
+})
+
+test('H27 SEGURIDAD: la guarda de la segunda instancia no se engaña con un elemento de la página', async () => {
+  // Un `<div id="__faroBooted">` de la página también se ve como
+  // `window.__faroBooted` en el mundo aislado del content script: el getter con
+  // nombre de Window devuelve el elemento sin mirar el mundo (Chromium,
+  // window_properties.cc). Con una guarda que sólo pidiera «algo verdadero», esa
+  // página se quedaba sin Faro, y el consejo del panel —recargar la pestaña y la
+  // extensión— no lo arreglaba (revisión adversaria de H27). Un elemento nunca
+  // es `true`; una segunda instancia en el mismo mundo sí lo encuentra.
+  assert(JS.includes('if (window.__faroBooted === true) return'), 'la guarda compara con true')
+  eq(cuenta(JS, 'window.__faroBooted'), 2, 'la guarda y la marca, nada más')
+
+  const ventana = Object.create({ __faroBooted: { tagName: 'DIV', id: '__faroBooted' } })
+  const { modulos } = modulosSanos([])
+  const primera = cargar({ window: ventana, modulos })
+  eq(primera.oyentes.length, 1, 'con el elemento en la página, Faro arranca igual')
+  eq(await primera.manda({ type: MSG.PING }), { ok: true, url: PAGINA.href, title: 'Página', booted: false })
+  eq(ventana.__faroBooted, true, 'y deja su marca')
+  const segunda = cargar({ window: ventana, modulos })
+  eq(segunda.oyentes.length, 0, 'una segunda instancia en el mismo mundo se queda en nada')
 })

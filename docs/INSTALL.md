@@ -1686,7 +1686,9 @@ corto y un detalle. Todos los títulos, por dónde salen:
   momento viaja lo que elegiste.
 - «Content script inyectado» — con el permiso ya concedido, el content script
   se inyectó en la pestaña abierta sin recargarla. Desde H27 sólo sale si el
-  recién puesto CONTESTA bien: antes salía en verde aunque no arrancara.
+  recién puesto CONTESTA bien, y desde su revisión si ARRANCA (la comprobación
+  de después de inyectarlo se lo pide): antes salía en verde aunque no
+  arrancara.
 - «Content script roto» — (H27, en rojo) el content script está en la pestaña
   pero no arranca: host y el motivo que da él mismo, recortado a la ruta del
   módulo que falló (por ejemplo «Failed to fetch dynamically imported module:
@@ -1696,8 +1698,10 @@ corto y un detalle. Todos los títulos, por dónde salen:
   de «Falta un permiso»: el permiso ya está. Recarga la pestaña y, si sigue
   igual, la extensión.
 - «Señalar sin activar» — (H27, en amarillo) pulsaste el rotulador y la selección no se
-  encendió: «la pestaña no contesta» (recargarla suele bastar) o el motivo que
-  da el content script al negarse.
+  encendió: «la pestaña no contesta» (navegó o se recargó entre la comprobación
+  y el clic; recargarla suele bastar) o el motivo que da el content script al
+  negarse. Sin permiso o con el content script roto no sale esta línea: sale
+  la tarjeta **Dar permiso** (sin nada en el registro) o «Content script roto».
 - «Permiso concedido» — concediste el permiso sobre el dominio; el content
   script queda registrado para él.
 - «Permiso de host denegado» — cerraste o rechazaste el diálogo de permiso de
@@ -2127,7 +2131,8 @@ token y sigue funcionando mientras tanto.
 Recarga la pestaña: el content script se inyecta al cargar la página, y el
 que tiene cargado es el anterior, que se queda sin extensión detrás (desde H27
 se da cuenta solo y se apaga, con sus marcas). Si sigue igual, mira el
-Registro: «Content script roto» dice qué módulo no cargó, y la consola de la
+Registro: «Content script roto» dice qué módulo no cargó (desde la revisión de
+H27, ya en la comprobación de después de inyectarlo), y la consola de la
 página lo repite con «[faro] no se pudo arrancar el content script». Faro pide
 sus módulos siempre con `chrome.runtime.getURL()` y los sirve por
 `web_accessible_resources` del manifest (lo vigila `web-accessible.test.js` en
@@ -2790,13 +2795,18 @@ entera (TINTAS).
 **Pulso el rotulador y no pasa nada**
 Como la navegación paso a paso, señalar en la página necesita permiso sobre el
 dominio y que el content script esté cargado. En `*.atlassian.net` funciona de
-fábrica. Desde H27 el panel dice cuál de las cosas pasa, y el registro lo
-apunta como «Señalar sin activar»: sin permiso, la tarjeta **Dar permiso**;
-con el content script roto, «Faro no ha podido arrancar en esta pestaña:
-<motivo>…»; si la pestaña no contesta, «No he podido hablar con esta pestaña.
-Recárgala y vuelve a intentarlo.» (una pestaña cargada antes de recargar la
-extensión, por ejemplo); y si contesta pero se niega, «No he podido activar la
-selección: <motivo>.».
+fábrica. Desde H27 el panel dice cuál de las cosas pasa, y cada una deja en el
+registro un rastro distinto:
+
+- sin permiso, la tarjeta **Dar permiso**, y nada en el registro;
+- con el content script roto, «Faro no ha podido arrancar en esta pestaña:
+  <motivo>…», y «Content script roto» en el registro, una vez por pestaña y
+  motivo;
+- si la pestaña no contesta, «No he podido hablar con esta pestaña.
+  Recárgala y vuelve a intentarlo.», y «Señalar sin activar · la pestaña no
+  contesta» (la pestaña navegó o se recargó en ese momento);
+- y si contesta pero se niega, «No he podido activar la selección:
+  <motivo>.», y «Señalar sin activar» con ese motivo.
 
 **Al señalar, el cursor es el de texto y no el subrayador azul**
 El subrayador es una imagen `data:` metida en la hoja que Faro cuelga de la

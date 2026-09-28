@@ -251,6 +251,14 @@ const COMMENT_EDITORS = '#addcomment, #footer-comment-button, [data-testid*="com
  * Avisa cuando cambia la URL, incluidos los cambios por pushState que no
  * disparan ningún evento estándar.
  *
+ * En un content script, lo que los ve es el sondeo de cada 700 ms, y es la vía
+ * PRINCIPAL, no una red de seguridad: `history` es ahí el del mundo aislado,
+ * envolver su `pushState` no toca el de la página y el router de Jira o de
+ * Confluence nunca llama al envoltorio, que sólo actuaría en el mundo
+ * principal. `popstate` y `hashchange` sí llegan (atrás, adelante, el ancla) y
+ * sólo adelantan el aviso. Y el sondeo es también lo que detecta al huérfano,
+ * abajo (revisión adversaria de H27, que por eso pina el intervalo).
+ *
  * `opciones.sigueVivo`, si viene, se pregunta en cada comprobación ANTES de
  * mirar la URL, y la primera vez que dice que no, esto se para solo (lo mismo
  * que la función que devuelve) y no vuelve a avisar a nadie. Es para el
@@ -290,7 +298,7 @@ export function onUrlChange(callback, opciones = {}) {
 
   window.addEventListener('popstate', check)
   window.addEventListener('hashchange', check)
-  const poll = setInterval(check, 700) // red de seguridad para routers raros
+  const poll = setInterval(check, 700) // la vía principal en un content script (arriba)
 
   // Repetirla no hace nada: `check` la llama cada vez que `sigueVivo` dice que
   // no, y quien la recibe puede llamarla también.

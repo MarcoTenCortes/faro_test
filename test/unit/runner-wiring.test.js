@@ -22,6 +22,11 @@
  *    hasta tres veces por observación y doce observaciones por análisis.
  *  - H23 (docs/PLAN2.md §3.6): el color del subrayado llega de `MSG.SETTINGS`
  *    (bootstrap.js) al overlay por `setHighlightColor`, que sólo delega.
+ *  - Revisión adversaria de H27 (2026-09-28, reproducido en Chromium): cancelar
+ *    mientras el paso buscaba el enlace o se desplazaba no cortaba nada; al
+ *    volver de la espera encendía el foco (montando otra vez el overlay que el
+ *    huérfano acababa de destruir), sacaba la tarjeta y pulsaba. Lo mismo con
+ *    «Parar» del panel. La guarda va detrás de cada espera y antes de pintar.
  * Estas no se pueden ejecutar en Node (necesitan el DOM), así que se comprueba
  * el cableado; `visibleResolution` sí, con Ranges de mentira.
  */
@@ -107,7 +112,9 @@ test('M2: Escape a mitad de un paso de desplegar lo cancela: al abrir la rama, a
   assert(abrir >= 0, '_expandStep abre la rama')
   assert(expandir.slice(abrir).includes(CANCELA), 'tras abrir la rama se mira si se canceló')
   eq(cuenta(expandir, 'await this._flash('), 2, 'los dos destellos: sin control de desplegar y rama ya abierta')
-  eq(cuenta(expandir, CANCELA), 3, 'una guarda tras cada destello y otra tras abrir la rama')
+  // EL CAMBIO (revisión adversaria de H27): de tres a cuatro, con la de antes
+  // del foco (la pina la prueba de H27 de abajo).
+  eq(cuenta(expandir, CANCELA), 4, 'una guarda antes del foco, una tras cada destello y otra tras abrir la rama')
 
   const flash = metodo('_flash')
   const guarda = flash.indexOf('if (this.cancelled) return')
@@ -123,6 +130,55 @@ test('M2: Escape a mitad de un paso de desplegar lo cancela: al abrir la rama, a
   assert(corta >= 0, 'dentro de la ronda se mira si se canceló')
   assert(corta < ronda.indexOf('btn.click()'), 'antes de pulsar nada')
   assert(corta < ronda.indexOf('this.overlay.spotlight('), 'y antes de volver a encender el foco')
+})
+
+test('H27 revisión: un paso cancelado mientras busca o se desplaza no enciende el foco ni pulsa', () => {
+  // Visto en Chromium con el ejecutor del banco: `destroy()` del huérfano (o
+  // «Parar» del panel, CANCEL_PLAN → MSG.CANCEL) mientras `waitFor` buscaba el
+  // enlace; al volver, el paso montaba otra vez el overlay, sacaba la tarjeta y
+  // pulsaba (`{status:'clicked'}`). Cancelar sólo resolvía la espera de la
+  // tarjeta, y ninguna otra espera miraba `this.cancelled` al volver. Cada
+  // guarda va JUSTO detrás de su espera: entre una y otra no hay nada que pinte.
+  const CANCELA = "if (this.cancelled) return { status: STEP_RESULT.CANCELLED, reason: this.cancelReason || 'user' }"
+  const lineasDe = (nombre) =>
+    metodo(nombre)
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean)
+  /** Dónde va la línea siguiente a la primera que empieza por `empieza`. */
+  const tras = (ls, empieza) => {
+    const i = ls.findIndex((l) => l.startsWith(empieza))
+    assert(i >= 0, `no encuentro «${empieza}»`)
+    return i + 1
+  }
+
+  const paso = lineasDe('executeStep')
+  const encontrado = tras(paso, 'const found = await waitFor(')
+  eq(paso[encontrado], CANCELA, 'encontrado el enlace, se mira antes de presentarlo o de desplegarlo')
+  assert(encontrado < paso.indexOf('if (desplegando) return this._expandStep(found, { step, index, total, isLast })'), 'antes de desplegar')
+  assert(encontrado < paso.indexOf('return this._presentAndClick(found, { step, index, total, isLast })'), 'y antes de presentarlo')
+  eq(paso[tras(paso, 'const retry = await waitFor(')], CANCELA, 'y otra vez al volver a buscar tras el barrido')
+
+  for (const [nombre, foco] of [
+    ['_presentAndClick', 'this.overlay.spotlight(rect)'],
+    ['_expandStep', 'this.overlay.spotlight(rect, { padding: 6 })'],
+  ]) {
+    const ls = lineasDe(nombre)
+    const guarda = tras(ls, 'await sleep(this.timing.scrollSettleMs ?? NAV_TIMING.scrollSettleMs)')
+    eq(ls[guarda], CANCELA, `${nombre}: tras desplazarse`)
+    assert(guarda < ls.indexOf(foco), `${nombre}: antes de encender el foco`)
+  }
+  const presentar = lineasDe('_presentAndClick')
+  assert(tras(presentar, 'await sleep(') < presentar.indexOf('target.click()'), 'y antes de pulsar')
+
+  // Al abrir la rama: cada tecla y el último recurso, sólo sin cancelar.
+  const rama = lineasDe('_abrirRama')
+  const teclas = tras(rama, "for (const key of ['ArrowRight', 'Enter']) {")
+  eq(rama[teclas], 'if (this.cancelled) return false', 'antes de cada tecla')
+  assert(teclas < rama.indexOf("fila.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }))"), 'antes de despachar la tecla')
+  const ultimo = rama.lastIndexOf('control.click()')
+  assert(ultimo > teclas, 'el último recurso va detrás del teclado')
+  eq(rama[ultimo - 1], 'if (this.cancelled) return false', 'y antes del último recurso')
 })
 
 test('M8: applyNotes y focusNote comparten la guardia de caja visible', () => {

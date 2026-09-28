@@ -2229,8 +2229,8 @@ async function hasHostPermission(origin) {
  * apuntaba «Content script inyectado» con la acción fallando detrás. Ahora el
  * SW dice `alive` y `error` y, tras inyectar, `kind`; con el script vivo y roto
  * ni se pide permiso ni se reinyecta: se apunta el motivo (`noteContentProblem`)
- * y se dice (`showContentProblem`). Sigue devolviendo un booleano: más de
- * veinte llamadas sólo quieren saber si pueden hablar con la pestaña.
+ * y se dice (`showContentProblem`). Sigue devolviendo un booleano: diecinueve
+ * llamadas sólo quieren saber si pueden hablar con la pestaña.
  */
 async function ensureContentAccess({ announce = true } = {}) {
   if (!state.site || !state.tabId) return false
@@ -6716,8 +6716,10 @@ async function togglePick() {
   }
 
   // H27 (PLAN3 §3.1, B4): un solo aviso con «Recárgala» valía para todo y no
-  // explicaba nada. `null` es que nadie contestó (la pestaña se fue, o el script
-  // es un huérfano de antes de recargar la extensión) y recargar sí ayuda;
+  // explicaba nada. `null` es que nadie contestó: la pestaña navegó o se cerró
+  // entre la comprobación y el clic, y recargar sí ayuda. No es el huérfano de
+  // una extensión recargada: ése no contesta al PING y `ensureContentAccess` ya
+  // reinyectó antes de llegar aquí (revisión adversaria de H27, D10).
   // `ok: false` es un script que contesta y dice por qué no arranca, y lo que
   // hay que enseñar es ese motivo.
   const r = await chrome.tabs.sendMessage(state.tabId, { type: MSG.PICK_START }).catch(() => null)

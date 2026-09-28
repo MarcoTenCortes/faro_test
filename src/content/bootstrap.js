@@ -16,7 +16,13 @@
  */
 
 ;(() => {
-  if (window.__faroBooted) return
+  // Una segunda instancia en este mismo mundo (reinyectar en una pestaña que ya
+  // tiene el content script) se queda en nada. Se compara con `true` y no con
+  // «algo»: un elemento de la página con id="__faroBooted" también se ve como
+  // `window.__faroBooted` en el mundo aislado (el getter con nombre de Window no
+  // mira el mundo), y con la guarda floja esa página se quedaba sin Faro y sin
+  // arreglo posible (revisión adversaria de H27).
+  if (window.__faroBooted === true) return
   window.__faroBooted = true
 
   const url = (p) => chrome.runtime.getURL(p)
@@ -27,7 +33,10 @@
   // que arrastran) detrás del primer mensaje que lo necesita, no de cualquiera:
   // PING y SETTINGS se contestan sin arrancar, porque el service worker los
   // manda a cada pestaña en cuanto se abre el panel y arrancar ahí sería cargar
-  // todo en páginas donde nadie va a usarlo. Y cuando el arranque falla se ve:
+  // todo en páginas donde nadie va a usarlo. La excepción es el PING que pide
+  // `arrancar`, el que el service worker manda justo después de inyectar: ahí
+  // alguien va a usarlo, y el «Listo» del panel tiene que querer decir que
+  // arrancó, no sólo que hay un oyente. Y cuando el arranque falla se ve:
   // hasta H27 un arranque roto contestaba `{ok:false}` a todo, PING incluido, y
   // para el service worker y el panel «script roto» y «no hay script» eran lo
   // mismo: se reinyectaba (en este mundo, `__faroBooted` lo deja en nada) y se
@@ -116,13 +125,18 @@
         let apagado = false
 
         // El huérfano se apaga ENTERO y una sola vez: el sondeo de la URL, el
-        // overlay (sus marcas, su host, las clases de «Señalar» y sus oyentes)
-        // y el selector si estaba eligiendo. Nada de eso tiene ya a quién
-        // contarle nada.
+        // paso que estuviera en marcha, el overlay (sus marcas, su host, las
+        // clases de «Señalar» y sus oyentes) y el selector si estaba eligiendo.
+        // Nada de eso tiene ya a quién contarle nada. El paso se cancela ANTES
+        // de destruir el overlay: `destroy()` no toca la espera del ejecutor, y
+        // un paso en su pausa acababa en 'auto', pulsaba el enlace y volvía a
+        // montar el host recién quitado (revisión adversaria de H27, visto en
+        // Chromium; runner.js mira además la cancelación tras cada espera).
         const apagar = () => {
           if (apagado) return
           apagado = true
           parar?.()
+          runner.cancel('huerfano')
           runner.overlay.destroy()
           if (picker) picker.cancel()
         }
@@ -318,6 +332,13 @@
         // se guarda hasta el arranque si todavía no lo hubo.
         switch (msg.type) {
           case MSG.PING:
+            // Salvo si pide `arrancar`: es el PING de después de inyectar, y un
+            // PING ligero sólo prueba que hay un oyente. Un script recién puesto
+            // cuyo arranque iba a fallar pasaba los dos PING del service worker
+            // y el panel decía «Listo» (revisión adversaria de H27). Con un
+            // arranque que ya falló no se vuelve a intentar: gastaría el segundo
+            // intento y otro error en la consola en un script que se sabe roto.
+            if (msg.arrancar && !arrancado && !bootError) await boot().catch(() => null)
             if (bootError && !arrancado) {
               sendResponse({ ok: false, alive: true, booted: false, error: bootErrorText(bootError) })
               return

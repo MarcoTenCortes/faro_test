@@ -797,7 +797,7 @@ cuáles no), que desde H16 son tuyos y no de un sitio.
 ## Comprobaciones
 
 ```bash
-npm run check              # sintaxis + orden + manifest + 1666 pruebas unitarias + docs
+npm run check              # sintaxis + orden + manifest + 1679 pruebas unitarias + docs
 npm run check:docs         # sólo el paso docs: número de pruebas, títulos del registro, mensajes y ficheros del mapa
 npm run test:integration   # contra un opencode real que arranca la propia prueba
 npm run harness            # banco de pruebas visual en http://127.0.0.1:5175
@@ -1304,7 +1304,8 @@ tarjeta pidiendo permiso. Al concederlo:
 
 1. registra el content script para ese dominio, y
 2. lo inyecta en la pestaña que ya tienes abierta, sin recargar, y comprueba
-   que contesta.
+   que ARRANCA, no sólo que contesta (desde la revisión de H27: antes, un
+   script que iba a fallar pasaba la comprobación y Faro decía «Listo»).
 
 Si el permiso falta, el aviso lo dice. Antes esto fallaba en silencio: pulsabas
 «Paso a paso» y no ocurría nada. Y desde H27, si el permiso está pero el

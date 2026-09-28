@@ -259,6 +259,9 @@ patrones no cambian), la contraseña de opencode sigue sólo en el panel, y
   `restIndexFor` corren en paralelo. Consecuencia documentada en FLUJOS §4.1:
   al abrir el panel en un sitio configurado se inyecta sin clic; el content
   script NO arranca hasta el primer mensaje real (PING y SETTINGS no arrancan).
+  (Revisión adversaria de H27, D1: salvo el PING con `arrancar` que el SW
+  manda al asegurarlo, antes y después de inyectar, porque uno ligero sólo
+  prueba que hay un oyente y el «Listo» tiene que querer decir arrancado.)
 - De paso y baratos (C5-9, C5-10): `onMessage` devuelve `true` sólo para los
   tipos que atiende; la hidratación guarda su PROMESA; START_PLAN,
   NAVIGATE_DIRECT y REQUEST_HOST_PERMISSION sólo sin `sender.tab`.
@@ -645,7 +648,24 @@ Con la extensión recargada y una pestaña de Jira o Confluence recargada:
 8. Preguntar a Marco si cargó H26 recargando la entrada vieja (actualización)
    o de cero, y si alguna vez vio «Permiso dado, pero no he podido inyectarme:
    permiso denegado» (la carrera de los 5 s).
-9. NUNCA «Quitar Faro» de `chrome://extensions` para probar: borra
+9. (Revisión adversaria de H27, D1) Tras «Dar permiso» en un host propio,
+   «Content script inyectado» sólo si el content script ARRANCÓ; con un módulo
+   roto, «Content script roto» ya en esa primera comprobación, nunca «Listo».
+10. (D3) Recargar la extensión con un «Paso a paso» a mitad de un paso: el
+    huérfano se apaga sin pulsar nada ni volver a montar el overlay
+    (`document.querySelectorAll('#faro-overlay-host').length` en 0 o 1).
+11. (D4) Una página con un `<div id="__faroBooted">` (pegado desde la consola
+    antes de cargar la extensión, o en el banco) sigue teniendo Faro.
+12. (G8) Quitar el permiso de un DC con la pestaña abierta y mirar si Faro
+    sigue marcando: `ready` no mira `granted`, a propósito, y se espera que sí
+    hasta recargar la pestaña (como hace Chrome con el acceso retirado).
+13. (G8) Con «Paso a paso» y «Señalar», que el panel lateral llega SIN
+    `sender.tab`: desde la revisión CANCEL_PLAN y CONTENT_STATUS dependen de
+    ello, y si no fuera así fallaría todo a la vez («sólo desde el panel»).
+14. (D10) «Dar permiso» desde «Qué mirar hoy» (`askTodayPermission`, con un
+    `await todayMissingPermission()` delante del diálogo) abre el diálogo de
+    Chrome.
+15. NUNCA «Quitar Faro» de `chrome://extensions` para probar: borra
    `chrome.storage.local` entero (sitios, contextos, mapas, modelo, diario).
    El control sin código es editar `manifest.json` a mano en la copia de
    trabajo, «Recargar» y luego `git checkout manifest.json`; H27 lo hace ya

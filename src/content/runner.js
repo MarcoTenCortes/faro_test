@@ -141,6 +141,12 @@ export class NavRunner {
     const desplegando = step.action === 'expand'
     const timeout = this.timing.locateTimeoutMs ?? NAV_TIMING.locateTimeoutMs
     const found = await waitFor(() => locateStep(step, document), { timeout })
+    // Cancelado mientras se buscaba el enlace (Escape, «Parar» del panel o el
+    // huérfano que se apaga): al volver no se presenta nada. Cancelar sólo
+    // resuelve la espera de la tarjeta, y sin esto el paso encendía el foco,
+    // volvía a montar el overlay y pulsaba (revisión adversaria de H27, visto en
+    // Chromium). Lo mismo tras cada espera de abajo que acaba pintando.
+    if (this.cancelled) return { status: STEP_RESULT.CANCELLED, reason: this.cancelReason || 'user' }
 
     if (!found) {
       // Una rama INTERMEDIA que no aparece se salta y ya está. Antes se ofrecía
@@ -157,6 +163,7 @@ export class NavRunner {
       if (this.cancelled) return { status: STEP_RESULT.CANCELLED, reason: this.cancelReason || 'user' }
       if (expanded) {
         const retry = await waitFor(() => locateStep(step, document), { timeout: 1200 })
+        if (this.cancelled) return { status: STEP_RESULT.CANCELLED, reason: this.cancelReason || 'user' }
         if (retry) return this._presentAndClick(retry, { step, index, total, isLast })
       }
       return this._offerFallback(step, index, total)
@@ -203,6 +210,9 @@ export class NavRunner {
     // borde visible y parece que no ha pasado nada.
     await this._traerALaVista(toggle.row || toggle.toggle)
     await sleep(this.timing.scrollSettleMs ?? NAV_TIMING.scrollSettleMs)
+    // Cancelado mientras se desplazaba: el foco no se enciende (revisión
+    // adversaria de H27; ver `executeStep`).
+    if (this.cancelled) return { status: STEP_RESULT.CANCELLED, reason: this.cancelReason || 'user' }
 
     const marca = toggle.row || toggle.toggle
     const rect = marca.getBoundingClientRect()
@@ -267,6 +277,9 @@ export class NavRunner {
       const fila = toggle.row || control
       fila.focus?.({ preventScroll: true })
       for (const key of ['ArrowRight', 'Enter']) {
+        // Cada espera del despliegue puede acabar en una cancelación: tras
+        // ella ya no se despliega nada (revisión adversaria de H27).
+        if (this.cancelled) return false
         fila.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }))
         if (await this._esperaDespliegue(control)) return true
       }
@@ -274,8 +287,9 @@ export class NavRunner {
       /* si el navegador no deja, se prueba lo siguiente */
     }
 
-    // Último recurso: pulsar la propia fila.
+    // Último recurso: pulsar la propia fila. Nunca tras cancelar: suele navegar.
     if (toggle.isRow) {
+      if (this.cancelled) return false
       control.click()
       if (await this._esperaDespliegue(control)) return true
     }
@@ -434,6 +448,9 @@ export class NavRunner {
     // quedarse fuera de la vista aunque la ventana esté bien colocada.
     await this._traerALaVista(target)
     await sleep(this.timing.scrollSettleMs ?? NAV_TIMING.scrollSettleMs)
+    // Cancelado mientras se desplazaba: ni foco, ni tarjeta, ni clic (revisión
+    // adversaria de H27; ver `executeStep`).
+    if (this.cancelled) return { status: STEP_RESULT.CANCELLED, reason: this.cancelReason || 'user' }
 
     const rect = target.getBoundingClientRect()
     this.overlay.spotlight(rect)

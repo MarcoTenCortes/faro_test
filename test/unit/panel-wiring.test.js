@@ -2674,8 +2674,14 @@ test('H9: el perfil del proyecto se carga con el sitio y se vuelve a contar fuer
   // la API del sitio y el chat no puede esperarla.
   assert(/\n  refreshProfileSoon\(testigo\)/.test(arranque), 'el refresco se lanza al final del arranque')
   assert(!/await refreshProfileSoon\(/.test(arranque), 'y no se espera: el chat ya está puesto')
+  // La llamada TIENE que estar: con el `indexOf` solo, borrarla daba -1 < n y
+  // pasaba (revisión adversaria de H27, D5). Y hace falta de verdad, no por
+  // orden: `countProfile` manda JQL_SEARCH a la pestaña sin cruzar
+  // `ensureContentAccess`, así que tras recargar la extensión el perfil se
+  // quedaría sin nadie que conteste si el arranque no asegura antes el script.
   assert(
-    arranque.indexOf('await ensureContentAccess({ announce: false })') < arranque.indexOf('refreshProfileSoon(testigo)'),
+    arranque.indexOf('await ensureContentAccess({ announce: false })') >= 0 &&
+      arranque.indexOf('await ensureContentAccess({ announce: false })') < arranque.indexOf('refreshProfileSoon(testigo)'),
     'después de asegurarse de que hay content script con quien hablar'
   )
 
@@ -8955,8 +8961,8 @@ test('H27: un content script roto se registra como “Content script roto” y n
   // permiso» pidiendo lo que ya estaba dado. Desde H27 el SW distingue vivo y
   // roto (`alive`, `error`, `kind`) y el panel lo dice.
 
-  // (1) ensureContentAccess, ENTERA. Sigue devolviendo un booleano (más de
-  // veinte llamadas sólo quieren saber si pueden hablar con la pestaña); lo
+  // (1) ensureContentAccess, ENTERA. Sigue devolviendo un booleano (diecinueve
+  // llamadas sólo quieren saber si pueden hablar con la pestaña); lo
   // nuevo es la rama del script vivo y roto, ANTES de la del permiso, y lo que
   // el SW contesta tras inyectar («roto», «huerfano»), que ya no es un `ok` sin
   // mirar.
@@ -9068,6 +9074,83 @@ test('H27: un content script roto se registra como “Content script roto” y n
   h27Una(H27_LIMPIO, '\n  pendingIntent: null,\n  contentProblem: null,\n}\n', 'state.contentProblem existe, a null, como última clave')
   const escrituras = (src) => src.split('state.contentProblem = ').length - 1
   eq([escrituras(H27_LIMPIO), escrituras(acceso), escrituras(apuntar)], [4, 3, 1], 'state.contentProblem sólo se escribe en ensureContentAccess (tres veces a null) y en noteContentProblem')
+
+  // Revisión adversaria de H27 (D5): lo de arriba pinaba el lado de
+  // ensureContentAccess y nada de lo que H27 prometía alrededor. Sobre una copia
+  // pasaban en verde siete mutaciones que devolvían el «Listo» falso de B4 desde
+  // el panel, o quitaban la inyección sin clic del arranque.
+
+  // (5) requestHostPermission, ENTERA. Sólo un `ok` del service worker es
+  // «Permiso concedido»: un `kind` «roto» o «huerfano» trae su `error` y no es
+  // un permiso que falte. Y el mensaje lleva la pestaña: con `tabId` null el SW
+  // sólo registra el script para la próxima carga y contesta `ok` sin inyectar
+  // en la pestaña abierta.
+  eq(
+    h27Funcion('async function requestHostPermission('),
+    h27Lineas(
+      'async function requestHostPermission(target = null) {',
+      '  const origin = target?.origin || state.site.origin',
+      '  const host = target?.host || state.site.host',
+      '  const tabId = target ? target.tabId ?? null : state.tabId',
+      "  const pattern = origin.replace(/\\/+$/, '') + '/*'",
+      '  const granted = await chrome.permissions.request({ origins: [pattern] }).catch(() => false)',
+      '  if (!granted) {',
+      "    log.warn('Permiso de host denegado', host)",
+      '    return { ok: false, denied: true }',
+      '  }',
+      '  const r = await chrome.runtime',
+      '    .sendMessage({ type: MSG.REQUEST_HOST_PERMISSION, origin, tabId })',
+      '    .catch(() => null)',
+      '  if (r?.ok) {',
+      "    log.ok('Permiso concedido', host)",
+      '    return { ok: true }',
+      '  }',
+      "  return { ok: false, error: r?.error || 'motivo desconocido' }",
+      '}'
+    ),
+    'requestHostPermission: sólo un ok del service worker es «Permiso concedido», y el mensaje lleva la pestaña'
+  )
+  // Los tres «Listo» que cuelgan de ella (la tarjeta del chat, «Qué mirar hoy»
+  // y la pantalla de páginas base), cada uno detrás de su `if (r.ok) {`: con
+  // `r.error` delante, un script roto diría «Listo» igual.
+  for (const listo of [
+    h27Lineas('    if (r.ok) {', '      card.remove()', "      showNotice('Listo. Ya puedo resaltar y guiarte paso a paso en ' + state.site.host + '.')"),
+    h27Lineas('  if (r.ok) {', '    setTodayStatus(`Listo. Ya puedo mirar qué ha cambiado en ${falta.host}.`)'),
+    h27Lineas(
+      '    if (r.ok) {',
+      "      $('sources-perm').classList.add('hidden')",
+      "      setSourcesStatus(`Listo. Ya puedo buscar en ${target?.via === 'linked' ? target.site.host : 'Confluence'}.`)"
+    ),
+  ]) {
+    h27Una(H27_LIMPIO, listo, 'el «Listo» sólo con un ok del service worker')
+  }
+  eq(H27_LIMPIO.split('Listo. Ya puedo').length - 1, 3, 'y no hay un cuarto «Listo» de permiso sin pinar')
+
+  // (6) Quien recibe el `false` y pinta el aviso lo hace por showPermissionNotice,
+  // que sólo desvía al motivo si el problema apuntado es de ESTA pestaña:
+  // showContentProblem a secas, con el permiso de verdad sin dar, diría
+  // «motivo desconocido» en lugar de ofrecer «Dar permiso».
+  h27Una(
+    h27Funcion('async function runPlan('),
+    h27Lineas('  const puede = await ensureContentAccess({ announce: false })', '  if (!puede) {', '    showPermissionNotice()'),
+    'runPlan pide el permiso por showPermissionNotice'
+  )
+  h27Una(
+    H27_LIMPIO,
+    h27Lineas('    if (msg.result?.needsPermission) {', "      log.error('Navegación detenida', 'sin permiso de host')", '      showPermissionNotice()'),
+    'PLAN_FINISHED sin permiso, por showPermissionNotice'
+  )
+
+  // (7) El arranque asegura el script en silencio (`announce: false`: pedir el
+  // permiso nada más abrir el panel es pedirlo por si acaso) y ANTES de volver
+  // a contar el perfil, que manda JQL_SEARCH a la pestaña sin pasar por
+  // ensureContentAccess: es la inyección sin clic de H27 tras recargar la
+  // extensión.
+  h27Una(
+    h27Funcion('async function bootForSite('),
+    '\n  await ensureContentAccess({ announce: false })\n  refreshProfileSoon(testigo)\n',
+    'bootForSite asegura el script, en silencio, justo antes de refreshProfileSoon'
+  )
 })
 
 test('H27: “Señalar” dice la causa', () => {

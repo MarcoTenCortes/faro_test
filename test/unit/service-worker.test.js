@@ -39,10 +39,20 @@ const PERMISOS_QUITADOS = []
 
 /**
  * Lo que devuelve `chrome.runtime.getManifest().host_permissions` con el
- * manifest real: son los orígenes que Chrome da al instalar y que el worker
- * NUNCA registra a mano (ya los cubre `content_scripts`).
+ * manifest real: los orígenes que Chrome da al instalar. No es lo mismo que lo
+ * que cubre `content_scripts` (revisión adversaria de H27, G7): 127.0.0.1 y
+ * localhost tienen permiso pero ningún script declarado, y el de cada puerto lo
+ * registra el «Dar permiso» del panel.
  */
 const HOSTS_DEL_MANIFEST = ['http://127.0.0.1/*', 'http://localhost/*', 'https://*.atlassian.net/*']
+/** Los `matches` de `content_scripts` del manifest real: lo único que el worker nunca registra a mano. */
+const MATCHES_DEL_MANIFEST = ['https://*.atlassian.net/*']
+// El patrón que casa con cualquier host https, aquí arriba y no en su prueba:
+// lleva dentro un asterisco seguido de una barra, y dead-exports.test.js (que
+// quita los comentarios con una regex) lo tomaría por el final de uno y se
+// comería lo que hubiera detrás de la última barra y asterisco anteriores,
+// `loaded.cubiertoPorContentScripts` incluido.
+const CUALQUIER_HTTPS = 'https://*/*'
 
 /** El error de Chrome al llamar a `permissions.request` sin gesto del usuario. */
 const SIN_GESTO = 'This function must be called during a user gesture'
@@ -106,7 +116,11 @@ function makeChrome() {
         state.panelMessages.push(m)
       },
       getURL: (p) => 'chrome-extension://test/' + p,
-      getManifest: () => ({ manifest_version: 3, host_permissions: [...HOSTS_DEL_MANIFEST] }),
+      getManifest: () => ({
+        manifest_version: 3,
+        host_permissions: [...HOSTS_DEL_MANIFEST],
+        content_scripts: [{ matches: [...MATCHES_DEL_MANIFEST], js: ['src/content/bootstrap.js'] }],
+      }),
     },
     action: { onClicked: { addListener() {} } },
     sidePanel: {
@@ -890,6 +904,17 @@ test('H23 revisión: tras inyectar el content script, los ajustes van detrás', 
   // EL CAMBIO (H27): tras inyectar se vuelve a hacer PING, y el `ok` y los
   // ajustes sólo salen si ESE contesta bien (hasta H27, `{ ok: true }` sin mirar).
   eq(rig.state.sentWithTab.map((s) => s.msg.type), ['faro:ping', 'faro:ping', 'faro:settings'], 'el PING otra vez tras inyectar, y los ajustes detrás')
+  // Y los dos PING piden arrancar (revisión adversaria de H27, G1): el ligero
+  // sólo prueba que hay un oyente, y lo contesta bien un script cuyo arranque
+  // va a fallar.
+  eq(
+    rig.state.sentWithTab.filter((s) => s.msg.type === MSG.PING).map((s) => s.msg),
+    [
+      { type: MSG.PING, arrancar: true },
+      { type: MSG.PING, arrancar: true },
+    ],
+    'los dos PING de asegurar piden arrancar'
+  )
   const [ajustes] = rig.state.sentWithTab.filter((s) => s.msg.type === MSG.SETTINGS)
   eq([ajustes.tabId, ajustes.msg.highlightColor], [3, 'ambar'])
 })
@@ -955,9 +980,9 @@ test('H27: con el PING muerto también después de inyectar, REQUEST_HOST_PERMIS
 
 test('H27: un content script vivo y roto no se reinyecta y da kind roto', async () => {
   // Reinyectar no arregla un arranque roto: Chrome guarda en su mapa de módulos
-  // el import que falló (whatwg/html#6768), y una segunda instancia en el mismo
-  // mundo sólo añadiría otro oyente compitiendo con el viejo. Lo que hace falta
-  // es DECIRLO, con el motivo que da el propio content script.
+  // el import que falló (whatwg/html#6768), y reinyectar en el mismo mundo no
+  // hace nada: `window.__faroBooted` deja la segunda instancia en nada. Lo que
+  // hace falta es DECIRLO, con el motivo que da el propio content script.
   const rig = makeChrome()
   await loadWorker(rig)
   rig.state.local['faro:settings'] = AJUSTES_AMBAR
@@ -992,19 +1017,22 @@ test('H27: un content script vivo y roto no se reinyecta y da kind roto', async 
 test('H27: dos REQUEST_HOST_PERMISSION a la vez registran e inyectan UNA vez', async () => {
   // Sin `request` ni gesto, el panel asegura el script desde varios sitios a la
   // vez al abrirse (el arranque, los chips, los campos de la incidencia, «hoy»,
-  // el índice): sin serializar por origen, cada uno registraba e inyectaba el
-  // suyo y la pestaña acababa con dos content scripts compitiendo.
+  // el índice): sin serializar por origen y pestaña, cada uno registraba e
+  // inyectaba el suyo y la pestaña acababa con dos content scripts compitiendo.
   const rig = makeChrome()
   await loadWorker(rig)
   rig.state.contentReply = (msg, tabId) =>
     msg.type === MSG.PING && rig.state.inyecciones.some((o) => o.target.tabId === tabId) ? { ok: true } : null
   const pide = (tabId) => rig.send({ type: MSG.REQUEST_HOST_PERMISSION, origin: CONF_ORIGEN, tabId })
 
-  eq(await Promise.all([pide(3), pide(3), pide(1)]), [{ ok: true }, { ok: true }, { ok: true }])
+  eq(await Promise.all([pide(3), pide(1), pide(3)]), [{ ok: true }, { ok: true }, { ok: true }])
   eq(rig.state.registros.map((s) => s.id), [CONF_ID], 'un registro')
-  // La tercera es otra pestaña del mismo origen (otro panel, en otra ventana):
-  // compartir la respuesta de la primera la dejaría sin script diciéndole «ok»,
-  // así que espera su turno y se asegura la suya.
+  // La del medio es otra pestaña del mismo origen (otro panel, en otra
+  // ventana): compartir la respuesta de la 3 la dejaría sin script diciéndole
+  // «ok», y esperar a la 3 la colgaría con ella si la 3 no contesta (revisión
+  // adversaria de H27, G9). La misma pestaña comparte; OTRA del mismo origen ni
+  // comparte ni espera. Con la 1 en medio, una entrada de la 1 que pisara la de
+  // la 3 haría inyectar la 3 dos veces.
   eq(rig.state.inyecciones.map((o) => o.target.tabId), [3, 1], 'una inyección por pestaña, y no dos en la misma')
 })
 
@@ -1043,7 +1071,8 @@ test('H27: onInstalled registra cada origen concedido de un sitio guardado y nin
   // de un host propio pedirían «Dar permiso» con el permiso dado. La concesión
   // ES el consentimiento: un sitio guardado sin claves (`configured: false`
   // tras «Quitar las claves», o sin `configured` si se saltaron) sigue siendo
-  // de la persona. Lo del manifest no: ya lo cubre `content_scripts`.
+  // de la persona. Lo que ya cubre `content_scripts` del manifest real
+  // (`*.atlassian.net`) no, aunque esté concedido por su host exacto.
   const rig = makeChrome()
   await loadWorker(rig)
   rig.state.local['faro:sites'] = {
@@ -1058,12 +1087,16 @@ test('H27: onInstalled registra cada origen concedido de un sitio guardado y nin
     'acme.atlassian.net': { host: 'acme.atlassian.net', configured: true, product: 'confluence', cloud: true },
   }
   // El Jira enlazado no es una clave de `faro:sites`, y ajeno.example tiene
-  // permiso pero no es un sitio de nadie.
+  // permiso pero no es un sitio de nadie. `acme.atlassian.net`, guardado y
+  // concedido por su host, lo cubre ya `content_scripts` (revisión adversaria
+  // de H27, G7: hasta aquí se comparaba con `host_permissions` por cadena
+  // exacta, y hacía falta un manifest inventado para que algo casara).
   rig.state.granted.push(
     'https://confluence.simplprogramme.eu/*',
     'https://jira.simplprogramme.eu/*',
     'https://wiki.quitado.example/*',
-    'https://ajeno.example/*'
+    'https://ajeno.example/*',
+    'https://acme.atlassian.net/*'
   )
 
   await rig.disparar(INSTALADO, { reason: 'update' })
@@ -1080,14 +1113,6 @@ test('H27: onInstalled registra cada origen concedido de un sitio guardado y nin
   // Idempotente: otra vuelta no registra nada dos veces.
   await rig.disparar(INSTALADO, { reason: 'install' })
   eq(rig.state.registros.length, 3, 'nada nuevo en la segunda vuelta')
-
-  // Lo que el manifest ya declara no se registra aunque sea un sitio guardado
-  // y esté concedido (aquí con un manifest inventado que lo incluye).
-  rig.state.vivos.clear()
-  rig.state.registros.length = 0
-  globalThis.chrome.runtime.getManifest = () => ({ host_permissions: [...HOSTS_DEL_MANIFEST, 'https://jira.simplprogramme.eu/*'] })
-  await rig.disparar(INSTALADO, { reason: 'update' })
-  eq(rig.state.registros.map((s) => s.id), [CONF_ID, 'faro-https---wiki-quitado-example'])
 })
 
 test('H27: un «Duplicate script ID» cuenta como registrado, y un registro que falla no tumba los demás', async () => {
@@ -1155,9 +1180,9 @@ test('H27: un permiso añadido registra y uno quitado desregistra', async () => 
 
 test('H27: originsToRegister es pura', async () => {
   // La regla de la reconciliación, sin chrome: los hosts de `faro:sites` y sus
-  // enlazados, sólo con el permiso concedido y nunca los del manifest, sin
-  // repetidos y en orden. Congelados: ordenar la lista de entrada en su sitio
-  // lanzaría.
+  // enlazados, sólo con el permiso concedido y nunca lo que ya cubre
+  // `content_scripts`, sin repetidos y en orden. Congelados: ordenar la lista
+  // de entrada en su sitio lanzaría.
   const rig = makeChrome()
   await loadWorker(rig)
   const congela = (o) => Object.freeze(Object.fromEntries(Object.entries(o).map(([k, v]) => [k, Object.freeze(v)])))
@@ -1177,19 +1202,19 @@ test('H27: originsToRegister es pura', async () => {
     'https://otro.example/*',
     'http://localhost/*',
   ])
-  const manifestOrigins = Object.freeze(['https://manifiesto.example/*', 'http://localhost/*'])
+  const contentScriptMatches = Object.freeze(['https://manifiesto.example/*', 'http://localhost/*'])
 
   const guardado = globalThis.chrome
   delete globalThis.chrome
   try {
-    eq(loaded.originsToRegister({ sites, granted, manifestOrigins }), [
+    eq(loaded.originsToRegister({ sites, granted, contentScriptMatches }), [
       'https://a.example',
       'https://jira.enlazado.example',
       'https://quitado.example',
       'https://wiki.b.example',
     ])
     eq(loaded.originsToRegister({}), [], 'sin nada, nada')
-    eq(loaded.originsToRegister({ sites: null, granted: null, manifestOrigins: null }), [], 'y con nulos tampoco lanza')
+    eq(loaded.originsToRegister({ sites: null, granted: null, contentScriptMatches: null }), [], 'y con nulos tampoco lanza')
   } finally {
     globalThis.chrome = guardado
   }
@@ -1225,11 +1250,14 @@ test('H27: un tipo que el SW no atiende no deja el canal abierto', async () => {
   }
 })
 
-test('H27: START_PLAN desde una pestaña se rechaza', async () => {
-  // Lanzar un recorrido, navegar y asegurar el content script son cosas del
-  // panel, que no es una pestaña: un mensaje con `sender.tab` (un content
-  // script, o cualquier página de la extensión abierta en una pestaña) no
-  // puede mandar al worker a navegar ni a inyectar.
+test('H27: los cinco mensajes del panel desde una pestaña se rechazan', async () => {
+  // Lanzar un recorrido, navegar, cortarlo, asegurar el content script y
+  // preguntar por él son cosas del panel, que no es una pestaña: un mensaje con
+  // `sender.tab` (un content script, o cualquier página de la extensión abierta
+  // en una pestaña) no puede mandar al worker a navegar ni a inyectar, ni
+  // cortar el recorrido de otra pestaña, ni sondear el permiso de un origen
+  // cualquiera o el estado de otra pestaña (revisión adversaria de H27, G8:
+  // CANCEL_PLAN y CONTENT_STATUS se habían quedado sin la guarda).
   const rig = makeChrome()
   await loadWorker(rig)
   const partida = rig.state.tabs[1].url
@@ -1238,6 +1266,8 @@ test('H27: START_PLAN desde una pestaña se rechaza', async () => {
     { type: MSG.START_PLAN, tabId: 1, plan: PLAN },
     { type: MSG.NAVIGATE_DIRECT, tabId: 1, plan: { ...PLAN, steps: [] } },
     { type: MSG.REQUEST_HOST_PERMISSION, origin: CONF_ORIGEN, tabId: 1 },
+    { type: MSG.CANCEL_PLAN, tabId: 1 },
+    { type: MSG.CONTENT_STATUS, tabId: 1, origin: CONF_ORIGEN },
   ]) {
     eq(await rig.send(msg, desdeUnaPestana), { ok: false, error: 'sólo desde el panel' }, msg.type)
   }
@@ -1277,5 +1307,332 @@ test('H27: dos mensajes al despertar esperan a la MISMA lectura del recorrido gu
     eq(Object.keys(rig.state.session['faro:plans']).sort(), ['1', '7'], 'el recorrido que ya estaba guardado Y el nuevo')
   } finally {
     listas.forEach((l, i) => (l.length = cuantos[i]))
+  }
+})
+
+// ------------------------------------------------- revisión adversaria de H27
+//
+// Sobre 7c729e4 (docs/plan/handoff/h27-rev-decisiones.md, D1 y D6-D10). Todo
+// con comentarios de línea: desde aquí hasta el final no puede haber ni un
+// comentario de bloque ni una cadena con un asterisco seguido de barra.
+// dead-exports.test.js quita los comentarios con una regex, toma el «/*» de un
+// patrón como «'https://x/*'» por el principio de uno, y lo cerraría ahí
+// comiéndose los `loaded.originsToRegister` y `loaded.cubiertoPorContentScripts`
+// que hay en medio: las dos exportaciones se quedarían sin importador.
+
+// Un worker recién despertado: otra instancia del módulo (con otro `?probe=`)
+// sobre el `chrome` que ya esté montado, con su `hydrating` a null, y sus
+// oyentes quitados al acabar para que las demás pruebas sigan con la primera.
+// `fn` recibe `manda(msg)`, que habla con el oyente de mensajes de ESA
+// instancia sin `sender.tab`, como el panel.
+async function conWorkerDespierto(sufijo, fn) {
+  const listas = [LISTENERS, CAMBIOS, ACTUALIZADAS, INSTALADO, PERMISOS_DADOS, PERMISOS_QUITADOS]
+  const cuantos = listas.map((l) => l.length)
+  try {
+    await import('../../src/background/service-worker.js?probe=' + sufijo)
+    const despierto = LISTENERS[LISTENERS.length - 1]
+    await fn((msg) => new Promise((r) => despierto(msg, {}, r)))
+  } finally {
+    listas.forEach((l, i) => (l.length = cuantos[i]))
+  }
+}
+
+test('H27 revisión: tras inyectar, el PING pide arrancar y un arranque roto da kind roto, no «Listo»', async () => {
+  // El PING ligero lo contesta bien un content script aunque su arranque vaya
+  // a fallar: antes de arrancar sólo ha cargado una hoja, messages.js. Con él,
+  // un script recién inyectado que no arranca pasaba los dos PING de
+  // `asegurarAhora` y el panel decía «Listo» sin poder marcar nada, que es lo
+  // que H27 vino a quitar (revisión adversaria de H27, G1). Aquí la pestaña
+  // contesta como bootstrap.js: bien al PING ligero, roto al que pide arrancar.
+  const rig = makeChrome()
+  await loadWorker(rig)
+  rig.state.local['faro:settings'] = AJUSTES_AMBAR
+  const comoBootstrap = (msg) => (msg.arrancar ? { ok: false, alive: true, booted: false, error: 'x' } : { ok: true, booted: false })
+  rig.state.contentReply = (msg) => (msg.type === MSG.PING && rig.state.inyecciones.length ? comoBootstrap(msg) : null)
+
+  eq(await rig.send({ type: MSG.REQUEST_HOST_PERMISSION, origin: CONF_ORIGEN, tabId: 3 }), { ok: false, kind: 'roto', error: 'x' })
+  eq(rig.state.inyecciones.map((o) => o.target), [{ tabId: 3 }])
+  eq(
+    rig.state.sentWithTab.map((s) => s.msg),
+    [
+      { type: MSG.PING, arrancar: true },
+      { type: MSG.PING, arrancar: true },
+    ],
+    'los dos PING piden arrancar, y ningún SETTINGS'
+  )
+
+  // Y el de antes de inyectar también: un script que ya estaba en la página y
+  // no había arrancado (el de `content_scripts` en Cloud, o uno de antes) se
+  // arranca ahora, y si no puede, es roto sin reinyectar.
+  rig.state.inyecciones.length = 0
+  rig.state.sentWithTab.length = 0
+  rig.state.contentReply = (msg) => (msg.type === MSG.PING ? comoBootstrap(msg) : null)
+  eq(await rig.send({ type: MSG.REQUEST_HOST_PERMISSION, origin: CONF_ORIGEN, tabId: 3 }), { ok: false, kind: 'roto', error: 'x' })
+  eq([rig.state.inyecciones, rig.state.sentWithTab.map((s) => s.msg)], [[], [{ type: MSG.PING, arrancar: true }]])
+
+  // El PING de comprobar sigue siendo el ligero (lo que ganó H11): un
+  // CONTENT_STATUS no arranca nada.
+  rig.state.sentWithTab.length = 0
+  eq(await rig.send({ type: MSG.CONTENT_STATUS, tabId: 3, origin: CONF_ORIGEN }), { granted: true, ready: true, alive: true, error: '' })
+  eq(rig.state.sentWithTab.map((s) => s.msg).filter((m) => m.type === MSG.PING), [{ type: MSG.PING }], 'el PING de CONTENT_STATUS, sin arrancar')
+})
+
+test('H27: sin pestaña, REQUEST_HOST_PERMISSION sólo registra y da ok', async () => {
+  // Es lo que pide el panel para el Confluence enlazado desde un Jira DC: no
+  // hay pestaña suya en la que inyectar, así que se registra para cuando el
+  // usuario lo abra y nada más. El mock contesta bien a todo: un PING que se
+  // colara hacia la pestaña `null` saldría en `sentWithTab`.
+  const rig = makeChrome()
+  await loadWorker(rig)
+  rig.state.contentReply = () => ({ ok: true })
+  eq(await rig.send({ type: MSG.REQUEST_HOST_PERMISSION, origin: CONF_ORIGEN, tabId: null }), { ok: true })
+  eq(rig.state.registros.map((s) => s.id), [CONF_ID])
+  eq([rig.state.sentWithTab, rig.state.inyecciones], [[], []], 'ni un mensaje ni una inyección')
+})
+
+test('H27: si Chrome no deja registrar el script, kind registro y no se toca la pestaña', async () => {
+  // Registrar va primero: si Chrome no lo deja, se dice con su motivo y no se
+  // pregunta a la pestaña ni se inyecta nada en ella.
+  const rig = makeChrome()
+  await loadWorker(rig)
+  rig.state.contentReply = () => null
+  const registra = globalThis.chrome.scripting.registerContentScripts
+  globalThis.chrome.scripting.registerContentScripts = async () => {
+    throw new Error('cuota de scripts llena')
+  }
+  try {
+    eq(await rig.send({ type: MSG.REQUEST_HOST_PERMISSION, origin: CONF_ORIGEN, tabId: 3 }), {
+      ok: false,
+      kind: 'registro',
+      error: 'no se pudo registrar el script: cuota de scripts llena',
+    })
+    eq([rig.state.sentWithTab, rig.state.inyecciones], [[], []], 'ni un PING ni una inyección')
+  } finally {
+    globalThis.chrome.scripting.registerContentScripts = registra
+  }
+})
+
+test('H27: si la inyección falla, kind inyeccion sin segundo PING ni SETTINGS', async () => {
+  // Chrome no deja inyectar en cualquier pestaña (una página de error, una del
+  // navegador, una que se está cerrando): se dice con su motivo, sin preguntar
+  // a un script que no se ha puesto ni empujarle los ajustes.
+  const rig = makeChrome()
+  await loadWorker(rig)
+  rig.state.local['faro:settings'] = AJUSTES_AMBAR
+  rig.state.contentReply = () => null
+  const inyecta = globalThis.chrome.scripting.executeScript
+  globalThis.chrome.scripting.executeScript = async () => {
+    throw new Error('Cannot access contents of the page')
+  }
+  try {
+    eq(await rig.send({ type: MSG.REQUEST_HOST_PERMISSION, origin: CONF_ORIGEN, tabId: 3 }), {
+      ok: false,
+      kind: 'inyeccion',
+      error: 'no se pudo inyectar: Cannot access contents of the page',
+    })
+    eq(rig.state.sentWithTab.map((s) => s.msg.type), ['faro:ping'], 'el PING de antes y nada más')
+  } finally {
+    globalThis.chrome.scripting.executeScript = inyecta
+  }
+})
+
+test('H27: si la lectura del recorrido guardado falla, la siguiente llamada vuelve a leer', async () => {
+  // La hidratación guarda su PROMESA (H27, C5-10). Si esa lectura falla, la
+  // promesa rechazada no puede quedarse ahí: el worker contestaría con el mismo
+  // error a todo lo que tocara un recorrido hasta volver a dormirse. Hace falta
+  // un worker recién despertado, que no haya leído todavía.
+  const rig = makeChrome()
+  await loadWorker(rig)
+  rig.state.session['faro:plans'] = { 7: { plan: PLAN, index: 1, phase: 'steps' } }
+  const lee = globalThis.chrome.storage.session.get
+  let fallos = 1
+  globalThis.chrome.storage.session.get = async (k) => {
+    if (fallos-- > 0) throw new Error('almacén de sesión caído')
+    return lee(k)
+  }
+  const errores = []
+  const error = console.error
+  console.error = (...args) => errores.push(args.map(String).join(' '))
+  try {
+    await conWorkerDespierto('reintento', async (manda) => {
+      const directo = { ...PLAN, mode: 'direct', steps: [] }
+      const primero = await manda({ type: MSG.NAVIGATE_DIRECT, tabId: 1, plan: directo })
+      eq(primero, { ok: false, error: 'almacén de sesión caído' }, 'el primero falla')
+      const segundo = await manda({ type: MSG.NAVIGATE_DIRECT, tabId: 1, plan: directo })
+      eq(segundo, { ok: true, navigating: true }, 'y el segundo vuelve a leer y guarda')
+      eq(Object.keys(rig.state.session['faro:plans']).sort(), ['1', '7'], 'sin perder el que ya estaba guardado')
+    })
+    eq(errores.length, 1, 'el fallo se apunta en la consola, una vez: ' + JSON.stringify(errores))
+  } finally {
+    console.error = error
+    globalThis.chrome.storage.session.get = lee
+  }
+})
+
+test('H27: dos setPlan seguidos hacen UNA lectura del almacén de sesión', async () => {
+  // Rehidratar es cosa del primer mensaje después de despertar. Volver a leer
+  // en cada `setPlan` sería una lectura del almacén por cada paso de cada
+  // recorrido, para nada: lo que hay guardado es lo que el worker ya tiene.
+  const rig = makeChrome()
+  await loadWorker(rig)
+  rig.state.session['faro:plans'] = { 7: { plan: PLAN, index: 1, phase: 'steps' } }
+  const lee = globalThis.chrome.storage.session.get
+  let lecturas = 0
+  globalThis.chrome.storage.session.get = async (k) => {
+    lecturas++
+    return lee(k)
+  }
+  try {
+    await conWorkerDespierto('dos-seguidos', async (manda) => {
+      const directo = { ...PLAN, mode: 'direct', steps: [] }
+      eq((await manda({ type: MSG.NAVIGATE_DIRECT, tabId: 1, plan: directo })).ok, true, 'el primero')
+      eq((await manda({ type: MSG.NAVIGATE_DIRECT, tabId: 2, plan: directo })).ok, true, 'el segundo')
+    })
+    eq(lecturas, 1, 'una lectura al despertar, y ninguna más')
+    eq(Object.keys(rig.state.session['faro:plans']).sort(), ['1', '2', '7'])
+  } finally {
+    globalThis.chrome.storage.session.get = lee
+  }
+})
+
+test('H27 revisión: un host de Cloud abierto antes de instalar se inyecta pero no se registra', async () => {
+  // `*.atlassian.net` ya lo cubre `content_scripts`: Chrome lo pone solo en
+  // cada carga, y un script dinámico encima lo duplicaría. Lo que sí hace falta
+  // es inyectarlo en la pestaña que ya estaba abierta al instalar, que no lo
+  // tiene (revisión adversaria de H27, G7: hasta aquí se registraba igual).
+  const rig = makeChrome()
+  await loadWorker(rig)
+  rig.state.contentReply = (msg) => (msg.type === MSG.PING && rig.state.inyecciones.length ? { ok: true } : null)
+  eq(await rig.send({ type: MSG.REQUEST_HOST_PERMISSION, origin: 'https://acme.atlassian.net', tabId: 3 }), { ok: true })
+  eq(rig.state.registros, [], 'ningún script dinámico')
+  eq(rig.state.inyecciones.map((o) => o.target.tabId), [3], 'y sí la inyección en la pestaña abierta')
+})
+
+test('H27 revisión: cubiertoPorContentScripts es pura', async () => {
+  // Qué cubre ya `content_scripts`, casando por PATRÓN como Chrome y no por
+  // cadena exacta (revisión adversaria de H27, G7): hasta aquí se buscaba el
+  // `https://host/*` fabricado entre los `host_permissions`, y ni
+  // `acme.atlassian.net` casaba con el comodín, ni un origen con puerto con
+  // nada. Sin chrome.
+  const rig = makeChrome()
+  await loadWorker(rig)
+  const cubierto = (origen, patrones) => loaded.cubiertoPorContentScripts(origen, patrones)
+  const CLOUD = Object.freeze([...MATCHES_DEL_MANIFEST])
+  const guardado = globalThis.chrome
+  delete globalThis.chrome
+  try {
+    // El comodín de subdominio: el dominio y sus subdominios, y nada que sólo
+    // acabe igual; y el esquema del patrón, que no es `*`.
+    eq(
+      [
+        'https://acme.atlassian.net',
+        'https://a.b.atlassian.net',
+        'https://atlassian.net',
+        'https://evilatlassian.net',
+        'https://atlassian.net.evil.example',
+        'http://acme.atlassian.net',
+      ].map((o) => cubierto(o, CLOUD)),
+      [true, true, true, false, false, false]
+    )
+    // El host exacto, y el puerto: un patrón sin puerto vale para todos (como
+    // en Chrome); con puerto, sólo para ése.
+    eq(
+      [
+        cubierto('https://wiki.example', ['https://wiki.example/*']),
+        cubierto('https://otra.wiki.example', ['https://wiki.example/*']),
+        cubierto('https://WIKI.example', ['https://wiki.example/*']),
+        cubierto('https://wiki.example:8443', ['https://wiki.example/*']),
+        cubierto('https://wiki.example:8443', ['https://wiki.example:8443/*']),
+        cubierto('https://wiki.example', ['https://wiki.example:8443/*']),
+        cubierto('http://127.0.0.1:5175', ['http://127.0.0.1/*']),
+      ],
+      [true, false, true, true, true, false, true]
+    )
+    // `*://` vale para http y https; el host comodín, para cualquiera; un
+    // patrón que no abarca la ruta entera no cubre el origen; y lo que no es
+    // un origen o no es una lista no cubre nada, sin lanzar.
+    eq(
+      [
+        cubierto('http://acme.atlassian.net', ['*://*.atlassian.net/*']),
+        cubierto('https://cualquiera.example', [CUALQUIER_HTTPS]),
+        cubierto('https://wiki.example', ['https://wiki.example/wiki/*']),
+        cubierto('https://wiki.example', []),
+        cubierto('no es un origen', CLOUD),
+        cubierto('https://wiki.example', null),
+      ],
+      [true, true, false, false, false, false]
+    )
+  } finally {
+    globalThis.chrome = guardado
+  }
+})
+
+test('H27 revisión: originsToRegister casa patrones, conserva el puerto y deja fuera lo que cubre content_scripts', async () => {
+  // Se parte de lo CONCEDIDO y no de un patrón fabricado con el host
+  // (revisión adversaria de H27, G7): así un Confluence propio en otro puerto
+  // conserva el suyo, y lo que ya cubre `content_scripts` sale aunque el
+  // permiso sea el de su host exacto. Sólo https: el banco (http, en
+  // 127.0.0.1) lo asegura el panel puerto a puerto, y reconciliarlo aquí lo
+  // ensancharía a todos. Una clave guardada con mayúsculas es el mismo host.
+  const rig = makeChrome()
+  await loadWorker(rig)
+  const sites = {
+    'Wiki.B.Example': { configured: true, jiraHost: 'jira.puerto.example' },
+    'acme.atlassian.net': { configured: true, cloud: true },
+    'comodin.example': { configured: true },
+    '127.0.0.1': { configured: true },
+  }
+  const granted = [
+    'https://wiki.b.example/*',
+    'https://jira.puerto.example:8443/*',
+    'https://acme.atlassian.net/*',
+    '*://comodin.example/*',
+    'http://127.0.0.1/*',
+    'https://*.atlassian.net/*',
+    'https://no-es-un-sitio.example/*',
+  ]
+  const guardado = globalThis.chrome
+  delete globalThis.chrome
+  try {
+    eq(loaded.originsToRegister({ sites, granted, contentScriptMatches: MATCHES_DEL_MANIFEST }), [
+      'https://comodin.example',
+      'https://jira.puerto.example:8443',
+      'https://wiki.b.example',
+    ])
+    // Sin `content_scripts` que lo cubra, el de Cloud concedido por su host entra.
+    eq(loaded.originsToRegister({ sites, granted }).includes('https://acme.atlassian.net'), true)
+  } finally {
+    globalThis.chrome = guardado
+  }
+})
+
+test('H27: una pestaña que no contesta no deja colgada a otra del mismo origen', async () => {
+  // `sendMessage` no tiene plazo: una pestaña que no contesta al PING (colgada
+  // en un script de la página, o a medio cerrar) dejaba esperando a cualquier
+  // otra del mismo origen que llegara detrás, porque la cola era por origen
+  // (revisión adversaria de H27, G9). No hace falta: el registro ya aguanta la
+  // carrera («Duplicate script ID») y la inyección es de cada pestaña.
+  const rig = makeChrome()
+  await loadWorker(rig)
+  let soltar = null
+  const colgada = new Promise((r) => (soltar = r))
+  rig.state.contentReply = (msg, tabId) => {
+    if (msg.type !== MSG.PING) return null
+    if (tabId === 3) return colgada
+    return rig.state.inyecciones.some((o) => o.target.tabId === tabId) ? { ok: true } : null
+  }
+  const pide = (tabId) => rig.send({ type: MSG.REQUEST_HOST_PERMISSION, origin: CONF_ORIGEN, tabId })
+  const plazo = esperar(50).then(() => 'colgado')
+  const tercera = pide(3)
+  try {
+    eq(await Promise.race([pide(1), plazo]), { ok: true }, 'la 1 no espera a la 3')
+    eq(rig.state.inyecciones.map((o) => o.target.tabId), [1], 'y se inyecta la suya')
+    eq(rig.state.registros.map((s) => s.id), [CONF_ID], 'con un solo registro')
+  } finally {
+    // Se suelta la 3: el worker se importa una vez por proceso, y una promesa
+    // colgada en `asegurando` se quedaría ahí para las pruebas siguientes.
+    soltar({ ok: true })
+    await tercera
+    await esperar(0)
   }
 })
