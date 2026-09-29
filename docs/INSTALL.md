@@ -823,12 +823,16 @@ Junto al selector de modelo, abajo, hay otras dos cosas:
   «dibujar el flujo». Hasta H29 no mandaba nada: la dejaba escrita en el cuadro,
   como «Preguntar sobre estos», y enviarla lo hacías tú; Marco pidió que lo
   hiciera directamente (decisión 17). Lo que tuvieras escrito en el cuadro se
-  sustituye por esa pregunta, que es lo único que manda el botón; lo que
-  tuvieras preparado —un fragmento señalado en la página, una lista de
-  «Preguntar sobre estos»— viaja con ella, como con cualquier envío, y la nota
-  bajo tu pregunta lo dice. Con una respuesta todavía en camino el botón está
-  apagado, y si en ese momento Faro no puede mandar (sin conexión preparada con
-  opencode), la pregunta se queda escrita en el cuadro, como antes: mándala tú.
+  sustituye por esa pregunta, que es lo único que escribe el botón; lo demás va
+  como en cualquier envío: lo que tuvieras preparado —un fragmento o una imagen
+  señalados en la página, una lista de «Preguntar sobre estos» y, en Análisis,
+  la incidencia en bloques y las páginas base— viaja con ella, y la nota bajo
+  tu pregunta lo dice. Con una respuesta todavía en camino el botón está
+  apagado. Si al pulsarlo la pestaña ya no es de Jira (preguntaste en Jira y te
+  fuiste a otra mientras llegaba la respuesta), no se manda y lo dice en rojo
+  en el chat: «No lo he mandado: esta pestaña no es de Jira. Vuelve a la de
+  Jira y pulsa Intro; la pregunta queda en el cuadro.» La pregunta se queda
+  escrita, como antes: vuelve a la pestaña de Jira y mándala tú.
   Cualquier respuesta que traiga un bloque ```mermaid **cerrado** se dibuja en
   el chat —en Jira y en Confluence, lo pida el botón o no—: mientras llega a
   trozos se ve el código, y al cerrarse el bloque aparece el diagrama. Faro lo
@@ -856,8 +860,10 @@ Junto al selector de modelo, abajo, hay otras dos cosas:
   a «Dibujar el flujo» en Análisis no se subraya en la página: es un dibujo, no
   un análisis. Y desde H29 ninguna respuesta a «Dibujar el flujo» ofrece
   llevarte a ningún sitio (ni «Llévame» ni «Paso a paso» debajo): es un mapa de
-  lo que ya se ha contado, y como va lleno de claves, antes ponía a trabajar al
-  planificador —un segundo turno de pago— para una tarjeta que sobraba
+  lo que ya se ha contado, y como va lleno de claves, en General con mapa (y en
+  Búsqueda, si no nombraba el destino) ponía a trabajar al planificador —un
+  segundo turno de pago— para una tarjeta que sobraba; sin mapa salía «Me falta
+  el mapa», y con una búsqueda de Jira en el turno, la tarjeta de esa búsqueda
   (decisión 18). Para ir a una incidencia del dibujo, pulsa su nodo.
 
 - **Contrastar con Jira** (H25) — el diagrama lo dibuja el modelo, y una
@@ -1899,7 +1905,11 @@ corto y un detalle. Todos los títulos, por dónde salen:
   su pregunta se escribió en el cuadro y se mandó (desde H29, decisión 17; hasta
   entonces decía «pregunta preparada · sin mandar» y la mandabas tú): detrás
   viene «Turno enviado». Si no viene, Faro no pudo mandarla en ese momento y la
-  pregunta se quedó escrita en el cuadro, como antes: mándala tú.
+  pregunta se quedó escrita en el cuadro, como antes: con el botón a la vista
+  pasa cuando la pestaña ya no es de Jira, y entonces lo dijo en el chat un
+  aviso en rojo, «No lo he mandado: esta pestaña no es de Jira…», sin título
+  propio en el registro (desde la revisión de H29): vuelve a la pestaña de Jira
+  y pulsa Intro.
 - «Relaciones de Jira» — (H25) pulsaste «Contrastar con Jira» bajo un
   diagrama, con tres detalles. **Leídas** (en verde): el mismo resumen que el
   pie de la figura «Según Jira» («Según Jira: 3 relaciones entre 4 incidencias
@@ -1994,8 +2004,12 @@ corto y un detalle. Todos los títulos, por dónde salen:
   con su «Construir». Un destino de OTRO espacio que sí tenga mapa sigue dando
   su tarjeta de siempre. Desde H29 (decisión 18), con el detalle «una respuesta
   a «Dibujar el flujo» no es un sitio al que llevar»: el diagrama va lleno de
-  claves, y antes eso ponía a trabajar al planificador —un segundo turno de
-  pago— para una tarjeta «Llévame» que sobraba; ahora no se mira nada más.
+  claves, y en General con mapa (y en Búsqueda, si la respuesta no nombraba el
+  destino) eso ponía a trabajar al planificador —un segundo turno de pago—
+  para una tarjeta «Llévame» que sobraba; sin mapa salía «Me falta el mapa», y
+  con una búsqueda de Jira en el turno, la tarjeta de esa búsqueda. Ahora no se
+  mira nada más. Sale también en Análisis y Resumen, que nunca ofrecen tarjeta:
+  no es un fallo, es la huella de que la respuesta era un diagrama.
 - «Camino leído de Confluence» — la cadena de padres del destino se leyó de
   la API REST del sitio (ramas, versión de la API, milisegundos).
 - «Sin camino» — no se pudo leer (sin acceso a la pestaña, 401/403, login,

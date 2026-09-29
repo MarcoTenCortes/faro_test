@@ -622,7 +622,8 @@ Veintiuna decisiones que sostienen el diseño:
      si cita tres incidencias o más de proyectos que Faro conoce, hay un botón,
      *Dibujar el flujo*: al pulsarlo manda su pregunta fija, sin que tengas que
      enviarla tú (desde H29; hasta entonces la dejaba escrita, como el de
-     arriba), y desaparece en cuanto preguntas otra cosa. La respuesta es un
+     arriba; si la pestaña ya no es de Jira, lo dice y la deja escrita), y
+     desaparece en cuanto preguntas otra cosa. La respuesta es un
      dibujo, no un sitio al que ir: no sale debajo ninguna tarjeta para
      llevarte, y así no se gasta un segundo turno en planificarla. Cualquier
      respuesta que traiga un bloque ```mermaid cerrado se dibuja en el chat

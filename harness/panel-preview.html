@@ -1425,11 +1425,14 @@ async function arrancar() {
 
   /**
    * H24: la fila de «Dibujar el flujo» que el panel cuelga bajo una respuesta de
-   * Jira que cita tres incidencias o más, con la clase con la que nace allí
-   * (`diagramButton`: `ghost small` + `NEEDS_IDLE`).
+   * Jira que cita tres incidencias o más, con las clases con las que nace allí:
+   * el botón, `ghost small` + `NEEDS_IDLE` (`diagramButton`), y la fila,
+   * `nav-actions dg-offer`, la marca con la que `send()` la retira (D03 de H24;
+   * copiada en la revisión de H29, D6: sin regla CSS, `check()` mide lo mismo).
+   * Sin el `title` del panel: ningún botón de acción del espejo lo lleva.
    */
   function filaDibujarElFlujo() {
-    const fila = mk('div', 'nav-actions')
+    const fila = mk('div', 'nav-actions dg-offer')
     fila.appendChild(mk('button', 'ghost small needs-idle', 'Dibujar el flujo'))
     return fila
   }
@@ -1649,7 +1652,10 @@ async function arrancar() {
     )
     b1.appendChild(prosa(texto, true))
     // H24: «Dibujar el flujo», que el panel cuelga justo detrás de la prosa
-    // (antes de los avisos y de la tarjeta de observaciones).
+    // (antes de los avisos y de la tarjeta de observaciones). Aquí se queda bajo
+    // b1 para medirla, junto a la pregunta que mandó: en el panel la retira el
+    // envío siguiente (D03) y, desde H29, el mismo clic, así que nunca se ven las
+    // dos a la vez (revisión de H29, D6).
     b1.appendChild(filaDibujarElFlujo())
     b1.appendChild(
       tarjetaNotas({

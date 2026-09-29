@@ -7888,7 +7888,8 @@ test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibu
   assert(!/innerHTML|insertAdjacentHTML|outerHTML/.test(dibujo), 'SEGURIDAD: el panel no dibuja con innerHTML')
 
   // (5) «Dibujar el flujo»: la pregunta fija, sin claves ni host (§8.20), y el
-  // botón ENTERO, que la manda y no manda nada más que ella.
+  // botón ENTERO, que la escribe en el cuadro y la manda: su texto es sólo ella,
+  // y lo armado viaja como en cualquier envío (revisión de H29, D2).
   // EL CAMBIO (H26): la pregunta pide además «sin classDef, style, click, href
   // ni URL»: en el turno real del 2026-09-27 el modelo escribió un classDef
   // debajo de su :::riesgo, por costumbre (diagram-parse.js ya lo ignora; un
@@ -7904,9 +7905,13 @@ test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibu
   const boton = funcion('function diagramButton(')
   // EL CAMBIO (decisión 17, H29; 2026-09-28, lo pidió Marco): el clic manda la
   // pregunta, como las sugerencias del chat vacío, «Reintentar con X» y «Pedirlo
-  // numerado». Fuera el announce: el clic ya tiene eco (la fila se va, la burbuja
-  // sale con su nota y el chat se pone aria-busy). El foco va ANTES de send():
-  // si send() sale pronto, la pregunta se queda escrita con el foco en el cuadro.
+  // numerado». Fuera el announce, como en Intro y en esos tres: la respuesta se
+  // anuncia al terminar (A2); aria-busy no es eco, #chat no es región viva
+  // (revisión de H29, D1). El foco va ANTES de send(): si send() sale pronto, la
+  // pregunta se queda escrita con el foco en el cuadro. EL CAMBIO (revisión de
+  // H29, D1): la salida pronta que se da con el botón a la vista es la de sin
+  // sitio (la pestaña pasó a una fuera de Atlassian mientras llegaba la
+  // respuesta), y era muda; ahora lo dice con showNotice, que ya anuncia.
   eq(
     boton,
     lineas(
@@ -7925,14 +7930,15 @@ test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibu
       '    autoGrow()',
       '    el.input.focus()',
       '    send()',
+      "    if (!state.streaming && !state.site) showNotice('No lo he mandado: esta pestaña no es de Jira. Vuelve a la de Jira y pulsa Intro; la pregunta queda en el cuadro.', true)",
       '  })',
       '  return b',
       '}'
     ),
-    'el botón manda la pregunta fija con el host del momento, nace apagado con un turno en vuelo, y nada más'
+    'el botón manda la pregunta fija con el host del momento, nace apagado con un turno en vuelo, sin sitio lo dice, y nada más'
   )
   // SEGURIDAD (decisión 17), en lugar de «el botón no manda nada» (§8.20): lo
-  // único que sale es la constante, y una vez.
+  // único que el botón escribe es la constante, y manda una vez.
   eq(boton.split('send()').length - 1, 1, 'SEGURIDAD (decisión 17): el botón manda UNA vez')
   eq(
     boton.match(/\bel\.input\b.*$/gm),
@@ -7940,10 +7946,16 @@ test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibu
     'SEGURIDAD (decisión 17): lo único que el botón escribe en el cuadro es la pregunta fija'
   )
   eq((boton.match(/\.value\s*[-+]?=(?!=)/g) || []).length, 1, 'SEGURIDAD (decisión 17): y es su única escritura de un valor')
-  // Y EJECUTADO: el cuerpo real del botón con new Function y los dobles como
-  // parámetros (nada global). El `send` doble apunta cómo estaba todo AL
-  // LLAMARLO y hace lo que hace el de verdad: sale pronto con la cabecera REAL
-  // de send() y, si pasa, consume el armado y vacía el cuadro.
+  // Y EJECUTADO: el cuerpo real del botón y el PRINCIPIO real de send() —de su
+  // firma a `const cron = startTiming(`, lo que corre antes de ceder el hilo—,
+  // con new Function y los dobles como parámetros (nada global). EL CAMBIO
+  // (revisión de H29, D3): hasta entonces el send era un doble escrito a mano que
+  // consumía el armado y vaciaba el cuadro él mismo, así que esas aserciones se
+  // probaban a sí mismas. El envoltorio apunta cómo estaba todo AL LLAMARLO; lo
+  // que vale justo después del clic, sin ceder el hilo, es lo que ven un segundo
+  // clic, un Enter y el aviso del botón. «Turno enviado» lo registra el resto de
+  // send(), que aquí no corre: el envoltorio lo apunta si el principio acaba
+  // ocupado.
   {
     const cabecera = lineas(
       '  const text = el.input.value.trim()',
@@ -7951,44 +7963,82 @@ test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibu
       '  if (!state.client) return'
     )
     una(funcion('async function send('), 'async function send() {\n' + cabecera + '\n', 'send() sale pronto sin texto, con un turno en vuelo, sin sitio o sin cliente, antes de consumir nada')
-    const pasaLaCabecera = new Function('el', 'state', cabecera + '\nreturn true')
+    const principio = corte(LIMPIO, 'async function send() {', '\n  const cron = startTiming(') + "\n  return 'ocupado'\n}"
+    const hacerEnvio = new Function(
+      'el', 'state', 'clearPick', 'DIAGRAM_QUESTION', 'autoGrow', 'hasSources', 'normalizeSources', 'preloadedApplies', 'currentPageId', 'currentMcpCheck', 'setStreaming',
+      principio + '\nreturn send'
+    )
     const Q = 'Dibuja el flujo … bloque ```mermaid …'
-    const crear = new Function('document', 'NEEDS_IDLE', 'state', 'el', 'log', 'autoGrow', 'send', 'announce', 'DIAGRAM_QUESTION', boton + '\nreturn diagramButton()')
-    const pulsar = ({ streaming = false, client = {} } = {}) => {
-      const r = { envios: [], registro: [], focos: 0, anuncios: [] }
-      const state = { streaming, client, site: { host: 'jira.example.com' }, pendingDiagram: null }
-      const el = { input: { value: 'mi borrador', focus: () => r.focos++ } }
+    const crear = new Function('document', 'NEEDS_IDLE', 'state', 'el', 'log', 'autoGrow', 'send', 'announce', 'showNotice', 'DIAGRAM_QUESTION', boton + '\nreturn diagramButton()')
+    const pulsar = async ({ streaming = false, client = {}, site = { host: 'jira.example.com', product: 'jira' } } = {}) => {
+      const r = { envios: [], registro: [], focos: 0, anuncios: [], avisos: [], quitadas: 0, salidas: [] }
+      const state = {
+        streaming, client, site, skill: 'general', sources: null, index: null, tabUrl: '', tabTitle: '', tabId: 7,
+        pendingPick: { kind: 'text' }, pendingPreload: null, pendingDiagram: null,
+      }
+      const el = {
+        input: { value: 'mi borrador', focus: () => r.focos++ },
+        chat: { querySelectorAll: (sel) => (sel === '.dg-offer' ? [{ remove: () => r.quitadas++ }] : []) },
+      }
       const log = { info: (...a) => r.registro.push(a) }
+      const deVerdad = hacerEnvio(
+        el, state, () => (state.pendingPick = null), Q, () => {}, () => false, (x) => x, () => false, () => '', () => Promise.resolve(true),
+        (on) => (state.streaming = on)
+      )
       const send = () => {
         r.envios.push({ valor: el.input.value, armado: state.pendingDiagram })
-        if (!pasaLaCabecera(el, state)) return
-        r.registro.push(['Turno enviado'])
-        state.pendingDiagram = null
-        el.input.value = ''
+        const p = deVerdad()
+        r.salidas.push(p)
+        return p
       }
       const oyentes = {}
       const document = { createElement: (tag) => ({ tag, addEventListener: (tipo, fn) => (oyentes[tipo] = fn) }) }
-      const b = crear(document, 'needs-idle', state, el, log, () => {}, send, (t) => r.anuncios.push(t), Q)
+      const b = crear(document, 'needs-idle', state, el, log, () => {}, send, (t) => r.anuncios.push(t), (...a) => r.avisos.push(a), Q)
       oyentes.click()
-      return { ...r, b, state, el }
+      const alVolver = { valor: el.input.value, streaming: state.streaming, armado: state.pendingDiagram, pick: state.pendingPick, quitadas: r.quitadas }
+      for (const p of r.salidas) if ((await p) === 'ocupado') r.registro.push(['Turno enviado'])
+      return { ...r, b, state, el, alVolver }
     }
-    const clic = pulsar()
+    const clic = await pulsar()
     eq(clic.envios, [{ valor: Q, armado: { host: 'jira.example.com' } }], 'un clic manda UNA vez, con la pregunta fija en el cuadro (no el borrador) y el armado con el host del momento')
     eq(clic.state.pendingDiagram, null, 'send() consume el armado: nada queda vivo para la pregunta siguiente')
+    eq(
+      clic.alVolver,
+      { valor: '', streaming: true, armado: null, pick: null, quitadas: 1 },
+      'el send() REAL, sin ceder el hilo, retira la oferta, vacía el cuadro, consume lo armado y ocupa el panel: un segundo clic no encuentra el botón y un Enter, el cuadro vacío'
+    )
     eq(clic.focos, 1, 'con el foco en el cuadro')
     eq(clic.registro, [['Diagrama', 'pedido desde el botón'], ['Turno enviado']], 'el Registro: pedido desde el botón, y el turno')
-    eq(clic.anuncios, [], 'sin «Pregunta preparada»: el clic ya tiene eco')
-    const enVuelo = pulsar({ streaming: true })
+    eq(clic.anuncios, [], 'sin «Pregunta preparada»: como Intro y los otros tres botones que mandan, se anuncia al terminar (A2)')
+    eq(clic.avisos, [], 'y sin aviso: la mandó')
+    const enVuelo = await pulsar({ streaming: true })
     eq(
       [enVuelo.b.disabled, enVuelo.envios.length, enVuelo.el.input.value, enVuelo.state.pendingDiagram, enVuelo.registro],
       [true, 0, 'mi borrador', null, []],
       'con un turno en vuelo nace apagado, y un clic no manda, no pisa el borrador ni arma nada'
     )
-    const sinCliente = pulsar({ client: null })
+    // Sin cliente no se da con el botón a la vista (sin cliente no hubo turno que
+    // lo pintara); se queda porque ejercita la otra salida de la cabecera, y porque
+    // con sitio el aviso de la pestaña no tiene que salir.
+    const sinCliente = await pulsar({ client: null })
     eq(
       [sinCliente.envios.length, sinCliente.el.input.value, sinCliente.state.pendingDiagram, sinCliente.focos, sinCliente.registro],
       [1, Q, { host: 'jira.example.com' }, 1, [['Diagrama', 'pedido desde el botón']]],
       'sin cliente send() sale pronto: la pregunta se queda ESCRITA con el foco en el cuadro, como antes, y el Registro dice «pedido desde el botón» sin «Turno enviado»'
+    )
+    eq(sinCliente.avisos, [], 'con sitio no culpa a la pestaña: el aviso es sólo para la salida sin sitio')
+    // EL CAMBIO (revisión de H29, D1): sin sitio —se preguntó en Jira y la pestaña
+    // pasó a una fuera de Atlassian mientras llegaba la respuesta; la oferta se
+    // pinta con lo capturado al pedir— send() sale pronto, y era mudo.
+    const sinSitio = await pulsar({ site: null })
+    eq(
+      [sinSitio.envios.length, sinSitio.el.input.value, sinSitio.state.pendingDiagram, sinSitio.state.pendingPick, sinSitio.focos, sinSitio.registro, sinSitio.anuncios, sinSitio.avisos.length],
+      [1, Q, { host: '' }, { kind: 'text' }, 1, [['Diagrama', 'pedido desde el botón']], [], 1],
+      'sin sitio send() sale pronto sin consumir nada: la pregunta se queda ESCRITA con el foco en el cuadro, sin «Turno enviado», y UN aviso (showNotice ya anuncia: ningún announce aparte)'
+    )
+    assert(
+      sinSitio.avisos[0]?.[1] === true && /pestaña no es de Jira/.test(sinSitio.avisos[0]?.[0]) && /pulsa Intro/.test(sinSitio.avisos[0]?.[0]),
+      'el aviso dice por qué no salió y qué hacer, en rojo: ' + JSON.stringify(sinSitio.avisos)
     )
   }
   eq(JS_SIN.split('diagramButton(').length - 1, 2, 'la declaración y un solo sitio que lo cuelga')
@@ -8057,6 +8107,17 @@ test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibu
   orden(envio, [consumo.trim(), retirada.trim(), 'runTurn(', oferta.trim()], 'al consumir, antes de mandar y antes de colgar la nueva')
   eq(JS_SIN.split("'.dg-offer'").length - 1, 1, 'nadie más retira ofertas')
   eq(JS_SIN.split('dg-offer').length - 1, 2, 'la marca se pone en un sitio y se busca en otro')
+  // EL CAMBIO (revisión de H29, D3): lo que el botón de H29 da por hecho de
+  // send() y de setStreaming, pinado contra el código real (la parte (5) ejecuta
+  // el principio de send()). send() retira la oferta, vacía el cuadro y se pone
+  // ocupado sin ceder el hilo: un doble clic no encuentra el botón, un Enter
+  // encuentra el cuadro vacío y el aviso de «sin sitio» del botón puede mirar
+  // state.streaming justo detrás de send(). Y setStreaming no deshabilita el
+  // cuadro: el foco que pide el botón se queda.
+  una(envio, "\n  el.input.value = ''\n  autoGrow()\n", 'send() vacía el cuadro sin ceder el hilo: un Enter tras el clic no reenvía')
+  orden(envio, [retirada.trim(), "el.input.value = ''", 'setStreaming(true)'], 'retira la oferta, vacía el cuadro y se pone ocupado, en este orden')
+  assert(!/\bawait\b/.test(envio.slice(0, envio.indexOf('setStreaming(true)'))), 'ningún await antes de ocupar el panel (H2 «Ocupado desde ya»; decisión 17)')
+  una(corte(JS_SIN, 'function setStreaming(on) {', '\n}'), '\n  el.input.disabled = false\n', 'setStreaming no deshabilita el cuadro: el foco que pide el botón se queda')
   orden(
     envio,
     ['if (!mismoSitio) {', 'paintTurn(turn, toolsBox, cuerpo, true)', 'announce(answerAnnouncement(answer))', oferta.trim(), 'await offerNotes('],
@@ -8088,11 +8149,15 @@ test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibu
   )
   orden(notas, ['if (esDiagrama) {', 'const respuestaCorta', 'segmentedPassNotes('], 'antes de medir la respuesta y de la pasada que trocea')
   // EL CAMBIO (decisión 18, H29; 2026-09-28, PLAN3 §3.3): una respuesta a
-  // «Dibujar el flujo» no ofrece navegación. Está llena de claves, así que
-  // shouldPlan decía que sí y el planificador gastaba un segundo turno de pago
-  // para una tarjeta «Llévame» que sobra. send() se lo dice con lo capturado al
-  // pedir, y la salida es la PRIMERA línea del cuerpo: antes del modo, de la
-  // búsqueda de Jira y del índice. Con registro: una salida muda no se ve (§8.14).
+  // «Dibujar el flujo» no ofrece navegación. Está llena de claves: en General con
+  // mapa (y en Búsqueda si la respuesta no nombra el destino) shouldPlan decía que
+  // sí y el planificador gastaba un segundo turno de pago para una tarjeta
+  // «Llévame» que sobra; sin mapa salía «Me falta el mapa», con una jira_search la
+  // tarjeta de esa búsqueda, y en Análisis y Resumen nada (revisión de H29, D5).
+  // send() se lo dice con lo capturado al pedir, y la salida es la PRIMERA línea
+  // del cuerpo: antes del modo, de la búsqueda de Jira y del índice. Con registro:
+  // una salida muda no se ve (§8.14); por ir antes del modo, sale también en
+  // Análisis y Resumen, que nunca ofrecen tarjeta, y dice por qué no la hay.
   una(
     envio,
     '\n    await offerNavigation(answer, bubble, skill, turn.parts, { preloaded: !!preloadDelTurno, diagrama: diagramaAlPedir })\n',
@@ -8255,6 +8320,12 @@ test('H24: el diagrama se dibuja sin innerHTML, navega por validatePlan y «Dibu
   assert(
     corte(espejo, 'function filaDibujarElFlujo()', 'function respuestaConDiagrama()').includes("mk('button', 'ghost small needs-idle', 'Dibujar el flujo')"),
     'la fila con la clase con la que nace en el panel'
+  )
+  // EL CAMBIO (revisión de H29, D6): y la fila con `dg-offer`, la marca con la que
+  // send() la retira (D03): copia fiel; sin regla CSS, check() mide lo mismo.
+  assert(
+    corte(espejo, 'function filaDibujarElFlujo()', 'function respuestaConDiagrama()').includes("mk('div', 'nav-actions dg-offer')"),
+    'la fila con la marca con la que nace en el panel (D03)'
   )
   const textoPregunta = pregunta.slice(pregunta.indexOf("'") + 1, pregunta.lastIndexOf("'"))
   assert(textoPregunta.length > 100 && jira.includes("'" + textoPregunta + "'"), 'la pregunta de la tercera burbuja es la del panel, letra a letra')

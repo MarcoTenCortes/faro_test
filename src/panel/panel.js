@@ -5106,11 +5106,16 @@ function warnAboutSources(parts, bubble, { sources, pageId = '', issueKey = '', 
  */
 async function offerNavigation(answer, bubble, skillId = state.skill, parts = [], { preloaded = false, diagrama = false } = {}) {
   // Una respuesta a «Dibujar el flujo» es un mapa de lo que ya se ha contado, no
-  // un sitio al que ir. Va llena de claves, así que `shouldPlan` decía que sí y
-  // el planificador gastaba un segundo turno de pago para una tarjeta «Llévame»
-  // que sobra (decisión 18, 2026-09-28; PLAN3 §3.3). Es la primera salida,
-  // delante del modo y de la búsqueda de Jira, y con registro: una salida muda
-  // no se ve (§8.14).
+  // un sitio al que ir. Va llena de claves: en General con mapa (y en Búsqueda
+  // cuando la respuesta no nombra el destino) `shouldPlan` decía que sí y el
+  // planificador gastaba un segundo turno de pago para una tarjeta «Llévame» que
+  // sobra; sin mapa salía «Me falta el mapa», con una `jira_search` en el turno
+  // la tarjeta de esa búsqueda, y en Análisis y Resumen nada (decisión 18,
+  // 2026-09-28; PLAN3 §3.3; el matiz, de la revisión de H29, D5). Es la primera
+  // salida, delante del modo y de la búsqueda de Jira, y con registro: una salida
+  // muda no se ve (§8.14). Por ir delante del modo, el registro sale también en
+  // Análisis y Resumen, que nunca ofrecen tarjeta, y a propósito: dice por qué no
+  // la hay en el modo en que más se pulsa el botón.
   if (diagrama) {
     log.info('Sin navegación', 'una respuesta a «Dibujar el flujo» no es un sitio al que llevar')
     return
@@ -5610,7 +5615,8 @@ async function openIssueFromResults(key, { site, card }) {
  *
  * Sin claves, sin host y sin título (§8.20, la misma regla que
  * `PRELOAD_QUESTION`): «tu última respuesta» ya está en la sesión, y lo que
- * manda el botón es exactamente esta constante. Pide lo que el parser sabe
+ * escribe el botón es exactamente esta constante (lo armado viaja con ella,
+ * como en cualquier envío: revisión de H29, D2). Pide lo que el parser sabe
  * leer (`readFlowchart`): un `flowchart` en su valla, la clave como primera
  * palabra de cada etiqueta —de ahí sale el nodo que navega— y las clases de
  * `NOTE_KINDS`.
@@ -5633,24 +5639,39 @@ const DIAGRAM_QUESTION = 'Dibuja el flujo entre las incidencias de tu última re
  * escrita, como «Preguntar sobre estos», por una regla heredada de §8.20 sin
  * motivo propio; el 2026-09-28 Marco pidió que no fuera «copiar y pegar un
  * prompt en el input del chat» sino que lo hiciera directamente, como ya hacen
- * las sugerencias del chat vacío, «Reintentar con X» y «Pedirlo numerado». Lo
- * que sale es sólo `DIAGRAM_QUESTION`, y una vez: apunta con el host del
+ * las sugerencias del chat vacío, «Reintentar con X» y «Pedirlo numerado». Su
+ * texto es sólo `DIAGRAM_QUESTION`, y sale una vez: apunta con el host del
  * momento que el turno es para dibujar (`state.pendingDiagram`, que consume
  * `send()`) ANTES de mandar, o el armado quedaría vivo para la pregunta
  * siguiente; y escribe la pregunta antes de `send()`, o mandaría el borrador.
- * Lo que esté armado —lo señalado en la página, lo precargado con «Preguntar
- * sobre estos»— viaja con ella, como con cualquier envío, y la nota bajo la
- * pregunta lo dice.
+ * Lo que esté armado —lo señalado en la página, la imagen señalada como
+ * adjunto, lo precargado con «Preguntar sobre estos» y, en Análisis, la
+ * incidencia en bloques y las páginas base— viaja con ella, como con cualquier
+ * envío, y la nota bajo la pregunta lo dice (revisión de H29, D2).
  *
  * El foco va al cuadro ANTES de `send()`: la fila del botón desaparece al
- * mandar, y si `send()` sale pronto —sin cliente o sin sitio— la pregunta se
- * queda escrita con el foco ahí, como antes (el Registro dice «pedido desde el
- * botón» sin «Turno enviado»). Sin `announce`: el clic ya tiene eco (la fila se
- * va, la burbuja sale con su nota y el chat se pone `aria-busy`). `send()` no
- * tiene ningún `await` antes de `setStreaming(true)`, así que un doble clic no
- * abre dos turnos. La viñeta en el prompt de Análisis se descartó a propósito
- * (docs/PLAN2.md §8.10): las 40 instantáneas no cambian. `NEEDS_IDLE`, como los
- * demás botones del chat: nace con el turno todavía en vuelo.
+ * mandar, y si `send()` sale pronto la pregunta se queda escrita con el foco
+ * ahí, como antes (el Registro dice «pedido desde el botón» sin «Turno
+ * enviado»). Con el botón a la vista, la salida pronta que se da es la de sin
+ * sitio: se preguntó en Jira y la pestaña pasó a una fuera de Atlassian
+ * mientras llegaba la respuesta (la oferta se pinta con lo capturado al pedir).
+ * Era muda —el botón prometía mandar y no pasaba nada— y ahora lo dice con
+ * `showNotice`, que ya anuncia (revisión de H29, D1); `!state.client` no se da
+ * aquí: sin cliente no hubo turno que pintara el botón. Al mandar, sin
+ * `announce`, como Intro y los otros tres botones que mandan: el lector oye el
+ * foco en el cuadro, ya vacío, y la respuesta se anuncia al terminar (A2); a la
+ * vista, la fila se va y sale la burbuja con su nota.
+ *
+ * Un doble clic no abre dos turnos: `send()` retira la fila del botón, vacía el
+ * cuadro y se pone ocupado (`setStreaming(true)`) antes de su primer `await`,
+ * así que el segundo clic no encuentra el botón y un Enter encuentra el cuadro
+ * vacío; y `setStreaming` no deshabilita el cuadro, así que el foco pedido se
+ * queda. Por lo mismo, justo detrás de `send()` `state.streaming` ya dice si
+ * salió, y el aviso se apoya en eso. Lo pina la prueba H24 de panel-wiring
+ * contra el `send()` y el `setStreaming` reales (revisión de H29, D3). La
+ * viñeta en el prompt de Análisis se descartó a propósito (docs/PLAN2.md
+ * §8.10): las 40 instantáneas no cambian. `NEEDS_IDLE`, como los demás botones
+ * del chat: nace con el turno todavía en vuelo.
  */
 function diagramButton() {
   const b = document.createElement('button')
@@ -5667,6 +5688,7 @@ function diagramButton() {
     autoGrow()
     el.input.focus()
     send()
+    if (!state.streaming && !state.site) showNotice('No lo he mandado: esta pestaña no es de Jira. Vuelve a la de Jira y pulsa Intro; la pregunta queda en el cuadro.', true)
   })
   return b
 }
