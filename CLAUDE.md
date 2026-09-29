@@ -312,7 +312,7 @@ Cada contrato con su porqué y sus bordes, en docs/REFERENCIA.md §6; aquí, la 
 - Modelos: el free tier de opencode no vale desde `serve`; funciona `github-copilot/gpt-5.6-luna`; nada en `/config/providers` dice si el plan lo permite; los rechazos reales, en REFERENCIA §7.
 - `~/.local/share/opencode/opencode.db` (SQLite WAL) guarda cada turno, sistema incluido: lo lee `npm run turn` (§2); su forma, en REFERENCIA §7.
 
-Detalle y cómo se midió cada cosa: docs/REFERENCIA.md §7
+Detalle y cómo se midió: docs/REFERENCIA.md §7
 
 ## 8. Decisiones de diseño (no negociables sin motivo escrito)
 Sólo el enunciado; el porqué, el incidente que la motivó y sus matices están en docs/REFERENCIA.md §8 con el mismo número.
@@ -428,7 +428,7 @@ Los pasos completos, con el porqué de cada regla: docs/REFERENCIA.md §11.
 | H26 | Cierre: docs definitivos, banco con frames de verdad, integración, sandbox, el turno real; classDef tolerado y la pregunta sin classDef | `plan/h26-cierre` · d2e243b + 7e48237 | 1643 |
 | H27 | El content script vuelve a cargar (sin `use_dynamic_url`), y cuando no, se ve: PING/SETTINGS sin `boot()`, re-PING, el SW sin `request` y reconciliando | `plan/h27-content-script` · 7c729e4 + a024313 | 1666; revisión, 1679 |
 | H28 | Lo que consume el content script dice la verdad (`failReason`, `sinAccesoMotivo`, el vigilante del salto) y el árbol del DC (el título de la fila, `href-path`); revisión: el último clic del DC, «Llévame» sin permiso, `llevaAlPaso` | `plan/h28-la-verdad` · 6afde42 + ace17bc | 1707; revisión, 1730 |
-| H29 | «Dibujar el flujo» manda al pulsarlo y no ofrece navegación (decisiones 17 y 18) | `plan/h29-dibujar-manda` · sin commit | 1730 |
+| H29 | «Dibujar el flujo» manda al pulsarlo y no ofrece navegación (decisiones 17 y 18) | `plan/h29-dibujar-manda` · a89f7f6 + d3d682c | 1730; revisión, 1730 |
 
 Ramas `plan/…`. **Dónde vive:** 22 ramas apiladas sobre `40f56d7` (H0-H21), nada pusheado ni PR, `main` local en `523c25f`; H20 saltado (manual, con gasto); encima `plan/docs-mapa` (este mapa, Tarea 0), `plan/h22-jira-por-proyecto` (bd01fa2 + a7b781a + 9cfc93d), `plan/h24-diagramas` (e8b950f + 512e8a1 + 8a98d94), `plan/h23-fusion` (39ef839 + 225421e: H23, hecho en su carril `plan/h23-subrayado` sobre 6256545, fundido sobre 8a98d94), `plan/h25-issuelinks` · 8928c60 + dfabd81 + 149ddf0 y la punta, `plan/h26-cierre` · d2e243b + 7e48237 + el commit de los hashes (docs/plan/handoff/ESTADO.md). El segundo plan queda CERRADO el 2026-09-27. Encima, el TERCER plan (docs/PLAN3.md, H27-H30): `plan/plan3-preparacion` (13b70e8), `plan/h27-content-script`, `plan/h28-la-verdad` y `plan/h29-dibujar-manda`.
 
